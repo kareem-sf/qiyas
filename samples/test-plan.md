@@ -67,6 +67,11 @@ conflicts panel must show exactly two quantity mismatches: **A.4** (30.000 vs 22
 and **B.2** (4 vs 5 pcs, +25.0 %). Nothing else.
 
 `cargo run -p qiyas-ai --example phase2_walkthrough` does all of this through the AI tools and
-prints the conflicts. Without links (`-- --no-link`) the matching rules find nothing, because the
-default descriptions ("LwPolyline on A-ROOM") do not look like the BOQ text: link, or describe the
+prints the conflicts. Without links (`-- --no-link`) only the door and window counts match their
+BOQ rows ("DOOR count" and "Doors 900 mm"); the four wall and floor rows show as not in the
+drawings, because default descriptions ("LwPolyline on A-ROOM") do not look like the BOQ text.
+Default-named lines are never reported as missing from the BOQ. Link, or describe the
 measurements the way the BOQ does.
+
+The AI tools only open files beside the drawing (its folder or a subfolder), so the assistant
+imports `test-boq.xlsx` when it sits next to `test-plan.dwg`, as it does in `samples/`.
