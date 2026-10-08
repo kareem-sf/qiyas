@@ -53,9 +53,17 @@ pub async fn serve(
         .map_err(|e| AiError::Server(format!("127.0.0.1:{port}: {e}")))?;
 
     let handler = Qiyas::new(session, on_mutated);
+    // Browsers send `Origin`; only the server's own origin may call it, so a web page can't drive
+    // Qiyas even with the token. MCP apps and the bridge send no `Origin` and pass.
+    let port = addr.port();
     let config = StreamableHttpServerConfig::default()
         .with_cancellation_token(shutdown.child_token())
-        .with_allowed_hosts(["127.0.0.1", "localhost"]);
+        .with_allowed_hosts(["127.0.0.1", "localhost"])
+        .with_allowed_origins([
+            format!("http://127.0.0.1:{port}"),
+            format!("http://localhost:{port}"),
+        ])
+        .enforce_origin_validation();
     let mcp = StreamableHttpService::new(
         move || Ok(handler.clone()),
         Arc::new(LocalSessionManager::default()),

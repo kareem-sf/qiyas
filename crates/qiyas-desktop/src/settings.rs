@@ -148,7 +148,34 @@ pub fn load(dir: &Path) -> Settings {
             eprintln!("settings.json could not be written: {e}");
         }
     }
+    // Files from before they were written 0600 hold the token too.
+    for name in [FILE.to_string(), format!("{FILE}.bak")] {
+        if let Err(e) = owner_only(&dir.join(&name)) {
+            eprintln!("{name} could not be made private: {e}");
+        }
+    }
     settings
+}
+
+/// On Unix, lets only the user read and write `path`, if it exists.
+fn owner_only(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        match fs::metadata(path) {
+            Ok(meta) if meta.permissions().mode() & 0o777 != 0o600 => {
+                fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            }
+            Ok(_) => Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Ok(())
+    }
 }
 
 /// Writes the settings to `dir` atomically: a temporary file, then a rename over the old one. On

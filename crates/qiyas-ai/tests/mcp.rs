@@ -240,3 +240,46 @@ async fn a_restart_on_the_same_port_binds_again() {
     assert_eq!(client.list_all_tools().await.unwrap().len(), 27);
     shutdown.cancel();
 }
+
+/// A raw MCP `initialize` POST with the right token and this `Origin`.
+async fn post_with_origin(addr: SocketAddr, origin: &str) -> reqwest::StatusCode {
+    reqwest::Client::new()
+        .post(url(addr))
+        .bearer_auth(TOKEN)
+        .header("origin", origin)
+        .header("content-type", "application/json")
+        .header("accept", "application/json, text/event-stream")
+        .body(
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}"#,
+        )
+        .send()
+        .await
+        .unwrap()
+        .status()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn other_origins_are_refused_even_with_the_token() {
+    let server = start(true).await;
+    let port = server.addr.port();
+    for origin in [
+        "http://evil.example",
+        "https://evil.example",
+        "http://localhost:3000",
+        "null",
+    ] {
+        assert_eq!(
+            post_with_origin(server.addr, origin).await,
+            reqwest::StatusCode::FORBIDDEN,
+            "{origin}"
+        );
+    }
+    // The server's own origin passes.
+    let status = post_with_origin(server.addr, &format!("http://127.0.0.1:{port}")).await;
+    assert!(status.is_success(), "{status}");
+
+    // Clients that send no Origin (the bridge, Claude Code) still work.
+    let client = connect(server.addr, TOKEN).await.unwrap();
+    assert_eq!(client.list_all_tools().await.unwrap().len(), 27);
+    assert_eq!(server.mutated.load(Ordering::SeqCst), 0);
+}

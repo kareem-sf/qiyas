@@ -179,3 +179,23 @@ fn only_the_user_can_read_the_file() {
         .mode();
     assert_eq!(mode & 0o777, 0o600);
 }
+
+#[cfg(unix)]
+#[test]
+fn load_makes_old_files_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("settings.json");
+    let bak = dir.path().join("settings.json.bak");
+    settings::save(dir.path(), &Settings::default()).unwrap();
+    fs::write(&bak, "old").unwrap();
+    for p in [&file, &bak] {
+        fs::set_permissions(p, fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    let before = read(dir.path());
+    settings::load(dir.path());
+    assert_eq!(read(dir.path()), before, "nothing else changes");
+    assert_eq!(mode(&file), 0o600);
+    assert_eq!(mode(&bak), 0o600);
+}

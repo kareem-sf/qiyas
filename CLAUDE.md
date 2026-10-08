@@ -52,7 +52,8 @@ Outside AI apps can drive Qiyas through its MCP server (the same tools as the in
 their measurements are marked `mcp`).
 
 - Turn it on in Settings, MCP server. It listens on `127.0.0.1:48123/mcp` (port in Settings) and
-  needs `Authorization: Bearer <token>`; the token is in Settings and in `settings.json` (mode
+  needs `Authorization: Bearer <token>`; a request with an `Origin` other than the server's own
+  gets 403, so web pages can't use it; the token is in Settings and in `settings.json` (mode
   0600). The dialog shows whether it is listening.
 - Settings gives both setups, with the bridge's path filled in:
   - Claude Code: `claude mcp add qiyas -e QIYAS_MCP_TOKEN=<token> -- <app folder>/qiyas-mcp`
@@ -63,6 +64,8 @@ their measurements are marked `mcp`).
   "Qiyas is not running or MCP is disabled in its settings".
 - Dev: `cargo build -p qiyas-mcp` puts the bridge in `target/debug`, the folder Settings shows
   under `pnpm tauri dev`.
+- Release builds: always `pnpm bundle`, never plain `pnpm tauri build`, so the bridge ships.
+  `pnpm bundle` runs both steps below.
 - Bundling: `scripts/build-sidecar.sh` builds it in release into
   `crates/qiyas-desktop/binaries/qiyas-mcp-<target triple>` (git-ignored), then
   `pnpm tauri build --config crates/qiyas-desktop/tauri.bundle.conf.json` ships it beside the
