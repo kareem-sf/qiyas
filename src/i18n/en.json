@@ -193,5 +193,6 @@
   "conflicts.none": "No conflicts",
   "conflicts.noMatch": "No conflicts match the filter",
   "conflicts.found": "{n} conflicts found",
+  "conflicts.hint": "Link or name your measurements to find gaps",
   "conflicts.openCount": "Open conflicts: {n}"
 }

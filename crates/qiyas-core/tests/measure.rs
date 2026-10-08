@@ -586,3 +586,42 @@ fn undo_if_refuses_when_top_step_is_users() {
     assert!(session.redo());
     assert_eq!(session.top_step_source(), Some(Source::Ai));
 }
+
+#[test]
+fn default_descriptions_are_marked_auto() {
+    let (_dir, mut session) = sample_session();
+    let rect = handle_of(&session, |e| matches!(e, EntityType::LwPolyline(_)));
+    let distance = Command::MeasureDistance {
+        points: vec![[0.0, 0.0], [3.0, 0.0]],
+    };
+    let count = Command::CountBlock {
+        block_name: "DOOR".to_string(),
+        layer: None,
+    };
+    for cmd in [
+        distance,
+        area(&RECT_4X3),
+        Command::MeasureEntity { handle: rect },
+        count,
+    ] {
+        let m = measure(&mut session, cmd);
+        assert!(m.auto_description, "{}", m.description);
+    }
+
+    // A description the caller gives is not a default.
+    let given = with(add(Kind::Area), |_, _, _, points, _| {
+        *points = RECT_4X3.to_vec()
+    });
+    let m = measure(&mut session, given);
+    assert!(!m.auto_description);
+
+    // Renaming clears the flag.
+    let id = session.takeoff.items[0].id.clone();
+    session
+        .run(Command::SetDescription {
+            id: id.clone(),
+            text: "Wall".to_string(),
+        })
+        .unwrap();
+    assert!(!session.takeoff.get(&id).unwrap().auto_description);
+}

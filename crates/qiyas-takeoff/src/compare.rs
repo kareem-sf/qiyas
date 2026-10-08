@@ -244,9 +244,11 @@ fn mismatch(item: &BoqItem, sum: f64, tol: f64, units_label: &str) -> Option<Fou
     let pct = percent.map_or(String::new(), |p| format!(" ({})", signed(p)));
     let (mut reason, mut reason_ar) = (
         format!(
-            "BOQ says {} {u}, drawings measure {} {u}{pct}",
+            "BOQ says {} {}, drawings measure {} {}{pct}",
             qty(q, u),
-            qty(sum, u)
+            unit_en(u),
+            qty(sum, u),
+            unit_en(u)
         ),
         format!(
             "جدول الكميات يذكر {} {}، والمقاس من الرسومات {} {}{pct}",
@@ -276,7 +278,13 @@ fn other_unit(item: &BoqItem, other: &[&Measurement]) -> Found {
     }
     let list = |ar: bool| -> String {
         sums.iter()
-            .map(|(u, s)| format!("{} {}", qty(*s, u), if ar { unit_ar(u) } else { u }))
+            .map(|(u, s)| {
+                format!(
+                    "{} {}",
+                    qty(*s, u),
+                    if ar { unit_ar(u) } else { unit_en(u) }
+                )
+            })
             .collect::<Vec<_>>()
             .join(" + ")
     };
@@ -286,7 +294,7 @@ fn other_unit(item: &BoqItem, other: &[&Measurement]) -> Found {
         ConflictKind::UnitDoubt,
         format!(
             "BOQ item {code} is in {}, but {} in another unit: {}",
-            item.unit,
+            unit_en(&item.unit),
             plural(n, "linked measurement is", "linked measurements are"),
             list(false)
         ),
@@ -319,12 +327,12 @@ fn raw_unit(item: &BoqItem, links: &[&Measurement]) -> Found {
     let mut f = Found::new(
         ConflictKind::UnitDoubt,
         format!(
-            "BOQ item {code} is in \"{}\", not a standard unit (m, m2, m3, pcs, kg, t); check its {}",
+            "BOQ item {code} is in \"{}\", not a standard unit (m, m², m³, pcs, kg, t); check its {}",
             item.unit,
             plural(n, "linked measurement", "linked measurements")
         ),
         format!(
-            "وحدة البند {code} هي «{}» وليست وحدة قياسية (م، م²، م³، عدد، كجم، طن)؛ راجع القياسات المرتبطة به ({n})",
+            "وحدة البند {code} هي «{}» وليست وحدة قياسية (م، م²، م³، قطعة، كجم، طن)؛ راجع القياسات المرتبطة به ({n})",
             item.unit,
         ),
     )
@@ -342,8 +350,9 @@ fn not_in_drawings(item: &BoqItem) -> Found {
     let mut f = Found::new(
         ConflictKind::NotInDrawings,
         format!(
-            "BOQ item {code} \"{desc}\" ({} {u}) has no linked measurement and nothing measured matches it",
-            qty(item.quantity, u)
+            "BOQ item {code} \"{desc}\" ({} {}) has no linked measurement and nothing measured matches it",
+            qty(item.quantity, u),
+            unit_en(u)
         ),
         format!(
             "البند {code} «{desc}» ({} {}) بلا قياس مرتبط، ولا شيء مقاس يطابقه",
@@ -358,11 +367,13 @@ fn not_in_drawings(item: &BoqItem) -> Found {
 }
 
 /// Unlinked measurements that no BOQ description matches, one finding per description group.
+/// Lines with a default description ("LwPolyline on A-ROOM") say nothing about the work, so they
+/// are left out: link or name them to have them checked.
 fn missing_from_boq(boq: &Boq, quantities: &[&Measurement], out: &mut Vec<Found>) {
     let items: Vec<BTreeSet<String>> = boq.items.iter().map(|i| tokens(&i.description)).collect();
     let mut groups: BTreeMap<String, Vec<&Measurement>> = BTreeMap::new();
     for m in quantities {
-        if is_linked(m) {
+        if is_linked(m) || m.auto_description {
             continue;
         }
         let words = tokens(&m.description);
@@ -377,7 +388,13 @@ fn missing_from_boq(boq: &Boq, quantities: &[&Measurement], out: &mut Vec<Found>
         }
         let total = |ar: bool| -> String {
             sums.iter()
-                .map(|(u, s)| format!("{} {}", qty(*s, u), if ar { unit_ar(u) } else { u }))
+                .map(|(u, s)| {
+                    format!(
+                        "{} {}",
+                        qty(*s, u),
+                        if ar { unit_ar(u) } else { unit_en(u) }
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join(" + ")
         };
@@ -389,9 +406,10 @@ fn missing_from_boq(boq: &Boq, quantities: &[&Measurement], out: &mut Vec<Found>
         let mut f = Found::new(
             ConflictKind::MissingFromBoq,
             format!(
-                "{} \"{desc}\" ({}) match no BOQ item",
+                "{} \"{desc}\" ({}) {} no BOQ item",
                 plural(n, "measurement", "measurements"),
-                total(false)
+                total(false),
+                if n == 1 { "matches" } else { "match" }
             ),
             format!(
                 "«{desc}»: {} ({}) بلا بند يقابله في جدول الكميات",
@@ -547,12 +565,21 @@ fn signed(p: f64) -> String {
     format!("{sign}{:.1} %", p.abs())
 }
 
+/// A unit as English text shows it: "m²" and "m³" for the standard area and volume units.
+fn unit_en(unit: &str) -> &str {
+    match unit_key(unit).as_str() {
+        "m2" => "m²",
+        "m3" => "m³",
+        _ => unit,
+    }
+}
+
 fn unit_ar(unit: &str) -> &str {
     match unit_key(unit).as_str() {
         "m" => "م",
         "m2" => "م²",
         "m3" => "م³",
-        "pcs" => "عدد",
+        "pcs" => "قطعة",
         "kg" => "كجم",
         "t" => "طن",
         _ => unit,

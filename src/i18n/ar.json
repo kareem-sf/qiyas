@@ -193,5 +193,6 @@
   "conflicts.none": "لا توجد تعارضات",
   "conflicts.noMatch": "لا توجد تعارضات مطابقة للتصفية",
   "conflicts.found": "التعارضات الموجودة: {n}",
+  "conflicts.hint": "اربط قياساتك أو سمِّها لاكتشاف النواقص",
   "conflicts.openCount": "تعارضات مفتوحة: {n}"
 }

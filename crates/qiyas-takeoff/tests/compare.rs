@@ -135,7 +135,7 @@ fn quantity_mismatch_uses_the_sum_of_links() {
     assert_eq!(c.unit, "m2");
     assert_eq!(
         c.reason,
-        "BOQ says 120.000 m2, drawings measure 99.000 m2 (−17.5 %)"
+        "BOQ says 120.000 m², drawings measure 99.000 m² (−17.5 %)"
     );
     assert_eq!(
         c.reason_ar,
@@ -190,6 +190,10 @@ fn missing_from_boq_groups_by_description() {
     );
     let kerb = missing.iter().find(|c| c.measurements.len() == 1).unwrap();
     assert_eq!(kerb.found, Some(12.0));
+    assert_eq!(
+        kerb.reason,
+        "1 measurement \"Kerb stone\" (12.000 m) matches no BOQ item"
+    );
     assert!(of_kind(&conflicts, ConflictKind::NotInDrawings).is_empty());
 }
 
@@ -337,7 +341,7 @@ fn unit_doubt_for_length_vs_area() {
     assert_eq!(tiles.measurements, [takeoff.items[0].id.clone()]);
     assert_eq!(
         tiles.reason,
-        "BOQ item A.1 is in m2, but 1 linked measurement is in another unit: 12.000 m"
+        "BOQ item A.1 is in m², but 1 linked measurement is in another unit: 12.000 m"
     );
     // An item in a unit of its own, with links not exactly in that unit, is a doubt too.
     assert!(doubts.iter().any(|c| c.boq_code.as_deref() == Some("B.1")));
@@ -494,4 +498,50 @@ fn resolved_conflicts_keep_their_status_after_recompare() {
     assert_eq!(changed.len(), 1);
     assert_ne!(changed[0].id, first[0].id);
     assert_eq!(changed[0].status, ConflictStatus::Open);
+}
+
+#[test]
+fn arabic_reasons_say_qita_for_pieces() {
+    let takeoff = takeoff(vec![m(Kind::Count, 5.0, "Windows", "GF Plan", Some("B.2"))]);
+    let conflicts = run(
+        &boq(vec![item("B.2", "Windows", "pcs", 4.0)]),
+        &takeoff,
+        &[],
+    );
+    assert_eq!(conflicts.len(), 1, "{conflicts:#?}");
+    assert_eq!(
+        conflicts[0].reason,
+        "BOQ says 4 pcs, drawings measure 5 pcs (+25.0 %)"
+    );
+    assert_eq!(
+        conflicts[0].reason_ar,
+        "جدول الكميات يذكر 4 قطعة، والمقاس من الرسومات 5 قطعة (+25.0 %)"
+    );
+}
+
+#[test]
+fn default_named_measurements_are_never_missing_from_boq() {
+    let mut auto = m(Kind::Area, 22.09, "LwPolyline on A-ROOM", "GF Plan", None);
+    auto.auto_description = true;
+    let bill = boq(vec![item("A.4", "Floor screed, bedroom", "m2", 30.0)]);
+    let conflicts = run(&bill, &takeoff(vec![auto.clone()]), &[]);
+    assert!(
+        of_kind(&conflicts, ConflictKind::MissingFromBoq).is_empty(),
+        "{conflicts:#?}"
+    );
+
+    // Named by someone, it is work the BOQ may lack.
+    let mut named = auto;
+    named.auto_description = false;
+    let conflicts = run(&bill, &takeoff(vec![named]), &[]);
+    assert_eq!(of_kind(&conflicts, ConflictKind::MissingFromBoq).len(), 1);
+}
+
+#[test]
+fn plural_descriptions_match_singular_ones() {
+    let mut doors = m(Kind::Count, 3.0, "DOOR count", "GF Plan", None);
+    doors.auto_description = true;
+    let bill = boq(vec![item("B.1", "Doors 900 mm", "pcs", 3.0)]);
+    let conflicts = run(&bill, &takeoff(vec![doors]), &[]);
+    assert!(conflicts.is_empty(), "{conflicts:#?}");
 }

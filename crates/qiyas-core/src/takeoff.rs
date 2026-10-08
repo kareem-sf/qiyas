@@ -70,6 +70,10 @@ pub struct Measurement {
     /// Code of the BOQ item this line is linked to.
     #[serde(default)]
     pub boq_code: Option<String>,
+    /// The description is a default ("Distance", "LwPolyline on A-WALL", "DOOR count"), not one
+    /// the user or the AI gave; the comparison doesn't report such lines as missing from the BOQ.
+    #[serde(default)]
+    pub auto_description: bool,
 }
 
 impl Measurement {
@@ -105,6 +109,7 @@ impl Measurement {
                 .expect("UTC now formats as RFC 3339"),
             height: None,
             boq_code: None,
+            auto_description: false,
         }
     }
 }

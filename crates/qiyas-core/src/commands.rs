@@ -151,6 +151,7 @@ impl Session {
                 };
                 let mut m = self.measurement(Kind::Length, path.length(), "Distance", "");
                 m.points = path.points;
+                m.auto_description = true;
                 m
             }
             Command::MeasureArea { points } => {
@@ -164,10 +165,19 @@ impl Session {
                 let mut m = self.measurement(Kind::Area, ring.area(), "Area", "");
                 m.self_intersecting = ring.self_intersects();
                 m.points = ring.points;
+                m.auto_description = true;
                 m
             }
-            Command::MeasureEntity { handle } => self.measure_entity(handle)?,
-            Command::CountBlock { block_name, layer } => self.count_block(block_name, layer),
+            Command::MeasureEntity { handle } => {
+                let mut m = self.measure_entity(handle)?;
+                m.auto_description = true;
+                m
+            }
+            Command::CountBlock { block_name, layer } => {
+                let mut m = self.count_block(block_name, layer);
+                m.auto_description = true;
+                m
+            }
             Command::RemoveMeasurement { id } => {
                 return Ok(match self.takeoff.remove(&id) {
                     Some(_) => Outcome::Removed { id },
@@ -178,6 +188,7 @@ impl Session {
                 return Ok(match self.takeoff.items.iter_mut().find(|m| m.id == id) {
                     Some(m) => {
                         m.description = text;
+                        m.auto_description = false;
                         Outcome::Changed
                     }
                     None => Outcome::Nothing,

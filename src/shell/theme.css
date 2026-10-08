@@ -637,6 +637,12 @@ button.link {
 .conflicts-head button:not(.primary) {
   border-color: var(--rule);
 }
+.conflicts-hint {
+  margin: 0;
+  padding: 0 10px 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
 .conflicts .empty {
   margin: 0;
   padding: 0 10px 8px;

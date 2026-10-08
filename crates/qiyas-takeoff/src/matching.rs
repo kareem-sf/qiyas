@@ -7,7 +7,7 @@ use qiyas_core::BlockCount;
 
 /// Words that say nothing about the work, units and sizes among them. Compared after `fold` and
 /// after digits are removed ("50mm" is "mm").
-const STOP_WORDS: [&str; 22] = [
+const STOP_WORDS: [&str; 23] = [
     "the",
     "of",
     "and",
@@ -30,6 +30,8 @@ const STOP_WORDS: [&str; 22] = [
     "no",
     "nr",
     "pcs",
+    // A count's default description is "<block> count".
+    "count",
 ];
 /// Arabic article and the prepositions fused with it, longest first.
 const ARTICLES: [&str; 6] = ["وال", "بال", "كال", "فال", "لل", "ال"];
@@ -82,13 +84,32 @@ fn split_words(text: &str, keep_digits: bool) -> BTreeSet<String> {
         .collect()
 }
 
-/// The words of a description with digits and stop words removed: what descriptions are matched
-/// on ("Screed 50mm" is "screed").
+/// The words of a description with digits and stop words removed and English plurals made
+/// singular: what descriptions are matched on ("Screed 50mm" is "screed", "Doors" is "door").
 pub(crate) fn tokens(text: &str) -> BTreeSet<String> {
     let stop: Vec<String> = STOP_WORDS.iter().map(|w| fold(w)).collect();
-    let mut words = split_words(text, false);
-    words.retain(|w| !stop.contains(w));
-    words
+    split_words(text, false)
+        .into_iter()
+        .map(|w| singular(&w))
+        .filter(|w| !stop.contains(w))
+        .collect()
+}
+
+/// A simple English singular for words of 4 letters or more: "boxes" is "box" (after s, x, z,
+/// ch or sh), "doors" is "door"; words ending in "ss" ("glass") stay.
+fn singular(word: &str) -> String {
+    if word.chars().count() < 4 || !word.is_ascii() || word.ends_with("ss") {
+        return word.to_string();
+    }
+    if let Some(stem) = word.strip_suffix("es") {
+        if ["s", "x", "z", "ch", "sh"]
+            .iter()
+            .any(|e| stem.ends_with(e))
+        {
+            return stem.to_string();
+        }
+    }
+    word.strip_suffix('s').unwrap_or(word).to_string()
 }
 
 /// Two descriptions (`tokens` of each) match when they share 2 tokens or more (or their one
@@ -279,6 +300,17 @@ mod tests {
         assert!(!m("Screed 50mm", "Plaster 20mm thick"));
         // Half is not more than half.
         assert!(!m("concrete slab beam column", "concrete slab stair wall"));
+    }
+
+    #[test]
+    fn english_plurals_are_singular() {
+        assert_eq!(tokens("Doors"), tokens("door"));
+        assert_eq!(tokens("Boxes"), tokens("box"));
+        assert_eq!(tokens("Walls"), tokens("wall"));
+        assert_eq!(tokens("Floor tiles"), tokens("floor tile"));
+        assert_eq!(tokens("Glass"), ["glass".to_string()].into());
+        assert_eq!(tokens("gas"), ["gas".to_string()].into());
+        assert!(overlaps(&tokens("Doors 900 mm"), &tokens("DOOR count")));
     }
 
     #[test]

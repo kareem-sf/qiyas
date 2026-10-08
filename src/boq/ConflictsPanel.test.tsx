@@ -161,3 +161,8 @@ test("empty states: no BOQ, not compared, none found", () => {
   renderPanel({ conflicts: [], onCompare: undefined });
   expect((screen.getByRole("button", { name: "Compare" }) as HTMLButtonElement).disabled).toBe(true);
 });
+
+test("a hint under the toolbar says to link or name measurements", () => {
+  renderPanel();
+  expect(screen.getByText("Link or name your measurements to find gaps")).toBeTruthy();
+});

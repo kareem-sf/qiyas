@@ -197,6 +197,7 @@ export const ConflictsPanel = memo(function ConflictsPanel({
           {t("exportConflicts")}
         </button>
       </div>
+      <p className="conflicts-hint">{t("conflicts.hint")}</p>
       {conflicts.length > 0 && (
         <div className="conflicts-filters">
           <div className="segmented" role="group" aria-label={t("conflicts.status")}>
