@@ -350,3 +350,78 @@ fn failed_write_keeps_the_original_and_the_path() {
     assert!(!project_path(&taken).exists());
     assert_eq!(std::fs::read(&source).unwrap(), original);
 }
+
+#[test]
+fn save_over_the_drawing_keeps_a_backup_of_the_original() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = qiyas_core::fixtures::write_sample(dir.path(), "dxf");
+    let original = std::fs::read(&source).unwrap();
+    let mut session = Session::open(&source).unwrap();
+    measure_sample(&mut session);
+    session.save().unwrap();
+
+    let bak = dir.path().join(format!(
+        "{}.bak",
+        source.file_name().unwrap().to_string_lossy()
+    ));
+    assert_eq!(std::fs::read(&bak).unwrap(), original);
+    assert_ne!(std::fs::read(&source).unwrap(), original);
+}
+
+#[test]
+fn save_as_a_new_file_writes_no_backup() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = qiyas_core::fixtures::write_sample(dir.path(), "dxf");
+    let mut session = Session::open(&source).unwrap();
+    session.save_as(&dir.path().join("out.dwg")).unwrap();
+    assert!(!dir.path().join("out.dwg.bak").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn save_keeps_the_drawing_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let source = qiyas_core::fixtures::write_sample(dir.path(), "dxf");
+    std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o640)).unwrap();
+    let mut session = Session::open(&source).unwrap();
+    session.save().unwrap();
+    let mode = std::fs::metadata(&source).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o640);
+}
+
+#[test]
+fn failed_save_leaves_the_drawing_in_memory_untouched() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = qiyas_core::fixtures::write_sample(dir.path(), "dxf");
+    let mut session = Session::open(&source).unwrap();
+    measure_sample(&mut session);
+    let before = session.drawing.doc.clone();
+    let target = dir.path().join("missing").join("out.dwg");
+    assert!(session.save_as(&target).is_err());
+    assert!(session.drawing.doc == before);
+    assert!(session.drawing.doc.layers.get("QIYAS-LENGTH").is_none());
+}
+
+#[test]
+fn project_file_failure_says_the_drawing_was_saved() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = qiyas_core::fixtures::write_sample(dir.path(), "dxf");
+    let mut session = Session::open(&source).unwrap();
+    measure_sample(&mut session);
+    // A non-empty folder where the project file should go: its rename fails.
+    let out = dir.path().join("out.dwg");
+    std::fs::create_dir(project_path(&out)).unwrap();
+    std::fs::write(project_path(&out).join("keep"), "").unwrap();
+
+    let err = session.save_as(&out).unwrap_err();
+    assert!(
+        err.to_string()
+            .starts_with("Drawing saved, but the project file could not be written"),
+        "{err}"
+    );
+    assert!(out.exists());
+    assert_eq!(session.drawing.path, out);
+    // The saved drawing is the one in memory now.
+    assert!(session.drawing.doc.layers.get("QIYAS-LENGTH").is_some());
+}

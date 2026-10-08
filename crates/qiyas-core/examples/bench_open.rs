@@ -1,4 +1,4 @@
-//! Times opening a real drawing, building its first batch and picking.
+//! Times opening a real drawing, building its first batch, picking and copying the document.
 //!
 //! `cargo run --release -p qiyas-core --example bench_open -- <drawing.dwg>`
 //! Read only: it never writes to the drawing.
@@ -34,11 +34,18 @@ fn main() {
     let hits: Vec<_> = (0..20).map(|_| session.pick(centre, 0.01)).collect();
     let pick_ms = ms(t) / 20.0;
 
+    // Save embeds measurements into a copy of the document; this is what that copy costs.
+    let t = Instant::now();
+    let copy = session.drawing.doc.clone();
+    let clone_ms = ms(t);
+    drop(copy);
+
     let info = session.info();
     println!("file      {}", path.display());
     println!("open ms   {open_ms:.0}");
     println!("batch ms  {batch_ms:.0}");
     println!("pick ms   {pick_ms:.3} (avg of 20, hit {:?})", hits[0]);
+    println!("clone ms  {clone_ms:.0} (copy of the document, as save makes)");
     println!("segments  {}", batch.segments.len() / 4);
     println!("ranges    {}", batch.ranges.len());
     println!("bytes     {bytes}");

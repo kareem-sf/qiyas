@@ -1,4 +1,4 @@
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   drawingInfo,
@@ -198,7 +198,18 @@ export default function App() {
     });
   }
 
-  const saveFile = () => (info ? saveWith(saveDrawing) : undefined);
+  /** Saves over the drawing's own file. A drawing that opened with problems is rewritten with only
+   *  what Qiyas could read, so ask first; the core keeps the original as a `.bak` either way. */
+  async function saveFile() {
+    if (!info) return;
+    if (
+      info.problems.length > 0 &&
+      !(await ask(t("save.confirmRecovered"), { title: t("appName"), kind: "warning" }))
+    ) {
+      return;
+    }
+    await saveWith(saveDrawing);
+  }
 
   /** Asks where to save the drawing, as DWG or DXF, and saves it there. */
   async function saveFileAs() {

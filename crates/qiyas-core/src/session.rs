@@ -129,7 +129,8 @@ impl Session {
 
     /// Writes the drawing to `path` (DWG or DXF by extension, in the drawing's own version) with
     /// the take-off embedded on the `QIYAS-*` layers, then saves the project file next to it.
-    /// From then on the session's drawing is the one at `path`.
+    /// A file already at `path` is first copied to `<path>.bak`. From then on the session's
+    /// drawing is the one at `path`; after a failed write it is unchanged.
     pub fn save_as(&mut self, path: &Path) -> Result<(), CoreError> {
         let ext = path
             .extension()
@@ -144,20 +145,26 @@ impl Session {
                 ))
             }
         };
-        embed_measurements(&mut self.drawing.doc, &self.takeoff.items);
-        // The embedded entities are part of the drawing now: draw and pick them too.
-        *self.cache.get_mut() = None;
-        let doc = &self.drawing.doc;
+        // Embedded into a copy, so a failed write leaves the drawing in memory as it was.
+        let mut doc = self.drawing.doc.clone();
+        embed_measurements(&mut doc, &self.takeoff.items);
         let bytes = if dwg {
-            DwgWriter::write_to_vec(doc)
+            DwgWriter::write_to_vec(&doc)
         } else {
-            DxfWriter::new(doc).write_to_vec()
+            DxfWriter::new(&doc).write_to_vec()
         }
         .map_err(|e| CoreError::Unwritable(e.to_string()))?;
         // Into a temp file first, so a failed save never damages the drawing already there.
-        project::write_atomic(path, &bytes)?;
+        project::write_with_backup(path, &bytes)?;
+        self.drawing.doc = doc;
+        // The embedded entities are part of the drawing now: draw and pick them too.
+        *self.cache.get_mut() = None;
         self.drawing.path = path.to_path_buf();
-        self.save_project()?;
+        self.save_project().map_err(|e| {
+            CoreError::Unwritable(format!(
+                "Drawing saved, but the project file could not be written: {e}"
+            ))
+        })?;
         Ok(())
     }
 

@@ -43,12 +43,31 @@ pub(crate) fn save(path: &Path, project: &Project) -> Result<(), CoreError> {
 }
 
 /// Writes `bytes` to `<path>.tmp`, synced to disk, then renames it over `path`, so a crash
-/// mid-write never leaves a half-written file. On failure the temp file is removed.
+/// mid-write never leaves a half-written file. A file already at `path` keeps its permissions.
+/// On failure the temp file is removed.
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".tmp");
-    let tmp = PathBuf::from(tmp);
-    let written = write_synced(&tmp, bytes).and_then(|()| std::fs::rename(&tmp, path));
+    replace(path, bytes, false)
+}
+
+/// Like `write_atomic`, but first copies a file already at `path` to `<path>.bak`. A copy, not a
+/// rename, so the original stays in place if the rename fails.
+pub(crate) fn write_with_backup(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    replace(path, bytes, true)
+}
+
+fn replace(path: &Path, bytes: &[u8], backup: bool) -> std::io::Result<()> {
+    let tmp = with_suffix(path, ".tmp");
+    let written = write_synced(&tmp, bytes).and_then(|()| {
+        if let Ok(meta) = std::fs::metadata(path) {
+            if meta.is_file() {
+                std::fs::set_permissions(&tmp, meta.permissions())?;
+                if backup {
+                    std::fs::copy(path, with_suffix(path, ".bak"))?;
+                }
+            }
+        }
+        std::fs::rename(&tmp, path)
+    });
     if written.is_err() {
         // Best effort: the error that matters is the write or rename one.
         let _ = std::fs::remove_file(&tmp);
@@ -64,11 +83,16 @@ fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 
 /// Copies the unreadable project file at `path` to `<path>.bak`; returns the backup's file name.
 pub(crate) fn back_up(path: &Path) -> std::io::Result<String> {
-    let mut bak = path.as_os_str().to_owned();
-    bak.push(".bak");
-    let bak = PathBuf::from(bak);
+    let bak = with_suffix(path, ".bak");
     std::fs::copy(path, &bak)?;
     Ok(file_name(&bak))
+}
+
+/// `path` with `suffix` added after its extension, e.g. `villa.dwg` → `villa.dwg.bak`.
+fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(suffix);
+    PathBuf::from(name)
 }
 
 #[cfg(test)]

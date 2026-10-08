@@ -60,6 +60,7 @@
   "export.failed": "Export failed: {error}",
   "save.done": "Saved to {path}",
   "save.failed": "Could not save: {error}",
+  "save.confirmRecovered": "This drawing opened with problems. Saving will rewrite it with only what Qiyas could read. A backup .bak is kept. Save anyway?",
   "about": "About",
   "about.line": "Qiyas, a QS Mind app",
   "about.close": "Close"
