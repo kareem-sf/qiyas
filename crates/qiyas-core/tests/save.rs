@@ -1,7 +1,12 @@
 use std::path::Path;
 
-use opencadcodec::{Color, EntityType};
-use qiyas_core::{project_path, Command, CoreError, Kind, Session};
+use opencadcodec::entities::{BoundaryEdge, BoundaryPath, Hatch, LineEdge};
+use opencadcodec::xdata::{ExtendedDataRecord, XDataValue};
+use opencadcodec::{Color, DxfWriter, EntityType, Point, Vector2};
+use qiyas_core::{
+    embed_measurements, project_path, read_embedded, Command, CoreError, Kind, Measurement,
+    Session, Units,
+};
 
 /// Measures a distance, an area and the three DOOR references in `session`.
 fn measure_sample(session: &mut Session) {
@@ -194,4 +199,154 @@ fn measured_entities_are_embedded_from_their_shape() {
     assert_eq!(items[1].points, [[0.0, 0.0], [10.0, 0.0]]);
     assert_eq!(items[0].layer, "A-WALL");
     assert_eq!(items[2].block_name.as_deref(), Some("DOOR"));
+}
+
+#[test]
+fn count_survives_two_trips_through_the_drawing() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = qiyas_core::fixtures::write_sample(dir.path(), "dxf");
+    let mut session = Session::open(&source).unwrap();
+    measure_sample(&mut session);
+    let first = dir.path().join("first.dwg");
+    session.save_as(&first).unwrap();
+    std::fs::remove_file(project_path(&first)).unwrap();
+
+    // Rebuilt from the drawing: no handles, so the next save writes the count from its points.
+    let mut rebuilt = Session::open(&first).unwrap();
+    assert!(rebuilt.takeoff.items[2].handles.is_empty());
+    let second = dir.path().join("second.dwg");
+    rebuilt.save_as(&second).unwrap();
+    std::fs::remove_file(project_path(&second)).unwrap();
+
+    let count = Session::open(&second).unwrap().takeoff.items[2].clone();
+    assert_eq!((count.kind, count.value), (Kind::Count, 3.0));
+    assert_eq!(count.points, [[1.0, 1.0], [5.0, 1.0], [9.0, 1.0]]);
+}
+
+/// A square ring of side `size` with its corner at (x, 0), as a hatch boundary.
+fn square(x: f64, size: f64) -> BoundaryPath {
+    let corners = [[x, 0.0], [x + size, 0.0], [x + size, size], [x, size]];
+    let mut path = BoundaryPath::new();
+    for i in 0..4 {
+        let (a, b) = (corners[i], corners[(i + 1) % 4]);
+        path.add_edge(BoundaryEdge::Line(LineEdge {
+            start: Vector2::new(a[0], a[1]),
+            end: Vector2::new(b[0], b[1]),
+        }));
+    }
+    path
+}
+
+#[test]
+fn measured_entity_with_several_paths_writes_one_polyline_per_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("hatch.dxf");
+    let mut doc = qiyas_core::fixtures::sample_doc();
+    let mut hatch = Hatch::new();
+    hatch.paths.push(square(30.0, 1.0));
+    hatch.paths.push(square(40.0, 2.0));
+    let handle = doc.add_entity(EntityType::Hatch(hatch)).unwrap().value();
+    DxfWriter::new(&doc).write_to_file(&source).unwrap();
+    let mut session = Session::open(&source).unwrap();
+    session.run(Command::MeasureEntity { handle }).unwrap();
+    let out = dir.path().join("out.dxf");
+    session.save_as(&out).unwrap();
+    std::fs::remove_file(project_path(&out)).unwrap();
+
+    let reopened = Session::open(&out).unwrap();
+    let rings = reopened
+        .drawing
+        .doc
+        .entities()
+        .filter(|e| e.common().layer == "QIYAS-AREA")
+        .count();
+    assert_eq!(rings, 2);
+    let items = &reopened.takeoff.items;
+    assert_eq!(items.len(), 1);
+    assert!((items[0].value - 5.0).abs() < 1e-9, "{}", items[0].value);
+    assert_eq!(items[0].points.len(), 4);
+}
+
+/// A length measurement drawn by the user, in metres.
+fn user_length() -> Measurement {
+    let mut m = Measurement::new(
+        Kind::Length,
+        3.0,
+        Units::Metres,
+        "Distance".to_string(),
+        String::new(),
+        "*Model_Space".to_string(),
+    );
+    m.points = vec![[0.0, 0.0], [3.0, 0.0]];
+    m
+}
+
+#[test]
+fn malformed_records_are_skipped() {
+    let mut doc = qiyas_core::fixtures::sample_doc();
+    let good = user_length();
+    embed_measurements(&mut doc, std::slice::from_ref(&good));
+    let short = vec![
+        XDataValue::String("short".to_string()),
+        XDataValue::String("count".to_string()),
+        XDataValue::Real(1.0),
+    ];
+    let wrong_type = vec![
+        XDataValue::String("wrong".to_string()),
+        XDataValue::String("count".to_string()),
+        XDataValue::String("1".to_string()),
+        XDataValue::String(String::new()),
+        XDataValue::String(String::new()),
+        XDataValue::String("*Model_Space".to_string()),
+        XDataValue::String(String::new()),
+    ];
+    let mut unknown_kind = wrong_type.clone();
+    unknown_kind[0] = XDataValue::String("unknown".to_string());
+    unknown_kind[1] = XDataValue::String("volume".to_string());
+    unknown_kind[2] = XDataValue::Real(1.0);
+    for values in [short, wrong_type, unknown_kind] {
+        let mut record = ExtendedDataRecord::new("QIYAS");
+        record.values = values;
+        let mut point = Point::new();
+        point.common.extended_data.add_record(record);
+        doc.add_entity(EntityType::Point(point)).unwrap();
+    }
+
+    let items = read_embedded(&doc);
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].id, good.id);
+    assert_eq!(items[0].points, good.points);
+}
+
+#[test]
+fn upper_case_extension_saves() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = qiyas_core::fixtures::write_sample(dir.path(), "dxf");
+    let mut session = Session::open(&source).unwrap();
+    measure_sample(&mut session);
+    let out = dir.path().join("OUT.DWG");
+    session.save_as(&out).unwrap();
+    std::fs::remove_file(project_path(&out)).unwrap();
+    assert_eq!(Session::open(&out).unwrap().takeoff.items.len(), 3);
+}
+
+#[test]
+fn failed_write_keeps_the_original_and_the_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = qiyas_core::fixtures::write_sample(dir.path(), "dxf");
+    let original = std::fs::read(&source).unwrap();
+    let mut session = Session::open(&source).unwrap();
+    measure_sample(&mut session);
+
+    // A non-empty folder where the drawing should go: the rename fails.
+    let taken = dir.path().join("taken.dwg");
+    std::fs::create_dir(&taken).unwrap();
+    std::fs::write(taken.join("keep"), "").unwrap();
+    for target in [dir.path().join("missing").join("out.dwg"), taken.clone()] {
+        assert!(matches!(session.save_as(&target), Err(CoreError::Io(_))));
+        assert_eq!(session.drawing.path, source);
+    }
+    assert!(!dir.path().join("taken.dwg.tmp").exists());
+    assert!(!project_path(&taken).exists());
+    assert_eq!(std::fs::read(&source).unwrap(), original);
 }

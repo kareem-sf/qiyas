@@ -181,13 +181,18 @@ export default function App() {
   /** Writes the drawing with `write`, then shows its new layers and entities. */
   async function saveWith(write: () => Promise<void>) {
     await run(async () => {
-      await write().catch((e) => {
-        throw t("save.failed", { error: String(e) });
-      });
-      const next = await drawingInfo();
-      setInfo(next);
+      let next: DrawingInfo | null = null;
+      try {
+        await write().catch((e) => {
+          throw t("save.failed", { error: String(e) });
+        });
+      } finally {
+        // Even a failed save may have written the drawing and moved to its new path.
+        next = await drawingInfo().catch(() => null);
+        if (next) setInfo(next);
+      }
       await redraw();
-      setNotice(t("save.done", { path: next.path }));
+      setNotice(t("save.done", { path: next?.path ?? "" }));
     });
   }
 
@@ -342,7 +347,8 @@ export default function App() {
 
   const selectedOverlay = useMemo(
     () =>
-      selected && selected.points.length > 0
+      // A count's points are the counted places, not a line to draw.
+      selected && selected.kind !== "count" && selected.points.length > 0
         ? overlaySegments(selected.points, null, selected.kind === "area" ? "area" : "distance")
         : null,
     [selected],

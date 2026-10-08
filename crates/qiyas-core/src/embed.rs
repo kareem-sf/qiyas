@@ -7,11 +7,11 @@
 //! `String(sheet)`, `String(block_name or "")`. A count writes one point per counted reference,
 //! each with the whole count's record.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use opencadcodec::xdata::{ExtendedDataRecord, XDataValue};
 use opencadcodec::{
-    AppId, CadDocument, Color, EntityType, Handle, Layer, LwPolyline, Point, Vector2,
+    AppId, CadDocument, Color, EntityType, Handle, Layer, LwPolyline, Point, Vector2, Vector3,
 };
 use qiyas_geom::{flatten, Path, Xform};
 
@@ -38,8 +38,9 @@ fn kind_name(kind: Kind) -> &'static str {
 }
 
 /// Replaces the measurement entities in `doc` with `items`: removes every entity carrying `QIYAS`
-/// xdata, then adds one polyline per length or area and one point per counted reference, on the
-/// measurement's sheet. A count reference that is not a block reference is skipped.
+/// xdata, then adds one polyline per path of a length or area and one point per counted reference
+/// (or per stored point, for a count rebuilt from the drawing), on the measurement's sheet. A count
+/// reference that is not a block reference is skipped.
 pub fn embed_measurements(doc: &mut CadDocument, items: &[Measurement]) {
     // `remove_entity` leaves the handle in its block's list; readers and writers skip such handles.
     let old: Vec<Handle> = doc
@@ -71,7 +72,7 @@ pub fn embed_measurements(doc: &mut CadDocument, items: &[Measurement]) {
     for m in items {
         match m.kind {
             Kind::Length | Kind::Area => {
-                if let Some(points) = shape_points(doc, m) {
+                for points in shape_paths(doc, m) {
                     let mut line = LwPolyline::from_points(
                         points.iter().map(|p| Vector2::new(p[0], p[1])).collect(),
                     );
@@ -80,12 +81,24 @@ pub fn embed_measurements(doc: &mut CadDocument, items: &[Measurement]) {
                 }
             }
             Kind::Count => {
-                for handle in &m.handles {
-                    if let Some(EntityType::Insert(insert)) = doc.get_entity(Handle::new(*handle)) {
-                        let mut point = Point::new();
-                        point.location = insert.insert_point;
-                        shapes.push((EntityType::Point(point), m));
-                    }
+                let locations: Vec<Vector3> = if m.handles.is_empty() {
+                    m.points
+                        .iter()
+                        .map(|p| Vector3::new(p[0], p[1], 0.0))
+                        .collect()
+                } else {
+                    m.handles
+                        .iter()
+                        .filter_map(|h| match doc.get_entity(Handle::new(*h)) {
+                            Some(EntityType::Insert(insert)) => Some(insert.insert_point),
+                            _ => None,
+                        })
+                        .collect()
+                };
+                for location in locations {
+                    let mut point = Point::new();
+                    point.location = location;
+                    shapes.push((EntityType::Point(point), m));
                 }
             }
         }
@@ -103,19 +116,26 @@ pub fn embed_measurements(doc: &mut CadDocument, items: &[Measurement]) {
     }
 }
 
-/// The picked points, or for a measured entity the vertices of its first path (first closed
-/// path for an area). `None` when there is nothing to draw.
-fn shape_points(doc: &CadDocument, m: &Measurement) -> Option<Vec<[f64; 2]>> {
+/// The picked points as one path, or for a measured entity the vertices of each of its paths
+/// (each closed path, for an area). Empty when there is nothing to draw.
+fn shape_paths(doc: &CadDocument, m: &Measurement) -> Vec<Vec<[f64; 2]>> {
     if !m.points.is_empty() {
-        return Some(m.points.clone());
+        return vec![m.points.clone()];
     }
-    let entity = doc.get_entity(Handle::new(*m.handles.first()?))?;
+    let Some(entity) = m
+        .handles
+        .first()
+        .and_then(|h| doc.get_entity(Handle::new(*h)))
+    else {
+        return Vec::new();
+    };
     let mut paths = Vec::new();
     flatten(doc, entity, &Xform::identity(), MEASURE_TOL, &mut paths);
     paths
         .into_iter()
-        .find(|p| m.kind == Kind::Length || p.closed)
+        .filter(|p| m.kind == Kind::Length || p.closed)
         .map(|p| p.points)
+        .collect()
 }
 
 fn record(m: &Measurement) -> ExtendedDataRecord {
@@ -135,8 +155,11 @@ fn record(m: &Measurement) -> ExtendedDataRecord {
 }
 
 /// Rebuilds the take-off from the entities carrying `QIYAS` xdata, in the order they were written
-/// (by handle). Points come from the polyline vertices; the points of one count become one
-/// measurement with the stored value. Records that don't match the layout are skipped.
+/// (by handle). Entities with the same id merge into one measurement with the stored value: a
+/// length or area takes its points from its first polyline, a count gets one point per `Point`.
+/// A measured entity with several paths therefore comes back with the first path only, and is
+/// written back as that one polyline on the next save. Records that don't match the layout are
+/// skipped.
 pub fn read_embedded(doc: &CadDocument) -> Vec<Measurement> {
     let units = Units::from_header(doc.header.insertion_units);
     let mut entities: Vec<(&EntityType, &ExtendedDataRecord)> = doc
@@ -146,28 +169,35 @@ pub fn read_embedded(doc: &CadDocument) -> Vec<Measurement> {
     entities.sort_by_key(|(e, _)| e.common().handle.value());
 
     let mut items: Vec<Measurement> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
+    let mut index: HashMap<String, usize> = HashMap::new();
     for (entity, record) in entities {
-        let Some(mut m) = parse(record, units) else {
+        let Some(m) = parse(record, units) else {
             continue;
         };
-        if !seen.insert(m.id.clone()) {
-            continue;
+        let i = *index.entry(m.id.clone()).or_insert_with(|| {
+            items.push(m);
+            items.len() - 1
+        });
+        let m = &mut items[i];
+        match entity {
+            EntityType::Point(p) if m.kind == Kind::Count => {
+                m.points.push([p.location.x, p.location.y]);
+            }
+            EntityType::LwPolyline(line) if m.kind != Kind::Count && m.points.is_empty() => {
+                m.points = line
+                    .vertices
+                    .iter()
+                    .map(|v| [v.location.x, v.location.y])
+                    .collect();
+                m.self_intersecting = m.kind == Kind::Area
+                    && Path {
+                        points: m.points.clone(),
+                        closed: true,
+                    }
+                    .self_intersects();
+            }
+            _ => {}
         }
-        if let (Kind::Length | Kind::Area, EntityType::LwPolyline(line)) = (m.kind, entity) {
-            m.points = line
-                .vertices
-                .iter()
-                .map(|v| [v.location.x, v.location.y])
-                .collect();
-            m.self_intersecting = m.kind == Kind::Area
-                && Path {
-                    points: m.points.clone(),
-                    closed: true,
-                }
-                .self_intersects();
-        }
-        items.push(m);
     }
     items
 }
