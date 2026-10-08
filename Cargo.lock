@@ -2497,6 +2497,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "qiyas-geom"
+version = "0.1.0"
+dependencies = [
+ "opencadcodec",
+]
+
+[[package]]
 name = "quick-xml"
 version = "0.42.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

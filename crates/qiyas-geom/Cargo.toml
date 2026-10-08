@@ -1,0 +1,9 @@
+[package]
+name = "qiyas-geom"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+opencadcodec.workspace = true
