@@ -1,0 +1,43 @@
+import { expect, test } from "vitest";
+import { shortcutFor, type Keys } from "./shortcuts";
+
+const keys = (code: string, more: Partial<Keys> = {}): Keys => ({
+  code,
+  key: "",
+  ctrlKey: false,
+  metaKey: false,
+  shiftKey: false,
+  altKey: false,
+  ...more,
+});
+
+test("tool letters, Escape and Enter", () => {
+  expect(shortcutFor(keys("KeyD"))).toBe("distance");
+  expect(shortcutFor(keys("KeyA"))).toBe("area");
+  expect(shortcutFor(keys("KeyC"))).toBe("count");
+  expect(shortcutFor(keys("KeyS"))).toBe("select");
+  expect(shortcutFor(keys("Escape"))).toBe("escape");
+  expect(shortcutFor(keys("Enter"))).toBe("finish");
+  expect(shortcutFor(keys("NumpadEnter"))).toBe("finish");
+  expect(shortcutFor(keys("KeyD", { shiftKey: true }))).toBeNull();
+  expect(shortcutFor(keys("KeyQ"))).toBeNull();
+});
+
+test("undo, redo and save with Ctrl", () => {
+  expect(shortcutFor(keys("KeyZ", { ctrlKey: true }))).toBe("undo");
+  expect(shortcutFor(keys("KeyZ", { ctrlKey: true, shiftKey: true }))).toBe("redo");
+  expect(shortcutFor(keys("KeyY", { ctrlKey: true }))).toBe("redo");
+  expect(shortcutFor(keys("KeyS", { ctrlKey: true }))).toBe("save");
+  expect(shortcutFor(keys("KeyS", { ctrlKey: true, shiftKey: true }))).toBeNull();
+  expect(shortcutFor(keys("KeyD", { ctrlKey: true }))).toBeNull();
+});
+
+test("an Arabic keyboard layout still finds the shortcut", () => {
+  expect(shortcutFor(keys("KeyZ", { key: "ئ", ctrlKey: true }))).toBe("undo");
+  expect(shortcutFor(keys("KeyD", { key: "ي" }))).toBe("distance");
+});
+
+test("Alt and Meta leave the key alone", () => {
+  expect(shortcutFor(keys("KeyD", { altKey: true }))).toBeNull();
+  expect(shortcutFor(keys("KeyZ", { ctrlKey: true, metaKey: true }))).toBeNull();
+});

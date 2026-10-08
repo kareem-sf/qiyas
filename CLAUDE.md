@@ -22,7 +22,7 @@ qiyas/
   scripts/check.sh  cargo fmt, clippy, test, tsc, vitest, in one run
 ```
 
-Only `qiyas-core` and `qiyas-desktop` exist so far; the others arrive in later tasks.
+The crates that exist now: `qiyas-core`, `qiyas-geom`, `qiyas-render`, `qiyas-boq` and `qiyas-desktop`. `qiyas-takeoff`, `qiyas-pdf` and `qiyas-ai` arrive in later phases.
 
 ## Global constraints
 
@@ -42,6 +42,8 @@ Only `qiyas-core` and `qiyas-desktop` exist so far; the others arrive in later t
 - Run `scripts/check.sh` before every commit.
 - Never push or release without the founder's yes.
 - Run the app: `pnpm tauri dev --config crates/qiyas-desktop/tauri.conf.json`.
+- The `.qiyas` project file is saved next to the drawing after every command.
+- Save keeps a `.bak` of the original drawing (e.g. `villa.dwg.bak`) before writing over it.
 
 ## Where the plans live
 

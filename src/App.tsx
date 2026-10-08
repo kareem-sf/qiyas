@@ -30,6 +30,7 @@ import { SheetTabs } from "./shell/SheetTabs";
 import { StatusBar } from "./shell/StatusBar";
 import { TakeoffPanel } from "./shell/TakeoffPanel";
 import { measurementBounds, overlaySegments } from "./tools/overlay";
+import { shortcutFor } from "./tools/shortcuts";
 import { useTool } from "./tools/useTool";
 import { parseBatch, type Batch } from "./viewport/batch";
 import type { Theme } from "./viewport/gl";
@@ -41,8 +42,6 @@ const THEME_KEY = "qiyas.theme";
 const typing = (e: KeyboardEvent) =>
   e.target instanceof HTMLElement &&
   (e.target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName));
-
-const TOOL_KEYS: Record<string, Tool> = { d: "distance", a: "area", c: "count", s: "select" };
 
 /** The stored theme, else the system's. */
 function initialTheme(): Theme {
@@ -79,6 +78,9 @@ export default function App() {
   const fitNext = useRef(false);
   /** True while a layer change talks to the core; clicks meanwhile are dropped, so they can't interleave. */
   const layerBusy = useRef(false);
+  /** Set when autosave failed for this drawing, so the error shows once, not after every click. A new
+   *  open or a successful save turns autosave back on. */
+  const autosaveOff = useRef(false);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -117,12 +119,15 @@ export default function App() {
     setItemTotals(nextTotals);
   }
 
-  /** Saves the take-off next to the drawing. A failure is shown, but the work goes on. */
+  /** Saves the take-off next to the drawing. A failure is shown once and turns autosave off, but the
+   *  work goes on. */
   async function autosave() {
+    if (autosaveOff.current) return;
     try {
       await saveProject();
     } catch (e) {
-      setError(String(e));
+      autosaveOff.current = true;
+      setError(t("project.autosaveOff", { error: String(e) }));
     }
   }
 
@@ -168,6 +173,7 @@ export default function App() {
     setOpening(true);
     await run(async () => {
       const next = await openDrawing(path);
+      autosaveOff.current = false;
       setInfo(next);
       // The core opens a drawing on its first sheet.
       setSheetBlock(next.sheets[0]?.block ?? "");
@@ -193,6 +199,8 @@ export default function App() {
         next = await drawingInfo().catch(() => null);
         if (next) setInfo(next);
       }
+      // The save wrote the project file too: autosave can try again.
+      autosaveOff.current = false;
       await redraw();
       setNotice(t("save.done", { path: next?.path ?? "" }));
     });
@@ -308,23 +316,22 @@ export default function App() {
   // Keyboard: tool letters, Escape, Enter, undo, redo and save. Re-bound each render, so it sees fresh state.
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      if (typing(e) || e.altKey || e.metaKey) return;
-      const key = e.key.toLowerCase();
-      if (e.ctrlKey) {
-        if (key === "z" && !e.shiftKey) history(undo);
-        else if (key === "y" || (key === "z" && e.shiftKey)) history(redo);
-        else if (key === "s" && !e.shiftKey) saveFile();
-        else return;
+      if (typing(e)) return;
+      const action = shortcutFor(e);
+      if (action === "undo" || action === "redo" || action === "save") {
+        if (action === "undo") history(undo);
+        else if (action === "redo") history(redo);
+        else saveFile();
         e.preventDefault();
-      } else if (e.key === "Escape") {
+      } else if (action === "escape") {
         measure.escape();
         setSelectedId(null);
-      } else if (e.key === "Enter") {
+      } else if (action === "finish") {
         // Enter on a focused button presses it; don't also finish the measure.
         if (e.target instanceof HTMLButtonElement) return;
         measure.finish();
-      } else if (TOOL_KEYS[key] && !e.shiftKey && !e.repeat) {
-        chooseTool(TOOL_KEYS[key]);
+      } else if (action && !e.repeat) {
+        chooseTool(action);
       }
     }
     window.addEventListener("keydown", onKeyDown);

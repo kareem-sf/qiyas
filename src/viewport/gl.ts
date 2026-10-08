@@ -51,11 +51,14 @@ in vec4 v_color;
 uniform vec4 u_color;  // overrides the vertex colour when alpha > 0
 uniform bool u_light;
 uniform vec3 u_ink;
+uniform vec3 u_paper;
 out vec4 outColor;
 void main() {
   vec3 c = u_color.a > 0.0 ? u_color.rgb : v_color.rgb;
   // White lines (ACI 7 and friends) would vanish on Paper; draw them in Ink.
   if (u_light && all(greaterThan(c, vec3(0.999)))) c = u_ink;
+  // Black lines would vanish on Ink; draw them in Paper.
+  if (!u_light && all(lessThan(c, vec3(0.001)))) c = u_paper;
   outColor = vec4(c, 1.0);
 }`;
 
@@ -92,6 +95,7 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
   const uColor = u("u_color");
   const uLight = u("u_light");
   const uInk = u("u_ink");
+  const uPaper = u("u_paper");
 
   const vao = gl.createVertexArray();
   const positions = gl.createBuffer();
@@ -182,6 +186,7 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       gl.uniform2f(uToClip, 2 / (camera.width * camera.scale), 2 / (camera.height * camera.scale));
       gl.uniform1i(uLight, light ? 1 : 0);
       gl.uniform3f(uInk, ...INK);
+      gl.uniform3f(uPaper, ...PAPER);
       gl.uniform2f(uOffset, 0, 0);
       gl.uniform4f(uColor, 0, 0, 0, 0);
       gl.drawArrays(gl.LINES, 0, vertexCount);
