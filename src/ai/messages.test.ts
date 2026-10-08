@@ -1,0 +1,119 @@
+import { expect, test } from "vitest";
+import type { AgentEvent } from "../api";
+import { EMPTY, reduce, startNewOffered, type Action, type Transcript } from "./messages";
+
+const run = (actions: Action[], from: Transcript = EMPTY) => actions.reduce(reduce, from);
+
+const call = (id: string, name = "measure_area", mutating = true): AgentEvent => ({
+  type: "tool_call",
+  id,
+  name,
+  input: { handle: 7 },
+  mutating,
+});
+
+const result = (id: string, more: Partial<Extract<AgentEvent, { type: "tool_result" }>> = {}): AgentEvent => ({
+  type: "tool_result",
+  id,
+  summary: "12.000 m2: wall",
+  handles: [7],
+  ui: null,
+  is_error: false,
+  ...more,
+});
+
+test("items keep the order they arrive in", () => {
+  const t = run([
+    { type: "user", text: "Measure the wall" },
+    { type: "text", text: "Measuring." },
+    call("a"),
+    result("a"),
+    { type: "text", text: "Done." },
+    { type: "done", usage: {} },
+  ]);
+  expect(t.items.map((i) => i.kind)).toEqual(["user", "assistant", "tool", "assistant"]);
+});
+
+test("text deltas join into one streamed message that finishes at the next item", () => {
+  const t = run([{ type: "text", text: "Hel" }, { type: "text", text: "lo " }, { type: "text", text: "there" }]);
+  expect(t.items).toEqual([{ kind: "assistant", text: "Hello there", finished: false }]);
+  const after = run([call("a")], t);
+  expect(after.items[0]).toEqual({ kind: "assistant", text: "Hello there", finished: true });
+  const ended = run([{ type: "end" }], t);
+  expect(ended.items[0]).toMatchObject({ finished: true });
+});
+
+test("a tool card runs, then is done with its summary, handles and ui", () => {
+  const running = run([call("a")]);
+  expect(running.items[0]).toMatchObject({ kind: "tool", id: "a", status: "running", mutating: true });
+  const ui = { action: "zoom", bounds: [[0, 0], [1, 1]] as [[number, number], [number, number]] };
+  const done = run([result("a", { ui })], running);
+  expect(done.items[0]).toMatchObject({
+    kind: "tool",
+    status: "done",
+    summary: "12.000 m2: wall",
+    handles: [7],
+    ui,
+  });
+});
+
+test("a failed tool shows as an error, and the right card of several is updated", () => {
+  const t = run([
+    call("a", "list_layers", false),
+    call("b"),
+    result("b", { is_error: true, summary: "Not closed", handles: [] }),
+    result("a", { summary: "3 found", handles: [] }),
+  ]);
+  expect(t.items).toMatchObject([
+    { id: "a", status: "done", summary: "3 found", mutating: false },
+    { id: "b", status: "error", summary: "Not closed" },
+  ]);
+});
+
+test("a refusal ends the streamed text and offers a new conversation", () => {
+  const t = run([
+    { type: "user", text: "…" },
+    { type: "text", text: "Let me" },
+    { type: "refused", category: "cyber", text: "I can't help with that." },
+  ]);
+  expect(t.items.at(-2)).toMatchObject({ kind: "assistant", finished: true });
+  expect(t.items.at(-1)).toEqual({ kind: "refused", category: "cyber", text: "I can't help with that." });
+  expect(startNewOffered(t)).toBe(true);
+});
+
+test("a long conversation offers a new one; a cancel does not", () => {
+  const long = run([{ type: "stopped", reason: "conversation is long, start a new one" }]);
+  expect(long.items).toEqual([{ kind: "stopped", reason: "conversation is long, start a new one" }]);
+  expect(startNewOffered(long)).toBe(true);
+  expect(startNewOffered(run([{ type: "stopped", reason: "cancelled" }]))).toBe(false);
+  expect(startNewOffered(EMPTY)).toBe(false);
+});
+
+test("empty thinking is dropped; thinking deltas join", () => {
+  expect(run([{ type: "thinking", text: "" }]).items).toEqual([]);
+  const t = run([
+    { type: "thinking", text: "First " },
+    { type: "thinking", text: "the walls." },
+    { type: "text", text: "Ok" },
+  ]);
+  expect(t.items).toEqual([
+    { kind: "thinking", text: "First the walls." },
+    { kind: "assistant", text: "Ok", finished: false },
+  ]);
+});
+
+test("undo marks the card; the end of a turn fails cards still running; clear empties", () => {
+  const t = run([call("a"), result("a"), { type: "undone", id: "a" }, call("b"), { type: "end" }]);
+  expect(t.items).toMatchObject([
+    { id: "a", undone: true },
+    { id: "b", status: "error" },
+  ]);
+  expect(run([{ type: "clear" }], t)).toEqual(EMPTY);
+});
+
+test("unsend takes back the last user message only", () => {
+  const t = run([{ type: "user", text: "hi" }]);
+  expect(run([{ type: "unsend" }], t)).toEqual(EMPTY);
+  const answered = run([{ type: "text", text: "Hello" }], t);
+  expect(run([{ type: "unsend" }], answered)).toEqual(answered);
+});

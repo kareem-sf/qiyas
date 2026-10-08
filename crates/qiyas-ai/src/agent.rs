@@ -14,7 +14,7 @@ use crate::provider::{
     png_base64, AiError, ContentBlock, Message, Provider, ResultPart, Role, StopReason,
     StreamEvent, TurnRequest, Usage, INVALID_JSON,
 };
-use crate::{catalogue, execute, ToolOutput};
+use crate::{catalogue, execute, ToolOutput, ToolSpec};
 
 /// Most tool calls in one user turn.
 pub const MAX_TOOL_CALLS: usize = 40;
@@ -57,6 +57,8 @@ pub enum AgentEvent {
         id: String,
         name: String,
         input: Value,
+        /// The tool changes the take-off or the BOQ work (see `ToolSpec::mutating`).
+        mutating: bool,
     },
     ToolResult {
         id: String,
@@ -183,7 +185,9 @@ impl Agent {
                 // empty user message would be refused, so the turn ends below instead.
                 StopReason::ToolUse if has_calls(&turn.content) => {
                     let assistant = Message::assistant(turn.content);
-                    let results = self.run_tools(&assistant, &mut calls, &events).await;
+                    let results = self
+                        .run_tools(&assistant, &tools, &mut calls, &events)
+                        .await;
                     self.history.push(assistant);
                     self.history.push(Message::user(results));
                     if calls >= MAX_TOOL_CALLS {
@@ -256,6 +260,7 @@ impl Agent {
     async fn run_tools(
         &self,
         assistant: &Message,
+        tools: &[ToolSpec],
         calls: &mut usize,
         events: &mpsc::Sender<AgentEvent>,
     ) -> Vec<ContentBlock> {
@@ -266,6 +271,7 @@ impl Agent {
                     id: id.to_string(),
                     name: name.to_string(),
                     input: input.clone(),
+                    mutating: tools.iter().any(|t| t.name == name && t.mutating),
                 })
                 .await;
             // Every answered call counts, bad input included.

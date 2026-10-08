@@ -17,11 +17,15 @@ import {
   takeoff,
   totals,
   undo,
+  type AiUi,
   type Command,
   type DrawingInfo,
   type Measurement,
   type Total,
 } from "./api";
+import { AssistantPanel } from "./ai/AssistantPanel";
+import type { ToolCardItem } from "./ai/messages";
+import { useAssistant } from "./ai/useAssistant";
 import { useLanguage, useT } from "./i18n";
 import { About } from "./shell/About";
 import { LayersPanel } from "./shell/LayersPanel";
@@ -30,7 +34,7 @@ import { SettingsDialog } from "./shell/SettingsDialog";
 import { SheetTabs } from "./shell/SheetTabs";
 import { StatusBar } from "./shell/StatusBar";
 import { TakeoffPanel } from "./shell/TakeoffPanel";
-import { measurementBounds, overlaySegments } from "./tools/overlay";
+import { handlesBounds, measurementBounds, overlaySegments } from "./tools/overlay";
 import { shortcutFor } from "./tools/shortcuts";
 import { useTool } from "./tools/useTool";
 import { parseBatch, type Batch } from "./viewport/batch";
@@ -74,6 +78,10 @@ export default function App() {
   const [items, setItems] = useState<Measurement[]>([]);
   const [itemTotals, setItemTotals] = useState<Total[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  /** The right panel's tab. */
+  const [sideTab, setSideTab] = useState<"takeoff" | "assistant">("takeoff");
+  /** Entities the assistant pointed at (Show on a tool card, or a zoom it asked for). */
+  const [aiHighlight, setAiHighlight] = useState<number[]>([]);
   const viewport = useRef<ViewportHandle>(null);
   const viewportBox = useRef<HTMLDivElement>(null);
   /** Set when the next batch is a new drawing or sheet, so the view fits it once it is drawn. */
@@ -169,6 +177,60 @@ export default function App() {
     setBatch(next);
   }
 
+  /** Does what a tool's result asks of the window: another sheet, other layers, a zoom. */
+  function applyAiUi(ui: AiUi) {
+    run(async () => {
+      if (ui.action === "show_sheet" && ui.sheet) {
+        setSheetBlock(ui.sheet);
+        measure.escape();
+        await redraw(true);
+      } else if (ui.action === "redraw") {
+        if (ui.hidden) {
+          // The model may write a layer's name in another case; the panel uses the drawing's.
+          const names = new Set(ui.hidden.map((n) => n.toUpperCase()));
+          setHidden(new Set(info?.layers.map((l) => l.name).filter((n) => names.has(n.toUpperCase()))));
+        }
+        await redraw();
+      } else if (ui.bounds) {
+        setAiHighlight(ui.handles ?? []);
+        viewport.current?.fitTo(ui.bounds);
+      }
+    });
+  }
+
+  const assistant = useAssistant({
+    lang,
+    onMutated: async () => {
+      await run(async () => {
+        await refreshTakeoff();
+        await redraw();
+      });
+      await autosave();
+    },
+    onUi: applyAiUi,
+    onNeedSettings: () => setSettingsOpen(true),
+  });
+
+  const showCard = useCallback(
+    (card: ToolCardItem) => {
+      setAiHighlight(card.handles);
+      const bounds = card.ui?.bounds ?? handlesBounds(card.handles, batch);
+      if (bounds) viewport.current?.fitTo(bounds);
+    },
+    [batch],
+  );
+
+  const { markUndone } = assistant;
+  const undoCard = useCallback(
+    async (card: ToolCardItem) => {
+      await history(undo);
+      markUndone(card.id);
+    },
+    [info, markUndone],
+  );
+
+  const openSettings = useCallback(() => setSettingsOpen(true), []);
+
   async function openFile() {
     const path = await open({ filters: [{ name: "Drawings", extensions: ["dwg", "dxf"] }] });
     if (typeof path !== "string") return;
@@ -181,6 +243,7 @@ export default function App() {
       setSheetBlock(next.sheets[0]?.block ?? "");
       setHidden(new Set());
       setSelectedId(null);
+      setAiHighlight([]);
       measure.escape();
       await refreshTakeoff();
       await redraw(true);
@@ -328,6 +391,7 @@ export default function App() {
       } else if (action === "escape") {
         measure.escape();
         setSelectedId(null);
+        setAiHighlight([]);
       } else if (action === "finish") {
         // Enter on a focused button presses it; don't also finish the measure.
         if (e.target instanceof HTMLButtonElement) return;
@@ -362,10 +426,10 @@ export default function App() {
   );
 
   const highlight = useMemo(() => {
-    const handles = new Set((selected?.handles ?? []).map(BigInt));
+    const handles = new Set([...(selected?.handles ?? []), ...aiHighlight].map(BigInt));
     if (measure.highlighted !== null) handles.add(BigInt(measure.highlighted));
     return handles;
-  }, [selected, measure.highlighted]);
+  }, [selected, measure.highlighted, aiHighlight]);
 
   const selectedOverlay = useMemo(
     () =>
@@ -447,7 +511,14 @@ export default function App() {
         </div>
       </header>
       {aboutOpen && <About theme={theme} onClose={() => setAboutOpen(false)} />}
-      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && (
+        <SettingsDialog
+          onClose={() => {
+            setSettingsOpen(false);
+            assistant.refreshStatus();
+          }}
+        />
+      )}
       <div className="middle">
         <LayersPanel
           layers={info?.layers ?? []}
@@ -476,14 +547,62 @@ export default function App() {
           )}
           {info && <SheetTabs sheets={info.sheets} active={sheet} onSelect={chooseSheet} />}
         </main>
-        <TakeoffPanel
-          items={items}
-          totals={itemTotals}
-          selectedId={selectedId}
-          onSelect={selectRow}
-          onRemove={removeRow}
-          onRename={renameRow}
-        />
+        <div className="side">
+          <div className="side-tabs" role="tablist">
+            <button
+              type="button"
+              role="tab"
+              id="tab-takeoff"
+              aria-controls="panel-takeoff"
+              aria-selected={sideTab === "takeoff"}
+              onClick={() => setSideTab("takeoff")}
+            >
+              {t("takeoff")}
+            </button>
+            <button
+              type="button"
+              role="tab"
+              id="tab-assistant"
+              aria-controls="panel-assistant"
+              aria-selected={sideTab === "assistant"}
+              onClick={() => setSideTab("assistant")}
+            >
+              {t("assistant")}
+              {assistant.busy && <span className="spinner" aria-hidden="true" />}
+            </button>
+          </div>
+          {/* Both stay mounted, so a draft or a running answer survives a tab switch. */}
+          <div
+            className="side-panel"
+            role="tabpanel"
+            id="panel-takeoff"
+            aria-labelledby="tab-takeoff"
+            hidden={sideTab !== "takeoff"}
+          >
+            <TakeoffPanel
+              items={items}
+              totals={itemTotals}
+              selectedId={selectedId}
+              onSelect={selectRow}
+              onRemove={removeRow}
+              onRename={renameRow}
+            />
+          </div>
+          <div
+            className="side-panel"
+            role="tabpanel"
+            id="panel-assistant"
+            aria-labelledby="tab-assistant"
+            hidden={sideTab !== "assistant"}
+          >
+            <AssistantPanel
+              assistant={assistant}
+              onShow={showCard}
+              onUndo={undoCard}
+              onSettings={openSettings}
+            />
+          </div>
+        </div>
       </div>
       <StatusBar
         cursor={cursor}

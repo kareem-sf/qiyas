@@ -596,3 +596,287 @@ button.link {
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+
+/* Right panel: the take-off and the assistant, as tabs. */
+.side {
+  width: 340px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border-inline-start: 1px solid var(--rule);
+}
+.side-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 6px 8px 0;
+  border-bottom: 1px solid var(--rule);
+}
+.side-tabs [role="tab"] {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 6px 6px 0 0;
+  color: var(--muted);
+}
+.side-tabs [role="tab"][aria-selected="true"] {
+  background: var(--bg);
+  color: var(--fg);
+  font-weight: 500;
+}
+:root[dir="rtl"] .side-tabs [role="tab"] {
+  font-feature-settings: "swsh";
+}
+.side-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.side-panel[hidden] {
+  display: none;
+}
+.side .takeoff {
+  flex: 1;
+  min-height: 0;
+  width: auto;
+  border-inline-start: 0;
+}
+
+.spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  border: 1.5px solid var(--accent-soft);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation-duration: 2.4s;
+  }
+}
+
+/* Assistant */
+.assistant-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.assistant-head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 6px 8px 2px;
+}
+.model-badge {
+  padding: 0 6px;
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.assistant-log {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 10px 10px;
+}
+.assistant-empty {
+  color: var(--muted);
+}
+.assistant-empty p {
+  margin: 8px 0;
+}
+.assistant-empty ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.assistant-empty button {
+  width: 100%;
+  text-align: start;
+  color: var(--fg);
+  background: var(--bg);
+  border-color: var(--rule);
+  padding: 6px 10px;
+}
+.msg {
+  overflow-wrap: anywhere;
+}
+.msg p,
+.msg ul {
+  margin: 0 0 6px;
+}
+.msg :is(p, ul):last-child {
+  margin-bottom: 0;
+}
+.msg ul {
+  padding-inline-start: 18px;
+}
+.msg code {
+  font: 12px ui-monospace, monospace;
+  padding: 0 3px;
+  background: var(--hover);
+  border-radius: 3px;
+}
+.msg.user {
+  align-self: flex-end;
+  max-width: 88%;
+  padding: 6px 10px;
+  white-space: pre-wrap;
+  background: var(--accent-soft);
+  border-radius: 10px;
+}
+.msg.thinking {
+  color: var(--muted);
+  font-size: 12px;
+}
+.msg.thinking summary {
+  cursor: pointer;
+}
+.msg.thinking p {
+  margin-top: 4px;
+  white-space: pre-wrap;
+}
+.msg.notice {
+  padding: 6px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  color: var(--muted);
+}
+.msg.refused {
+  color: var(--fg);
+  border-color: var(--warn);
+}
+.msg.refused strong {
+  color: var(--warn);
+}
+.msg.refused p {
+  margin-top: 4px;
+}
+.msg .category {
+  font-size: 11px;
+  color: var(--muted);
+}
+.working {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--muted);
+}
+.new-conversation {
+  align-self: center;
+}
+.assistant-panel .primary,
+.side .primary {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.tool-card {
+  padding: 6px 8px;
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  font-size: 12px;
+}
+.tool-card.error {
+  border-color: var(--warn);
+}
+.tool-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.tool-state {
+  display: inline-flex;
+  color: var(--accent);
+}
+.tool-card.error .tool-state {
+  color: var(--warn);
+}
+.tool-state svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.tool-name {
+  flex: 1;
+  font-weight: 500;
+}
+.tool-status {
+  color: var(--muted);
+}
+.tool-card.error .tool-status,
+.tool-card.error .tool-summary {
+  color: var(--warn);
+}
+.tool-summary {
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+}
+.tool-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+}
+.tool-actions button {
+  padding: 1px 8px;
+  border-color: var(--rule);
+}
+.tool-undone {
+  color: var(--muted);
+}
+
+.assistant-panel .error {
+  border-top: 1px solid var(--rule);
+}
+.composer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-top: 1px solid var(--rule);
+}
+.composer textarea {
+  resize: none;
+  font: inherit;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+.composer-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.composer-buttons button {
+  border-color: var(--rule);
+}

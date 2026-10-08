@@ -388,7 +388,8 @@ fn show_layers(
             source,
         )?;
     }
-    Ok(json!({ "hidden": session.hidden_layers(), "ui": { "action": "redraw" } }))
+    let hidden = session.hidden_layers();
+    Ok(json!({ "hidden": hidden, "ui": { "action": "redraw", "hidden": hidden } }))
 }
 
 fn find_entities(session: &Session, input: FindInput) -> Result<Value, ToolError> {

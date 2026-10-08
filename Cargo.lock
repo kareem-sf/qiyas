@@ -3195,6 +3195,7 @@ dependencies = [
  "getrandom 0.4.3",
  "keyring",
  "keyring-core",
+ "qiyas-ai",
  "qiyas-boq",
  "qiyas-core",
  "serde",
@@ -3203,6 +3204,8 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tempfile",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

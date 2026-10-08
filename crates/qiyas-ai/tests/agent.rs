@@ -399,14 +399,14 @@ async fn tool_use_round_trip_executes_against_the_session() {
     }
 
     // Events: the call, then its result, for each tool, then the closing text.
-    let calls: Vec<&str> = events
+    let calls: Vec<(&str, bool)> = events
         .iter()
         .filter_map(|e| match e {
-            AgentEvent::ToolCall { name, .. } => Some(name.as_str()),
+            AgentEvent::ToolCall { name, mutating, .. } => Some((name.as_str(), *mutating)),
             _ => None,
         })
         .collect();
-    assert_eq!(calls, ["measure_area", "list_layers"]);
+    assert_eq!(calls, [("measure_area", true), ("list_layers", false)]);
     let first_call = events
         .iter()
         .position(|e| matches!(e, AgentEvent::ToolCall { id, .. } if id == "toolu_1"))
@@ -824,8 +824,9 @@ async fn openai_compatible_streams_text_and_tool_calls() {
     result.unwrap();
     assert_eq!(texts(&events), ["Let me look.", "Three layers."]);
     assert!(events.iter().any(|e| matches!(e,
-        AgentEvent::ToolCall { id, name, input }
-            if id == "call_1" && name == "list_layers" && *input == json!({"offset": 0}))));
+        AgentEvent::ToolCall { id, name, input, mutating }
+            if id == "call_1" && name == "list_layers" && *input == json!({"offset": 0})
+                && !mutating)));
 
     let reqs = mock.requests();
     assert_eq!(reqs.len(), 2);

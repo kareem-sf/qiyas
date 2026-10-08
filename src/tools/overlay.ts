@@ -21,6 +21,15 @@ export function overlaySegments(points: Point[], cursor: Point | null, tool: Too
 /** Where a take-off line sits: around its points, else around its entities as drawn in `batch`.
  *  `null` when neither is on the current batch. */
 export function measurementBounds(m: Measurement, batch: Batch | null): Bounds | null {
+  return around(m.points, m.points.length === 0 ? m.handles : [], batch);
+}
+
+/** Around the entities `handles` as drawn in `batch`; `null` when none is on it. */
+export function handlesBounds(handles: number[], batch: Batch | null): Bounds | null {
+  return around([], handles, batch);
+}
+
+function around(points: Point[], entities: number[], batch: Batch | null): Bounds | null {
   const min: Point = [Infinity, Infinity];
   const max: Point = [-Infinity, -Infinity];
   const add = (x: number, y: number) => {
@@ -29,9 +38,9 @@ export function measurementBounds(m: Measurement, batch: Batch | null): Bounds |
     max[0] = Math.max(max[0], x);
     max[1] = Math.max(max[1], y);
   };
-  for (const [x, y] of m.points) add(x, y);
-  if (m.points.length === 0 && batch) {
-    const handles = new Set(m.handles.map(BigInt));
+  for (const [x, y] of points) add(x, y);
+  if (entities.length > 0 && batch) {
+    const handles = new Set(entities.map(BigInt));
     const [ox, oy] = batch.origin;
     for (const { handle, first, count } of batch.ranges) {
       if (!handles.has(handle)) continue;

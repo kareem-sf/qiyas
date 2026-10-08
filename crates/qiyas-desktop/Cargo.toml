@@ -13,6 +13,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { workspace = true }
 
 [dependencies]
+qiyas-ai = { path = "../qiyas-ai" }
 qiyas-boq = { path = "../qiyas-boq" }
 qiyas-core = { path = "../qiyas-core" }
 tauri = { workspace = true }
@@ -25,6 +26,13 @@ serde_json = { workspace = true }
 keyring = "4"
 keyring-core = "1"
 getrandom = "0.4"
+# The assistant's turn runs on Tauri's tokio runtime: a channel for its events, and a token to
+# cancel it.
+tokio = { version = "1", features = ["macros", "sync", "time"] }
+tokio-util = "0.7"
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# The IPC tests run the commands on Tauri's mock runtime, on the sample drawing.
+tauri = { workspace = true, features = ["test"] }
+qiyas-core = { path = "../qiyas-core", features = ["fixtures"] }

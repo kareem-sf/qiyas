@@ -234,3 +234,58 @@ export const deleteApiKey = (provider: Provider) => invoke<void>("delete_api_key
 
 /** The running app's folder, where the `qiyas-mcp` bridge sits. */
 export const appDir = () => invoke<string>("app_dir");
+
+/** What the window should do after a tool, from the tool's result. Bounds in drawing coordinates. */
+export type AiUi = {
+  /** "zoom", "show_sheet", "show_markup" or "redraw". */
+  action: string;
+  bounds?: [[number, number], [number, number]];
+  handles?: number[];
+  sheet?: string;
+  /** After `redraw` from show_layers: the layers hidden now. */
+  hidden?: string[];
+  id?: string;
+};
+
+/** One event of the assistant's turn (`qiyas_ai::AgentEvent`), sent as `ai:event`. */
+export type AgentEvent =
+  | { type: "text"; text: string }
+  | { type: "thinking"; text: string }
+  | { type: "tool_call"; id: string; name: string; input: unknown; mutating: boolean }
+  | {
+      type: "tool_result";
+      id: string;
+      summary: string;
+      handles: number[];
+      ui: AiUi | null;
+      is_error: boolean;
+    }
+  | { type: "refused"; category: string | null; text: string }
+  | { type: "stopped"; reason: string }
+  | { type: "done"; usage: Record<string, number> };
+
+/** Sent as `ai:done` when a turn has ended. */
+export type AiDone = { error: string | null };
+
+export type AiStatus = {
+  /** "anthropic", "openai_compatible", or "mock" in a debug build with QIYAS_AI_MOCK=1. */
+  provider: string;
+  model: string;
+  has_key: boolean;
+  busy: boolean;
+  message_count: number;
+};
+
+/** Starts a turn and returns at once; events follow as `ai:event`, then `ai:done`. Rejects with
+ *  "busy", "no_api_key" or "no_base_url". */
+export const aiSend = (text: string) => invoke<void>("ai_send", { text });
+
+export const aiCancel = () => invoke<void>("ai_cancel");
+
+/** Starts a new conversation; `ai:cleared` follows. */
+export const aiClear = () => invoke<void>("ai_clear");
+
+export const aiStatus = () => invoke<AiStatus>("ai_status");
+
+/** The assistant answers in this language; a change starts a new conversation. */
+export const aiSetLanguage = (lang: "en" | "ar") => invoke<void>("ai_set_language", { lang });

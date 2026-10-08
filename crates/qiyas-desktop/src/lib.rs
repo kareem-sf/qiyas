@@ -1,4 +1,7 @@
+mod ai;
 mod commands;
+#[cfg(debug_assertions)]
+mod mock;
 pub mod secrets;
 pub mod settings;
 mod state;
@@ -40,6 +43,11 @@ pub fn run() {
             commands::has_api_key,
             commands::delete_api_key,
             commands::app_dir,
+            commands::ai_send,
+            commands::ai_cancel,
+            commands::ai_clear,
+            commands::ai_status,
+            commands::ai_set_language,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Qiyas");
