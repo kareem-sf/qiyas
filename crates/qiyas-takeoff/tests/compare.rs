@@ -427,6 +427,21 @@ fn marks_match_block_names_and_attribute_values() {
 }
 
 #[test]
+fn nos_and_no_headers_are_count_columns() {
+    let plans = [("GF Plan".to_string(), blocks(&[("D1", 3)]))];
+    for columns in [["MARK", "NOS"], ["TYPE", "No."]] {
+        let mut schedule = door_schedule(&[("D1", "4")]);
+        schedule.columns = columns.iter().map(|c| c.to_string()).collect();
+        let conflicts = against_plans(&schedule, &plans);
+        assert_eq!(conflicts.len(), 1, "{columns:?}");
+        assert_eq!(
+            (conflicts[0].expected, conflicts[0].found),
+            (Some(4.0), Some(3.0))
+        );
+    }
+}
+
+#[test]
 fn sheets_of_one_floor_count_once() {
     let schedule = |n: &str| door_schedule(&[("D1", n)]);
     let sheet = |name: &str, n: usize| (name.to_string(), blocks(&[("D1", n)]));

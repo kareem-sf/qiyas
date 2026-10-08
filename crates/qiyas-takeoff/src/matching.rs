@@ -53,12 +53,22 @@ pub(crate) fn fold(text: &str) -> String {
         .collect()
 }
 
-/// The words of a text: folded, split at anything not a letter or digit, digits removed,
-/// one-letter words dropped, the Arabic article (also fused with و ب ك ف ل) taken off.
+/// The words of a text, as schedule headers are read: folded, split at anything not a letter or
+/// digit, one-letter words dropped, the Arabic article (also fused with و ب ك ف ل) taken off.
+/// Stop words stay, so "No." and "Nos" are words.
 pub(crate) fn words(text: &str) -> BTreeSet<String> {
+    split_words(text, true)
+}
+
+/// `words`, with digits kept or removed.
+fn split_words(text: &str, keep_digits: bool) -> BTreeSet<String> {
     fold(text)
         .split(|c: char| !c.is_alphanumeric())
-        .map(|word| word.chars().filter(|c| !c.is_numeric()).collect::<String>())
+        .map(|word| {
+            word.chars()
+                .filter(|c| keep_digits || !c.is_numeric())
+                .collect::<String>()
+        })
         .map(|word| {
             ARTICLES
                 .iter()
@@ -72,10 +82,11 @@ pub(crate) fn words(text: &str) -> BTreeSet<String> {
         .collect()
 }
 
-/// The words of a description without the stop words: what descriptions are matched on.
+/// The words of a description with digits and stop words removed: what descriptions are matched
+/// on ("Screed 50mm" is "screed").
 pub(crate) fn tokens(text: &str) -> BTreeSet<String> {
     let stop: Vec<String> = STOP_WORDS.iter().map(|w| fold(w)).collect();
-    let mut words = words(text);
+    let mut words = split_words(text, false);
     words.retain(|w| !stop.contains(w));
     words
 }
@@ -113,7 +124,8 @@ pub(crate) fn unit_key(unit: &str) -> String {
 /// that "Level 01" and "L1" are the same floor:
 /// - GF, G, ground, الأرضي → GF; RF, roof, السطح → RF; mezzanine, الميزانين → MZ;
 /// - FF, first, الأول → L1; SF, second, الثاني → L2; TF, third, الثالث → L3; fourth, الرابع → L4;
-/// - L1 to L99, 1F to 99F, and a number after level, floor, lvl, طابق or دور → L and the number;
+/// - L1 to L99, 1F to 99F, and a number after level, floor, lvl, طابق or دور → L and the number
+///   (level 0 → GF);
 /// - B1 to B9 → B and the number; basement, البدروم → B.
 ///
 /// A bare sheet number ("A-01") is not a floor.
@@ -130,7 +142,7 @@ pub(crate) fn floor_tokens(sheet: &str) -> BTreeSet<String> {
         } else if LEVEL_WORDS.iter().any(|w| fold(w) == *word) {
             let number = words.get(i + 1).and_then(|n| floor_number(n, 2));
             if let Some(n) = number {
-                floors.insert(format!("L{n}"));
+                floors.insert(level(n));
             }
         }
     }
@@ -175,7 +187,16 @@ fn named_floor(word: &str) -> Option<String> {
     word.strip_prefix('l')
         .or_else(|| word.strip_suffix('f'))
         .and_then(|d| floor_number(d, 2))
-        .map(|n| format!("L{n}"))
+        .map(level)
+}
+
+/// Level `n` by its canonical name: level 0 is the ground floor.
+fn level(n: u32) -> String {
+    if n == 0 {
+        "GF".to_string()
+    } else {
+        format!("L{n}")
+    }
 }
 
 /// `text` as a floor number of 1 to `most` digits (Arabic-Indic too), without leading zeros.
@@ -271,6 +292,8 @@ mod tests {
         assert_eq!(f("Ground Floor Plan"), ["GF"]);
         assert_eq!(f("Ground Floor Furniture"), ["GF"]);
         assert_eq!(f("Floor 3"), ["L3"]);
+        assert_eq!(f("Level 0 Plan"), ["GF"]);
+        assert_eq!(f("L00 Lighting"), ["GF"]);
         assert_eq!(f("مخطط الدور ٢"), ["L2"]);
         assert_eq!(f("مخطط الطابق الأرضي"), ["GF"]);
         assert_eq!(f("Basement B2"), ["B", "B2"]);

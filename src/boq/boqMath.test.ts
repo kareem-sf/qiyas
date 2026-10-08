@@ -50,3 +50,10 @@ test("search ignores case and Arabic letter forms", () => {
   expect(matches(item, "steel")).toBe(false);
   expect(matches(item, "  ")).toBe(true);
 });
+
+test("search keeps Arabic-Indic digits", () => {
+  const item = boqItem("C-03", "خرسانة الدور ٢", "m3", 1);
+  expect(searchKey("٢")).toBe("٢");
+  expect(matches(item, "٢")).toBe(true);
+  expect(matches(item, "٣")).toBe(false);
+});

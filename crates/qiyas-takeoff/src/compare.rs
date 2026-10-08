@@ -12,7 +12,7 @@ use time::OffsetDateTime;
 
 use crate::matching::{
     floor_tokens, group_key, is_schedule_sheet, leading_number, names_mark, overlaps, tokens,
-    unit_key, STANDARD_UNITS,
+    unit_key, words, STANDARD_UNITS,
 };
 
 /// What a comparison looks at. Sheets are named as the user sees them (layout names).
@@ -481,7 +481,7 @@ fn schedule_vs_plan(
 
 /// The mark column and the count column of a schedule header, or `None` when it lacks either.
 fn schedule_columns(columns: &[String]) -> Option<(usize, usize)> {
-    let words: Vec<BTreeSet<String>> = columns.iter().map(|c| tokens(c)).collect();
+    let words: Vec<BTreeSet<String>> = columns.iter().map(|c| words(c)).collect();
     let has = |i: usize, set: &[&str]| set.iter().any(|w| words[i].contains(*w));
     let qty = (0..columns.len())
         .find(|&i| has(i, &QTY_WORDS))
