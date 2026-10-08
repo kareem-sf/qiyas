@@ -1,0 +1,15 @@
+[package]
+name = "qiyas-render"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+opencadcodec.workspace = true
+qiyas-geom = { path = "../qiyas-geom" }
+rstar.workspace = true
+
+[dev-dependencies]
+# Dev-only, for the sample drawing: qiyas-core depends on qiyas-render, never the other way.
+qiyas-core = { path = "../qiyas-core", features = ["fixtures"] }
