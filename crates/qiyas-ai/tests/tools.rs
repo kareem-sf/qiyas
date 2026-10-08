@@ -150,6 +150,17 @@ fn execute_measure_area_by_handle_marks_ai_source() {
     let length = &session.takeoff.items[1];
     assert_eq!((length.kind, length.value), (Kind::Length, 7.0));
     assert_eq!(length.source, "mcp");
+
+    // Both carry a default description; one the model gives is its own.
+    assert!(session.takeoff.items.iter().all(|m| m.auto_description));
+    assert_eq!(m["auto_description"], true);
+    let out = run(
+        &mut session,
+        "add_measurement",
+        json!({ "kind": "area", "handles": [rectangle], "description": "Slab" }),
+    )
+    .unwrap();
+    assert_eq!(out["measurement"]["auto_description"], false);
 }
 
 #[test]
@@ -519,4 +530,105 @@ fn import_boq_and_list_boq() {
 
     assert!(session.undo_if(Source::Ai));
     assert_eq!(session.boq, None);
+}
+
+/// A one-item BOQ workbook at `path`.
+fn write_boq(path: &std::path::Path) {
+    let mut book = rust_xlsxwriter::Workbook::new();
+    let sheet = book.add_worksheet();
+    sheet
+        .write_row(0, 0, ["Item", "Description", "Unit", "Quantity"])
+        .unwrap();
+    sheet
+        .write_row(1, 0, ["F.1", "Floor tiles", "sqm"])
+        .unwrap();
+    sheet.write_number(1, 3, 48.0).unwrap();
+    book.save(path).unwrap();
+}
+
+const OUTSIDE: &str = "Only files beside the open drawing can be opened by the assistant; use the BOQ tab's Import for other files";
+
+#[test]
+fn import_boq_opens_files_beside_the_drawing_only() {
+    // outer/x.xlsx, outer/plan/sample.dxf, outer/plan/test-boq.xlsx, outer/plan/boq/sub.xlsx.
+    let outer = tempfile::tempdir().unwrap();
+    let dir = outer.path().join("plan");
+    std::fs::create_dir_all(dir.join("boq")).unwrap();
+    let mut session = Session::open(&qiyas_core::fixtures::write_sample(&dir, "dxf")).unwrap();
+    write_boq(&dir.join("test-boq.xlsx"));
+    write_boq(&dir.join("boq").join("sub.xlsx"));
+
+    // Relative paths are read from the drawing's folder, whatever the process's own folder is.
+    let out = run(
+        &mut session,
+        "import_boq",
+        json!({ "path": "test-boq.xlsx" }),
+    )
+    .unwrap();
+    assert_eq!(out["items"], 1, "{out}");
+    let out = run(
+        &mut session,
+        "import_boq",
+        json!({ "path": "boq/sub.xlsx" }),
+    )
+    .unwrap();
+    assert_eq!(out["items"], 1, "{out}");
+    let inside = dir.join("test-boq.xlsx");
+    run(&mut session, "import_boq", json!({ "path": inside })).unwrap();
+
+    // Anything outside the folder is refused, before it is read.
+    let outside = outer.path().join("x.xlsx");
+    write_boq(&outside);
+    let mut refused = vec![
+        json!("../x.xlsx"),
+        json!("boq/../../x.xlsx"),
+        json!(outside),
+        json!("../missing.xlsx"),
+    ];
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&outside, dir.join("link.xlsx")).unwrap();
+        refused.push(json!("link.xlsx"));
+    }
+    for path in refused {
+        let err = run(&mut session, "import_boq", json!({ "path": path })).unwrap_err();
+        match err {
+            ToolError::BadInput(why) => assert_eq!(why, OUTSIDE, "{path}"),
+            other => panic!("{path}: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn json_floats_are_rounded_to_6_decimals() {
+    let (_dir, mut session) = sample();
+    // 0.1 x 0.2 is 0.020000000000000004 in floating point.
+    let out = run(
+        &mut session,
+        "add_measurement",
+        json!({
+            "kind": "area",
+            "points": [[0, 0], [0.1, 0], [0.1, 0.2], [0, 0.2]],
+            "description": "Pad"
+        }),
+    )
+    .unwrap();
+    assert_eq!(out["measurement"]["value"].to_string(), "0.02", "{out}");
+    assert_eq!(out["measurement"]["shown"].to_string(), "0.02", "{out}");
+    // Handles stay integers.
+    let doors = handles_of(&session, "Insert");
+    let out = run(&mut session, "get_entity", json!({ "handle": doors[0] })).unwrap();
+    assert_eq!(out["entity"]["handle"], json!(doors[0]));
+    assert!(out["entity"]["handle"].is_u64());
+}
+
+#[test]
+fn view_image_is_800_wide_by_default() {
+    let (_dir, mut session) = sample();
+    let ToolOutput::Image { png, .. } =
+        execute(&mut session, "view_image", &json!({}), Source::Ai).unwrap()
+    else {
+        panic!("expected an image");
+    };
+    assert_eq!(u32::from_be_bytes(png[16..20].try_into().unwrap()), 800);
 }

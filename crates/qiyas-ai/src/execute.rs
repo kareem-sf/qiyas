@@ -2,6 +2,7 @@
 //! keeps the JSON result under 40 KB. Nothing from a tool's input is ever logged.
 
 use std::collections::{HashMap, HashSet};
+use std::path::{Component, Path, PathBuf};
 
 use qiyas_core::{
     Command, ConflictStatus, CoreError, EntityFilter, Kind, Outcome, Session, Source,
@@ -16,10 +17,15 @@ use crate::image::{height_for, normalized, render_png, MAX_SIDE};
 const MAX_OUTPUT: usize = 40_960;
 /// `find_entities` rows per page when the model gives no limit.
 const DEFAULT_LIMIT: usize = 100;
-const DEFAULT_WIDTH: u32 = 1024;
+const DEFAULT_WIDTH: u32 = 800;
 const MIN_WIDTH: u32 = 16;
 /// Margin around the whole sheet in `view_image`, as a share of its size.
 const MARGIN: f64 = 0.02;
+/// Why a tool refuses a path outside the drawing's folder.
+const OUTSIDE_FOLDER: &str = "Only files beside the open drawing can be opened by the assistant; \
+                              use the BOQ tab's Import for other files";
+/// Decimals kept in the numbers of a JSON result.
+const DECIMALS: f64 = 1e6;
 
 /// What a tool returns: JSON for the model, or a picture of the drawing.
 #[derive(Debug, Clone)]
@@ -207,7 +213,7 @@ pub fn execute(
         "view_image" => return view_image(session, parse(input)?),
         _ => return Err(ToolError::UnknownTool(name.to_string())),
     };
-    Ok(ToolOutput::Json(capped(value, offset)))
+    Ok(ToolOutput::Json(capped(rounded(value), offset)))
 }
 
 // ---- Inputs. Unknown fields are refused, so a misspelt filter is never silently ignored. ----
@@ -499,7 +505,22 @@ fn measure(
         (Some(_), Some(_)) => return Err(bad("Give handle or points, not both")),
         (None, None) => return Err(bad("Give handle or points")),
     };
-    measured(session.run_as(cmd, source)?)
+    let default_name = matches!(cmd, Command::AddMeasurement { .. });
+    let mut outcome = session.run_as(cmd, source)?;
+    // "LwPolyline on A-ROOM" is the default name MeasureEntity would give: mark it so, in the
+    // take-off (the step just recorded) and in the answer.
+    if let (true, Outcome::Measured { measurement }) = (default_name, &mut outcome) {
+        measurement.auto_description = true;
+        if let Some(m) = session
+            .takeoff
+            .items
+            .iter_mut()
+            .find(|m| m.id == measurement.id)
+        {
+            m.auto_description = true;
+        }
+    }
+    measured(outcome)
 }
 
 fn count_blocks(
@@ -564,9 +585,9 @@ fn add_measurement(
 /// Reads the workbook at `path` and makes it the session's BOQ (an undo step). Returns a summary,
 /// not the items: list_boq pages through those.
 fn import_boq(session: &mut Session, input: ImportBoq, source: Source) -> Result<Value, ToolError> {
+    let path = resolve_in_drawing_folder(session, &input.path)?;
     // A wrong path or a sheet with no header is the model's to fix, so both are bad input.
-    let boq = qiyas_boq::import_boq(std::path::Path::new(&input.path))
-        .map_err(|e| ToolError::BadInput(e.to_string()))?;
+    let boq = qiyas_boq::import_boq(&path).map_err(|e| ToolError::BadInput(e.to_string()))?;
     let mut sections: Vec<&str> = Vec::new();
     for item in &boq.items {
         if !item.section.is_empty() && sections.last() != Some(&item.section.as_str()) {
@@ -664,6 +685,68 @@ fn view_image(session: &Session, input: ImageInput) -> Result<ToolOutput, ToolEr
 }
 
 // ---- Helpers ----
+
+/// `path` (relative to the open drawing's folder, or absolute) as a real path inside that folder
+/// or one of its subfolders, links followed. Every tool that takes a path goes through this, so
+/// the model, or an MCP client, can't read files elsewhere on the computer.
+pub(crate) fn resolve_in_drawing_folder(
+    session: &Session,
+    path: &str,
+) -> Result<PathBuf, ToolError> {
+    let parent = session
+        .drawing
+        .path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let folder = parent
+        .canonicalize()
+        .map_err(|e| ToolError::Failed(format!("The drawing's folder can't be read: {e}")))?;
+    let full = folder.join(path);
+    // A file that doesn't exist yet can't be resolved; its path is cleaned up as written.
+    let real = full.canonicalize().unwrap_or_else(|_| lexical(&full));
+    if real.starts_with(&folder) {
+        Ok(real)
+    } else {
+        Err(bad(OUTSIDE_FOLDER))
+    }
+}
+
+/// `path` with `.` and `..` worked out from its text alone.
+fn lexical(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in path.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// `value` with every non-integer number rounded to 6 decimals, so the model reads 22.09, not
+/// 22.089999999999996. Integers (handles, counts) are left as they are.
+fn rounded(value: Value) -> Value {
+    match value {
+        Value::Number(n) if n.is_f64() => {
+            let x = n.as_f64().unwrap_or_default();
+            let r = (x * DECIMALS).round() / DECIMALS;
+            // Too large to scale safely: as it is.
+            if !r.is_finite() || x.abs() >= 1e9 {
+                return Value::Number(n);
+            }
+            serde_json::Number::from_f64(r).map_or(Value::Number(n), Value::Number)
+        }
+        Value::Array(items) => Value::Array(items.into_iter().map(rounded).collect()),
+        Value::Object(map) => {
+            Value::Object(map.into_iter().map(|(k, v)| (k, rounded(v))).collect())
+        }
+        other => other,
+    }
+}
 
 /// The block of the sheet named by its name or block name (any case); the current sheet when
 /// `None`.

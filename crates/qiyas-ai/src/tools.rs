@@ -254,11 +254,16 @@ pub fn catalogue() -> Vec<ToolSpec> {
         ),
         tool(
             "import_boq",
-            "Import a bill of quantities from an Excel file on the user's computer; it replaces \
-             the BOQ imported before (the user can undo it). Headers may be English or Arabic. \
-             Returns the number of items, the sections, and how many item rows were left out \
-             because their quantity is not a number; list_boq gives the items.",
-            json!({ "path": { "type": "string", "description": "Full path of the .xlsx file." } }),
+            "Import a bill of quantities from an Excel file beside the open drawing; it replaces \
+             the BOQ imported before (the user can undo it). The path is relative to the \
+             drawing's folder (the [state] block gives it); files outside that folder and its \
+             subfolders can't be opened. Headers may be English or Arabic. Returns the number \
+             of items, the sections, and how many item rows were left out because their \
+             quantity is not a number; list_boq gives the items.",
+            json!({ "path": {
+                "type": "string",
+                "description": "The .xlsx file, relative to the drawing's folder, e.g. boq.xlsx."
+            } }),
             &["path"],
             true,
         ),
@@ -274,7 +279,8 @@ pub fn catalogue() -> Vec<ToolSpec> {
         ),
         tool(
             "link_boq",
-            "Link a measurement to a BOQ item, so its quantity counts towards that item.",
+            "Link a measurement to a BOQ item, so its quantity counts towards that item. Before \
+             comparing, link each measurement this way, or name it the way the BOQ does.",
             json!({
                 "id": id(),
                 "code": { "type": "string", "description": "The BOQ item code; empty unlinks it." }
@@ -288,7 +294,9 @@ pub fn catalogue() -> Vec<ToolSpec> {
              and list the conflicts: quantity mismatches, work missing from the BOQ or from the \
              drawings, schedules that disagree with the plans, blocks counted differently on two \
              sheets of one floor, doubtful units. Conflicts found before keep their status and \
-             note. When the result is cut, list_conflicts pages through the rest.",
+             note. When the result is cut, list_conflicts pages through the rest. Before \
+             comparing, link each measurement to its BOQ item with link_boq, or name it the way \
+             the BOQ does.",
             json!({
                 "tolerance": {
                     "type": "number",
@@ -352,7 +360,7 @@ pub fn catalogue() -> Vec<ToolSpec> {
              colours on white, the take-off in violet. The caption gives the bounds used.",
             json!({
                 "bounds": bbox("The part to show; the whole sheet when left out."),
-                "width": { "type": "integer", "description": "Width in pixels, at most 1600. Default 1024." }
+                "width": { "type": "integer", "description": "Width in pixels, at most 1600. Default 800." }
             }),
             &[],
             false,

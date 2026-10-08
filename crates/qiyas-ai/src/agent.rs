@@ -23,6 +23,14 @@ pub const MAX_TOOL_CALLS: usize = 40;
 pub const MAX_MESSAGES: usize = 400;
 /// Why the agent stops at `MAX_MESSAGES`.
 pub const TOO_LONG: &str = "conversation is long, start a new one";
+/// Most base64 bytes of pictures in one conversation; every picture stays in the history and is
+/// sent again with each request.
+pub const IMAGE_BUDGET: usize = 15 * 1024 * 1024;
+/// Most `remove_measurement` (and, apart, `resolve_conflict`) calls in one user turn.
+pub const MAX_DESTRUCTIVE: usize = 10;
+const NO_IMAGE_BUDGET: &str =
+    "Image budget for this conversation is used up; start a new conversation to look again";
+const CANCELLED: &str = "Not run: cancelled";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentSettings {
@@ -94,6 +102,39 @@ pub struct Agent {
     system: Option<String>,
     /// Append-only: earlier messages are never changed or dropped.
     history: Vec<Message>,
+    /// Base64 bytes of the pictures in `history`, and the most it may hold.
+    image_bytes: usize,
+    image_budget: usize,
+}
+
+/// What the tool calls of one user turn have used so far.
+#[derive(Default)]
+struct TurnCounts {
+    calls: usize,
+    removals: usize,
+    resolutions: usize,
+}
+
+impl TurnCounts {
+    /// Counts a removal or resolution; `Some(why)` when the turn has had its share of them.
+    fn over_cap(&mut self, name: &str) -> Option<&'static str> {
+        let (n, why) = match name {
+            "remove_measurement" => (
+                &mut self.removals,
+                "Too many removals in one turn; ask the user to confirm",
+            ),
+            "resolve_conflict" => (
+                &mut self.resolutions,
+                "Too many resolutions in one turn; ask the user to confirm",
+            ),
+            _ => return None,
+        };
+        if *n >= MAX_DESTRUCTIVE {
+            return Some(why);
+        }
+        *n += 1;
+        None
+    }
 }
 
 impl Agent {
@@ -108,7 +149,15 @@ impl Agent {
             settings,
             system: None,
             history: Vec::new(),
+            image_bytes: 0,
+            image_budget: IMAGE_BUDGET,
         }
+    }
+
+    /// The agent with another picture budget (base64 bytes per conversation), for tests.
+    pub fn with_image_budget(mut self, bytes: usize) -> Agent {
+        self.image_budget = bytes;
+        self
     }
 
     pub fn history(&self) -> &[Message] {
@@ -119,6 +168,7 @@ impl Agent {
     pub fn clear(&mut self) {
         self.history.clear();
         self.system = None;
+        self.image_bytes = 0;
     }
 
     /// The new settings apply to the next request; the language of the system prompt changes
@@ -152,7 +202,7 @@ impl Agent {
             ContentBlock::Text { text: user_text },
         ]);
         let tools = catalogue();
-        let mut calls = 0;
+        let mut counts = TurnCounts::default();
         let mut usage = Usage::default();
         loop {
             if cancel.is_cancelled() {
@@ -186,11 +236,11 @@ impl Agent {
                 StopReason::ToolUse if has_calls(&turn.content) => {
                     let assistant = Message::assistant(turn.content);
                     let results = self
-                        .run_tools(&assistant, &tools, &mut calls, &events)
+                        .run_tools(&assistant, &tools, &mut counts, &events, &cancel)
                         .await;
                     self.history.push(assistant);
                     self.history.push(Message::user(results));
-                    if calls >= MAX_TOOL_CALLS {
+                    if counts.calls >= MAX_TOOL_CALLS {
                         return stopped(&events, &format!("stopped after {MAX_TOOL_CALLS} steps"))
                             .await;
                     }
@@ -256,13 +306,15 @@ impl Agent {
     }
 
     /// Runs the tool calls of `assistant` in order and returns one result block for each, all
-    /// for one user message. Past `MAX_TOOL_CALLS` the calls are answered but not run.
+    /// for one user message. Once `cancel` fires, past `MAX_TOOL_CALLS`, and past
+    /// `MAX_DESTRUCTIVE` removals or resolutions, the calls are answered but not run.
     async fn run_tools(
-        &self,
+        &mut self,
         assistant: &Message,
         tools: &[ToolSpec],
-        calls: &mut usize,
+        counts: &mut TurnCounts,
         events: &mpsc::Sender<AgentEvent>,
+        cancel: &CancellationToken,
     ) -> Vec<ContentBlock> {
         let mut results = Vec::new();
         for (id, name, input) in assistant.tool_uses() {
@@ -275,18 +327,23 @@ impl Agent {
                 })
                 .await;
             // Every answered call counts, bad input included.
-            let (block, event) = if *calls >= MAX_TOOL_CALLS {
+            let (block, event) = if cancel.is_cancelled() {
+                (error_result(id, CANCELLED), error_event(id, CANCELLED))
+            } else if counts.calls >= MAX_TOOL_CALLS {
                 let why = "Not run: the limit of tool calls for this message was reached.";
                 (error_result(id, why), error_event(id, why))
             } else if !input.is_object() {
-                *calls += 1;
+                counts.calls += 1;
                 (
                     error_result(id, INVALID_JSON),
                     error_event(id, INVALID_JSON),
                 )
+            } else if let Some(why) = counts.over_cap(name) {
+                counts.calls += 1;
+                (error_result(id, why), error_event(id, why))
             } else {
-                *calls += 1;
-                self.run_tool(id, name, input)
+                counts.calls += 1;
+                self.run_tool(id, name, input).await
             };
             results.push(block);
             let _ = events.send(event).await;
@@ -294,16 +351,38 @@ impl Agent {
         results
     }
 
-    /// Locks the session, runs one tool, and lets go of the lock before anything else happens.
-    fn run_tool(&self, id: &str, name: &str, input: &Value) -> (ContentBlock, AgentEvent) {
-        let output = {
-            let mut guard = self.session.lock().unwrap_or_else(PoisonError::into_inner);
-            match guard.as_mut() {
-                Some(session) => execute(session, name, input, Source::Ai),
-                None => {
-                    let why = "No drawing is open. Ask the user to open one.";
-                    return (error_result(id, why), error_event(id, why));
-                }
+    /// Runs one tool off the async workers (a picture takes a while to draw), holding the
+    /// session's lock only while it runs. A picture past the conversation's budget is refused.
+    async fn run_tool(
+        &mut self,
+        id: &str,
+        name: &str,
+        input: &Value,
+    ) -> (ContentBlock, AgentEvent) {
+        if name == "view_image" && self.image_bytes >= self.image_budget {
+            return (
+                error_result(id, NO_IMAGE_BUDGET),
+                error_event(id, NO_IMAGE_BUDGET),
+            );
+        }
+        let session = self.session.clone();
+        let (tool, args) = (name.to_string(), input.clone());
+        let ran = tokio::task::spawn_blocking(move || {
+            let mut guard = session.lock().unwrap_or_else(PoisonError::into_inner);
+            guard
+                .as_mut()
+                .map(|session| execute(session, &tool, &args, Source::Ai))
+        })
+        .await;
+        let output = match ran {
+            Ok(Some(output)) => output,
+            Ok(None) => {
+                let why = "No drawing is open. Ask the user to open one.";
+                return (error_result(id, why), error_event(id, why));
+            }
+            Err(e) => {
+                let why = format!("The tool {name} crashed: {e}");
+                return (error_result(id, &why), error_event(id, &why));
             }
         };
         match output {
@@ -327,6 +406,14 @@ impl Agent {
                 (block, event)
             }
             Ok(ToolOutput::Image { png, caption }) => {
+                let data = png_base64(&png);
+                if self.image_bytes + data.len() > self.image_budget {
+                    return (
+                        error_result(id, NO_IMAGE_BUDGET),
+                        error_event(id, NO_IMAGE_BUDGET),
+                    );
+                }
+                self.image_bytes += data.len();
                 let event = AgentEvent::ToolResult {
                     id: id.to_string(),
                     summary: caption.clone(),
@@ -336,7 +423,7 @@ impl Agent {
                 };
                 let block = ContentBlock::ToolResult {
                     tool_use_id: id.to_string(),
-                    content: vec![ResultPart::Text(caption), ResultPart::Png(png_base64(&png))],
+                    content: vec![ResultPart::Text(caption), ResultPart::Png(data)],
                     is_error: false,
                 };
                 (block, event)

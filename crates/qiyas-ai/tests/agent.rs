@@ -848,3 +848,211 @@ async fn openai_compatible_streams_text_and_tool_calls() {
     assert_eq!(second[3]["role"], "tool");
     assert_eq!(second[3]["tool_call_id"], "call_1");
 }
+
+const SLAB: &str = r#"{"points": [[0, 0], [10, 0], [10, 10], [0, 10]]}"#;
+
+#[tokio::test]
+async fn cancel_between_tool_calls_runs_no_more_of_them() {
+    let mock = serve(|n| match n {
+        0 => tool_turn(&[
+            ("toolu_1", "measure_area", &[SLAB]),
+            ("toolu_2", "measure_area", &[SLAB]),
+            ("toolu_3", "measure_area", &[SLAB]),
+        ]),
+        _ => text_turn(&["Should not be asked."]),
+    })
+    .await;
+    let (_dir, session) = sample();
+    let mut agent = Agent::new(
+        Box::new(mock.anthropic()),
+        session.clone(),
+        AgentSettings::default(),
+    );
+    // One event at a time, on this one thread: the cancel lands right after the first result.
+    let (tx, mut rx) = mpsc::channel(1);
+    let cancel = CancellationToken::new();
+    let trigger = cancel.clone();
+    let listen = async {
+        let mut events = Vec::new();
+        while let Some(e) = rx.recv().await {
+            if matches!(&e, AgentEvent::ToolResult { id, .. } if id == "toolu_1") {
+                trigger.cancel();
+            }
+            events.push(e);
+        }
+        events
+    };
+    let (result, events) = tokio::join!(agent.run_turn("Measure".into(), tx, cancel), listen);
+    result.unwrap();
+
+    let items = session
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .takeoff
+        .items
+        .len();
+    assert_eq!(items, 1, "only the first call ran");
+    let skipped: Vec<&str> = events
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::ToolResult {
+                id,
+                summary,
+                is_error: true,
+                ..
+            } if summary == "Not run: cancelled" => Some(id.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(skipped, ["toolu_2", "toolu_3"]);
+    assert_eq!(
+        events.last(),
+        Some(&AgentEvent::Stopped {
+            reason: "cancelled".into()
+        })
+    );
+    assert_eq!(mock.requests().len(), 1, "nothing more is asked");
+    // Every call is answered, so the conversation can go on.
+    let last = agent.history().last().unwrap();
+    assert!(last.has_tool_results());
+    assert_eq!(last.content.len(), 3);
+}
+
+/// `count` calls of `name`, each with `input(i)`, in one answer.
+fn many(name: &'static str, count: usize, input: impl Fn(usize) -> String) -> Reply {
+    let calls: Vec<(&'static str, &'static str, Vec<&'static str>)> = (0..count)
+        .map(|i| {
+            let id: &'static str = Box::leak(format!("toolu_{i}").into_boxed_str());
+            let json: &'static str = Box::leak(input(i).into_boxed_str());
+            (id, name, vec![json])
+        })
+        .collect();
+    let refs: Vec<(&str, &str, &[&str])> = calls
+        .iter()
+        .map(|(id, name, f)| (*id, *name, f.as_slice()))
+        .collect();
+    tool_turn(&refs)
+}
+
+#[tokio::test]
+async fn removals_and_resolutions_stop_after_10_in_one_turn() {
+    let (_dir, session) = sample();
+    let ids: Vec<String> = {
+        let mut guard = session.lock().unwrap();
+        let s = guard.as_mut().unwrap();
+        (0..12)
+            .map(|_| {
+                let cmd = qiyas_core::Command::MeasureDistance {
+                    points: vec![[0.0, 0.0], [1.0, 0.0]],
+                };
+                match s.run(cmd).unwrap() {
+                    qiyas_core::Outcome::Measured { measurement } => measurement.id,
+                    other => panic!("{other:?}"),
+                }
+            })
+            .collect()
+    };
+    let removals = ids.clone();
+    let mock = serve(move |n| match n {
+        0 => many("remove_measurement", 11, |i| {
+            json!({ "id": removals[i] }).to_string()
+        }),
+        1 => many("resolve_conflict", 11, |i| {
+            json!({ "id": format!("c{i}"), "status": "resolved", "note": "" }).to_string()
+        }),
+        _ => text_turn(&["Done."]),
+    })
+    .await;
+    let mut agent = Agent::new(
+        Box::new(mock.anthropic()),
+        session.clone(),
+        AgentSettings::default(),
+    );
+    let (result, events) = turn(&mut agent, "Remove them all and resolve everything").await;
+    result.unwrap();
+
+    let left = session
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .takeoff
+        .items
+        .len();
+    assert_eq!(left, 2, "10 removed, the 11th refused");
+    let summary = |id: &str, nth: usize| {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::ToolResult { id: i, summary, .. } if i == id => Some(summary.clone()),
+                _ => None,
+            })
+            .nth(nth)
+            .unwrap()
+    };
+    assert_eq!(
+        summary("toolu_10", 0),
+        "Too many removals in one turn; ask the user to confirm"
+    );
+    assert_eq!(
+        summary("toolu_10", 1),
+        "Too many resolutions in one turn; ask the user to confirm"
+    );
+    // The first ten resolutions ran (and failed: there are no such conflicts).
+    assert!(summary("toolu_9", 1).starts_with("No conflict with id c9"));
+}
+
+#[tokio::test]
+async fn view_image_stops_when_the_image_budget_is_used() {
+    // The size of one 64-pixel picture of the sample, as base64.
+    let (_d, probe) = sample();
+    let one = {
+        let mut guard = probe.lock().unwrap();
+        let s = guard.as_mut().unwrap();
+        match qiyas_ai::execute(
+            s,
+            "view_image",
+            &json!({ "width": 64 }),
+            qiyas_core::Source::Ai,
+        )
+        .unwrap()
+        {
+            qiyas_ai::ToolOutput::Image { png, .. } => png.len().div_ceil(3) * 4,
+            _ => panic!("expected an image"),
+        }
+    };
+    let mock = serve(|n| match n {
+        0 | 2 => tool_turn(&[
+            ("toolu_1", "view_image", &[r#"{"width": 64}"#]),
+            ("toolu_2", "view_image", &[r#"{"width": 64}"#]),
+        ]),
+        _ => text_turn(&["Looked."]),
+    })
+    .await;
+    let (_dir, session) = sample();
+    let mut agent = Agent::new(
+        Box::new(mock.anthropic()),
+        session,
+        AgentSettings::default(),
+    )
+    .with_image_budget(one + one / 2);
+    turn(&mut agent, "Look twice").await.0.unwrap();
+
+    let body = &mock.requests()[1].body;
+    let results = body["messages"][2]["content"].as_array().unwrap();
+    assert!(results[0].get("is_error").is_none(), "{}", results[0]);
+    assert_eq!(results[0]["content"][1]["type"], "image");
+    assert_eq!(results[1]["is_error"], true);
+    assert_eq!(
+        results[1]["content"][0]["text"],
+        "Image budget for this conversation is used up; start a new conversation to look again"
+    );
+
+    // A new conversation has the whole budget again.
+    agent.clear();
+    turn(&mut agent, "Look twice").await.0.unwrap();
+    let body = &mock.requests()[3].body;
+    assert!(body["messages"][2]["content"][0].get("is_error").is_none());
+}

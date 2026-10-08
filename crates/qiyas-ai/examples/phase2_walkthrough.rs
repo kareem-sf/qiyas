@@ -1,6 +1,7 @@
 //! `cargo run -p qiyas-ai --example phase2_walkthrough`: the Phase 2 check without a model.
 //! Opens a copy of `samples/test-plan.dwg`, measures the rooms and walls and counts the blocks
-//! through the AI tools, imports `samples/test-boq.xlsx`, links every measurement, compares, and
+//! through the AI tools, imports `samples/test-boq.xlsx` (copied beside the drawing: the tools
+//! only open files in the drawing's folder), links every measurement, compares, and
 //! prints the conflicts. Expected: two quantity mismatches, A.4 and B.2.
 //! With `-- --no-link` nothing is linked, to see what the matching rules find on their own.
 
@@ -38,6 +39,11 @@ fn main() {
     let dir = tempfile::tempdir().unwrap();
     let dwg = dir.path().join("test-plan.dwg");
     std::fs::copy(format!("{root}/test-plan.dwg"), &dwg).unwrap();
+    std::fs::copy(
+        format!("{root}/test-boq.xlsx"),
+        dir.path().join("test-boq.xlsx"),
+    )
+    .unwrap();
     let mut s = Session::open(&dwg).unwrap();
 
     let living = handle_at(&mut s, "A-ROOM", "LwPolyline", 0.15, 0.15);
@@ -60,10 +66,9 @@ fn main() {
         println!("{tool:15} {} {} -> {code}", m["shown"], m["description"]);
         measured.push((m["id"].clone(), code));
     }
-    let boq = format!("{root}/test-boq.xlsx");
     println!(
         "import_boq      {}",
-        run(&mut s, "import_boq", json!({ "path": boq }))
+        run(&mut s, "import_boq", json!({ "path": "test-boq.xlsx" }))
     );
     if std::env::args().all(|a| a != "--no-link") {
         for (id, code) in measured {
