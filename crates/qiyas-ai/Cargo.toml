@@ -12,8 +12,16 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tiny-skia.workspace = true
+# HTTPS to the AI provider. rustls with the `ring` crypto provider (Apache-2.0 AND ISC) rather
+# than reqwest's default aws-lc-rs, which needs a C/CMake build and carries the OpenSSL licence.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "http2", "json"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio = { version = "1", features = ["macros", "sync", "time"] }
+tokio-util = "0.7"
+base64 = "0.22"
 
 [dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util", "time"] }
 opencadcodec.workspace = true
 tempfile.workspace = true
 qiyas-core = { path = "../qiyas-core", features = ["fixtures"] }
