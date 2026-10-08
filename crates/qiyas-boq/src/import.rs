@@ -23,9 +23,10 @@ enum Field {
     Rate,
 }
 
-/// Column names per field, English and Arabic. A cell matches a name when it is that name or
-/// starts with it and a space (e.g. "Rate (AED)"); the longest name matched wins, so
-/// "Item description" is a description, not a code.
+/// Column names per field, English and Arabic (compared without the article ال, so "وصف" and
+/// "الوصف" are the same). A cell matches a name when it is that name or starts with it and a
+/// space (e.g. "Rate (AED)"); the longest name matched, over all fields, wins, so "Item
+/// description" is a description, not a code, and "Unit price" is a rate, not a unit.
 const NAMES: [(Field, &[&str]); 5] = [
     (
         Field::Code,
@@ -39,14 +40,26 @@ const NAMES: [(Field, &[&str]); 5] = [
             "item description",
             "الوصف",
             "البيان",
-            "الوصف البند",
+            "وصف البند",
         ],
     ),
     (Field::Unit, &["unit", "uom", "الوحدة"]),
     (Field::Qty, &["qty", "quantity", "الكمية"]),
     (
         Field::Rate,
-        &["rate", "unit rate", "price", "السعر", "سعر الوحدة", "الفئة"],
+        &[
+            "rate",
+            "unit rate",
+            "price",
+            "unit price",
+            "cost",
+            "unit cost",
+            "amount per unit",
+            "السعر",
+            "سعر",
+            "سعر الوحدة",
+            "الفئة",
+        ],
     ),
 ];
 
@@ -147,8 +160,8 @@ fn field_of(cell: &str) -> Option<Field> {
         .map(|(field, _)| field)
 }
 
-/// The items below the header, and how many item rows were left out for a quantity that is not
-/// a number.
+/// The items below the header, and how many rows were left out: a quantity that is not a
+/// number, or a quantity with no description.
 fn read_items(range: &Range<Data>, h: &Header) -> (Vec<BoqItem>, u32) {
     let first = range.start().map_or(0, |(row, _)| row);
     let mut items = Vec::new();
@@ -160,7 +173,11 @@ fn read_items(range: &Range<Data>, h: &Header) -> (Vec<BoqItem>, u32) {
         let unit = text(cell(h.unit));
         let qty = cell(h.qty);
         let qty_empty = text(qty).is_empty();
-        if description.is_empty() && qty_empty {
+        // No description is never an item: a blank row, or a total or stray number to count.
+        if description.is_empty() {
+            if !qty_empty {
+                skipped += 1;
+            }
             continue;
         }
         if unit.is_empty() && qty_empty {
@@ -262,7 +279,8 @@ fn unit_key(unit: &str) -> String {
 }
 
 /// A header cell for comparing: lower case, punctuation as spaces, single spaces, Arabic
-/// without diacritics and with one form of alef, yeh and teh marbuta.
+/// without diacritics, without a leading article ال on each word, and with one form of alef,
+/// yeh and teh marbuta.
 fn header_key(cell: &str) -> String {
     let spaced: String = plain_arabic(&cell.to_lowercase())
         .chars()
@@ -274,7 +292,14 @@ fn header_key(cell: &str) -> String {
             _ => ' ',
         })
         .collect();
-    spaced.split_whitespace().collect::<Vec<_>>().join(" ")
+    spaced
+        .split_whitespace()
+        .map(|w| match w.strip_prefix("ال") {
+            Some(rest) if rest.chars().count() >= 2 => rest,
+            _ => w,
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// `s` without Arabic diacritics (harakat, superscript alef) and tatweel.
@@ -307,6 +332,15 @@ mod tests {
         assert_eq!(field_of("Unit Rate (EGP)"), Some(Field::Rate));
         assert_eq!(field_of("الكمـــيّة"), Some(Field::Qty));
         assert_eq!(field_of("سعر الوحدة"), Some(Field::Rate));
+        assert_eq!(field_of("Unit Price"), Some(Field::Rate));
+        assert_eq!(field_of("Unit Cost (AED)"), Some(Field::Rate));
+        assert_eq!(field_of("Unit"), Some(Field::Unit));
+        assert_eq!(field_of("وصف"), Some(Field::Description));
+        assert_eq!(field_of("وحدة"), Some(Field::Unit));
+        assert_eq!(field_of("كمية"), Some(Field::Qty));
+        assert_eq!(field_of("سعر"), Some(Field::Rate));
+        assert_eq!(field_of("بيان"), Some(Field::Description));
+        assert_eq!(field_of("وصف البند"), Some(Field::Description));
         assert_eq!(field_of("Amount"), None);
         assert_eq!(field_of("Notes"), None);
     }

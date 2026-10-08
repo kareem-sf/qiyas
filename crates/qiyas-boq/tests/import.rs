@@ -290,3 +290,97 @@ fn import_boq_command_stores_in_project() {
         old.drawing.problems
     );
 }
+
+/// Writes a workbook of one sheet holding `rows` from row 1.
+fn one_sheet(dir: &Path, name: &str, rows: &[Vec<C>]) -> PathBuf {
+    let path = dir.join(name);
+    let mut book = Workbook::new();
+    write_rows(book.add_worksheet(), 0, rows);
+    book.save(&path).unwrap();
+    path
+}
+
+#[test]
+fn unit_price_is_the_rate_not_the_unit() {
+    use C::*;
+    let dir = tempfile::tempdir().unwrap();
+    let after = one_sheet(
+        dir.path(),
+        "after.xlsx",
+        &[
+            vec![
+                T("Item"),
+                T("Description"),
+                T("Unit"),
+                T("Qty"),
+                T("Unit Price"),
+            ],
+            vec![T("1"), T("Tiles"), T("m2"), N(20.0), N(150.0)],
+        ],
+    );
+    let before = one_sheet(
+        dir.path(),
+        "before.xlsx",
+        &[
+            vec![
+                T("Item"),
+                T("Description"),
+                T("Unit Price"),
+                T("Unit"),
+                T("Qty"),
+            ],
+            vec![T("1"), T("Tiles"), N(150.0), T("m2"), N(20.0)],
+        ],
+    );
+    for path in [after, before] {
+        let item = &import_boq(&path).unwrap().items[0];
+        assert_eq!(
+            (item.unit.as_str(), item.rate),
+            ("m2", Some(150.0)),
+            "{path:?}"
+        );
+    }
+}
+
+#[test]
+fn arabic_headers_without_the_article_match() {
+    use C::*;
+    let dir = tempfile::tempdir().unwrap();
+    let path = one_sheet(
+        dir.path(),
+        "bare.xlsx",
+        &[
+            vec![T("بند"), T("وصف"), T("وحدة"), T("كمية"), T("سعر")],
+            vec![T("1"), T("لياسة"), T("م2"), N(80.0), N(35.0)],
+        ],
+    );
+    let item = &import_boq(&path).unwrap().items[0];
+    assert_eq!(
+        (
+            item.code.as_str(),
+            item.unit.as_str(),
+            item.quantity,
+            item.rate
+        ),
+        ("1", "m2", 80.0, Some(35.0))
+    );
+}
+
+#[test]
+fn a_quantity_without_a_description_is_skipped() {
+    use C::*;
+    let dir = tempfile::tempdir().unwrap();
+    let path = one_sheet(
+        dir.path(),
+        "total.xlsx",
+        &[
+            vec![T("Code"), T("Description"), T("Unit"), T("Qty")],
+            vec![T("A.1"), T("Plaster"), T("m2"), N(450.0)],
+            vec![T("Total"), E, E, N(450.0)],
+            vec![E, E, E, N(450.0)],
+        ],
+    );
+    let boq = import_boq(&path).unwrap();
+    assert_eq!(boq.items.len(), 1);
+    assert_eq!(boq.skipped_rows, 2);
+}
