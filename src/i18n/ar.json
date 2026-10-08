@@ -59,5 +59,8 @@
   "export.done": "تم التصدير إلى {path}",
   "export.failed": "تعذّر التصدير: {error}",
   "save.done": "تم الحفظ في {path}",
-  "save.failed": "تعذّر الحفظ: {error}"
+  "save.failed": "تعذّر الحفظ: {error}",
+  "about": "حول",
+  "about.line": "قياس، تطبيق من كيو إس مايند",
+  "about.close": "إغلاق"
 }

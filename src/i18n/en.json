@@ -59,5 +59,8 @@
   "export.done": "Exported to {path}",
   "export.failed": "Export failed: {error}",
   "save.done": "Saved to {path}",
-  "save.failed": "Could not save: {error}"
+  "save.failed": "Could not save: {error}",
+  "about": "About",
+  "about.line": "Qiyas, a QS Mind app",
+  "about.close": "Close"
 }

@@ -437,3 +437,33 @@ button.link {
 .totals .num {
   font-variant-numeric: tabular-nums;
 }
+
+/* About box */
+.about {
+  width: 340px;
+  padding: 28px 24px 20px;
+  text-align: center;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+}
+.about::backdrop {
+  background: rgb(14 15 18 / 0.5);
+}
+.about img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto 20px;
+}
+.about h2 {
+  font-size: 15px;
+}
+.about-version {
+  margin: 4px 0 18px;
+  color: var(--muted);
+}
+.about button {
+  border-color: var(--rule);
+}

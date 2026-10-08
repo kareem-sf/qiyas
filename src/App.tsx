@@ -23,6 +23,7 @@ import {
   type Total,
 } from "./api";
 import { useLanguage, useT } from "./i18n";
+import { About } from "./shell/About";
 import { LayersPanel } from "./shell/LayersPanel";
 import { Ribbon, type Tool } from "./shell/Ribbon";
 import { SheetTabs } from "./shell/SheetTabs";
@@ -65,6 +66,7 @@ export default function App() {
   const [tool, setTool] = useState<Tool>("select");
   const [cursor, setCursor] = useState<[number, number] | null>(null);
   const [opening, setOpening] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** A one-off status bar message, e.g. after an export; the next action clears it. */
   const [notice, setNotice] = useState<string | null>(null);
@@ -405,8 +407,12 @@ export default function App() {
               {t("dark")}
             </button>
           </div>
+          <button type="button" aria-haspopup="dialog" onClick={() => setAboutOpen(true)}>
+            {t("about")}
+          </button>
         </div>
       </header>
+      {aboutOpen && <About theme={theme} onClose={() => setAboutOpen(false)} />}
       <div className="middle">
         <LayersPanel
           layers={info?.layers ?? []}
