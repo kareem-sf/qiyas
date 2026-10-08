@@ -31,6 +31,64 @@ export type EntityInfo = {
   text: string | null;
 };
 
+/** Filter for the session's `find_entities` query (no IPC command yet). Names match case-insensitively. */
+export type EntityFilter = {
+  /** Sheet block or layout name; the current sheet when null. */
+  sheet?: string | null;
+  layer?: string | null;
+  kind?: string | null;
+  block_name?: string | null;
+  text_contains?: string | null;
+  /** [[min_x, min_y], [max_x, max_y]]: entities with at least one point inside. */
+  within?: [[number, number], [number, number]] | null;
+  offset?: number;
+  /** Rows per page, at most 500; 100 when left out. */
+  limit?: number;
+};
+
+/** One entity found. Length and area in drawing units; bounds in world coordinates. */
+export type EntityRow = {
+  handle: number;
+  kind: string;
+  layer: string;
+  block_name: string | null;
+  text: string | null;
+  length: number | null;
+  area: number | null;
+  bounds: [[number, number], [number, number]];
+};
+
+/** One page of results; `total` counts every match. */
+export type Page<T> = { rows: T[]; total: number; next_offset: number | null };
+
+export type TextRow = {
+  handle: number;
+  text: string;
+  at: [number, number];
+  height: number;
+  inside_block: string | null;
+};
+
+/** A dimension; `measurement` in drawing units (degrees for angular), null when not computed. */
+export type DimRow = {
+  handle: number;
+  kind: string;
+  measurement: number | null;
+  text_override: string | null;
+  at: [number, number];
+};
+
+/** A table read off a sheet. `source` is the table entity's handle, or 0 for a text grid. */
+export type Schedule = {
+  name: string;
+  sheet: string;
+  source: number;
+  columns: string[];
+  rows: string[][];
+};
+
+export type BlockCount = { block_name: string; layer: string; count: number };
+
 export const openDrawing = (path: string) => invoke<DrawingInfo>("open_drawing", { path });
 
 export const drawingInfo = () => invoke<DrawingInfo>("drawing_info");

@@ -4,6 +4,6 @@ mod flatten;
 mod path;
 mod transform;
 
-pub use flatten::{arc_points, flatten};
+pub use flatten::{arc_points, flatten, insert_instances};
 pub use path::Path;
 pub use transform::Xform;

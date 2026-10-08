@@ -1,6 +1,6 @@
 use std::f64::consts::TAU;
 
-use opencadcodec::entities::{BoundaryEdge, EntityType};
+use opencadcodec::entities::{BoundaryEdge, EntityType, Insert};
 use opencadcodec::{CadDocument, Vector3};
 
 use crate::path::same_point;
@@ -110,33 +110,16 @@ fn flatten_at(
             return;
         }
         EntityType::Insert(e) => {
-            let Some(block) = doc.block_records.get(&e.block_name) else {
-                return;
-            };
             if depth >= MAX_DEPTH {
                 return;
             }
-            let base = Xform::translate(-block.base_point.x, -block.base_point.y)
-                .then(&Xform::scale(e.x_scale(), e.y_scale()));
-            for col in 0..e.column_count.max(1) {
-                for row in 0..e.row_count.max(1) {
-                    if *budget == 0 {
-                        return;
-                    }
-                    *budget -= 1;
-                    // Array offsets sit in the insert's own axes, so they rotate with it.
-                    let offset = Xform::translate(
-                        f64::from(col) * e.column_spacing,
-                        f64::from(row) * e.row_spacing,
-                    );
-                    let instance = base
-                        .then(&offset)
-                        .then(&Xform::rotate(e.rotation))
-                        .then(&Xform::translate(e.insert_point.x, e.insert_point.y))
-                        .then(xf);
-                    for child in doc.entities_in_block(&e.block_name) {
-                        flatten_at(doc, child, &instance, tol, out, depth + 1, budget);
-                    }
+            for instance in insert_instances(doc, e, xf) {
+                if *budget == 0 {
+                    return;
+                }
+                *budget -= 1;
+                for child in doc.entities_in_block(&e.block_name) {
+                    flatten_at(doc, child, &instance, tol, out, depth + 1, budget);
                 }
             }
             return;
@@ -152,6 +135,34 @@ fn flatten_at(
         _ => return,
     };
     push(out, xf, points, closed, budget);
+}
+
+/// Block-to-world transform of each instance of `e` (one per array cell), followed by `xf`.
+/// Nothing when the block is missing. Lazy, so a caller can stop early on a huge array.
+pub fn insert_instances<'a>(
+    doc: &CadDocument,
+    e: &'a Insert,
+    xf: &'a Xform,
+) -> impl Iterator<Item = Xform> + 'a {
+    let base = doc.block_records.get(&e.block_name).map(|block| {
+        Xform::translate(-block.base_point.x, -block.base_point.y)
+            .then(&Xform::scale(e.x_scale(), e.y_scale()))
+    });
+    base.into_iter().flat_map(move |base| {
+        (0..e.column_count.max(1)).flat_map(move |col| {
+            (0..e.row_count.max(1)).map(move |row| {
+                // Array offsets sit in the insert's own axes, so they rotate with it.
+                let offset = Xform::translate(
+                    f64::from(col) * e.column_spacing,
+                    f64::from(row) * e.row_spacing,
+                );
+                base.then(&offset)
+                    .then(&Xform::rotate(e.rotation))
+                    .then(&Xform::translate(e.insert_point.x, e.insert_point.y))
+                    .then(xf)
+            })
+        })
+    })
 }
 
 /// Points on a circular arc, counter-clockwise from `a0` to `a1` (radians), ends included.
