@@ -6,6 +6,7 @@ use std::pin::Pin;
 use std::sync::Once;
 use std::time::Duration;
 
+use base64::Engine;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -220,6 +221,14 @@ impl AiError {
     }
 }
 
+/// What a tool input that is not valid JSON is answered with.
+pub const INVALID_JSON: &str = "invalid JSON input";
+
+/// A PNG as the base64 text a `ResultPart::Png` holds.
+pub fn png_base64(png: &[u8]) -> String {
+    base64::engine::general_purpose::STANDARD.encode(png)
+}
+
 /// Longest wait before the one retry after a 429 or 529.
 const MAX_RETRY_WAIT: u64 = 30;
 /// Wait when a 429 or 529 gives no `retry-after`.
@@ -276,10 +285,11 @@ pub(crate) async fn send(
         if status == 401 {
             return Err(AiError::Auth);
         }
-        let body = response.text().await.unwrap_or_default();
+        // Scrubbed before `error_message` may cut the body short, so no part of the key is left.
+        let body = scrub(&response.text().await.unwrap_or_default(), secret);
         return Err(AiError::Api {
             status,
-            message: scrub(&error_message(&body), secret),
+            message: error_message(&body),
         });
     }
 }

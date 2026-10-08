@@ -9,18 +9,20 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::anthropic::{png_base64, INVALID_JSON};
-use crate::prompt::{system_prompt, Lang, ProjectSummary};
+use crate::prompt::{state_block, system_prompt, DrawingFacts, Lang, LiveState};
 use crate::provider::{
-    AiError, ContentBlock, Message, Provider, ResultPart, Role, StopReason, StreamEvent,
-    TurnRequest, Usage,
+    png_base64, AiError, ContentBlock, Message, Provider, ResultPart, Role, StopReason,
+    StreamEvent, TurnRequest, Usage, INVALID_JSON,
 };
 use crate::{catalogue, execute, ToolOutput};
 
 /// Most tool calls in one user turn.
 pub const MAX_TOOL_CALLS: usize = 40;
-/// Messages kept after the first user message.
-pub const KEEP_MESSAGES: usize = 60;
+/// Longest conversation sent. The history is append-only (the API ties the model's thinking to
+/// everything before it), so instead of trimming, a longer one asks for a new conversation.
+pub const MAX_MESSAGES: usize = 400;
+/// Why the agent stops at `MAX_MESSAGES`.
+pub const TOO_LONG: &str = "conversation is long, start a new one";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentSettings {
@@ -86,6 +88,9 @@ pub struct Agent {
     provider: Box<dyn Provider>,
     session: Arc<Mutex<Option<Session>>>,
     settings: AgentSettings,
+    /// Built at the first turn and kept, byte for byte, until `clear()`.
+    system: Option<String>,
+    /// Append-only: earlier messages are never changed or dropped.
     history: Vec<Message>,
 }
 
@@ -99,6 +104,7 @@ impl Agent {
             provider,
             session,
             settings,
+            system: None,
             history: Vec::new(),
         }
     }
@@ -107,10 +113,14 @@ impl Agent {
         &self.history
     }
 
+    /// Starts a new conversation: the next turn builds a new system prompt.
     pub fn clear(&mut self) {
         self.history.clear();
+        self.system = None;
     }
 
+    /// The new settings apply to the next request; the language of the system prompt changes
+    /// only with a new conversation.
     pub fn set_settings(&mut self, settings: AgentSettings) {
         self.settings = settings;
     }
@@ -123,9 +133,22 @@ impl Agent {
         events: mpsc::Sender<AgentEvent>,
         cancel: CancellationToken,
     ) -> Result<(), AiError> {
-        self.push_user(vec![ContentBlock::Text { text: user_text }]);
-        // Built once per user turn so the cached prefix holds through the tool loop.
-        let system = self.system();
+        if self.history.len() >= MAX_MESSAGES {
+            return stopped(&events, TOO_LONG).await;
+        }
+        let system = match &self.system {
+            Some(s) => s.clone(),
+            None => {
+                let s = self.build_system();
+                self.system = Some(s.clone());
+                s
+            }
+        };
+        let state = self.state();
+        self.push_user(vec![
+            ContentBlock::Text { text: state },
+            ContentBlock::Text { text: user_text },
+        ]);
         let tools = catalogue();
         let mut calls = 0;
         let mut usage = Usage::default();
@@ -133,7 +156,9 @@ impl Agent {
             if cancel.is_cancelled() {
                 return stopped(&events, "cancelled").await;
             }
-            self.trim();
+            if self.history.len() > MAX_MESSAGES {
+                return stopped(&events, TOO_LONG).await;
+            }
             let req = TurnRequest {
                 system: system.clone(),
                 messages: self.history.clone(),
@@ -154,7 +179,9 @@ impl Agent {
                     let _ = events.send(AgentEvent::Refused { category, text }).await;
                     return Ok(());
                 }
-                StopReason::ToolUse => {
+                // With no call to answer (all were in a declined attempt before a fallback), an
+                // empty user message would be refused, so the turn ends below instead.
+                StopReason::ToolUse if has_calls(&turn.content) => {
                     let assistant = Message::assistant(turn.content);
                     let results = self.run_tools(&assistant, &mut calls, &events).await;
                     self.history.push(assistant);
@@ -171,12 +198,15 @@ impl Agent {
                         .tool_uses()
                         .map(|(id, _, _)| error_result(id, "Not run: the answer was cut off."))
                         .collect();
-                    self.history.push(assistant);
+                    // An empty assistant message would be refused on the next request.
+                    if !assistant.content.is_empty() {
+                        self.history.push(assistant);
+                    }
                     if !unrun.is_empty() {
                         self.history.push(Message::user(unrun));
                     }
                     return match reason {
-                        StopReason::EndTurn => {
+                        StopReason::EndTurn | StopReason::ToolUse => {
                             let _ = events.send(AgentEvent::Done { usage }).await;
                             Ok(())
                         }
@@ -238,10 +268,12 @@ impl Agent {
                     input: input.clone(),
                 })
                 .await;
+            // Every answered call counts, bad input included.
             let (block, event) = if *calls >= MAX_TOOL_CALLS {
                 let why = "Not run: the limit of tool calls for this message was reached.";
                 (error_result(id, why), error_event(id, why))
             } else if !input.is_object() {
+                *calls += 1;
                 (
                     error_result(id, INVALID_JSON),
                     error_event(id, INVALID_JSON),
@@ -306,41 +338,43 @@ impl Agent {
         }
     }
 
-    fn system(&self) -> String {
-        let guard = self.session.lock().unwrap_or_else(PoisonError::into_inner);
-        let (units, summary) = match guard.as_ref() {
-            Some(s) => (s.info().units, ProjectSummary::of(s)),
-            None => (String::new(), ProjectSummary::none()),
+    /// The system prompt for a new conversation: the rules and the drawing as it is now.
+    fn build_system(&self) -> String {
+        let facts = {
+            let guard = self.session.lock().unwrap_or_else(PoisonError::into_inner);
+            guard
+                .as_ref()
+                .map_or_else(DrawingFacts::none, DrawingFacts::of)
         };
-        drop(guard);
-        system_prompt(self.settings.language, &units, &summary)
+        system_prompt(self.settings.language, &facts)
     }
 
-    /// Adds user content, joining it to a user message already last (after a cancel or a
-    /// refusal), so roles keep alternating.
+    /// The `[state]` block for the next user message.
+    fn state(&self) -> String {
+        let state = {
+            let guard = self.session.lock().unwrap_or_else(PoisonError::into_inner);
+            guard.as_ref().map_or_else(LiveState::none, LiveState::of)
+        };
+        state_block(self.settings.language, &state)
+    }
+
+    /// Adds user content. A user message already last (after a cancel, an error or a refusal,
+    /// or tool results at the step limit) is the latest turn, not yet answered; the new content
+    /// goes after what it holds, so tool results stay first and roles keep alternating.
     fn push_user(&mut self, content: Vec<ContentBlock>) {
         match self.history.last_mut() {
             Some(last) if last.role == Role::User => last.content.extend(content),
             _ => self.history.push(Message::user(content)),
         }
     }
+}
 
-    /// Keeps the first user message and about the last `KEEP_MESSAGES`, starting the kept part
-    /// at an assistant message so no tool result loses its tool call.
-    fn trim(&mut self) {
-        let len = self.history.len();
-        if len <= KEEP_MESSAGES + 1 {
-            return;
-        }
-        let mut start = len - KEEP_MESSAGES;
-        while start < len && self.history[start].role != Role::Assistant {
-            start += 1;
-        }
-        if start >= len {
-            return;
-        }
-        self.history.drain(1..start);
-    }
+/// Whether `content` holds a tool call to answer.
+fn has_calls(content: &[ContentBlock]) -> bool {
+    Message::assistant(content.to_vec())
+        .tool_uses()
+        .next()
+        .is_some()
 }
 
 async fn stopped(events: &mpsc::Sender<AgentEvent>, reason: &str) -> Result<(), AiError> {
@@ -405,16 +439,24 @@ fn handles(value: &Value) -> Vec<u64> {
 mod tests {
     use super::*;
     use crate::provider::{BoxFuture, Sink, TurnResult};
-    use serde_json::json;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
-    struct Never;
-    impl Provider for Never {
+    /// Counts the requests it is asked to send, and answers each with a short text.
+    struct Counting(Arc<AtomicUsize>);
+    impl Provider for Counting {
         fn stream_turn<'a>(
             &'a self,
             _: TurnRequest,
             _: Sink<'a>,
         ) -> BoxFuture<'a, Result<TurnResult, AiError>> {
-            Box::pin(async { Err(AiError::Network("unused".into())) })
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async {
+                Ok(TurnResult {
+                    content: vec![ContentBlock::Text { text: "ok".into() }],
+                    stop_reason: StopReason::EndTurn,
+                    usage: Usage::default(),
+                })
+            })
         }
     }
 
@@ -425,36 +467,47 @@ mod tests {
         }
     }
 
-    #[test]
-    fn trim_keeps_first_message_and_tool_pairs() {
+    #[tokio::test]
+    async fn the_401st_message_is_refused_and_history_is_left_alone() {
+        let sent = Arc::new(AtomicUsize::new(0));
         let mut agent = Agent::new(
-            Box::new(Never),
+            Box::new(Counting(sent.clone())),
             Arc::new(Mutex::new(None)),
             AgentSettings::default(),
         );
-        agent.history.push(text(Role::User, "first"));
-        for i in 0..40 {
-            agent
-                .history
-                .push(Message::assistant(vec![ContentBlock::ToolUse {
-                    id: format!("t{i}"),
-                    name: "list_sheets".into(),
-                    input: json!({}),
-                }]));
-            agent
-                .history
-                .push(Message::user(vec![error_result(&format!("t{i}"), "x")]));
+        // 398 messages: one more turn (user + answer) fits exactly.
+        for i in 0..199 {
+            agent.history.push(text(Role::User, &format!("q{i}")));
+            agent.history.push(text(Role::Assistant, &format!("a{i}")));
         }
-        agent.trim();
-        let h = &agent.history;
-        assert!(h.len() <= KEEP_MESSAGES + 1);
-        assert_eq!(h[0], text(Role::User, "first"));
-        assert_eq!(h[1].role, Role::Assistant);
-        // Every tool result answers the tool call just before it.
-        for pair in h[1..].chunks(2) {
-            let (id, _, _) = pair[0].tool_uses().next().unwrap();
-            assert!(matches!(&pair[1].content[0],
-                ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == id));
+        let (tx, mut rx) = mpsc::channel(100);
+        agent
+            .run_turn("fits".into(), tx.clone(), CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(agent.history.len(), MAX_MESSAGES);
+        assert_eq!(sent.load(Ordering::SeqCst), 1);
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(AgentEvent::Text { .. }) | Ok(AgentEvent::Done { .. })
+        ));
+
+        let before = agent.history.clone();
+        agent
+            .run_turn("too many".into(), tx, CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(sent.load(Ordering::SeqCst), 1, "no request is sent");
+        assert_eq!(agent.history, before, "the history is not touched");
+        let mut last = None;
+        while let Ok(e) = rx.try_recv() {
+            last = Some(e);
         }
+        assert_eq!(
+            last,
+            Some(AgentEvent::Stopped {
+                reason: "conversation is long, start a new one".into()
+            })
+        );
     }
 }

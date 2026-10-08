@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use base64::Engine;
+use reqwest::header::HeaderValue;
 use serde_json::{json, Value};
 
 use crate::provider::{
@@ -17,8 +17,6 @@ const VERSION: &str = "2023-06-01";
 /// The beta for `fallbacks: "default"`: on a policy decline the API reruns the turn on its
 /// recommended fallback model inside the same call.
 const BETA: &str = "server-side-fallback-2026-07-01";
-/// What a tool input that is not valid JSON is answered with.
-pub const INVALID_JSON: &str = "invalid JSON input";
 
 /// The Claude API. The key is only ever put in the `x-api-key` header; this type has no `Debug`
 /// so it can't be printed by accident.
@@ -51,11 +49,15 @@ impl Provider for Anthropic {
     ) -> BoxFuture<'a, Result<TurnResult, AiError>> {
         Box::pin(async move {
             let body = request_body(&req);
+            // Marked sensitive so the HTTP stack never prints it; a key that is not a valid
+            // header value can only be refused.
+            let mut key = HeaderValue::from_str(&self.api_key).map_err(|_| AiError::Auth)?;
+            key.set_sensitive(true);
             let response = send(
                 || {
                     self.client
                         .post(&self.url)
-                        .header("x-api-key", &self.api_key)
+                        .header("x-api-key", key.clone())
                         .header("anthropic-version", VERSION)
                         .header("anthropic-beta", BETA)
                         .json(&body)
@@ -72,8 +74,8 @@ impl Provider for Anthropic {
     }
 }
 
-/// The JSON body. One cache breakpoint on the last tool and one on the system block, so the
-/// tools and the system prompt are cached across the turns of the tool loop.
+/// The JSON body. Cache breakpoints on the last tool and on the system block, plus automatic
+/// caching of the whole conversation prefix at the top level.
 pub fn request_body(req: &TurnRequest) -> Value {
     let mut tools: Vec<Value> = req.tools.iter().map(tool_json).collect();
     if let Some(last) = tools.last_mut() {
@@ -91,6 +93,9 @@ pub fn request_body(req: &TurnRequest) -> Value {
         "messages": req.messages.iter().map(message_json).collect::<Vec<_>>(),
         "output_config": { "effort": req.effort },
         "fallbacks": "default",
+        // Automatic caching: the API caches the longest prefix it has seen, so each turn of a
+        // conversation reads the one before it.
+        "cache_control": { "type": "ephemeral" },
     });
     if !tools.is_empty() {
         body["tools"] = Value::Array(tools);
@@ -170,11 +175,6 @@ fn block_json(b: &ContentBlock) -> Value {
         } => json!({ "type": "thinking", "thinking": thinking, "signature": signature }),
         ContentBlock::Raw(v) => v.clone(),
     }
-}
-
-/// A PNG as the base64 text a `ResultPart::Png` holds.
-pub fn png_base64(png: &[u8]) -> String {
-    base64::engine::general_purpose::STANDARD.encode(png)
 }
 
 /// A content block while it streams.

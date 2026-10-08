@@ -343,14 +343,20 @@ async fn text_stream_is_forwarded_in_order() {
     assert!(tools[..tools.len() - 1]
         .iter()
         .all(|t| t.get("cache_control").is_none()));
-    assert_eq!(
-        b["messages"],
-        json!([{"role":"user","content":[{"type":"text","text":"Hi"}]}])
-    );
+    assert_eq!(b["cache_control"], json!({"type": "ephemeral"}));
+    // One user message: the [state] block, then what the user typed.
+    let messages = b["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0]["role"], "user");
+    let content = messages[0]["content"].as_array().unwrap();
+    assert_eq!(content.len(), 2);
+    assert!(content[0]["text"].as_str().unwrap().starts_with("[state]"));
+    assert_eq!(content[1], json!({"type": "text", "text": "Hi"}));
 
     // The answer is kept for the next turn.
     let h = agent.history();
     assert_eq!(h.len(), 2);
+    assert_eq!(h[0].content.len(), 2);
     assert_eq!(
         h[1].content,
         vec![qiyas_ai::ContentBlock::Text {
@@ -546,6 +552,103 @@ async fn loop_stops_after_40_tool_calls() {
     // Every call made was answered, so the history is valid to continue from.
     let last = agent.history().last().unwrap();
     assert!(last.has_tool_results());
+}
+
+#[tokio::test]
+async fn malformed_tool_input_still_stops_after_40_calls() {
+    let mock = serve(|n| {
+        let id: &'static str = Box::leak(format!("toolu_{n}").into_boxed_str());
+        tool_turn(&[(id, "measure_area", &[r#"{"points": [[0, "#])])
+    })
+    .await;
+    let (_dir, session) = sample();
+    let mut agent = Agent::new(
+        Box::new(mock.anthropic()),
+        session,
+        AgentSettings::default(),
+    );
+    let (result, events) = turn(&mut agent, "Loop").await;
+    result.unwrap();
+    let answered = events
+        .iter()
+        .filter(|e| matches!(e, AgentEvent::ToolResult { is_error: true, .. }))
+        .count();
+    assert_eq!(answered, 40);
+    assert_eq!(mock.requests().len(), 40);
+    assert_eq!(
+        events.last(),
+        Some(&AgentEvent::Stopped {
+            reason: "stopped after 40 steps".into()
+        })
+    );
+}
+
+/// Each message of a request body as its JSON text.
+fn serialised(body: &Value) -> Vec<String> {
+    body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(Value::to_string)
+        .collect()
+}
+
+#[tokio::test]
+async fn history_is_append_only_and_system_prompt_is_stable() {
+    let mock = serve(|n| match n {
+        0 => tool_turn(&[(
+            "toolu_1",
+            "measure_area",
+            &[r#"{"points": [[0, 0], [10, 0], [10, 10], [0, 10]]}"#],
+        )]),
+        _ => text_turn(&["Done."]),
+    })
+    .await;
+    let (_dir, session) = sample();
+    let mut agent = Agent::new(
+        Box::new(mock.anthropic()),
+        session,
+        AgentSettings::default(),
+    );
+    turn(&mut agent, "Measure the slab").await.0.unwrap();
+    turn(&mut agent, "And now?").await.0.unwrap();
+
+    let reqs = mock.requests();
+    assert_eq!(reqs.len(), 3);
+    // The take-off changed between the turns, yet the system prompt and tools did not.
+    let system = |r: &Request| r.body["system"].to_string();
+    assert_eq!(system(&reqs[0]), system(&reqs[2]));
+    assert_eq!(system(&reqs[1]), system(&reqs[2]));
+    assert_eq!(reqs[0].body["tools"], reqs[2].body["tools"]);
+    assert!(
+        !system(&reqs[2]).contains("m2"),
+        "no live take-off in the system prompt"
+    );
+
+    // Each request only appends to the one before it.
+    for pair in reqs.windows(2) {
+        let (before, after) = (serialised(&pair[0].body), serialised(&pair[1].body));
+        assert!(after.len() > before.len());
+        assert_eq!(
+            after[..before.len()],
+            before[..],
+            "an earlier message changed"
+        );
+    }
+
+    // The second user message starts with the state block, which now shows the measurement.
+    let messages = reqs[2].body["messages"].as_array().unwrap();
+    let last = messages.last().unwrap();
+    assert_eq!(last["role"], "user");
+    let state = last["content"][0]["text"].as_str().unwrap();
+    assert!(state.starts_with("[state]"), "{state}");
+    assert!(
+        state.contains("- area: 1 measurement, total 100.000 m2"),
+        "{state}"
+    );
+    assert_eq!(last["content"][1]["text"], "And now?");
+    let first_state = messages[0]["content"][0]["text"].as_str().unwrap();
+    assert!(first_state.contains("no measurements yet"), "{first_state}");
 }
 
 #[tokio::test]

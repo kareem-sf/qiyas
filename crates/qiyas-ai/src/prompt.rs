@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::fmt::Write;
 
-use qiyas_core::{EntityFilter, Session, Total};
+use qiyas_core::{EntityFilter, Kind, Session, Total};
 
 /// Most layers and blocks listed in the prompt; the rest are counted.
 const MAX_LAYERS: usize = 60;
@@ -28,33 +28,33 @@ impl Lang {
     }
 }
 
-/// What the prompt says about the open project.
+/// The drawing facts the system prompt gives, captured once when the conversation starts. They
+/// never change for the life of the conversation, so the system prompt stays byte-identical
+/// (the API binds the model's thinking to it).
 #[derive(Debug, Clone, Default)]
-pub struct ProjectSummary {
-    /// False when no drawing is open; the rest is then empty.
+pub struct DrawingFacts {
+    /// False when no drawing was open; the rest is then empty.
     pub open: bool,
+    /// The drawing's file name.
+    pub file: String,
+    /// The drawing's unit name, e.g. "millimetres".
+    pub units: String,
     /// Sheet names, model first as the drawing lists them.
     pub sheets: Vec<String>,
-    /// The sheet shown.
+    /// The sheet shown when the conversation started.
     pub sheet: String,
-    /// Layers with their entity count on the sheet shown, most first; empty layers left out.
+    /// Layers with their entity count on that sheet, most first; empty layers left out.
     pub layers: Vec<(String, usize)>,
-    /// Blocks with their reference count on the sheet shown (visible layers), most first.
+    /// Blocks with their reference count on that sheet (visible layers), most first.
     pub blocks: Vec<(String, usize)>,
-    pub takeoff: Vec<Total>,
-    /// "no BOQ loaded" until the BOQ tasks land.
-    pub boq: String,
 }
 
-impl ProjectSummary {
-    pub fn none() -> ProjectSummary {
-        ProjectSummary {
-            boq: "no BOQ loaded".into(),
-            ..Default::default()
-        }
+impl DrawingFacts {
+    pub fn none() -> DrawingFacts {
+        DrawingFacts::default()
     }
 
-    pub fn of(session: &Session) -> ProjectSummary {
+    pub fn of(session: &Session) -> DrawingFacts {
         let info = session.info();
         let sheet = session.sheet.clone();
         let mut layers: Vec<(String, usize)> = info
@@ -80,27 +80,72 @@ impl ProjectSummary {
         }
         let mut blocks: Vec<(String, usize)> = per_block.into_iter().collect();
         blocks.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-        let sheet_name = info
-            .sheets
-            .iter()
-            .find(|s| s.block == sheet)
-            .map_or(sheet.clone(), |s| s.name.clone());
-        ProjectSummary {
+        DrawingFacts {
             open: true,
+            file: file_name(session),
+            units: info.units.clone(),
+            sheet: sheet_name(session),
             sheets: info.sheets.into_iter().map(|s| s.name).collect(),
-            sheet: sheet_name,
             layers,
             blocks,
-            takeoff: session.takeoff.totals(),
-            boq: "no BOQ loaded".into(),
         }
     }
 }
 
+/// What changes while the user works: sent at the start of every user message, never in the
+/// system prompt.
+#[derive(Debug, Clone, Default)]
+pub struct LiveState {
+    /// False when no drawing is open; the rest is then empty.
+    pub open: bool,
+    pub file: String,
+    /// The sheet shown now.
+    pub sheet: String,
+    pub takeoff: Vec<Total>,
+    /// The loaded BOQ, `None` until the BOQ tasks land.
+    pub boq: Option<String>,
+    /// Conflicts between the BOQ and the take-off (0 until the comparison engine lands).
+    pub conflicts: usize,
+}
+
+impl LiveState {
+    pub fn none() -> LiveState {
+        LiveState::default()
+    }
+
+    pub fn of(session: &Session) -> LiveState {
+        LiveState {
+            open: true,
+            file: file_name(session),
+            sheet: sheet_name(session),
+            takeoff: session.takeoff.totals(),
+            boq: None,
+            conflicts: 0,
+        }
+    }
+}
+
+fn file_name(session: &Session) -> String {
+    let path = session.info().path;
+    std::path::Path::new(&path)
+        .file_name()
+        .map_or_else(|| path.clone(), |n| n.to_string_lossy().into_owned())
+}
+
+/// The name of the sheet shown (its layout name, not its block).
+fn sheet_name(session: &Session) -> String {
+    session
+        .info()
+        .sheets
+        .into_iter()
+        .find(|s| s.block == session.sheet)
+        .map_or(session.sheet.clone(), |s| s.name)
+}
+
 const EN: &str = "\
-You are the AI staff inside Qiyas, a measurement CAD by QS Mind, working for a quantity surveyor. \
-You read the open drawing with your tools, measure quantities, add them to the take-off, and \
-explain what you did.
+You are the AI assistant inside Qiyas, a measurement CAD by QS Mind, working for a quantity \
+surveyor. You read the open drawing with your tools, measure quantities, add them to the take-off, \
+and explain what you did.
 
 Rules:
 - Never state a quantity unless it comes from a measurement or tool result in this conversation. \
@@ -114,10 +159,12 @@ the layer names are unclear.
 quantity in metres, square metres, cubic metres or pieces.
 - Give each measurement a clear description: what was measured and where.
 - If something in the drawing is unclear or seems wrong, say so instead of guessing.
+- Each user message starts with a [state] block written by Qiyas, not the user: the sheet shown, \
+the take-off totals and the BOQ status now. Trust it over the drawing summary below for those.
 - Answer in the user's language, briefly, in plain words.";
 
 const AR: &str = "\
-أنت فريق الذكاء الاصطناعي داخل قياس، برنامج القياس من كيو إس مايند، وتعمل لدى مهندس حصر كميات. \
+أنت مساعد الذكاء الاصطناعي لمهندس الكميات في قياس، برنامج القياس من كيو إس مايند. \
 تقرأ المخطط المفتوح بأدواتك، وتقيس الكميات، وتضيفها إلى جدول الحصر، وتشرح ما فعلت.
 
 القواعد:
@@ -127,78 +174,128 @@ const AR: &str = "\
 - اذكر اللوحات والطبقات التي استخدمتها لكل كمية، ليتحقق منها المستخدم.
 - انظر قبل أن تقيس: اعرض الطبقات، وابحث عن العناصر، واقرأ النصوص، وانظر إلى المخطط حين تكون أسماء الطبقات غير واضحة.
 - الإحداثيات والأطوال والمساحات من المخطط بوحدات الرسم. أما القياسات فتعطي كميتها بالمتر أو المتر المربع أو المتر المكعب أو بالعدد.
-- أعط كل قياس وصفًا واضحًا: ماذا قيس وأين.
+- أعط كل قياس وصفًا واضحًا: ما الذي قِيس وأين.
 - إن كان شيء في المخطط غير واضح أو يبدو خطأ فقل ذلك ولا تخمّن.
+- تبدأ كل رسالة من المستخدم بكتلة [state] يكتبها قياس لا المستخدم: اللوحة المعروضة ومجاميع الحصر وحالة جدول الكميات الآن. اعتمد عليها بدل ملخص المخطط أدناه في هذه الأمور.
 - أجب بلغة المستخدم، باختصار وبكلمات بسيطة.";
 
-/// The system prompt in `lang`, with `units` (the drawing's unit name, e.g. "millimetres") and
-/// the project summary. Names from the drawing are given as they are.
-pub fn system_prompt(lang: Lang, units: &str, summary: &ProjectSummary) -> String {
+/// The system prompt in `lang`: the fixed rules and the drawing facts. Build it once per
+/// conversation; the live state goes in `state_block` instead.
+pub fn system_prompt(lang: Lang, facts: &DrawingFacts) -> String {
     let ar = lang == Lang::Ar;
     let t = |en: &'static str, arabic: &'static str| if ar { arabic } else { en };
     let mut s = String::from(if ar { AR } else { EN });
 
-    s.push_str(t("\n\n## The drawing\n", "\n\n## المخطط\n"));
-    if !summary.open {
+    s.push_str(t(
+        "\n\n## The drawing (when this conversation started)\n",
+        "\n\n## المخطط (عند بدء هذه المحادثة)\n",
+    ));
+    if !facts.open {
         s.push_str(t(
-            "No drawing is open. Ask the user to open one.\n",
-            "لا يوجد مخطط مفتوح. اطلب من المستخدم أن يفتح مخططًا.\n",
+            "No drawing was open. If the [state] block still says so, ask the user to open one.\n",
+            "لم يكن هناك مخطط مفتوح. إن كانت كتلة [state] ما زالت تقول ذلك فاطلب من المستخدم أن يفتح مخططًا.\n",
         ));
+        return s;
+    }
+    let _ = writeln!(s, "{}{}", t("File: ", "الملف: "), facts.file);
+    let _ = writeln!(s, "{}{}", t("Units: ", "الوحدات: "), facts.units);
+    let _ = writeln!(
+        s,
+        "{}{}",
+        t("Sheets: ", "اللوحات: "),
+        facts.sheets.join(", ")
+    );
+    let _ = writeln!(
+        s,
+        "{}{}",
+        t("Sheet shown: ", "اللوحة المعروضة: "),
+        facts.sheet
+    );
+    s.push_str(t(
+        "Layers on that sheet (entities):\n",
+        "الطبقات في تلك اللوحة (عدد العناصر):\n",
+    ));
+    list(&mut s, &facts.layers, MAX_LAYERS, ar);
+    s.push_str(t(
+        "Blocks on that sheet (references):\n",
+        "الكتل في تلك اللوحة (عدد المراجع):\n",
+    ));
+    list(&mut s, &facts.blocks, MAX_BLOCKS, ar);
+    s
+}
+
+/// The `[state]` text put first in each user message: what is true now.
+pub fn state_block(lang: Lang, state: &LiveState) -> String {
+    let ar = lang == Lang::Ar;
+    let t = |en: &'static str, arabic: &'static str| if ar { arabic } else { en };
+    let mut s = String::from(t(
+        "[state] Written by Qiyas, not the user.\n",
+        "[state] يكتبها قياس، لا المستخدم.\n",
+    ));
+    if !state.open {
+        s.push_str(t("No drawing is open.\n", "لا يوجد مخطط مفتوح.\n"));
     } else {
-        let _ = writeln!(s, "{}{units}", t("Units: ", "الوحدات: "));
-        let _ = writeln!(
-            s,
-            "{}{}",
-            t("Sheets: ", "اللوحات: "),
-            summary.sheets.join(", ")
-        );
+        let _ = writeln!(s, "{}{}", t("Drawing: ", "المخطط: "), state.file);
         let _ = writeln!(
             s,
             "{}{}",
             t("Sheet shown: ", "اللوحة المعروضة: "),
-            summary.sheet
+            state.sheet
         );
-        s.push_str(t(
-            "Layers on the sheet shown (entities):\n",
-            "الطبقات في اللوحة المعروضة (عدد العناصر):\n",
-        ));
-        list(&mut s, &summary.layers, MAX_LAYERS, ar);
-        s.push_str(t(
-            "Blocks on the sheet shown (references):\n",
-            "الكتل في اللوحة المعروضة (عدد المراجع):\n",
-        ));
-        list(&mut s, &summary.blocks, MAX_BLOCKS, ar);
     }
-
-    s.push_str(t("\n## The take-off\n", "\n## جدول الحصر\n"));
-    if summary.takeoff.is_empty() {
-        s.push_str(t("No measurements yet.\n", "لا توجد قياسات بعد.\n"));
-    } else {
-        for total in &summary.takeoff {
-            let kind = serde_json::to_value(total.kind)
-                .ok()
-                .and_then(|v| v.as_str().map(str::to_string))
-                .unwrap_or_default();
-            let _ = writeln!(
+    s.push_str(t("Take-off:\n", "جدول الحصر:\n"));
+    if state.takeoff.is_empty() {
+        s.push_str(t("- no measurements yet\n", "- لا توجد قياسات بعد\n"));
+    }
+    for total in &state.takeoff {
+        let kind = kind_name(total.kind, ar);
+        let unit = unit_name(&total.unit, ar);
+        let sum = total.sum;
+        let n = total.count;
+        let _ = if ar {
+            writeln!(s, "- {kind}: القياسات: {n}، المجموع: {sum:.3} {unit}")
+        } else {
+            let plural = if n == 1 { "" } else { "s" };
+            writeln!(
                 s,
-                "- {kind}: {} {}, {} {:.3} {}",
-                total.count,
-                t("measurements", "قياسات"),
-                t("total", "المجموع"),
-                total.sum,
-                total.unit
-            );
-        }
+                "- {kind}: {n} measurement{plural}, total {sum:.3} {unit}"
+            )
+        };
     }
-
-    s.push_str(t("\n## The BOQ\n", "\n## جدول الكميات\n"));
-    let boq = if summary.boq == "no BOQ loaded" && ar {
-        "لم يُحمّل جدول كميات."
-    } else {
-        summary.boq.as_str()
+    let boq = match (&state.boq, ar) {
+        (Some(name), _) => name.as_str(),
+        (None, false) => "no BOQ loaded",
+        (None, true) => "لم يُحمّل جدول كميات",
     };
-    let _ = writeln!(s, "{boq}");
+    let _ = writeln!(s, "{}{boq}", t("BOQ: ", "جدول الكميات: "));
+    let _ = writeln!(s, "{}{}", t("Conflicts: ", "التعارضات: "), state.conflicts);
     s
+}
+
+fn kind_name(kind: Kind, ar: bool) -> &'static str {
+    match (kind, ar) {
+        (Kind::Length, false) => "length",
+        (Kind::Area, false) => "area",
+        (Kind::Count, false) => "count",
+        (Kind::Volume, false) => "volume",
+        (Kind::Item, false) => "item",
+        (Kind::Length, true) => "طول",
+        (Kind::Area, true) => "مساحة",
+        (Kind::Count, true) => "عدد",
+        (Kind::Volume, true) => "حجم",
+        (Kind::Item, true) => "بند",
+    }
+}
+
+/// Take-off units by name; an item's own unit is kept as it is.
+fn unit_name(unit: &str, ar: bool) -> &str {
+    match (unit, ar) {
+        ("m", true) => "م",
+        ("m2", true) => "م²",
+        ("m3", true) => "م³",
+        ("pcs", true) => "قطعة",
+        _ => unit,
+    }
 }
 
 fn list(s: &mut String, rows: &[(String, usize)], max: usize, ar: bool) {
@@ -235,17 +332,23 @@ mod tests {
 
     #[test]
     fn no_drawing_says_so_in_both_languages() {
-        let en = system_prompt(Lang::En, "", &ProjectSummary::none());
-        assert!(en.contains("No drawing is open"));
-        assert!(en.contains("no BOQ loaded"));
-        let ar = system_prompt(Lang::Ar, "", &ProjectSummary::none());
+        let en = system_prompt(Lang::En, &DrawingFacts::none());
+        assert!(en.contains("No drawing was open"));
+        let state = state_block(Lang::En, &LiveState::none());
+        assert!(state.starts_with("[state]"));
+        assert!(state.contains("No drawing is open"));
+        assert!(state.contains("BOQ: no BOQ loaded"));
+        let ar = system_prompt(Lang::Ar, &DrawingFacts::none());
         assert!(ar.contains("قياس"));
         assert!(ar.contains("كيو إس مايند"));
-        assert!(ar.contains("لا يوجد مخطط مفتوح"));
+        assert!(ar.contains("مساعد الذكاء الاصطناعي لمهندس الكميات"));
+        assert!(ar.contains("لم يكن هناك مخطط مفتوح"));
+        let state = state_block(Lang::Ar, &LiveState::none());
+        assert!(state.contains("لا يوجد مخطط مفتوح"));
+        assert!(state.contains("لم يُحمّل جدول كميات"));
     }
 
-    #[test]
-    fn summary_lists_layers_blocks_and_takeoff() {
+    fn sample_with_count() -> (tempfile::TempDir, Session) {
         let dir = tempfile::tempdir().unwrap();
         let path = qiyas_core::fixtures::write_sample(dir.path(), "dxf");
         let mut session = Session::open(&path).unwrap();
@@ -255,17 +358,46 @@ mod tests {
                 layer: None,
             })
             .unwrap();
-        let summary = ProjectSummary::of(&session);
-        assert!(summary.layers.contains(&("A-WALL".into(), 3)));
-        assert!(summary.layers.contains(&("A-DOOR".into(), 3)));
-        assert_eq!(summary.blocks, vec![("DOOR".to_string(), 3)]);
-        let text = system_prompt(Lang::En, &session.info().units, &summary);
+        (dir, session)
+    }
+
+    #[test]
+    fn system_prompt_lists_the_drawing_but_not_the_takeoff() {
+        let (_dir, session) = sample_with_count();
+        let facts = DrawingFacts::of(&session);
+        assert!(facts.layers.contains(&("A-WALL".into(), 3)));
+        assert!(facts.layers.contains(&("A-DOOR".into(), 3)));
+        assert_eq!(facts.blocks, vec![("DOOR".to_string(), 3)]);
+        let text = system_prompt(Lang::En, &facts);
+        assert!(text.contains("File: sample.dxf"), "{text}");
         assert!(text.contains("Units: metres"), "{text}");
         assert!(text.contains("- A-WALL: 3"), "{text}");
         assert!(text.contains("- DOOR: 3"), "{text}");
         assert!(
-            text.contains("- count: 1 measurements, total 3.000 pcs"),
-            "{text}"
+            !text.contains("pcs"),
+            "live state belongs in the state block: {text}"
         );
+    }
+
+    #[test]
+    fn state_block_gives_takeoff_in_both_languages() {
+        let (_dir, session) = sample_with_count();
+        let state = LiveState::of(&session);
+        let en = state_block(Lang::En, &state);
+        assert!(en.contains("Drawing: sample.dxf"), "{en}");
+        assert!(
+            en.contains("- count: 1 measurement, total 3.000 pcs"),
+            "{en}"
+        );
+        assert!(en.contains("Conflicts: 0"), "{en}");
+        let ar = state_block(Lang::Ar, &state);
+        assert!(
+            ar.contains("- عدد: القياسات: 1، المجموع: 3.000 قطعة"),
+            "{ar}"
+        );
+        assert_eq!(unit_name("m2", true), "م²");
+        assert_eq!(unit_name("m3", true), "م³");
+        assert_eq!(unit_name("bags", true), "bags");
+        assert_eq!(kind_name(Kind::Item, true), "بند");
     }
 }
