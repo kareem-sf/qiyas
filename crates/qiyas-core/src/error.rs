@@ -10,4 +10,6 @@ pub enum CoreError {
     NoSuchSheet(String),
     #[error("No entity with handle {0:X}")]
     NoSuchEntity(u64),
+    #[error("{0}")]
+    InvalidCommand(String),
 }

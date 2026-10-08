@@ -11,6 +11,8 @@ qiyas-geom = { path = "../qiyas-geom" }
 qiyas-render = { path = "../qiyas-render" }
 serde.workspace = true
 thiserror.workspace = true
+time.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

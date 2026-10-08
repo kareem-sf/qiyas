@@ -9,7 +9,8 @@ use qiyas_geom::{flatten, Xform};
 use qiyas_render::{build_batch, Batch, PickIndex, Visibility};
 use serde::Serialize;
 
-use crate::{CoreError, Drawing, LayerInfo, Sheet, Takeoff, Units};
+use crate::undo::History;
+use crate::{Command, CoreError, Drawing, LayerInfo, Outcome, Sheet, Takeoff, Units};
 
 /// Flatten tolerance for drawing on screen, in drawing units.
 pub const BATCH_TOL: f64 = 0.05;
@@ -24,6 +25,7 @@ pub struct Session {
     pub sheet: String,
     pub visibility: Visibility,
     pub takeoff: Takeoff,
+    history: History,
     /// Batch and pick index of the last sheet and visibility drawn; rebuilt when either changes.
     cache: RefCell<Option<Cached>>,
 }
@@ -68,7 +70,8 @@ impl Session {
             drawing,
             sheet,
             visibility: Visibility::default(),
-            takeoff: Takeoff,
+            takeoff: Takeoff::default(),
+            history: History::default(),
             cache: RefCell::new(None),
         })
     }
@@ -123,15 +126,12 @@ impl Session {
     }
 
     pub fn entity_info(&self, handle: u64) -> Result<EntityInfo, CoreError> {
-        let doc = &self.drawing.doc;
-        let entity = doc
+        let entity = self
+            .drawing
+            .doc
             .get_entity(Handle::new(handle))
             .ok_or(CoreError::NoSuchEntity(handle))?;
-        let mut paths = Vec::new();
-        flatten(doc, entity, &Xform::identity(), MEASURE_TOL, &mut paths);
-        let length = (!paths.is_empty()).then(|| paths.iter().map(|p| p.length()).sum());
-        let closed: Vec<_> = paths.iter().filter(|p| p.closed).collect();
-        let area = (!closed.is_empty()).then(|| closed.iter().map(|p| p.area()).sum());
+        let Extent { length, area, .. } = self.extent(entity);
         let (block_name, text) = match entity {
             EntityType::Insert(insert) => (Some(insert.block_name.clone()), None),
             EntityType::Text(t) => (None, Some(t.value.clone())),
@@ -147,6 +147,73 @@ impl Session {
             block_name,
             text,
         })
+    }
+
+    /// Runs `cmd` and, when it changes the take-off, records an undo step.
+    pub fn run(&mut self, cmd: Command) -> Result<Outcome, CoreError> {
+        let before = cmd.is_undoable().then(|| self.takeoff.clone());
+        let outcome = self.execute(cmd)?;
+        if let Some(before) = before {
+            if !matches!(outcome, Outcome::Nothing) {
+                self.history.record(before);
+            }
+        }
+        Ok(outcome)
+    }
+
+    /// Undoes the last take-off change. False when there is nothing to undo.
+    pub fn undo(&mut self) -> bool {
+        self.history.undo(&mut self.takeoff)
+    }
+
+    /// Redoes the last undone take-off change. False when there is nothing to redo.
+    pub fn redo(&mut self) -> bool {
+        self.history.redo(&mut self.takeoff)
+    }
+
+    pub fn can_undo(&self) -> bool {
+        self.history.can_undo()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        self.history.can_redo()
+    }
+
+    /// Length of all of `entity`'s flattened paths and area of the closed ones.
+    pub(crate) fn extent(&self, entity: &EntityType) -> Extent {
+        let mut paths = Vec::new();
+        flatten(
+            &self.drawing.doc,
+            entity,
+            &Xform::identity(),
+            MEASURE_TOL,
+            &mut paths,
+        );
+        let length = (!paths.is_empty()).then(|| paths.iter().map(|p| p.length()).sum());
+        let closed: Vec<_> = paths.iter().filter(|p| p.closed).collect();
+        let area = (!closed.is_empty()).then(|| closed.iter().map(|p| p.area()).sum());
+        Extent {
+            length,
+            area,
+            self_intersecting: closed.iter().any(|p| p.self_intersects()),
+        }
+    }
+
+    /// False when the user has hidden the layer or the drawing has it off or frozen.
+    pub(crate) fn layer_visible(&self, layer: &str) -> bool {
+        let key = normalize_name(layer);
+        let hidden = self
+            .visibility
+            .hidden_layers
+            .iter()
+            .any(|n| normalize_name(n) == key);
+        let off = self
+            .drawing
+            .doc
+            .layers
+            .get(layer)
+            .is_some_and(|l| l.flags.off || l.flags.frozen);
+        !hidden && !off
     }
 
     /// Runs `f` on the cached batch, rebuilding it first if the sheet or visibility changed.
@@ -168,6 +235,14 @@ impl Session {
     }
 }
 
+/// What one entity measures. `None` when it has no path, or no closed path for `area`.
+pub(crate) struct Extent {
+    pub length: Option<f64>,
+    pub area: Option<f64>,
+    /// True when any closed path crosses itself.
+    pub self_intersecting: bool,
+}
+
 fn units_name(units: Units) -> &'static str {
     match units {
         Units::Inches => "inches",
@@ -182,7 +257,7 @@ fn units_name(units: Units) -> &'static str {
 /// The `EntityType` variant name, e.g. "LwPolyline". Taken from the derived `Debug` output,
 /// which starts with the variant name; the writer stops at the first `(` so the entity's
 /// data is never formatted.
-fn variant_name(entity: &EntityType) -> String {
+pub(crate) fn variant_name(entity: &EntityType) -> String {
     struct UpToParen(String);
     impl Write for UpToParen {
         fn write_str(&mut self, s: &str) -> fmt::Result {

@@ -3,7 +3,9 @@
 use std::path::Path;
 use std::sync::PoisonError;
 
-use qiyas_core::{CoreError, DrawingInfo, EntityInfo, Session};
+use qiyas_core::{
+    Command, CoreError, DrawingInfo, EntityInfo, Measurement, Outcome, Session, Total,
+};
 use tauri::ipc::Response;
 use tauri::State;
 
@@ -65,4 +67,32 @@ pub fn pick(x: f64, y: f64, tol: f64, state: State<'_, AppState>) -> Result<Opti
 #[tauri::command]
 pub fn entity_info(handle: u64, state: State<'_, AppState>) -> Result<EntityInfo, String> {
     with_session(&state, |s| s.entity_info(handle))
+}
+
+/// Runs one command on the command bus; see `qiyas_core::Command`.
+#[tauri::command]
+pub fn run_command(cmd: Command, state: State<'_, AppState>) -> Result<Outcome, String> {
+    with_session(&state, |s| s.run(cmd))
+}
+
+/// Undoes the last take-off change; false when there was none.
+#[tauri::command]
+pub fn undo(state: State<'_, AppState>) -> Result<bool, String> {
+    with_session(&state, |s| Ok(s.undo()))
+}
+
+/// Redoes the last undone take-off change; false when there was none.
+#[tauri::command]
+pub fn redo(state: State<'_, AppState>) -> Result<bool, String> {
+    with_session(&state, |s| Ok(s.redo()))
+}
+
+#[tauri::command]
+pub fn takeoff(state: State<'_, AppState>) -> Result<Vec<Measurement>, String> {
+    with_session(&state, |s| Ok(s.takeoff.items.clone()))
+}
+
+#[tauri::command]
+pub fn totals(state: State<'_, AppState>) -> Result<Vec<Total>, String> {
+    with_session(&state, |s| Ok(s.takeoff.totals()))
 }

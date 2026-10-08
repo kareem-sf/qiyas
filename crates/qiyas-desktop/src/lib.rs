@@ -13,6 +13,11 @@ pub fn run() {
             commands::render_batch,
             commands::pick,
             commands::entity_info,
+            commands::run_command,
+            commands::undo,
+            commands::redo,
+            commands::takeoff,
+            commands::totals,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Qiyas");
