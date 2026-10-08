@@ -17,3 +17,14 @@ qiyas-boq = { path = "../qiyas-boq" }
 qiyas-core = { path = "../qiyas-core" }
 tauri = { workspace = true }
 tauri-plugin-dialog = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# The OS keychain: macOS Keychain, Windows Credential Manager, Secret Service on Linux (the
+# `v1` default features). `keyring-core` is the API those stores plug into, and its mock store
+# keeps the tests off the real keychain.
+keyring = "4"
+keyring-core = "1"
+getrandom = "0.4"
+
+[dev-dependencies]
+tempfile = { workspace = true }

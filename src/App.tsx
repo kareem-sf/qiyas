@@ -26,6 +26,7 @@ import { useLanguage, useT } from "./i18n";
 import { About } from "./shell/About";
 import { LayersPanel } from "./shell/LayersPanel";
 import { Ribbon, type Tool } from "./shell/Ribbon";
+import { SettingsDialog } from "./shell/SettingsDialog";
 import { SheetTabs } from "./shell/SheetTabs";
 import { StatusBar } from "./shell/StatusBar";
 import { TakeoffPanel } from "./shell/TakeoffPanel";
@@ -66,6 +67,7 @@ export default function App() {
   const [cursor, setCursor] = useState<[number, number] | null>(null);
   const [opening, setOpening] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** A one-off status bar message, e.g. after an export; the next action clears it. */
   const [notice, setNotice] = useState<string | null>(null);
@@ -425,12 +427,27 @@ export default function App() {
               {t("dark")}
             </button>
           </div>
+          <button
+            type="button"
+            className="gear"
+            aria-haspopup="dialog"
+            aria-label={t("settings")}
+            title={t("settings")}
+            onClick={() => setSettingsOpen(true)}
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <circle cx="8" cy="8" r="2.2" />
+              <path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4" />
+              <circle cx="8" cy="8" r="4.6" />
+            </svg>
+          </button>
           <button type="button" aria-haspopup="dialog" onClick={() => setAboutOpen(true)}>
             {t("about")}
           </button>
         </div>
       </header>
       {aboutOpen && <About theme={theme} onClose={() => setAboutOpen(false)} />}
+      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
       <div className="middle">
         <LayersPanel
           layers={info?.layers ?? []}

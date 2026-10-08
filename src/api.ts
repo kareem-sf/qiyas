@@ -196,3 +196,41 @@ export const saveDrawingAs = (path: string) => invoke<void>("save_drawing_as", {
 
 /** Writes the take-off and its totals to an Excel workbook at `path`. */
 export const exportTakeoff = (path: string) => invoke<void>("export_takeoff", { path });
+
+/** Who answers the in-app assistant. */
+export type Provider = "anthropic" | "openai_compatible";
+
+export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+export type Effort = (typeof EFFORTS)[number];
+
+/** The app settings (`settings.json`). The API key is not here: it is in the OS keychain. */
+export type Settings = {
+  provider: Provider;
+  /** Used exactly as typed. */
+  model: string;
+  /** The OpenAI-compatible service's address. */
+  base_url: string | null;
+  effort: Effort;
+  mcp_enabled: boolean;
+  mcp_port: number;
+  /** 32 hex characters, made once. */
+  mcp_token: string;
+  language: "en" | "ar";
+  theme: "system" | "light" | "dark";
+};
+
+export const getSettings = () => invoke<Settings>("get_settings");
+
+/** Rejects a port outside 1024–65535 or an unknown effort. */
+export const setSettings = (settings: Settings) => invoke<void>("set_settings", { settings });
+
+/** Stores the key in the OS keychain; it can't be read back from the window. */
+export const setApiKey = (provider: Provider, key: string) =>
+  invoke<void>("set_api_key", { provider, key });
+
+export const hasApiKey = (provider: Provider) => invoke<boolean>("has_api_key", { provider });
+
+export const deleteApiKey = (provider: Provider) => invoke<void>("delete_api_key", { provider });
+
+/** The running app's folder, where the `qiyas-mcp` bridge sits. */
+export const appDir = () => invoke<string>("app_dir");

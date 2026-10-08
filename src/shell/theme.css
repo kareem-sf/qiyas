@@ -467,3 +467,132 @@ button.link {
 .about button {
   border-color: var(--rule);
 }
+
+/* Settings */
+.settings {
+  width: 460px;
+  max-height: calc(100vh - 40px);
+  padding: 20px 22px 16px;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+}
+.settings::backdrop {
+  background: rgb(14 15 18 / 0.5);
+}
+.settings form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.settings h2 {
+  font-size: 15px;
+}
+.settings label,
+.settings .field,
+.settings .snippet {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.settings label > span:first-child,
+.settings .field > :first-child,
+.settings .snippet > span {
+  color: var(--muted);
+}
+.settings .field label {
+  display: inline;
+}
+.settings label.check {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+.settings label.check > span {
+  color: var(--fg);
+}
+.settings input:not([type="checkbox"]),
+.settings select {
+  font: inherit;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  padding: 4px 8px;
+  min-width: 0;
+}
+.settings input[readonly] {
+  color: var(--muted);
+  background: var(--panel);
+}
+.settings .row {
+  display: flex;
+  gap: 6px;
+}
+.settings .row input {
+  flex: 1;
+}
+.settings .badge {
+  margin-inline-start: 8px;
+  padding: 0 6px;
+  font-size: 11px;
+  color: var(--fg);
+  background: var(--accent-soft);
+  border-radius: 4px;
+}
+.settings fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 4px 0 0;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+}
+.settings legend {
+  padding: 0 4px;
+  font-weight: 700;
+}
+.settings pre {
+  margin: 0;
+  padding: 6px 8px;
+  font: 12px/1.4 ui-monospace, monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: var(--panel);
+  border-radius: 6px;
+}
+.settings .snippet button {
+  align-self: flex-end;
+}
+.settings button {
+  border-color: var(--rule);
+}
+.settings .error {
+  margin: 0;
+  border: none;
+  border-radius: 6px;
+}
+.settings .buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.settings .primary {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+.prefs .gear {
+  line-height: 0;
+  padding: 3px 6px;
+}
+.gear svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}

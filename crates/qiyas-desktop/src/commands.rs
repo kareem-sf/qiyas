@@ -11,6 +11,8 @@ use qiyas_core::{
 use tauri::ipc::Response;
 use tauri::State;
 
+use crate::secrets;
+use crate::settings::{self, Settings};
 use crate::state::AppState;
 
 /// Runs `f` on the open session, or fails with "No drawing is open".
@@ -19,7 +21,7 @@ fn with_session<R>(
     f: impl FnOnce(&mut Session) -> Result<R, CoreError>,
 ) -> Result<R, String> {
     // A panic in an earlier command leaves the session as it was; keep using it.
-    let mut guard = state.0.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut guard = state.session.lock().unwrap_or_else(PoisonError::into_inner);
     let session = guard.as_mut().ok_or("No drawing is open")?;
     f(session).map_err(|e| e.to_string())
 }
@@ -29,7 +31,7 @@ pub async fn open_drawing(path: String, state: State<'_, AppState>) -> Result<Dr
     // Read the file before taking the lock, so a slow open doesn't block other commands.
     let session = Session::open(Path::new(&path)).map_err(|e| e.to_string())?;
     let info = session.info();
-    *state.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(session);
+    *state.session.lock().unwrap_or_else(PoisonError::into_inner) = Some(session);
     Ok(info)
 }
 
@@ -136,4 +138,60 @@ pub async fn export_takeoff(path: String, state: State<'_, AppState>) -> Result<
         Ok((s.takeoff.items.clone(), s.takeoff.totals(), title))
     })?;
     qiyas_boq::export_takeoff(Path::new(&path), &items, &totals, &title).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_settings(state: State<'_, AppState>) -> Result<Settings, String> {
+    Ok(state
+        .settings
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone())
+}
+
+/// Checks and keeps new settings: written to disk first, then cached.
+#[tauri::command]
+pub async fn set_settings(settings: Settings, state: State<'_, AppState>) -> Result<(), String> {
+    settings::validate(&settings)?;
+    let mut cached = state
+        .settings
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    settings::save(&state.config_dir, &settings)
+        .map_err(|e| format!("The settings could not be saved: {e}"))?;
+    *cached = settings;
+    Ok(())
+}
+
+/// Runs a keychain call off the async workers: the OS may show a prompt and wait.
+async fn keychain<R: Send + 'static>(
+    f: impl FnOnce() -> Result<R, String> + Send + 'static,
+) -> Result<R, String> {
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Stores the provider's API key in the OS keychain. The key never comes back to the window.
+#[tauri::command]
+pub async fn set_api_key(provider: String, key: String) -> Result<(), String> {
+    keychain(move || secrets::set_api_key(&provider, &key)).await
+}
+
+#[tauri::command]
+pub async fn has_api_key(provider: String) -> Result<bool, String> {
+    keychain(move || Ok(secrets::get_api_key(&provider)?.is_some())).await
+}
+
+#[tauri::command]
+pub async fn delete_api_key(provider: String) -> Result<(), String> {
+    keychain(move || secrets::delete_api_key(&provider)).await
+}
+
+/// The folder of the running app, where the `qiyas-mcp` bridge sits next to it.
+#[tauri::command]
+pub async fn app_dir() -> Result<String, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let dir = exe.parent().ok_or("The app's folder is unknown")?;
+    Ok(dir.display().to_string())
 }
