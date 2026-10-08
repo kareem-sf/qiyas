@@ -104,6 +104,19 @@ pub fn save_project(state: State<'_, AppState>) -> Result<String, String> {
         .map_err(|e| format!("The take-off could not be saved: {e}"))
 }
 
+/// Saves the drawing over its own file, measurements embedded, and its project file.
+#[tauri::command]
+pub fn save_drawing(state: State<'_, AppState>) -> Result<(), String> {
+    with_session(&state, |s| s.save())
+}
+
+/// Saves the drawing to `path` (.dwg or .dxf), measurements embedded, with its project file next
+/// to it; the session then works on the new file.
+#[tauri::command]
+pub fn save_drawing_as(path: String, state: State<'_, AppState>) -> Result<(), String> {
+    with_session(&state, |s| s.save_as(Path::new(&path)))
+}
+
 /// Writes the take-off and its totals to an Excel workbook at `path`.
 #[tauri::command]
 pub fn export_takeoff(path: String, state: State<'_, AppState>) -> Result<(), String> {

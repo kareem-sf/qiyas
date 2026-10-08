@@ -104,5 +104,11 @@ export const totals = () => invoke<Total[]>("totals");
 /** Saves the take-off to the drawing's `.qiyas` project file; resolves to the path written. */
 export const saveProject = () => invoke<string>("save_project");
 
+/** Saves the drawing over its own file with the measurements embedded, and its project file. */
+export const saveDrawing = () => invoke<void>("save_drawing");
+
+/** Saves the drawing to `path` (.dwg or .dxf); from then on the open drawing is that file. */
+export const saveDrawingAs = (path: string) => invoke<void>("save_drawing_as", { path });
+
 /** Writes the take-off and its totals to an Excel workbook at `path`. */
 export const exportTakeoff = (path: string) => invoke<void>("export_takeoff", { path });

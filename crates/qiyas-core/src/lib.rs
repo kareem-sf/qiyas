@@ -2,6 +2,7 @@
 
 mod commands;
 mod drawing;
+mod embed;
 mod error;
 #[cfg(any(test, feature = "fixtures"))]
 pub mod fixtures;
@@ -13,6 +14,7 @@ mod units;
 
 pub use commands::{Command, Outcome};
 pub use drawing::{Drawing, LayerInfo, Sheet};
+pub use embed::{embed_measurements, read_embedded};
 pub use error::CoreError;
 pub use project::{project_path, Project};
 pub use session::{DrawingInfo, EntityInfo, Session, BATCH_TOL};

@@ -57,5 +57,7 @@
   "qty.m2": "م²",
   "qty.pcs": "قطعة",
   "export.done": "تم التصدير إلى {path}",
-  "export.failed": "تعذّر التصدير: {error}"
+  "export.failed": "تعذّر التصدير: {error}",
+  "save.done": "تم الحفظ في {path}",
+  "save.failed": "تعذّر الحفظ: {error}"
 }

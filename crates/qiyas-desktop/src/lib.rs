@@ -19,6 +19,8 @@ pub fn run() {
             commands::takeoff,
             commands::totals,
             commands::save_project,
+            commands::save_drawing,
+            commands::save_drawing_as,
             commands::export_takeoff,
         ])
         .run(tauri::generate_context!())

@@ -4,6 +4,9 @@ use thiserror::Error;
 pub enum CoreError {
     #[error("This drawing can't be opened: {0}")]
     Unreadable(String),
+    /// The CAD writer could not write the drawing; its own words.
+    #[error("{0}")]
+    Unwritable(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error("No sheet named {0}")]

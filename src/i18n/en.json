@@ -57,5 +57,7 @@
   "qty.m2": "m²",
   "qty.pcs": "pcs",
   "export.done": "Exported to {path}",
-  "export.failed": "Export failed: {error}"
+  "export.failed": "Export failed: {error}",
+  "save.done": "Saved to {path}",
+  "save.failed": "Could not save: {error}"
 }

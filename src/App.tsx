@@ -1,6 +1,7 @@
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  drawingInfo,
   entityInfo,
   exportTakeoff,
   openDrawing,
@@ -8,6 +9,8 @@ import {
   redo,
   renderBatch,
   runCommand,
+  saveDrawing,
+  saveDrawingAs,
   saveProject,
   setLayerHidden,
   setSheet,
@@ -175,6 +178,35 @@ export default function App() {
     setOpening(false);
   }
 
+  /** Writes the drawing with `write`, then shows its new layers and entities. */
+  async function saveWith(write: () => Promise<void>) {
+    await run(async () => {
+      await write().catch((e) => {
+        throw t("save.failed", { error: String(e) });
+      });
+      const next = await drawingInfo();
+      setInfo(next);
+      await redraw();
+      setNotice(t("save.done", { path: next.path }));
+    });
+  }
+
+  const saveFile = () => (info ? saveWith(saveDrawing) : undefined);
+
+  /** Asks where to save the drawing, as DWG or DXF, and saves it there. */
+  async function saveFileAs() {
+    if (!info) return;
+    const path = await save({
+      defaultPath: info.path,
+      filters: [
+        { name: "DWG", extensions: ["dwg"] },
+        { name: "DXF", extensions: ["dxf"] },
+      ],
+    });
+    if (!path) return;
+    await saveWith(() => saveDrawingAs(path));
+  }
+
   /** Asks where to save the Excel take-off, next to the drawing by default, and writes it. */
   async function exportFile() {
     if (!info) return;
@@ -255,7 +287,7 @@ export default function App() {
     focusDrawing();
   }
 
-  // Keyboard: tool letters, Escape, Enter, undo and redo. Re-bound each render, so it sees fresh state.
+  // Keyboard: tool letters, Escape, Enter, undo, redo and save. Re-bound each render, so it sees fresh state.
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (typing(e) || e.altKey || e.metaKey) return;
@@ -263,6 +295,7 @@ export default function App() {
       if (e.ctrlKey) {
         if (key === "z" && !e.shiftKey) history(undo);
         else if (key === "y" || (key === "z" && e.shiftKey)) history(redo);
+        else if (key === "s" && !e.shiftKey) saveFile();
         else return;
         e.preventDefault();
       } else if (e.key === "Escape") {
@@ -337,6 +370,8 @@ export default function App() {
           active={tool}
           onTool={chooseTool}
           onOpen={openFile}
+          onSave={info ? saveFile : undefined}
+          onSaveAs={info ? saveFileAs : undefined}
           onExport={info ? exportFile : undefined}
           onUndo={() => history(undo)}
           onRedo={() => history(redo)}

@@ -4,11 +4,12 @@ use std::fmt::{self, Write};
 use std::path::{Path, PathBuf};
 
 use opencadcodec::tables::normalize_name;
-use opencadcodec::{EntityType, Handle};
+use opencadcodec::{DwgWriter, DxfWriter, EntityType, Handle};
 use qiyas_geom::{flatten, Xform};
 use qiyas_render::{build_batch, Batch, PickIndex, Visibility};
 use serde::Serialize;
 
+use crate::embed::{embed_measurements, read_embedded};
 use crate::project::{self, project_path, Project};
 use crate::undo::History;
 use crate::{Command, CoreError, Drawing, LayerInfo, Outcome, Sheet, Takeoff, Units};
@@ -17,7 +18,7 @@ use crate::{Command, CoreError, Drawing, LayerInfo, Outcome, Sheet, Takeoff, Uni
 pub const BATCH_TOL: f64 = 0.05;
 /// Flatten tolerance for measured lengths and areas, in drawing units. Finer than `BATCH_TOL`
 /// so arcs measure close to their true length.
-const MEASURE_TOL: f64 = 1e-3;
+pub(crate) const MEASURE_TOL: f64 = 1e-3;
 
 /// The open drawing and what the user is looking at. Tauri-free, so it can be tested directly.
 pub struct Session {
@@ -64,7 +65,9 @@ pub struct EntityInfo {
 
 impl Session {
     /// Opens a drawing on its model sheet with nothing hidden, with the take-off from its project
-    /// file when there is one. A project file that can't be read is a problem, not a failure.
+    /// file when there is one, else from the measurements embedded in the drawing. A project file
+    /// that can't be read is a problem, not a failure. When the project file exists it wins: the
+    /// embedded measurements are ignored and rewritten on the next save.
     pub fn open(path: &Path) -> Result<Session, CoreError> {
         let mut drawing = Drawing::open(path)?;
         let sheet = drawing.sheets()[0].block.clone();
@@ -93,6 +96,8 @@ impl Session {
                         Err(_) => format!("Project file could not be read: {e}"),
                     }),
             }
+        } else {
+            takeoff.items = read_embedded(&drawing.doc);
         }
         Ok(Session {
             drawing,
@@ -114,6 +119,46 @@ impl Session {
         };
         project::save(&path, &project)?;
         Ok(path)
+    }
+
+    /// Saves the drawing over its own file; see `save_as`.
+    pub fn save(&mut self) -> Result<(), CoreError> {
+        let path = self.drawing.path.clone();
+        self.save_as(&path)
+    }
+
+    /// Writes the drawing to `path` (DWG or DXF by extension, in the drawing's own version) with
+    /// the take-off embedded on the `QIYAS-*` layers, then saves the project file next to it.
+    /// From then on the session's drawing is the one at `path`.
+    pub fn save_as(&mut self, path: &Path) -> Result<(), CoreError> {
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase);
+        let dwg = match ext.as_deref() {
+            Some("dwg") => true,
+            Some("dxf") => false,
+            _ => {
+                return Err(CoreError::InvalidCommand(
+                    "Save as .dwg or .dxf".to_string(),
+                ))
+            }
+        };
+        embed_measurements(&mut self.drawing.doc, &self.takeoff.items);
+        // The embedded entities are part of the drawing now: draw and pick them too.
+        *self.cache.get_mut() = None;
+        let doc = &self.drawing.doc;
+        let bytes = if dwg {
+            DwgWriter::write_to_vec(doc)
+        } else {
+            DxfWriter::new(doc).write_to_vec()
+        }
+        .map_err(|e| CoreError::Unwritable(e.to_string()))?;
+        // Into a temp file first, so a failed save never damages the drawing already there.
+        project::write_atomic(path, &bytes)?;
+        self.drawing.path = path.to_path_buf();
+        self.save_project()?;
+        Ok(())
     }
 
     pub fn info(&self) -> DrawingInfo {

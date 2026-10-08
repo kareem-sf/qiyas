@@ -35,21 +35,25 @@ pub(crate) fn load(path: &Path) -> Result<Project, CoreError> {
     serde_json::from_str(&text).map_err(|e| CoreError::Project(e.to_string()))
 }
 
-/// Writes `project` to `path` as pretty JSON: to `<path>.tmp` first, synced to disk, then renamed
-/// over `path`, so a crash mid-write never leaves a half-written project. On failure the temp
-/// file is removed.
+/// Writes `project` to `path` as pretty JSON, atomically (see `write_atomic`).
 pub(crate) fn save(path: &Path, project: &Project) -> Result<(), CoreError> {
     let text =
         serde_json::to_string_pretty(project).map_err(|e| CoreError::Project(e.to_string()))?;
+    Ok(write_atomic(path, text.as_bytes())?)
+}
+
+/// Writes `bytes` to `<path>.tmp`, synced to disk, then renames it over `path`, so a crash
+/// mid-write never leaves a half-written file. On failure the temp file is removed.
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");
     let tmp = PathBuf::from(tmp);
-    let written = write_synced(&tmp, text.as_bytes()).and_then(|()| std::fs::rename(&tmp, path));
+    let written = write_synced(&tmp, bytes).and_then(|()| std::fs::rename(&tmp, path));
     if written.is_err() {
         // Best effort: the error that matters is the write or rename one.
         let _ = std::fs::remove_file(&tmp);
     }
-    Ok(written?)
+    written
 }
 
 fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
