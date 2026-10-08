@@ -59,8 +59,6 @@ fn sample_batch_counts_and_bounds() {
     assert_eq!(batch.origin, [(x0 + x1) / 2.0, (y0 + y1) / 2.0]);
     let segments = batch.segments.len() / 4;
     assert_eq!(batch.colors.len(), segments);
-    assert_eq!(batch.handles.len(), segments);
-    assert_eq!(batch.entity_handles.len(), segments);
     let counted: u32 = batch.ranges.iter().map(|r| r.count).sum();
     assert_eq!(counted as usize, segments);
 }
@@ -153,7 +151,7 @@ fn bytes_decode_every_section() {
     doc.add_entity(EntityType::Line(line)).unwrap();
     let batch = build_batch(&doc, MODEL, &Visibility::default(), 1e-3);
     let bytes = batch.to_bytes();
-    let n = batch.handles.len();
+    let n = batch.colors.len();
     let r = batch.ranges.len();
     assert_eq!(n % 2, 1, "segment count should be odd");
     assert_eq!(u32_at(&bytes, 0), MAGIC);
@@ -174,31 +172,25 @@ fn bytes_decode_every_section() {
     );
 
     let table = section_table(&bytes);
-    assert_eq!(
-        table.iter().map(|s| s.0).collect::<Vec<_>>(),
-        [1, 2, 3, 4, 5, 6]
-    );
+    assert_eq!(table.iter().map(|s| s.0).collect::<Vec<_>>(), [3, 4, 5, 6]);
     for (_, at, len) in &table {
         assert_eq!(at % 8, 0, "{table:?}");
         assert!(at + len <= bytes.len());
     }
-    let (handles, len) = section_at(&bytes, section::HANDLES);
-    assert_eq!(len, 8 * n);
-    assert_eq!(u64_at(&bytes, handles), batch.handles[0]);
-    let (entities, len) = section_at(&bytes, section::ENTITY_HANDLES);
-    assert_eq!(len, 8 * n);
-    // The scaled DOOR's leaf line: top is the insert, the entity is the line in the block.
+    // A DOOR's leaf line: top is the insert, the entity is the line in the block.
     let door = batch
         .ranges
         .iter()
         .position(|r| r.chain != NO_CHAIN)
         .unwrap();
-    let first = batch.ranges[door].first as usize;
-    assert_eq!(
-        u64_at(&bytes, entities + 8 * first),
-        batch.entity_handles[first]
-    );
-    assert_ne!(batch.entity_handles[first], batch.handles[first]);
+    assert_ne!(batch.ranges[door].top, batch.ranges[door].entity);
+    // The ranges cover every segment once, in order.
+    let mut next = 0;
+    for r in &batch.ranges {
+        assert_eq!(r.first, next);
+        next += r.count;
+    }
+    assert_eq!(next as usize, n);
 
     let (ranges, len) = section_at(&bytes, section::RANGES);
     assert_eq!(len, 32 * r);
@@ -256,8 +248,8 @@ fn empty_sheet_is_empty() {
     assert_eq!(batch.bounds, [[0.0; 2]; 2]);
     assert_eq!(batch.origin, [0.0; 2]);
     let bytes = batch.to_bytes();
-    // Header and a table of six empty sections, padded to 8 bytes.
-    assert_eq!(bytes.len(), 136);
+    // Header and a table of four empty sections, padded to 8 bytes.
+    assert_eq!(bytes.len(), 112);
     assert!(section_table(&bytes).iter().all(|s| s.2 == 0));
 }
 
@@ -314,7 +306,6 @@ fn pick_finds_the_line() {
     let batch = sample_batch(&[]);
     let index = PickIndex::new(&batch);
     let hit = index.pick([5.0, 0.05], 0.1).unwrap();
-    assert_eq!(batch.handles[hit], line_handle(&doc));
     assert_eq!(batch.range_of(hit).unwrap().top, line_handle(&doc));
     assert_eq!(index.pick([50.0, 50.0], 0.1), None);
 }
@@ -326,7 +317,9 @@ fn pick_measures_to_the_segment_not_its_box() {
     let index = PickIndex::new(&batch);
     // Near the diagonal, far from the box corners.
     assert_eq!(
-        index.pick([5.0, 5.05], 0.1).map(|i| batch.handles[i]),
+        index
+            .pick([5.0, 5.05], 0.1)
+            .map(|i| batch.range_of(i).unwrap().top),
         Some(h[0])
     );
     // Inside the box but far from the diagonal.
@@ -339,11 +332,15 @@ fn pick_returns_the_nearest_entity() {
     let batch = build_batch(&doc, MODEL, &Visibility::default(), 1e-3);
     let index = PickIndex::new(&batch);
     assert_eq!(
-        index.pick([5.0, 0.1], 0.5).map(|i| batch.handles[i]),
+        index
+            .pick([5.0, 0.1], 0.5)
+            .map(|i| batch.range_of(i).unwrap().top),
         Some(h[0])
     );
     assert_eq!(
-        index.pick([5.0, 0.2], 0.5).map(|i| batch.handles[i]),
+        index
+            .pick([5.0, 0.2], 0.5)
+            .map(|i| batch.range_of(i).unwrap().top),
         Some(h[1])
     );
 }
@@ -365,8 +362,6 @@ fn bytes_match_the_frontend_fixture() {
     let batch = Batch {
         segments: vec![-2.0, -1.5, 2.0, 1.5, 0.0, 0.0, 1.0, 1.0],
         colors: vec![0xFF0000, 0x00FF00],
-        handles: vec![7, 8],
-        entity_handles: vec![7, 9],
         ranges: vec![
             Range {
                 top: 7,
@@ -399,11 +394,52 @@ fn bytes_match_the_frontend_fixture() {
 /// Also in `src/viewport/batch.test.ts`.
 const FRONTEND_FIXTURE: &str = concat!(
     "4259495102000000000000000000594000000000000069400000000000005a400000000000606940",
-    "00000000008059400000000000306940060000000100000088000000100000000200000098000000",
-    "1000000003000000a80000004000000004000000e80000000c00000005000000f800000020000000",
-    "06000000180100000800000000000000070000000000000008000000000000000700000000000000",
-    "090000000000000007000000000000000700000000000000ffffffff000000000100000000000000",
-    "08000000000000000900000000000000000000000100000001000000000000000100000008000000",
-    "0000000000000000000000c00000c0bf000000400000c03f00000000000000000000803f0000803f",
-    "0000ff0000ff0000",
+    "000000000080594000000000003069400400000003000000700000004000000004000000b0000000",
+    "0c00000005000000c00000002000000006000000e000000008000000000000000700000000000000",
+    "0700000000000000ffffffff00000000010000000000000008000000000000000900000000000000",
+    "0000000001000000010000000000000001000000080000000000000000000000000000c00000c0bf",
+    "000000400000c03f00000000000000000000803f0000803f0000ff0000ff0000",
 );
+
+#[test]
+fn nested_reference_on_a_hidden_layer_hides_its_whole_block() {
+    // PLAN holds a wall line and a reference to LEAF on A-DOOR; LEAF's line is on A-WALL.
+    let mut doc = sample_doc();
+    let add_block = |doc: &mut CadDocument, name: &str, entities: Vec<EntityType>| {
+        let mut block = BlockRecord::new(name);
+        block.handle = doc.allocate_handle();
+        let owner = block.handle;
+        doc.block_records.add(block).unwrap();
+        entities
+            .into_iter()
+            .map(|mut e| {
+                e.common_mut().owner_handle = owner;
+                doc.add_entity(e).unwrap().value()
+            })
+            .collect::<Vec<u64>>()
+    };
+    let mut leaf_line = EntityType::Line(Line::from_coords(0.0, 0.0, 0.0, 1.0, 0.0, 0.0));
+    leaf_line.common_mut().layer = "A-WALL".to_string();
+    add_block(&mut doc, "LEAF", vec![leaf_line]);
+    let mut wall = EntityType::Line(Line::from_coords(0.0, 2.0, 0.0, 5.0, 2.0, 0.0));
+    wall.common_mut().layer = "A-WALL".to_string();
+    let mut door = EntityType::Insert(Insert::new("LEAF", Vector3::new(1.0, 0.0, 0.0)));
+    door.common_mut().layer = "A-DOOR".to_string();
+    let inner = add_block(&mut doc, "PLAN", vec![wall, door]);
+    let mut plan = EntityType::Insert(Insert::new("PLAN", Vector3::new(60.0, 0.0, 0.0)));
+    plan.common_mut().layer = "A-WALL".to_string();
+    let top = doc.add_entity(plan).unwrap().value();
+
+    let parts = |hidden: &[&str]| -> Vec<Vec<u64>> {
+        let batch = build_batch(&doc, MODEL, &visibility(hidden), 1e-3);
+        batch
+            .ranges
+            .iter()
+            .filter(|r| r.top == top)
+            .map(|r| batch.chain_of(r).to_vec())
+            .collect()
+    };
+    assert_eq!(parts(&[]), [vec![top], vec![top, inner[1]]]);
+    // The leaf's own layer is shown, but the reference holding it is not.
+    assert_eq!(parts(&["A-DOOR"]), [vec![top]]);
+}

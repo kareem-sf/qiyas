@@ -19,7 +19,7 @@ use opencadcodec::xdata::{ExtendedDataRecord, XDataValue};
 use opencadcodec::{
     AppId, CadDocument, Color, EntityType, Handle, Layer, LwPolyline, Point, Vector2, Vector3,
 };
-use qiyas_geom::{flatten, Path};
+use qiyas_geom::{flatten, object_to_world, Path};
 
 use crate::session::{effective_block_name, locate, MEASURE_TOL};
 use crate::{Kind, Measurement, Units};
@@ -114,8 +114,10 @@ pub fn embed_measurements(doc: &mut CadDocument, items: &[Measurement]) {
                             let EntityType::Insert(insert) = located.entity else {
                                 return None;
                             };
+                            // The insert point is in the insert's own object coordinates.
                             let p = insert.insert_point;
-                            let [x, y] = located.xf.apply([p.x, p.y]);
+                            let on_plan = object_to_world(&insert.normal, p.z).apply([p.x, p.y]);
+                            let [x, y] = located.xf.apply(on_plan);
                             Some(Vector3::new(x, y, p.z))
                         })
                         .collect()

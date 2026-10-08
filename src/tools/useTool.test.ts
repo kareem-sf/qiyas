@@ -156,3 +156,39 @@ test("inside a block, a second click toggles between the entity and the block", 
   const double = toolReducer(first, click([0, 0], 100, leaf, info));
   expect(double.pendingCommand).toEqual({ type: "measure_entity", handle: 9, chain: [5, 8] });
 });
+
+test("a double click measures what the status bar showed before it", () => {
+  const leaf: Picked = { top: 5, entity: 9, chain: [5, 8], xref: null };
+  const info: EntityInfo = { ...door, handle: 9, chain: [5, 8], block_path: ["PLAN", "DOOR"] };
+  const block = { type: "measure_entity", handle: 5, chain: [] };
+  const entity = { type: "measure_entity", handle: 9, chain: [5, 8] };
+  const inner = run("select", [click([0, 0], 0, leaf, info)]);
+  const whole = toolReducer(inner, click([0, 0], 1000, leaf, info));
+  expect(whole.hint).toBe("measure.wholeBlock");
+
+  // Showing the whole block: the pair's first click swaps to the entity, the second takes it back.
+  const fromWhole = [click([0, 0], 3000, leaf, info), click([0, 0], 3100, leaf, info)].reduce(
+    toolReducer,
+    whole,
+  );
+  expect(fromWhole.pendingCommand).toEqual(block);
+  // Showing the entity, after a pause.
+  const fromInner = [click([0, 0], 3000, leaf, info), click([0, 0], 3100, leaf, info)].reduce(
+    toolReducer,
+    inner,
+  );
+  expect(fromInner.pendingCommand).toEqual(entity);
+  // A swap back and then a double click still measures what is shown.
+  const back = toolReducer(whole, click([0, 0], 2000, leaf, info));
+  expect(back.hint).toBe("measure.insideBlock");
+  const fromBack = [click([0, 0], 4000, leaf, info), click([0, 0], 4100, leaf, info)].reduce(
+    toolReducer,
+    back,
+  );
+  expect(fromBack.pendingCommand).toEqual(entity);
+
+  // Enter measures what the status shows, in both states.
+  expect(toolReducer(whole, { type: "finish" }).pendingCommand).toEqual(block);
+  expect(toolReducer(inner, { type: "finish" }).pendingCommand).toEqual(entity);
+  expect(toolReducer(back, { type: "finish" }).pendingCommand).toEqual(entity);
+});

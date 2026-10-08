@@ -50,11 +50,7 @@ export type Batch = {
   segments: Float32Array;
   /** `0xRRGGBB` per segment. */
   colors: Uint32Array;
-  /** Top-level entity handle per segment (the outermost block reference inside blocks). */
-  handles: BigUint64Array;
-  /** Innermost entity handle per segment; equal to `handles` outside blocks. */
-  entityHandles: BigUint64Array;
-  /** One per drawn entity, in segment order. */
+  /** One per drawn entity, in segment order; every segment is in exactly one. */
   ranges: Ranges;
   /** Block-reference handles leading to nested entities, outermost first. */
   chains: bigint[][];
@@ -72,7 +68,7 @@ export type Target = { handle: number; chain: number[] };
 const MAGIC = 0x51495942;
 const VERSION = 2;
 export const NO_CHAIN = 0xffffffff;
-const SECTION = { handles: 1, entityHandles: 2, ranges: 3, chains: 4, segments: 5, colors: 6 };
+const SECTION = { ranges: 3, chains: 4, segments: 5, colors: 6 };
 
 /**
  * Decodes layout version 2 documented on `Batch::to_bytes` (crates/qiyas-render/src/batch.rs): a
@@ -90,45 +86,69 @@ export function parseBatch(buf: ArrayBuffer): Batch {
     throw new Error(`Render batch is layout version ${version}; this window reads version ${VERSION}`);
   }
   const f = (i: number) => v.getFloat64(8 + 8 * i, true);
-  const sections = new Map<number, { at: number; length: number }>();
   const k = v.getUint32(56, true);
+  if (60 + 12 * k > buf.byteLength) throw new Error("Render batch section table too short");
+  const sections = new Map<number, { at: number; length: number }>();
   for (let i = 0; i < k; i++) {
     const entry = 60 + 12 * i;
+    const kind = v.getUint32(entry, true);
     const at = v.getUint32(entry + 4, true);
     const length = v.getUint32(entry + 8, true);
-    if (at + length > buf.byteLength) throw new Error("Render batch is cut short");
-    sections.set(v.getUint32(entry, true), { at, length });
+    if (at + length > buf.byteLength) throw new Error(`Render batch section ${kind} too short`);
+    sections.set(kind, { at, length });
   }
-  const section = (kind: number) => sections.get(kind) ?? { at: 0, length: 0 };
+  /** A required section; its length must be a whole number of `unit`-byte records. */
+  const section = (kind: number, unit = 1) => {
+    const found = sections.get(kind);
+    if (!found) throw new Error(`Render batch missing section ${kind}`);
+    if (found.length % unit !== 0) throw new Error(`Render batch section ${kind} too short`);
+    return found;
+  };
 
-  const handles = section(SECTION.handles);
-  const n = handles.length / 8;
-  const r = section(SECTION.ranges);
-  const ranges = new Ranges(
-    new BigUint64Array(buf, r.at, r.length / 8),
-    new Uint32Array(buf, r.at, r.length / 4),
-  );
-  const chains: bigint[][] = [];
+  const segments = section(SECTION.segments, 16);
+  const n = segments.length / 16;
+  const colors = section(SECTION.colors, 4);
+  if (colors.length !== 4 * n) throw new Error(`Render batch section ${SECTION.colors} too short`);
+
   const c = section(SECTION.chains);
+  const chains: bigint[][] = [];
   for (let at = c.at; at < c.at + c.length; ) {
-    const m = v.getUint32(at, true);
+    const m = at + 4 <= c.at + c.length ? v.getUint32(at, true) : -1;
+    if (m < 0 || at + 4 + 8 * m > c.at + c.length) {
+      throw new Error(`Render batch section ${SECTION.chains} too short`);
+    }
     const chain = [];
     for (let j = 0; j < m; j++) chain.push(v.getBigUint64(at + 4 + 8 * j, true));
     chains.push(chain);
     at += 4 + 8 * m;
   }
+
+  const r = section(SECTION.ranges, 32);
+  const ranges = new Ranges(
+    new BigUint64Array(buf, r.at, r.length / 8),
+    new Uint32Array(buf, r.at, r.length / 4),
+  );
+  // The ranges cover the segments, and name chains that exist.
+  let covered = 0;
+  for (let i = 0; i < ranges.length; i++) {
+    const chain = ranges.chain(i);
+    if (ranges.first(i) !== covered || (chain !== NO_CHAIN && chain >= chains.length)) {
+      throw new Error(`Render batch section ${SECTION.ranges} does not match the segments`);
+    }
+    covered += ranges.count(i);
+  }
+  if (covered !== n) throw new Error(`Render batch section ${SECTION.ranges} too short`);
+
   return {
     bounds: [
       [f(0), f(1)],
       [f(2), f(3)],
     ],
     origin: [f(4), f(5)],
-    handles: new BigUint64Array(buf, handles.at, n),
-    entityHandles: new BigUint64Array(buf, section(SECTION.entityHandles).at, n),
     ranges,
     chains,
-    segments: new Float32Array(buf, section(SECTION.segments).at, 4 * n),
-    colors: new Uint32Array(buf, section(SECTION.colors).at, n),
+    segments: new Float32Array(buf, segments.at, 4 * n),
+    colors: new Uint32Array(buf, colors.at, n),
   };
 }
 

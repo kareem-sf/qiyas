@@ -3,17 +3,15 @@ import { NO_CHAIN, parseBatch, rangeMatcher } from "./batch";
 
 /** A version 2 batch, laid out as `Batch::to_bytes` does: two segments, the first of a line at the
  *  top level (handle 7), the second of a line (9) inside block reference 8. `extra` adds a section
- *  of an unknown kind before the known ones. */
-function v2(extra = false): ArrayBuffer {
+ *  of an unknown kind before the known ones; `without` leaves a section out. */
+function v2(extra = false, without = 0): ArrayBuffer {
   const sections: [number, number][] = [
     ...(extra ? ([[99, 8]] as [number, number][]) : []),
-    [1, 16], // handles
-    [2, 16], // entity handles
     [3, 64], // ranges
     [4, 12], // chains: one chain of one handle
     [5, 32], // segments
     [6, 8], // colours
-  ];
+  ].filter(([kind]) => kind !== without) as [number, number][];
   const align = (n: number) => Math.ceil(n / 8) * 8;
   let at = align(60 + 12 * sections.length);
   const placed = sections.map(([kind, length]) => {
@@ -34,11 +32,9 @@ function v2(extra = false): ArrayBuffer {
     v.setUint32(64 + 12 * i, at, true);
     v.setUint32(68 + 12 * i, length, true);
   });
-  const of = (kind: number) => placed.find((p) => p.kind === kind)!.at;
-  v.setBigUint64(of(1), 7n, true);
-  v.setBigUint64(of(1) + 8, 8n, true);
-  v.setBigUint64(of(2), 7n, true);
-  v.setBigUint64(of(2) + 8, 9n, true);
+  // A left-out section's data goes nowhere (offset past the end is never written).
+  const of = (kind: number) => placed.find((p) => p.kind === kind)?.at ?? -1;
+  if (without !== 0) return buf;
   const ranges = of(3);
   [
     [7n, 7n, NO_CHAIN, 0],
@@ -63,8 +59,6 @@ test("parseBatch reads the header and the section table", () => {
   for (const extra of [false, true]) {
     const b = parseBatch(v2(extra));
     expect(Array.from(b.segments)).toEqual([-2, -1.5, 2, 1.5, 0, 0, 1, 1]);
-    expect(Array.from(b.handles)).toEqual([7n, 8n]);
-    expect(Array.from(b.entityHandles)).toEqual([7n, 9n]);
     expect(b.ranges.length).toBe(2);
     expect([b.ranges.at(0), b.ranges.at(1)]).toEqual([
       { top: 7n, entity: 7n, chain: NO_CHAIN, first: 0, count: 1 },
@@ -90,6 +84,24 @@ test("parseBatch rejects other versions and other data", () => {
   expect(() => parseBatch(v1)).toThrow(/not in the Qiyas batch format/);
 });
 
+test("parseBatch rejects a missing section or a cut-short buffer", () => {
+  for (const kind of [3, 4, 5, 6]) {
+    expect(() => parseBatch(v2(false, kind))).toThrow(`missing section ${kind}`);
+  }
+  const whole = v2();
+  // Cut inside the colours: their section no longer fits.
+  expect(() => parseBatch(whole.slice(0, whole.byteLength - 4))).toThrow("section 6 too short");
+  // Cut inside the section table.
+  expect(() => parseBatch(whole.slice(0, 70))).toThrow("section table too short");
+  // Colours for one segment only.
+  const short = v2();
+  const sv = new DataView(short);
+  const colorsEntry = 60 + 12 * 3;
+  expect(sv.getUint32(colorsEntry, true)).toBe(6);
+  sv.setUint32(colorsEntry + 8, 4, true);
+  expect(() => parseBatch(short)).toThrow("section 6 too short");
+});
+
 test("rangeMatcher tells a whole block from an entity inside it", () => {
   const b = parseBatch(v2());
   const [line, leaf] = [0, 1];
@@ -106,13 +118,11 @@ test("rangeMatcher tells a whole block from an entity inside it", () => {
  *  `bytes_match_the_frontend_fixture`). */
 const FROM_RUST = [
   "4259495102000000000000000000594000000000000069400000000000005a400000000000606940",
-  "00000000008059400000000000306940060000000100000088000000100000000200000098000000",
-  "1000000003000000a80000004000000004000000e80000000c00000005000000f800000020000000",
-  "06000000180100000800000000000000070000000000000008000000000000000700000000000000",
-  "090000000000000007000000000000000700000000000000ffffffff000000000100000000000000",
-  "08000000000000000900000000000000000000000100000001000000000000000100000008000000",
-  "0000000000000000000000c00000c0bf000000400000c03f00000000000000000000803f0000803f",
-  "0000ff0000ff0000",
+  "000000000080594000000000003069400400000003000000700000004000000004000000b0000000",
+  "0c00000005000000c00000002000000006000000e000000008000000000000000700000000000000",
+  "0700000000000000ffffffff00000000010000000000000008000000000000000900000000000000",
+  "0000000001000000010000000000000001000000080000000000000000000000000000c00000c0bf",
+  "000000400000c03f00000000000000000000803f0000803f0000ff0000ff0000",
 ].join("");
 
 test("parseBatch reads what the Rust side writes", () => {

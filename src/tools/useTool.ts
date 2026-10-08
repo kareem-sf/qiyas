@@ -23,8 +23,9 @@ export type ToolState = {
   /** Values for the `{name}` slots of `hint`. */
   hintArgs: Record<string, string> | null;
   /** What `select` picked, waiting to be measured: the entity itself, or with `whole` the
-   *  top-level block reference it sits in. `path` names the blocks along its chain. */
-  selected: { picked: Picked; path: string[]; whole: boolean } | null;
+   *  top-level block reference it sits in. `path` names the blocks along its chain. `toggled` is
+   *  true when the last click swapped `whole`, so a double click can take that swap back. */
+  selected: { picked: Picked; path: string[]; whole: boolean; toggled: boolean } | null;
   lastClick: { screen: Point; time: number } | null;
 };
 
@@ -131,11 +132,14 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
             // Inside a block, a slow second click swaps the entity for the whole block and back;
             // a double click (or Enter) measures. Elsewhere the second click measures.
             if (picked.chain.length > 0 && !double) {
-              return selectHint(clicked, { ...current, whole: !current.whole });
+              return selectHint(clicked, { ...current, whole: !current.whole, toggled: true });
             }
-            return measureSelected(clicked);
+            // The first click of a double click swapped: measure what was shown before the pair.
+            const whole = double && current.toggled ? !current.whole : current.whole;
+            return measureSelected({ ...clicked, selected: { ...current, whole } });
           }
-          return selectHint(clicked, { picked, path: event.info?.block_path ?? [], whole: false });
+          const path = event.info?.block_path ?? [];
+          return selectHint(clicked, { picked, path, whole: false, toggled: false });
         }
         case "count":
           // The second click of a double click would count the same block twice.

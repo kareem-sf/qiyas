@@ -343,6 +343,12 @@ fn ocs_of(entity: &EntityType) -> Option<Xform> {
     }
 }
 
+/// Object (OCS) to world coordinates on plan for an entity with extrusion `normal`, at height `z`
+/// in object coordinates: the identity for +Z, a mirror in X for -Z.
+pub fn object_to_world(normal: &Vector3, z: f64) -> Xform {
+    ocs(normal, z).unwrap_or_else(Xform::identity)
+}
+
 /// The plan projection of the AutoCAD arbitrary-axis transform for `normal`, at height `z` in
 /// object coordinates. `None` for +Z (identity) or a zero normal.
 pub(crate) fn ocs(normal: &Vector3, z: f64) -> Option<Xform> {

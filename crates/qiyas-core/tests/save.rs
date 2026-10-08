@@ -1,8 +1,8 @@
 use std::path::Path;
 
-use opencadcodec::entities::{BoundaryEdge, BoundaryPath, Hatch, LineEdge};
+use opencadcodec::entities::{BoundaryEdge, BoundaryPath, Hatch, Insert, LineEdge};
 use opencadcodec::xdata::{ExtendedDataRecord, XDataValue};
-use opencadcodec::{Color, DxfWriter, EntityType, Point, Vector2};
+use opencadcodec::{Color, DxfWriter, EntityType, Point, Vector2, Vector3};
 use qiyas_core::{
     embed_measurements, project_path, read_embedded, Command, CoreError, Kind, Measurement,
     Session, Units,
@@ -555,4 +555,35 @@ fn markup_item_embeds_on_the_markup_layer() {
         .map(|m| m.unit.as_str())
         .collect();
     assert_eq!(units, ["markup", "bags"]);
+}
+
+#[test]
+fn mirrored_insert_count_point_lands_where_it_is_drawn() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = qiyas_core::fixtures::write_sample(dir.path(), "dxf");
+    let mut session = Session::open(&source).unwrap();
+    // Mirrored in X: object point (40, 1) is drawn at world (-40, 1).
+    let mut door =
+        Insert::new("DOOR", Vector3::new(40.0, 1.0, 0.0)).with_normal(Vector3::new(0.0, 0.0, -1.0));
+    door.common.layer = "A-DOOR".to_string();
+    let handle = session
+        .drawing
+        .doc
+        .add_entity(EntityType::Insert(door))
+        .unwrap()
+        .value();
+    session
+        .run(Command::MeasureEntity {
+            handle,
+            chain: Vec::new(),
+        })
+        .unwrap();
+    let out = dir.path().join("out.dxf");
+    session.save_as(&out).unwrap();
+    std::fs::remove_file(project_path(&out)).unwrap();
+
+    let items = Session::open(&out).unwrap().takeoff.items;
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].kind, Kind::Count);
+    assert_eq!(items[0].points, [[-40.0, 1.0]]);
 }

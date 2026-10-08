@@ -16,7 +16,7 @@ const UNIFORM: f64 = 1e-9;
 /// The plan length of `entity` after `xf`, worked out exactly: Line, LwPolyline and Polyline2D
 /// (bulged segments as arcs), Polyline, Arc, Circle and a full Ellipse (Ramanujan's second
 /// approximation). `None` for any other entity, a stretching `xf`, a tilted extrusion normal or
-/// a closed polyline of fewer than three vertices: measure the flattened paths then.
+/// a closed polyline of two straight segments or fewer: measure the flattened paths then.
 pub fn exact_length(entity: &EntityType, xf: &Xform) -> Option<f64> {
     let s = uniform_scale(xf)?;
     let local = match entity {
@@ -137,11 +137,13 @@ fn full_ellipse(e: &opencadcodec::Ellipse) -> Option<(f64, f64)> {
 }
 
 /// Length along vertices whose bulges turn segments into arcs. A closed outline adds the
-/// segment back to the first vertex. `None` for a closed outline of fewer than three vertices,
-/// which the flattened path measures differently.
+/// segment back to the first vertex. `None` for a closed outline of fewer than three vertices
+/// and no bulge, which the flattened path measures as one segment (two bulged vertices, the usual
+/// way to draw a circle, are measured).
 fn bulge_length(vertices: &[([f64; 2], f64)], closed: bool) -> Option<f64> {
     let n = vertices.len();
-    if closed && n < 3 {
+    let bulged = vertices.iter().any(|(_, b)| b.abs() >= MIN_BULGE);
+    if closed && (n < 2 || (n == 2 && !bulged)) {
         return None;
     }
     let segments = if closed { n } else { n.saturating_sub(1) };

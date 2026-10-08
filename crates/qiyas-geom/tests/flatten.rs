@@ -436,6 +436,25 @@ fn exact_bulged_polyline_and_arc() {
 }
 
 #[test]
+fn exact_two_vertex_bulged_circle() {
+    let id = Xform::identity();
+    // Two half-circle bulges: the usual way a polyline draws a circle of radius 1.
+    let circle = closed_lwpolyline(&[(0.0, 0.0, 1.0), (2.0, 0.0, 1.0)]);
+    assert!((exact_length(&circle, &id).unwrap() - TAU).abs() < 1e-9);
+    assert!((exact_area(&circle, &id).unwrap() - PI).abs() < 1e-9);
+    // A half circle closed by its chord.
+    let half = closed_lwpolyline(&[(0.0, 0.0, 1.0), (2.0, 0.0, 0.0)]);
+    assert!((exact_length(&half, &id).unwrap() - (PI + 2.0)).abs() < 1e-9);
+    // With no bulge, the flattened path is one segment: no exact value.
+    let straight = closed_lwpolyline(&[(0.0, 0.0, 0.0), (2.0, 0.0, 0.0)]);
+    assert_eq!(exact_length(&straight, &id), None);
+    // The flattened path agrees with the exact values.
+    let doc = CadDocument::new();
+    let paths = flat(&doc, circle, 1e-5);
+    assert!((paths[0].length() - TAU).abs() < 1e-3);
+}
+
+#[test]
 fn exact_full_ellipse() {
     let ellipse = Ellipse::from_center_axes(
         Vector3::new(0.0, 0.0, 0.0),

@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use opencadcodec::tables::normalize_name;
-use opencadcodec::{CadDocument, Color};
+use opencadcodec::{CadDocument, Color, Handle};
 use qiyas_geom::{flatten, Path, Xform};
 
 use crate::color::resolve_color;
@@ -14,9 +14,8 @@ pub const VERSION: u32 = 2;
 pub const NO_CHAIN: u32 = u32::MAX;
 
 /// Section kinds of `Batch::to_bytes`. Later layouts add kinds; readers skip unknown ones.
+/// Kinds 1 and 2 (per-segment handles) are not used: the ranges carry the handles.
 pub mod section {
-    pub const HANDLES: u32 = 1;
-    pub const ENTITY_HANDLES: u32 = 2;
     pub const RANGES: u32 = 3;
     pub const CHAINS: u32 = 4;
     pub const SEGMENTS: u32 = 5;
@@ -45,11 +44,7 @@ pub struct Batch {
     pub segments: Vec<f32>,
     /// `0xRRGGBB` per segment.
     pub colors: Vec<u32>,
-    /// Handle of the top-level entity (the outermost block reference) per segment.
-    pub handles: Vec<u64>,
-    /// Handle of the innermost entity per segment; equals `handles` outside blocks.
-    pub entity_handles: Vec<u64>,
-    /// One per drawn entity, in segment order.
+    /// One per drawn entity, in segment order; every segment is in exactly one.
     pub ranges: Vec<Range>,
     /// The block-reference handles leading to each nested entity, outermost first.
     pub chains: Vec<Vec<u64>>,
@@ -96,6 +91,7 @@ pub fn build_batch(doc: &CadDocument, sheet_block: &str, vis: &Visibility, tol: 
     };
     let mut batch = Batch::default();
     let mut chain_index: HashMap<Vec<u64>, u32> = HashMap::new();
+    let mut chain_shown: HashMap<Vec<u64>, bool> = HashMap::new();
     // Absolute `x0 y0 x1 y1` per segment; made relative once the bounds are known.
     let mut absolute: Vec<[f64; 4]> = Vec::new();
     for entity in doc.entities_in_block(sheet_block) {
@@ -110,14 +106,24 @@ pub fn build_batch(doc: &CadDocument, sheet_block: &str, vis: &Visibility, tol: 
             if !shown(&flat.layer) {
                 continue;
             }
+            // A nested block reference on a hidden layer hides everything inside it.
+            let chain_shown = match chain_shown.get(flat.chain.as_slice()) {
+                Some(&v) => v,
+                None => {
+                    let v = nested_inserts_shown(doc, &flat.chain, &common.layer, &mut shown);
+                    chain_shown.insert(flat.chain.clone(), v);
+                    v
+                }
+            };
+            if !chain_shown {
+                continue;
+            }
             let [r, g, b] = resolve_color(&flat.color, &Color::ByLayer);
             let rgb = u32::from_be_bytes([0, r, g, b]);
             let first = absolute.len();
             for (a, b) in segments(&flat.path) {
                 absolute.push([a[0], a[1], b[0], b[1]]);
                 batch.colors.push(rgb);
-                batch.handles.push(top);
-                batch.entity_handles.push(flat.entity);
             }
             let count = absolute.len() - first;
             if count == 0 {
@@ -180,6 +186,30 @@ pub fn build_batch(doc: &CadDocument, sheet_block: &str, vis: &Visibility, tol: 
     batch
 }
 
+/// Whether every block reference of `chain` after the first (the top-level one, already checked)
+/// sits on a shown layer. A reference on layer "0" is drawn on the layer of the one around it.
+fn nested_inserts_shown(
+    doc: &CadDocument,
+    chain: &[u64],
+    top_layer: &str,
+    shown: &mut impl FnMut(&str) -> bool,
+) -> bool {
+    let mut layer = top_layer;
+    for &h in chain.iter().skip(1) {
+        let Some(insert) = doc.get_entity(Handle::new(h)) else {
+            continue;
+        };
+        let own = insert.common().layer.as_str();
+        if own != "0" {
+            layer = own;
+        }
+        if !shown(layer) {
+            return false;
+        }
+    }
+    true
+}
+
 /// A path of n points gives n - 1 segments, plus the closing one when closed
 /// (same rule as `Path::length`, so a closed two-point path is not drawn twice).
 fn segments(path: &Path) -> impl Iterator<Item = ([f64; 2], [f64; 2])> + '_ {
@@ -209,8 +239,7 @@ impl Batch {
     }
 
     /// Encodes the batch for the frontend: layout version 2. Little-endian; every section
-    /// starts on an 8-byte boundary (zero padding before it). With n = segments, r = ranges,
-    /// k = sections (6 here):
+    /// starts on an 8-byte boundary (zero padding before it). With k = sections (4 here):
     ///
     /// | offset   | size  | contents                                                     |
     /// |----------|-------|--------------------------------------------------------------|
@@ -225,8 +254,6 @@ impl Batch {
     ///
     /// | kind | name           | contents                                                    |
     /// |------|----------------|-------------------------------------------------------------|
-    /// | 1    | handles        | `u64` per segment: the top-level entity                     |
-    /// | 2    | entity handles | `u64` per segment: the innermost entity                     |
     /// | 3    | ranges         | 32 bytes per range: `u64` top, `u64` entity, `u32` chain    |
     /// |      |                | index (`0xFFFFFFFF` = none), `u32` first, `u32` count, 4 pad |
     /// | 4    | chains         | per chain: `u32` length m, then m `u64` handles, outermost  |
@@ -234,8 +261,9 @@ impl Batch {
     /// | 5    | segments       | `f32` x0 y0 x1 y1 per segment, relative to origin           |
     /// | 6    | colours        | `u32` 0xRRGGBB per segment                                  |
     ///
-    /// Readers find sections by kind and skip kinds they don't know, so a later layout can add
-    /// sections (glyphs, images) without a new version.
+    /// Every segment belongs to exactly one range, so the ranges give each segment's handles.
+    /// Kinds 1 and 2 are unused. Readers find sections by kind and skip kinds they don't know, so
+    /// a later layout can add sections (glyphs, images) without a new version.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut chains = Vec::new();
         for chain in &self.chains {
@@ -253,12 +281,7 @@ impl Batch {
             ranges.extend(r.count.to_le_bytes());
             ranges.extend([0u8; 4]);
         }
-        let sections: [(u32, Vec<u8>); 6] = [
-            (section::HANDLES, le_bytes(&self.handles, u64::to_le_bytes)),
-            (
-                section::ENTITY_HANDLES,
-                le_bytes(&self.entity_handles, u64::to_le_bytes),
-            ),
+        let sections: [(u32, Vec<u8>); 4] = [
             (section::RANGES, ranges),
             (section::CHAINS, chains),
             (
