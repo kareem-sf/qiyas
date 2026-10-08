@@ -93,8 +93,11 @@ pub fn catalogue() -> Vec<ToolSpec> {
         tool(
             "get_entity",
             "One entity by handle: its type, layer, block name, text, and length and area in \
-             drawing units.",
-            json!({ "handle": handle("The entity's handle, from find_entities.") }),
+             drawing units. For an entity inside blocks, give chain too.",
+            json!({
+                "handle": handle("The entity's handle, from find_entities."),
+                "chain": chain()
+            }),
             &["handle"],
             false,
         ),
@@ -152,6 +155,7 @@ pub fn catalogue() -> Vec<ToolSpec> {
              with its id; shown is in metres.",
             json!({
                 "handle": handle("The entity to measure, from find_entities."),
+                "chain": chain(),
                 "points": points("A polyline in drawing coordinates, 2 points or more.")
             }),
             &[],
@@ -165,6 +169,7 @@ pub fn catalogue() -> Vec<ToolSpec> {
              in square metres.",
             json!({
                 "handle": handle("The closed entity to measure, from find_entities."),
+                "chain": chain(),
                 "points": points("The corners of the ring in drawing coordinates, 3 points or \
                                   more; it is closed for you.")
             }),
@@ -394,6 +399,16 @@ fn sheet(description: &str) -> Value {
 
 fn handle(description: &str) -> Value {
     json!({ "type": "integer", "description": description })
+}
+
+/// The block references an entity sits inside.
+fn chain() -> Value {
+    json!({
+        "type": "array",
+        "items": { "type": "integer" },
+        "description": "For an entity inside blocks: the handles of the block references it \
+                        sits inside, outermost first. Leave out for an entity on the sheet."
+    })
 }
 
 fn id() -> Value {

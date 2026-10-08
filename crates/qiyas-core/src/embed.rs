@@ -5,7 +5,10 @@
 //! Xdata record of app `QIYAS`, in order: `String(id)`, `String(kind)` ("length", "area",
 //! "count", "volume" or "item"), `Real(value)` in drawing units, `String(description)`,
 //! `String(layer)`, `String(sheet)`, `String(block_name or "")`; then, for a volume only,
-//! `Real(height)` and, for an item only, `String(unit)`. A count writes one point per counted
+//! `Real(height)` and, for an item only, `String(unit)`. A measurement of an entity inside blocks
+//! adds a 9th value, `String(chain)`: the block-reference handles, outermost first, as decimal
+//! numbers joined by commas; its 8th value is then `String("")` for a length, area or count. Readers
+//! take records of 7, 8 or 9 values. A count writes one point per counted
 //! reference, each with the whole count's record. A volume is drawn like an area, on
 //! `QIYAS-AREA`; an item with geometry is drawn like a length, on `QIYAS-ITEM` (a markup, an item
 //! with unit "markup", on `QIYAS-MARKUP`), and an item without geometry is not written.
@@ -16,9 +19,9 @@ use opencadcodec::xdata::{ExtendedDataRecord, XDataValue};
 use opencadcodec::{
     AppId, CadDocument, Color, EntityType, Handle, Layer, LwPolyline, Point, Vector2, Vector3,
 };
-use qiyas_geom::{flatten, Path, Xform};
+use qiyas_geom::{flatten, Path};
 
-use crate::session::MEASURE_TOL;
+use crate::session::{effective_block_name, locate, MEASURE_TOL};
 use crate::{Kind, Measurement, Units};
 
 const APP: &str = "QIYAS";
@@ -106,9 +109,14 @@ pub fn embed_measurements(doc: &mut CadDocument, items: &[Measurement]) {
                 } else {
                     m.handles
                         .iter()
-                        .filter_map(|h| match doc.get_entity(Handle::new(*h)) {
-                            Some(EntityType::Insert(insert)) => Some(insert.insert_point),
-                            _ => None,
+                        .filter_map(|h| {
+                            let located = locate(doc, *h, &m.chain).ok()?;
+                            let EntityType::Insert(insert) = located.entity else {
+                                return None;
+                            };
+                            let p = insert.insert_point;
+                            let [x, y] = located.xf.apply([p.x, p.y]);
+                            Some(Vector3::new(x, y, p.z))
                         })
                         .collect()
                 };
@@ -139,21 +147,21 @@ fn closed(kind: Kind) -> bool {
 }
 
 /// The picked points as one path, or for a measured entity the vertices of each of its paths
-/// (each closed path, for an area or volume). Empty when there is nothing to draw.
+/// (each closed path, for an area or volume), placed by its chain of block references. Empty
+/// when there is nothing to draw.
 fn shape_paths(doc: &CadDocument, m: &Measurement) -> Vec<Vec<[f64; 2]>> {
     if !m.points.is_empty() {
         return vec![m.points.clone()];
     }
-    let Some(entity) = m
+    let Some(located) = m
         .handles
         .first()
-        .and_then(|h| doc.get_entity(Handle::new(*h)))
+        .and_then(|h| locate(doc, *h, &m.chain).ok())
     else {
         return Vec::new();
     };
-    let mut paths = Vec::new();
-    flatten(doc, entity, &Xform::identity(), MEASURE_TOL, &mut paths);
-    paths
+    flatten(doc, located.entity, &located.xf, MEASURE_TOL)
+        .into_paths()
         .into_iter()
         .filter(|p| !closed(m.kind) || p.closed)
         .map(|p| p.points)
@@ -176,7 +184,14 @@ fn record(m: &Measurement) -> ExtendedDataRecord {
     match m.kind {
         Kind::Volume => record.add_value(XDataValue::Real(m.height.unwrap_or_default())),
         Kind::Item => record.add_value(XDataValue::String(m.unit.clone())),
+        Kind::Length | Kind::Area | Kind::Count if !m.chain.is_empty() => {
+            record.add_value(XDataValue::String(String::new()))
+        }
         Kind::Length | Kind::Area | Kind::Count => {}
+    }
+    if !m.chain.is_empty() {
+        let chain: Vec<String> = m.chain.iter().map(u64::to_string).collect();
+        record.add_value(XDataValue::String(chain.join(",")));
     }
     record
 }
@@ -186,7 +201,8 @@ fn record(m: &Measurement) -> ExtendedDataRecord {
 /// length or area takes its points from its first polyline, a count gets one point per `Point`.
 /// A measured entity with several paths therefore comes back with the first path only, and is
 /// written back as that one polyline on the next save. Records that don't match the layout are
-/// skipped.
+/// skipped. A description that is one of the defaults Qiyas gives ("Distance", "Area",
+/// "<Kind> on <layer>", "<block> count") is marked as such.
 pub fn read_embedded(doc: &CadDocument) -> Vec<Measurement> {
     let units = Units::from_header(doc.header.insertion_units);
     let mut entities: Vec<(&EntityType, &ExtendedDataRecord)> = doc
@@ -226,15 +242,54 @@ pub fn read_embedded(doc: &CadDocument) -> Vec<Measurement> {
             _ => {}
         }
     }
+    for m in &mut items {
+        m.auto_description = is_default_description(m);
+        m.block_path = m
+            .chain
+            .iter()
+            .filter_map(|h| match doc.get_entity(Handle::new(*h)) {
+                Some(EntityType::Insert(insert)) => Some(effective_block_name(doc, insert)),
+                _ => None,
+            })
+            .collect();
+    }
     items
+}
+
+/// True when the description is one Qiyas makes up for a new measurement.
+fn is_default_description(m: &Measurement) -> bool {
+    let d = m.description.as_str();
+    let kind_on_layer = d
+        .strip_suffix(&format!(" on {}", m.layer))
+        .is_some_and(|kind| !kind.is_empty() && kind.chars().all(|c| c.is_ascii_alphanumeric()));
+    let block_count = m
+        .block_name
+        .as_ref()
+        .is_some_and(|b| d == format!("{b} count"));
+    matches!(d, "Distance" | "Area") || kind_on_layer || block_count
 }
 
 /// A measurement from one record, made now by the user, with no points or handles yet.
 fn parse(record: &ExtendedDataRecord, units: Units) -> Option<Measurement> {
     let values = record.values.as_slice();
-    let (head, extra) = match values {
-        [head @ .., extra] if values.len() == 8 => (head, Some(extra)),
-        _ => (values, None),
+    let (head, extra, chain) = match values.len() {
+        7 => (values, None, None),
+        8 => (&values[..7], Some(&values[7]), None),
+        9 => (&values[..7], Some(&values[7]), Some(&values[8])),
+        _ => return None,
+    };
+    let chain: Vec<u64> = match chain {
+        None => Vec::new(),
+        Some(XDataValue::String(list)) => list
+            .split(',')
+            .map(|h| h.trim().parse().ok())
+            .collect::<Option<_>>()?,
+        Some(_) => return None,
+    };
+    // A chain record pads the 8th value of kinds that have none.
+    let extra = match extra {
+        Some(XDataValue::String(s)) if s.is_empty() && !chain.is_empty() => None,
+        other => other,
     };
     let [XDataValue::String(id), XDataValue::String(kind), XDataValue::Real(value), XDataValue::String(description), XDataValue::String(layer), XDataValue::String(sheet), XDataValue::String(block_name)] =
         head
@@ -259,6 +314,7 @@ fn parse(record: &ExtendedDataRecord, units: Units) -> Option<Measurement> {
     );
     m.id = id.clone();
     m.block_name = (!block_name.is_empty()).then(|| block_name.clone());
+    m.chain = chain;
     match extra {
         Some(XDataValue::Real(height)) => m.height = Some(*height),
         Some(XDataValue::String(unit)) => m.unit = unit.clone(),

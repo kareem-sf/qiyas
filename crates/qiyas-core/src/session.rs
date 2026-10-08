@@ -3,11 +3,12 @@ use std::collections::HashSet;
 use std::fmt::{self, Write};
 use std::path::{Path, PathBuf};
 
+use opencadcodec::entities::Insert;
 use opencadcodec::tables::normalize_name;
-use opencadcodec::{DwgWriter, DxfWriter, EntityType, Handle};
-use qiyas_geom::{flatten, Xform};
+use opencadcodec::{CadDocument, DwgWriter, DxfWriter, EntityType, Handle};
+use qiyas_geom::{exact_area, exact_length, flatten, insert_instances, Xform};
 use qiyas_render::{build_batch, Batch, PickIndex, Visibility};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::commands::Part;
 use crate::embed::{embed_measurements, read_embedded};
@@ -59,18 +60,138 @@ pub struct DrawingInfo {
     pub problems: Vec<String>,
 }
 
-/// What the user sees about one picked entity. Length and area are in drawing units.
+/// Shown when some block content was too deep or too large to draw.
+const TRUNCATED: &str = "Drawing too complex, some block content not drawn";
+
+/// What is under the cursor: the entity itself (`entity`), the block references it sits inside
+/// (`chain`, outermost first, empty at the top level) and the top-level entity on the sheet
+/// (`top`: the first of `chain`, or `entity` itself).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Picked {
+    pub top: u64,
+    pub entity: u64,
+    pub chain: Vec<u64>,
+    /// Name of the xref the entity belongs to; always `None` for now.
+    pub xref: Option<String>,
+}
+
+/// What the user sees about one picked entity. Length and area are in drawing units, in world
+/// coordinates (an entity inside blocks is measured as placed by its block references).
 #[derive(Debug, Clone, Serialize)]
 pub struct EntityInfo {
     pub handle: u64,
     /// The entity type, e.g. "Line", "LwPolyline", "Insert", "Text".
     pub kind: String,
+    /// The layer it is drawn on: its own, or for one on layer "0" inside a block, its insert's.
     pub layer: String,
     pub length: Option<f64>,
     /// Sum of the closed paths' areas; `None` when the entity has no closed path.
     pub area: Option<f64>,
+    /// For a block reference, its block (for a dynamic block, the block it was made from).
     pub block_name: Option<String>,
     pub text: Option<String>,
+    /// The block the entity sits in, when it was picked inside one.
+    pub inside_block: Option<String>,
+    /// The block references the entity sits inside, outermost first; empty at the top level.
+    pub chain: Vec<u64>,
+    /// The block names along `chain`, outermost first.
+    pub block_path: Vec<String>,
+}
+
+/// An entity found by handle and chain, with what places it in the world.
+pub(crate) struct Located<'a> {
+    pub entity: &'a EntityType,
+    /// Block-to-world transform of the chain (identity at the top level).
+    pub xf: Xform,
+    /// The layer the entity is drawn on (layer "0" inside a block takes its insert's).
+    pub layer: String,
+    /// The block names along the chain, outermost first (dynamic blocks by their own name).
+    pub block_path: Vec<String>,
+}
+
+/// Finds `handle` inside the block references `chain` (outermost first; empty for an entity
+/// on a sheet). Each reference must sit in the block of the one before it, and the entity in
+/// the last one's block. An array (MINSERT) is placed by its first cell.
+pub(crate) fn locate<'a>(
+    doc: &'a CadDocument,
+    handle: u64,
+    chain: &[u64],
+) -> Result<Located<'a>, CoreError> {
+    let get = |h: u64| {
+        doc.get_entity(Handle::new(h))
+            .ok_or(CoreError::NoSuchEntity(h))
+    };
+    let mut xf = Xform::identity();
+    let mut layer: Option<&str> = None;
+    let mut block: Option<&str> = None;
+    let mut block_path = Vec::new();
+    for &h in chain {
+        let e = get(h)?;
+        let EntityType::Insert(insert) = e else {
+            return Err(CoreError::InvalidCommand(format!(
+                "Entity {h} in the chain is not a block reference"
+            )));
+        };
+        check_inside(doc, h, block)?;
+        let placed = insert_instances(doc, insert, &xf).next();
+        xf = placed.ok_or_else(|| {
+            CoreError::InvalidCommand(format!("Block {} is missing", insert.block_name))
+        })?;
+        layer = Some(drawn_layer(&insert.common.layer, layer));
+        block = Some(&insert.block_name);
+        block_path.push(effective_block_name(doc, insert));
+    }
+    let entity = get(handle)?;
+    check_inside(doc, handle, block)?;
+    Ok(Located {
+        entity,
+        xf,
+        layer: drawn_layer(&entity.common().layer, layer).to_string(),
+        block_path,
+    })
+}
+
+/// An entity's layer as drawn: layer "0" inside a block takes the insert's.
+fn drawn_layer<'a>(own: &'a str, insert: Option<&'a str>) -> &'a str {
+    match insert {
+        Some(outer) if own == "0" => outer,
+        _ => own,
+    }
+}
+
+/// Ok when `block` is `None` (no chain yet) or holds the entity `handle`.
+fn check_inside(doc: &CadDocument, handle: u64, block: Option<&str>) -> Result<(), CoreError> {
+    let Some(block) = block else {
+        return Ok(());
+    };
+    let inside = doc
+        .block_records
+        .get(block)
+        .is_some_and(|b| b.entity_handles.contains(&Handle::new(handle)));
+    if inside {
+        Ok(())
+    } else {
+        Err(CoreError::InvalidCommand(format!(
+            "Entity {handle} is not inside block {block}"
+        )))
+    }
+}
+
+/// The block an insert shows. An anonymous dynamic-block copy (`*U…`) is named after the
+/// dynamic block it was made from, when the drawing links them; otherwise the insert's own name.
+pub(crate) fn effective_block_name(doc: &CadDocument, insert: &Insert) -> String {
+    let anonymous = insert
+        .block_name
+        .get(..2)
+        .is_some_and(|p| p.eq_ignore_ascii_case("*U"));
+    if anonymous && !doc.block_representations.is_empty() {
+        if let Some(definition) = doc.dynamic_definition_for_insert(insert.common.handle) {
+            if let Some(record) = doc.block_records.iter().find(|b| b.handle == definition) {
+                return record.name.clone();
+            }
+        }
+    }
+    insert.block_name.clone()
 }
 
 impl Session {
@@ -191,13 +312,19 @@ impl Session {
         Ok(())
     }
 
+    /// The drawing's sheets, layers and units, and what went wrong reading it or drawing the
+    /// current sheet (builds the sheet's batch when it is not cached yet).
     pub fn info(&self) -> DrawingInfo {
+        let mut problems = self.drawing.problems.clone();
+        if self.with_cache(|c| c.batch.truncated) {
+            problems.push(TRUNCATED.to_string());
+        }
         DrawingInfo {
             path: self.drawing.path.display().to_string(),
             sheets: self.drawing.sheets(),
             layers: self.drawing.layers(),
             units: units_name(self.drawing.units).to_string(),
-            problems: self.drawing.problems.clone(),
+            problems,
         }
     }
 
@@ -235,20 +362,30 @@ impl Session {
         self.with_cache(|cached| cached.batch.clone())
     }
 
-    /// Handle of the entity nearest to `p` (drawing coordinates) within `tol`, among what is drawn.
-    pub fn pick(&self, p: [f64; 2], tol: f64) -> Option<u64> {
-        self.with_cache(|cached| cached.index.pick(p, tol))
+    /// The entity nearest to `p` (drawing coordinates) within `tol`, among what is drawn, down
+    /// to the entity inside any blocks.
+    pub fn pick(&self, p: [f64; 2], tol: f64) -> Option<Picked> {
+        self.with_cache(|cached| {
+            let range = cached.batch.range_of(cached.index.pick(p, tol)?)?;
+            Some(Picked {
+                top: range.top,
+                entity: range.entity,
+                chain: cached.batch.chain_of(range).to_vec(),
+                xref: None,
+            })
+        })
     }
 
-    pub fn entity_info(&self, handle: u64) -> Result<EntityInfo, CoreError> {
-        let entity = self
-            .drawing
-            .doc
-            .get_entity(Handle::new(handle))
-            .ok_or(CoreError::NoSuchEntity(handle))?;
-        let Extent { length, area, .. } = self.extent(entity);
+    /// The entity `handle` inside the block references `chain` (outermost first; empty for an
+    /// entity on a sheet), measured where those references place it.
+    pub fn entity_info(&self, handle: u64, chain: &[u64]) -> Result<EntityInfo, CoreError> {
+        let located = locate(&self.drawing.doc, handle, chain)?;
+        let entity = located.entity;
+        let Extent { length, area, .. } = self.extent(entity, &located.xf);
         let (block_name, text) = match entity {
-            EntityType::Insert(insert) => (Some(insert.block_name.clone()), None),
+            EntityType::Insert(insert) => {
+                (Some(effective_block_name(&self.drawing.doc, insert)), None)
+            }
             EntityType::Text(t) => (None, Some(t.value.clone())),
             EntityType::MText(t) => (None, Some(t.value.clone())),
             _ => (None, None),
@@ -256,11 +393,14 @@ impl Session {
         Ok(EntityInfo {
             handle,
             kind: variant_name(entity),
-            layer: entity.common().layer.clone(),
+            layer: located.layer,
             length,
             area,
             block_name,
             text,
+            inside_block: located.block_path.last().cloned(),
+            chain: chain.to_vec(),
+            block_path: located.block_path,
         })
     }
 
@@ -327,23 +467,24 @@ impl Session {
         self.history.can_redo()
     }
 
-    /// Length of all of `entity`'s flattened paths and area of the closed ones.
-    pub(crate) fn extent(&self, entity: &EntityType) -> Extent {
-        let mut paths = Vec::new();
-        flatten(
-            &self.drawing.doc,
-            entity,
-            &Xform::identity(),
-            MEASURE_TOL,
-            &mut paths,
-        );
-        let length = (!paths.is_empty()).then(|| paths.iter().map(|p| p.length()).sum());
+    /// Length and area of `entity` placed by `xf`: exact for lines, arcs, circles, full
+    /// ellipses and (bulged) polylines under a uniform scale; otherwise the length of all its
+    /// flattened paths and the area of the closed ones.
+    pub(crate) fn extent(&self, entity: &EntityType, xf: &Xform) -> Extent {
+        let paths = flatten(&self.drawing.doc, entity, xf, MEASURE_TOL).into_paths();
         let closed: Vec<_> = paths.iter().filter(|p| p.closed).collect();
-        let area = (!closed.is_empty()).then(|| closed.iter().map(|p| p.area()).sum());
+        let self_intersecting = closed.iter().any(|p| p.self_intersects());
+        let length = (!paths.is_empty()).then(|| {
+            exact_length(entity, xf).unwrap_or_else(|| paths.iter().map(|p| p.length()).sum())
+        });
+        // A crossing outline's lobes would cancel in the exact sum; the flattened one adds them.
+        let exact = exact_area(entity, xf).filter(|_| !self_intersecting);
+        let area = (!closed.is_empty())
+            .then(|| exact.unwrap_or_else(|| closed.iter().map(|p| p.area()).sum()));
         Extent {
             length,
             area,
-            self_intersecting: closed.iter().any(|p| p.self_intersects()),
+            self_intersecting,
         }
     }
 

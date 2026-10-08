@@ -43,6 +43,8 @@ export const row = (
   created: "2026-10-08T00:00:00Z",
   height: null,
   boq_code,
+  chain: [],
+  block_path: [],
   ...more,
 });
 

@@ -2,11 +2,11 @@
 //! `Session::run_as` (the AI, or an outside AI through MCP).
 
 use opencadcodec::tables::normalize_name;
-use opencadcodec::{EntityType, Handle};
+use opencadcodec::EntityType;
 use qiyas_geom::Path;
 use serde::{Deserialize, Serialize};
 
-use crate::session::variant_name;
+use crate::session::{effective_block_name, locate, variant_name};
 use crate::takeoff::in_metres;
 use crate::{
     Boq, Conflict, ConflictStatus, CoreError, Kind, Measurement, Schedule, Session, Source,
@@ -24,8 +24,12 @@ pub enum Command {
         points: Vec<[f64; 2]>,
     },
     /// Area of a closed entity, length of an open one, or 1 piece for a block reference.
+    /// `chain` lists the block references the entity sits inside, outermost first (empty, the
+    /// default, for an entity on the sheet); it is measured where they place it.
     MeasureEntity {
         handle: u64,
+        #[serde(default)]
+        chain: Vec<u64>,
     },
     /// Block references of `block_name` on the current sheet, on visible layers only
     /// (and only on `layer` when given).
@@ -59,6 +63,10 @@ pub enum Command {
         height: Option<f64>,
         points: Vec<[f64; 2]>,
         handles: Vec<u64>,
+        /// The block references every handle sits inside, outermost first; empty (the default)
+        /// for entities on the sheet.
+        #[serde(default)]
+        chain: Vec<u64>,
         description: String,
         note: String,
     },
@@ -168,8 +176,8 @@ impl Session {
                 m.auto_description = true;
                 m
             }
-            Command::MeasureEntity { handle } => {
-                let mut m = self.measure_entity(handle)?;
+            Command::MeasureEntity { handle, chain } => {
+                let mut m = self.measure_entity(handle, chain)?;
                 m.auto_description = true;
                 m
             }
@@ -209,10 +217,12 @@ impl Session {
                 height,
                 points,
                 handles,
+                chain,
                 description,
                 note,
             } => {
-                let mut m = self.add_measurement(kind, value, unit, height, points, handles)?;
+                let mut m =
+                    self.add_measurement(kind, value, unit, height, points, handles, chain)?;
                 m.description = description;
                 m.note = note;
                 m
@@ -307,6 +317,7 @@ impl Session {
     }
 
     /// The measurement of an `AddMeasurement`, without its description and note.
+    #[allow(clippy::too_many_arguments)]
     fn add_measurement(
         &self,
         kind: Kind,
@@ -315,6 +326,7 @@ impl Session {
         height: Option<f64>,
         points: Vec<[f64; 2]>,
         handles: Vec<u64>,
+        chain: Vec<u64>,
     ) -> Result<Measurement, CoreError> {
         if kind != Kind::Item && points.is_empty() && handles.is_empty() {
             return Err(invalid("A measurement needs geometry"));
@@ -340,14 +352,12 @@ impl Session {
             (_, Some(_)) => return Err(invalid("Only a volume takes a height")),
             (_, None) => {}
         }
+        if !chain.is_empty() && handles.is_empty() {
+            return Err(invalid("A chain goes with handles"));
+        }
         let entities = handles
             .iter()
-            .map(|&h| {
-                self.drawing
-                    .doc
-                    .get_entity(Handle::new(h))
-                    .ok_or(CoreError::NoSuchEntity(h))
-            })
+            .map(|&h| locate(&self.drawing.doc, h, &chain))
             .collect::<Result<Vec<_>, _>>()?;
 
         let mut self_intersecting = false;
@@ -365,7 +375,7 @@ impl Session {
             Kind::Length => entities
                 .iter()
                 .map(|e| {
-                    self.extent(e)
+                    self.extent(e.entity, &e.xf)
                         .length
                         .ok_or_else(|| invalid("This entity has no length"))
                 })
@@ -384,7 +394,7 @@ impl Session {
             Kind::Area | Kind::Volume => entities
                 .iter()
                 .map(|e| {
-                    let extent = self.extent(e);
+                    let extent = self.extent(e.entity, &e.xf);
                     self_intersecting |= extent.self_intersecting;
                     extent
                         .area
@@ -399,7 +409,7 @@ impl Session {
             Some(h) => value * h,
             None => value,
         };
-        let layer = entities.first().map_or("", |e| e.common().layer.as_str());
+        let layer = entities.first().map_or("", |e| e.layer.as_str());
         let mut m = self.measurement(kind, value, "", layer);
         if kind == Kind::Item {
             m.unit = unit.unwrap_or_default();
@@ -408,6 +418,10 @@ impl Session {
         m.self_intersecting = self_intersecting;
         m.points = points;
         m.handles = handles;
+        if let Some(first) = entities.first() {
+            m.block_path = first.block_path.clone();
+        }
+        m.chain = chain;
         Ok(m)
     }
 
@@ -423,20 +437,17 @@ impl Session {
         )
     }
 
-    fn measure_entity(&self, handle: u64) -> Result<Measurement, CoreError> {
-        let entity = self
-            .drawing
-            .doc
-            .get_entity(Handle::new(handle))
-            .ok_or(CoreError::NoSuchEntity(handle))?;
-        let layer = &entity.common().layer;
+    fn measure_entity(&self, handle: u64, chain: Vec<u64>) -> Result<Measurement, CoreError> {
+        let located = locate(&self.drawing.doc, handle, &chain)?;
+        let entity = located.entity;
+        let layer = &located.layer;
         let description = format!("{} on {layer}", variant_name(entity));
         let mut m = if let EntityType::Insert(insert) = entity {
             let mut m = self.measurement(Kind::Count, 1.0, &description, layer);
-            m.block_name = Some(insert.block_name.clone());
+            m.block_name = Some(effective_block_name(&self.drawing.doc, insert));
             m
         } else {
-            let extent = self.extent(entity);
+            let extent = self.extent(entity, &located.xf);
             match (extent.area, extent.length) {
                 (Some(area), _) => {
                     let mut m = self.measurement(Kind::Area, area, &description, layer);
@@ -448,18 +459,24 @@ impl Session {
             }
         };
         m.handles = vec![handle];
+        m.block_path = located.block_path;
+        m.chain = chain;
         Ok(m)
     }
 
     /// Counts top-level references only: a block nested inside another block is not counted yet.
+    /// A dynamic block's anonymous copies count as the dynamic block.
     fn count_block(&self, block_name: String, layer: Option<String>) -> Measurement {
         let block = normalize_name(&block_name);
         let only_on = layer.as_deref().map(normalize_name);
+        let doc = &self.drawing.doc;
         let handles: Vec<u64> = self
             .drawing
             .entities_in(&self.sheet)
             .filter_map(|e| match e {
-                EntityType::Insert(insert) if normalize_name(&insert.block_name) == block => {
+                EntityType::Insert(insert)
+                    if normalize_name(&effective_block_name(doc, insert)) == block =>
+                {
                     Some(e.common())
                 }
                 _ => None,

@@ -180,7 +180,12 @@ fn measured_entities_are_embedded_from_their_shape() {
     let line = handle_of(&session, |e| matches!(e, EntityType::Line(_)));
     let door = handle_of(&session, |e| matches!(e, EntityType::Insert(_)));
     for handle in [rect, line, door] {
-        session.run(Command::MeasureEntity { handle }).unwrap();
+        session
+            .run(Command::MeasureEntity {
+                handle,
+                chain: Vec::new(),
+            })
+            .unwrap();
     }
     let out = dir.path().join("out.dwg");
     session.save_as(&out).unwrap();
@@ -248,7 +253,12 @@ fn measured_entity_with_several_paths_writes_one_polyline_per_path() {
     let handle = doc.add_entity(EntityType::Hatch(hatch)).unwrap().value();
     DxfWriter::new(&doc).write_to_file(&source).unwrap();
     let mut session = Session::open(&source).unwrap();
-    session.run(Command::MeasureEntity { handle }).unwrap();
+    session
+        .run(Command::MeasureEntity {
+            handle,
+            chain: Vec::new(),
+        })
+        .unwrap();
     let out = dir.path().join("out.dxf");
     session.save_as(&out).unwrap();
     std::fs::remove_file(project_path(&out)).unwrap();
@@ -443,6 +453,7 @@ fn volume_embeds_and_rebuilds_with_height() {
             height,
             points,
             handles: Vec::new(),
+            chain: Vec::new(),
             description: "Slab".to_string(),
             note: String::new(),
         };
@@ -507,6 +518,7 @@ fn markup_item_embeds_on_the_markup_layer() {
                 height: None,
                 points: vec![[1.0, 1.0], [2.0, 1.0], [2.0, 2.0]],
                 handles: Vec::new(),
+                chain: Vec::new(),
                 description: unit.to_string(),
                 note: String::new(),
             })

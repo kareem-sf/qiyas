@@ -24,7 +24,7 @@ pub use embed::{embed_measurements, read_embedded};
 pub use error::CoreError;
 pub use project::{project_path, Project};
 pub use query::{BlockCount, DimRow, EntityFilter, EntityRow, Page, TextRow};
-pub use session::{DrawingInfo, EntityInfo, Session, BATCH_TOL};
+pub use session::{DrawingInfo, EntityInfo, Picked, Session, BATCH_TOL};
 pub use tables::Schedule;
 pub use takeoff::{Kind, Measurement, Source, Takeoff, Total};
 pub use units::Units;

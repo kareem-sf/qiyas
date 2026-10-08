@@ -24,12 +24,25 @@ export type DrawingInfo = {
 export type EntityInfo = {
   handle: number;
   kind: string;
+  /** The layer it is drawn on (layer "0" inside a block takes its insert's). */
   layer: string;
+  /** In drawing units, where its block references place it. */
   length: number | null;
   area: number | null;
+  /** For a block reference, its block (a dynamic block by its own name). */
   block_name: string | null;
   text: string | null;
+  /** The block the entity sits in, when it is inside one. */
+  inside_block: string | null;
+  /** The block references it sits inside, outermost first; empty on the sheet. */
+  chain: number[];
+  /** The block names along `chain`, outermost first. */
+  block_path: string[];
 };
+
+/** What is under the cursor (`qiyas_core::Picked`): the entity, the block references it sits inside
+ *  (outermost first, empty on the sheet) and the top-level entity on the sheet. */
+export type Picked = { top: number; entity: number; chain: number[]; xref: string | null };
 
 /** Filter for the session's `find_entities` query (no IPC command yet). Names match case-insensitively. */
 export type EntityFilter = {
@@ -102,11 +115,14 @@ export const setLayerHidden = (name: string, hidden: boolean) =>
 /** Raw bytes of the current sheet's batch; decode with `parseBatch`. */
 export const renderBatch = () => invoke<ArrayBuffer>("render_batch");
 
-/** Handle of the entity nearest to the drawing point (x, y) within `tol` drawing units. */
+/** The entity nearest to the drawing point (x, y) within `tol` drawing units, down to the entity
+ *  inside any blocks. */
 export const pick = (x: number, y: number, tol: number) =>
-  invoke<number | null>("pick", { x, y, tol });
+  invoke<Picked | null>("pick", { x, y, tol });
 
-export const entityInfo = (handle: number) => invoke<EntityInfo>("entity_info", { handle });
+/** One entity; give `chain` for an entity inside blocks. */
+export const entityInfo = (handle: number, chain: number[] = []) =>
+  invoke<EntityInfo>("entity_info", { handle, chain });
 
 export type Kind = "length" | "area" | "count" | "volume" | "item";
 
@@ -138,6 +154,10 @@ export type Measurement = {
   height: number | null;
   /** Code of the linked BOQ item. */
   boq_code: string | null;
+  /** The block references the measured entity sits inside, outermost first; empty otherwise. */
+  chain: number[];
+  /** The block names along `chain`, outermost first. */
+  block_path: string[];
 };
 
 export type Total = { kind: Kind; unit: Measurement["unit"]; count: number; sum: number };
@@ -212,7 +232,8 @@ export type Conflict = {
 export type Command =
   | { type: "measure_distance"; points: [number, number][] }
   | { type: "measure_area"; points: [number, number][] }
-  | { type: "measure_entity"; handle: number }
+  /** `chain`: the block references the entity sits inside, outermost first; empty on the sheet. */
+  | { type: "measure_entity"; handle: number; chain: number[] }
   | { type: "count_block"; block_name: string; layer: string | null }
   | { type: "remove_measurement"; id: string }
   | { type: "set_description"; id: string; text: string }

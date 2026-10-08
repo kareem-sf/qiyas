@@ -99,20 +99,38 @@ fn measure_entity_rect_line_and_insert() {
     let line = handle_of(&session, |e| matches!(e, EntityType::Line(_)));
     let door = handle_of(&session, |e| matches!(e, EntityType::Insert(_)));
 
-    let m = measure(&mut session, Command::MeasureEntity { handle: rect });
+    let m = measure(
+        &mut session,
+        Command::MeasureEntity {
+            handle: rect,
+            chain: Vec::new(),
+        },
+    );
     assert_eq!((m.kind, m.value, m.unit.as_str()), (Kind::Area, 12.0, "m2"));
     assert_eq!(m.description, "LwPolyline on A-WALL");
     assert_eq!(m.layer, "A-WALL");
     assert_eq!(m.handles, [rect]);
 
-    let m = measure(&mut session, Command::MeasureEntity { handle: line });
+    let m = measure(
+        &mut session,
+        Command::MeasureEntity {
+            handle: line,
+            chain: Vec::new(),
+        },
+    );
     assert_eq!(
         (m.kind, m.value, m.unit.as_str()),
         (Kind::Length, 10.0, "m")
     );
     assert_eq!(m.description, "Line on A-WALL");
 
-    let m = measure(&mut session, Command::MeasureEntity { handle: door });
+    let m = measure(
+        &mut session,
+        Command::MeasureEntity {
+            handle: door,
+            chain: Vec::new(),
+        },
+    );
     assert_eq!(
         (m.kind, m.value, m.unit.as_str()),
         (Kind::Count, 1.0, "pcs")
@@ -122,7 +140,8 @@ fn measure_entity_rect_line_and_insert() {
 
     assert!(matches!(
         session.run(Command::MeasureEntity {
-            handle: 0xDEAD_BEEF
+            handle: 0xDEAD_BEEF,
+            chain: Vec::new()
         }),
         Err(CoreError::NoSuchEntity(0xDEAD_BEEF))
     ));
@@ -276,6 +295,7 @@ fn add(kind: Kind) -> Command {
         height: None,
         points: Vec::new(),
         handles: Vec::new(),
+        chain: Vec::new(),
         description: String::new(),
         note: String::new(),
     }
@@ -487,6 +507,7 @@ fn run_as_ai_marks_source() {
         height: None,
         points: RECT_4X3.to_vec(),
         handles: Vec::new(),
+        chain: Vec::new(),
         description: "Slab".to_string(),
         note: "From the AI".to_string(),
     };
@@ -601,7 +622,10 @@ fn default_descriptions_are_marked_auto() {
     for cmd in [
         distance,
         area(&RECT_4X3),
-        Command::MeasureEntity { handle: rect },
+        Command::MeasureEntity {
+            handle: rect,
+            chain: Vec::new(),
+        },
         count,
     ] {
         let m = measure(&mut session, cmd);

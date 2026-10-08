@@ -25,6 +25,8 @@ const item = (id: string, description: string, shown: number, more: Partial<Meas
   created: "2026-10-08T00:00:00Z",
   height: null,
   boq_code: null,
+  chain: [],
+  block_path: [],
   ...more,
 });
 
@@ -132,4 +134,26 @@ test("the BOQ column and the link picker", () => {
   fireEvent.click(screen.getByRole("button", { name: "Link: Wall run" }));
   fireEvent.click(screen.getByRole("button", { name: "Unlink" }));
   expect(onLink).toHaveBeenLastCalledWith("a", null);
+});
+
+test("a row measured inside a block names the block path in its tooltip", () => {
+  render(
+    <TakeoffPanel
+      items={[
+        item("a", "Line on A-DOOR", 1.8, { chain: [5, 8], block_path: ["PLAN", "DOOR"] }),
+        item("b", "Wall run", 10),
+      ]}
+      totals={[]}
+      selectedId={null}
+      onSelect={() => {}}
+      onRemove={() => {}}
+      onRename={() => {}}
+      boq={null}
+      onLink={() => {}}
+    />,
+  );
+  expect(screen.getByText("Line on A-DOOR").getAttribute("title")).toBe(
+    "Line on A-DOOR\nIn block PLAN / DOOR",
+  );
+  expect(screen.getByText("Wall run").getAttribute("title")).toBe("Wall run");
 });

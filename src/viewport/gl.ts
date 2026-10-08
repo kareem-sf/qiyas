@@ -7,7 +7,7 @@
  * in f64 on the JS side relative to that same origin (camera centre minus origin), and only that
  * small offset is passed to the shader as f32.
  */
-import type { Batch } from "./batch";
+import { matchingRanges, type Batch, type Target } from "./batch";
 import type { Camera } from "./camera";
 
 export type Theme = "light" | "dark";
@@ -15,7 +15,8 @@ export type Theme = "light" | "dark";
 export type Renderer = {
   /** `null` clears the drawing. */
   setBatch(b: Batch | null): void;
-  setHighlight(handles: Set<bigint>): void;
+  /** Draws these entities violet (see `Target`). */
+  setHighlight(targets: Target[]): void;
   /** Violet segments `x0 y0 x1 y1` in absolute drawing coordinates, drawn on top; `null` for none. */
   setOverlay(segments: Float64Array | null): void;
   draw(camera: Camera, theme: Theme): void;
@@ -124,15 +125,16 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
 
   let batch: Batch | null = null;
   let vertexCount = 0;
-  let highlight = new Set<bigint>();
+  let highlight: Target[] = [];
   let highlightCount = 0;
   let overlay: Float64Array | null = null;
 
   function uploadHighlight() {
     const indices: number[] = [];
-    for (const { handle, first, count } of batch?.ranges ?? []) {
-      if (!highlight.has(handle)) continue;
-      for (let v = 2 * first; v < 2 * (first + count); v++) indices.push(v);
+    if (batch) {
+      for (const [first, count] of matchingRanges(batch, highlight)) {
+        for (let v = 2 * first; v < 2 * (first + count); v++) indices.push(v);
+      }
     }
     highlightCount = indices.length;
     gl.bindVertexArray(vao);
@@ -164,8 +166,8 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       uploadHighlight();
     },
 
-    setHighlight(handles) {
-      highlight = handles;
+    setHighlight(targets) {
+      highlight = targets;
       uploadHighlight();
     },
 

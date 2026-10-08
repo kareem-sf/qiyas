@@ -95,8 +95,8 @@ pub fn execute(
             (find_entities(session, input)?, offset)
         }
         "get_entity" => {
-            let Handle { handle } = parse(input)?;
-            let entity = session.entity_info(handle)?;
+            let Handle { handle, chain } = parse(input)?;
+            let entity = session.entity_info(handle, &chain)?;
             (json!({ "entity": entity, "units": units(session) }), 0)
         }
         "read_text" => {
@@ -259,6 +259,8 @@ struct FindInput {
 #[serde(deny_unknown_fields)]
 struct Handle {
     handle: u64,
+    #[serde(default)]
+    chain: Vec<u64>,
 }
 
 #[derive(Deserialize)]
@@ -282,6 +284,8 @@ struct SheetInput {
 #[serde(deny_unknown_fields)]
 struct MeasureInput {
     handle: Option<u64>,
+    #[serde(default)]
+    chain: Vec<u64>,
     points: Option<Vec<[f64; 2]>>,
 }
 
@@ -486,9 +490,12 @@ fn measure(
     kind: Kind,
     source: Source,
 ) -> Result<Value, ToolError> {
+    if !input.chain.is_empty() && input.handle.is_none() {
+        return Err(bad("A chain goes with a handle"));
+    }
     let cmd = match (input.handle, input.points) {
         (Some(handle), None) => {
-            let entity = session.entity_info(handle)?;
+            let entity = session.entity_info(handle, &input.chain)?;
             Command::AddMeasurement {
                 kind,
                 value: None,
@@ -496,6 +503,7 @@ fn measure(
                 height: None,
                 points: Vec::new(),
                 handles: vec![handle],
+                chain: input.chain,
                 description: format!("{} on {}", entity.kind, entity.layer),
                 note: String::new(),
             }
@@ -560,7 +568,7 @@ fn add_measurement(
         if !seen.insert(h) {
             return Err(bad(&format!("Handle {h} is given twice")));
         }
-        let entity = session.entity_info(h)?;
+        let entity = session.entity_info(h, &[])?;
         if input.kind == Kind::Count && entity.kind != "Insert" {
             return Err(bad(&format!(
                 "Handle {h} is a {}, not a block reference; a count takes block references only",
@@ -576,6 +584,7 @@ fn add_measurement(
         height: input.height.map(|h| h / to_drawing_units),
         points: input.points,
         handles: input.handles,
+        chain: Vec::new(),
         description: input.description,
         note: input.note,
     };
@@ -624,6 +633,7 @@ fn add_markup(
         height: None,
         points: input.points,
         handles: Vec::new(),
+        chain: Vec::new(),
         description: input.text,
         note: note.to_string(),
     };
@@ -828,29 +838,31 @@ fn bad(why: &str) -> ToolError {
     ToolError::BadInput(why.to_string())
 }
 
-/// The box around the drawn segments of `handles` on the current sheet.
+/// The box around the drawn segments of `handles` (entities on the sheet) on the current sheet.
 fn drawn_bounds(session: &Session, handles: &[u64]) -> Result<[[f64; 2]; 2], ToolError> {
     let batch = session.batch();
-    let ranges: HashMap<u64, (u32, u32)> = batch
-        .ranges
-        .iter()
-        .map(|&(h, first, count)| (h, (first, count)))
-        .collect();
+    // A block reference has one range per entity drawn inside it.
+    let mut ranges: HashMap<u64, Vec<(u32, u32)>> = HashMap::new();
+    for r in &batch.ranges {
+        ranges.entry(r.top).or_default().push((r.first, r.count));
+    }
     let mut points = Vec::new();
     for &h in handles {
-        session.entity_info(h)?;
-        let (first, count) = ranges
+        session.entity_info(h, &[])?;
+        let drawn = ranges
             .get(&h)
             .ok_or_else(|| bad(&format!("Entity {h} is not drawn on the sheet shown")))?;
         let [ox, oy] = batch.origin;
-        let segments = &batch.segments[*first as usize * 4..(*first + *count) as usize * 4];
-        points.extend(
-            segments
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|[x, y]| [f64::from(*x) + ox, f64::from(*y) + oy]),
-        );
+        for &(first, count) in drawn {
+            let segments = &batch.segments[first as usize * 4..(first + count) as usize * 4];
+            points.extend(
+                segments
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|[x, y]| [f64::from(*x) + ox, f64::from(*y) + oy]),
+            );
+        }
     }
     Ok(bounds_of(&points))
 }

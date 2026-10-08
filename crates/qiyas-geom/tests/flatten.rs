@@ -1,4 +1,4 @@
-use std::f64::consts::{FRAC_PI_2, PI};
+use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 use std::time::{Duration, Instant};
 
@@ -6,13 +6,11 @@ use opencadcodec::entities::{
     BoundaryEdge, BoundaryPath, CircularArcEdge, EntityType, Hatch, Insert, LineEdge, LwPolyline,
 };
 use opencadcodec::tables::{BlockRecord, TableEntry};
-use opencadcodec::{CadDocument, Circle, Line, Vector2, Vector3};
-use qiyas_geom::{flatten, Path, Xform};
+use opencadcodec::{Arc, CadDocument, Circle, Color, Ellipse, Layer, Line, Vector2, Vector3};
+use qiyas_geom::{exact_area, exact_length, flatten, Path, Xform};
 
 fn flat(doc: &CadDocument, entity: EntityType, tol: f64) -> Vec<Path> {
-    let mut out = Vec::new();
-    flatten(doc, &entity, &Xform::identity(), tol, &mut out);
-    out
+    flatten(doc, &entity, &Xform::identity(), tol).into_paths()
 }
 
 fn closed_lwpolyline(points: &[(f64, f64, f64)]) -> EntityType {
@@ -241,13 +239,15 @@ fn self_referencing_block_stops_at_depth_limit() {
         vec![line(0.0, 0.0, 1.0, 0.0), EntityType::Insert(inner)],
     );
     let start = Instant::now();
-    let paths = flat(
+    let outcome = flatten(
         &doc,
-        EntityType::Insert(Insert::new("X", Vector3::new(0.0, 0.0, 0.0))),
+        &EntityType::Insert(Insert::new("X", Vector3::new(0.0, 0.0, 0.0))),
+        &Xform::identity(),
         1e-3,
     );
-    // Inserts at depths 0 to 31 expand, each adding one line.
-    assert_eq!(paths.len(), 32);
+    // Inserts at depths 0 to 31 expand, each adding one line; the rest is reported cut.
+    assert_eq!(outcome.paths.len(), 32);
+    assert!(outcome.truncated);
     assert!(start.elapsed() < Duration::from_secs(1));
 }
 
@@ -263,10 +263,188 @@ fn self_referencing_minsert_stops_at_work_budget() {
         vec![line(0.0, 0.0, 1.0, 0.0), EntityType::Insert(inner)],
     );
     // Without a budget this would expand 4^32 instances.
-    let paths = flat(
+    let outcome = flatten(
         &doc,
-        EntityType::Insert(Insert::new("X", Vector3::new(0.0, 0.0, 0.0))),
+        &EntityType::Insert(Insert::new("X", Vector3::new(0.0, 0.0, 0.0))),
+        &Xform::identity(),
         1e-3,
     );
-    assert!(!paths.is_empty() && paths.len() <= 1_000_000);
+    assert!(!outcome.paths.is_empty() && outcome.paths.len() <= 1_000_000);
+    assert!(outcome.truncated);
+}
+
+/// A line with the given layer and colour.
+fn styled_line(layer: &str, color: Color) -> EntityType {
+    let mut e = line(0.0, 0.0, 1.0, 0.0);
+    e.common_mut().layer = layer.to_string();
+    e.common_mut().color = color;
+    e
+}
+
+#[test]
+fn nested_insert_yields_chain_inner_layer_and_colours() {
+    let mut doc = CadDocument::new();
+    for (name, index) in [("A-DOOR", 3), ("A-FRAME", 5)] {
+        let mut layer = Layer::new(name);
+        layer.color = Color::Index(index);
+        doc.layers.add(layer).unwrap();
+    }
+    // LEAF: a line on its own layer (ByLayer), one on layer 0 (ByLayer) and one ByBlock.
+    add_block(
+        &mut doc,
+        "LEAF",
+        vec![
+            styled_line("A-FRAME", Color::ByLayer),
+            styled_line("0", Color::ByLayer),
+            styled_line("0", Color::ByBlock),
+        ],
+    );
+    let mut leaf = EntityType::Insert(Insert::new("LEAF", Vector3::new(0.0, 0.0, 0.0)));
+    leaf.common_mut().layer = "0".to_string();
+    leaf.common_mut().color = Color::ByBlock;
+    add_block(&mut doc, "DOOR", vec![leaf]);
+    let leaf_handle = doc
+        .entities_in_block("DOOR")
+        .next()
+        .unwrap()
+        .common()
+        .handle
+        .value();
+    let inner: Vec<u64> = doc
+        .entities_in_block("LEAF")
+        .map(|e| e.common().handle.value())
+        .collect();
+
+    let mut door = EntityType::Insert(Insert::new("DOOR", Vector3::new(0.0, 0.0, 0.0)));
+    door.common_mut().layer = "A-DOOR".to_string();
+    door.common_mut().color = Color::Index(1);
+    let door_handle = doc.add_entity(door).unwrap().value();
+    let door = doc
+        .get_entity(opencadcodec::Handle::new(door_handle))
+        .unwrap();
+
+    let outcome = flatten(&doc, door, &Xform::identity(), 1e-3);
+    assert!(!outcome.truncated);
+    let paths = outcome.paths;
+    assert_eq!(paths.len(), 3);
+    for (p, &entity) in paths.iter().zip(&inner) {
+        assert_eq!(p.chain, vec![door_handle, leaf_handle]);
+        assert_eq!(p.entity, entity);
+        assert_eq!(p.xref, None);
+    }
+    // Its own layer and that layer's colour.
+    assert_eq!(
+        (paths[0].layer.as_str(), paths[0].color),
+        ("A-FRAME", Color::Index(5))
+    );
+    // Layer 0 takes the insert's layer (through LEAF, also on 0) and its colour.
+    assert_eq!(
+        (paths[1].layer.as_str(), paths[1].color),
+        ("A-DOOR", Color::Index(3))
+    );
+    // ByBlock takes the colour of the insert (LEAF is ByBlock too, so DOOR's red).
+    assert_eq!(
+        (paths[2].layer.as_str(), paths[2].color),
+        ("A-DOOR", Color::Index(1))
+    );
+}
+
+#[test]
+fn top_level_entity_has_no_chain() {
+    let doc = CadDocument::new();
+    let e = line(0.0, 0.0, 1.0, 0.0);
+    let outcome = flatten(&doc, &e, &Xform::identity(), 1e-3);
+    assert_eq!(outcome.paths.len(), 1);
+    assert!(outcome.paths[0].chain.is_empty());
+    assert_eq!(outcome.paths[0].layer, "0");
+}
+
+#[test]
+fn mirrored_normal_flips_the_block_and_its_arcs() {
+    let mut doc = CadDocument::new();
+    let mut arc = Arc::from_center_radius_angles(Vector3::new(1.0, 0.0, 0.0), 1.0, 0.0, FRAC_PI_2);
+    arc.normal = Vector3::new(0.0, 0.0, 1.0);
+    add_block(
+        &mut doc,
+        "D",
+        vec![line(0.0, 0.0, 1.0, 0.0), EntityType::Arc(arc)],
+    );
+    // Mirrored in X: the object x axis points along world -x.
+    let insert =
+        Insert::new("D", Vector3::new(5.0, 0.0, 0.0)).with_normal(Vector3::new(0.0, 0.0, -1.0));
+    let paths = flat(&doc, EntityType::Insert(insert), 1e-4);
+    assert_eq!(paths.len(), 2);
+    assert_points(&paths[0].points, &[[-5.0, 0.0], [-6.0, 0.0]]);
+    let arc = &paths[1];
+    assert_points(
+        &[arc.points[0], *arc.points.last().unwrap()],
+        &[[-7.0, 0.0], [-6.0, 1.0]],
+    );
+    // Still a quarter circle of radius 1.
+    assert!((arc.length() - FRAC_PI_2).abs() < 1e-3);
+
+    // An arc mirrored on its own lands the same way.
+    let mut own = Arc::from_center_radius_angles(Vector3::new(1.0, 0.0, 0.0), 1.0, 0.0, FRAC_PI_2);
+    own.normal = Vector3::new(0.0, 0.0, -1.0);
+    let paths = flat(&doc, EntityType::Arc(own), 1e-4);
+    let p = &paths[0].points;
+    assert_points(&[p[0], *p.last().unwrap()], &[[-2.0, 0.0], [-1.0, 1.0]]);
+}
+
+#[test]
+fn exact_circle_length_and_area() {
+    let circle = EntityType::Circle(Circle::from_center_radius(Vector3::new(3.0, 4.0, 0.0), 2.5));
+    let id = Xform::identity();
+    assert!((exact_area(&circle, &id).unwrap() - PI * 2.5 * 2.5).abs() < 1e-9);
+    assert!((exact_length(&circle, &id).unwrap() - 2.0 * PI * 2.5).abs() < 1e-9);
+    // A uniform scale (here with a mirror and a turn) scales both; a stretch has no exact value.
+    let xf = Xform::scale(-2.0, 2.0).then(&Xform::rotate(0.3));
+    assert!((exact_area(&circle, &xf).unwrap() - 4.0 * PI * 6.25).abs() < 1e-9);
+    assert!((exact_length(&circle, &xf).unwrap() - 2.0 * TAU * 2.5).abs() < 1e-9);
+    assert_eq!(exact_area(&circle, &Xform::scale(1.0, 2.0)), None);
+}
+
+#[test]
+fn exact_bulged_polyline_and_arc() {
+    let id = Xform::identity();
+    // A 2x2 square whose top edge bulges out into a half circle of radius 1.
+    let shape = closed_lwpolyline(&[
+        (0.0, 0.0, 0.0),
+        (2.0, 0.0, 0.0),
+        (2.0, 2.0, 1.0),
+        (0.0, 2.0, 0.0),
+    ]);
+    assert!((exact_area(&shape, &id).unwrap() - (4.0 + FRAC_PI_2)).abs() < 1e-9);
+    assert!((exact_length(&shape, &id).unwrap() - (6.0 + PI)).abs() < 1e-9);
+    // The same edge bulging in takes the half circle away.
+    let notch = closed_lwpolyline(&[
+        (0.0, 0.0, 0.0),
+        (2.0, 0.0, 0.0),
+        (2.0, 2.0, -1.0),
+        (0.0, 2.0, 0.0),
+    ]);
+    assert!((exact_area(&notch, &id).unwrap() - (4.0 - FRAC_PI_2)).abs() < 1e-9);
+
+    let arc = EntityType::Arc(Arc::from_center_radius_angles(
+        Vector3::new(0.0, 0.0, 0.0),
+        2.0,
+        0.0,
+        PI,
+    ));
+    assert!((exact_length(&arc, &id).unwrap() - 2.0 * PI).abs() < 1e-9);
+    assert_eq!(exact_area(&arc, &id), None);
+}
+
+#[test]
+fn exact_full_ellipse() {
+    let ellipse = Ellipse::from_center_axes(
+        Vector3::new(0.0, 0.0, 0.0),
+        Vector3::new(2.0, 0.0, 0.0),
+        0.5,
+    );
+    let e = EntityType::Ellipse(ellipse);
+    let id = Xform::identity();
+    assert!((exact_area(&e, &id).unwrap() - PI * 2.0).abs() < 1e-9);
+    // Ramanujan for a = 2, b = 1: 9.688448220...
+    assert!((exact_length(&e, &id).unwrap() - 9.688_448_220_5).abs() < 1e-6);
 }

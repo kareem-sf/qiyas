@@ -48,10 +48,15 @@ import { SettingsDialog } from "./shell/SettingsDialog";
 import { SheetTabs } from "./shell/SheetTabs";
 import { StatusBar } from "./shell/StatusBar";
 import { TakeoffPanel } from "./shell/TakeoffPanel";
-import { handlesBounds, measurementBounds, overlaySegments } from "./tools/overlay";
+import {
+  handlesBounds,
+  measurementBounds,
+  measurementTargets,
+  overlaySegments,
+} from "./tools/overlay";
 import { shortcutFor } from "./tools/shortcuts";
 import { useTool } from "./tools/useTool";
-import { parseBatch, type Batch } from "./viewport/batch";
+import { parseBatch, type Batch, type Target } from "./viewport/batch";
 import type { Bounds } from "./viewport/camera";
 import type { Theme } from "./viewport/gl";
 import { Viewport, type ViewportHandle } from "./viewport/Viewport";
@@ -662,10 +667,13 @@ export default function App() {
   );
 
   const highlight = useMemo(() => {
-    const linked = [...boqLinked, ...conflictLinked].flatMap((m) => m.handles);
-    const handles = new Set([...(selected?.handles ?? []), ...linked, ...aiHighlight].map(BigInt));
-    if (measure.highlighted !== null) handles.add(BigInt(measure.highlighted));
-    return handles;
+    const rows = [...(selected ? [selected] : []), ...boqLinked, ...conflictLinked];
+    const targets: Target[] = [
+      ...rows.flatMap(measurementTargets),
+      ...aiHighlight.map((handle) => ({ handle, chain: [] })),
+    ];
+    if (measure.highlighted !== null) targets.push(measure.highlighted);
+    return targets;
   }, [selected, boqLinked, conflictLinked, measure.highlighted, aiHighlight]);
 
   const selectedOverlay = useMemo(() => {
@@ -690,7 +698,7 @@ export default function App() {
   const message = opening
     ? t("opening")
     : measure.hint
-      ? t(measure.hint)
+      ? t(measure.hint, measure.hintArgs ?? undefined)
       : (notice ?? (info ? fileName : t("noDrawing")));
   // Unknown units are measured as millimetres; the status bar says so.
   const units = info ? t(`unit.${info.units === "unknown" ? "millimetres" : info.units}`) : "";

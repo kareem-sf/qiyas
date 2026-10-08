@@ -27,8 +27,8 @@ A small apartment, drawn in metres, made by `cargo run -p qiyas-core --example w
 | Outer wall ring, perimeter | Distance tool round the four corners | 42.000 m | 42.000 m |
 | Partition x = 7 | Select, click the line at (7, 4) twice | 9.000 m | 9.000 m |
 | Partition y = 5 | Select, click the line at (10, 5) twice | 5.000 m | 5.000 m |
-| Bay arc length | Select, click the arc at (3.5, 11) twice | 6.283 m (2π) | 6.282 m |
-| Fountain circle area | Select, click the circle at (5, 4.5) twice | 7.069 m² (2.25π) | 7.062 m² |
+| Bay arc length | Select, click the arc at (3.5, 11) twice | 6.283 m (2π) | 6.283 m |
+| Fountain circle area | Select, click the circle at (5, 4.5) twice | 7.069 m² (2.25π) | 7.069 m² |
 | Living room area | Select, click its left edge at (0.15, 4) twice | 58.290 m² | 58.290 m² |
 | Living room perimeter | Distance tool round its corners | 30.800 m | 30.800 m |
 | Bedroom area | Select, click its right edge at (11.85, 2.5) twice | 22.090 m² | 22.090 m² |
@@ -38,7 +38,7 @@ A small apartment, drawn in metres, made by `cargo run -p qiyas-core --example w
 | Columns | Count tool, click any column | 6 pcs | 6 pcs |
 | Hide A-DOOR, count doors again | Layers panel, then Count tool on another door? None visible | 0 pcs | 0 pcs |
 
-The arc and the circle come out 0.02 % and 0.1 % short because curves are measured along short straight pieces (0.001 m tolerance). Exact arc maths is on the Phase 1b list.
+Arcs, circles, full ellipses and bulged polyline segments are measured exactly, not along short straight pieces.
 
 ## Also worth trying
 

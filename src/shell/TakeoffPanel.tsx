@@ -107,7 +107,11 @@ export const TakeoffPanel = memo(function TakeoffPanel({
                         ) : (
                           <button
                             type="button"
-                            title={m.description}
+                            title={
+                              m.block_path.length > 0
+                                ? `${m.description}\n${t("takeoff.inBlock", { path: blockPath(m) })}`
+                                : m.description
+                            }
                             onDoubleClick={() => startEdit(m)}
                           >
                             {m.description}
@@ -216,3 +220,6 @@ export const TakeoffPanel = memo(function TakeoffPanel({
     </aside>
   );
 });
+
+/** The blocks a row's entity sits in, outermost first. */
+const blockPath = (m: Measurement) => m.block_path.join(" / ");

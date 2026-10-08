@@ -632,3 +632,42 @@ fn view_image_is_800_wide_by_default() {
     };
     assert_eq!(u32::from_be_bytes(png[16..20].try_into().unwrap()), 800);
 }
+
+#[test]
+fn entity_tools_reach_inside_blocks_with_a_chain() {
+    let (_dir, mut session) = sample();
+    let scaled = handles_of(&session, "Insert")[2];
+    let leaf = session
+        .drawing
+        .entities_in("DOOR")
+        .next()
+        .unwrap()
+        .common()
+        .handle
+        .value();
+    let out = run(
+        &mut session,
+        "get_entity",
+        json!({ "handle": leaf, "chain": [scaled] }),
+    )
+    .unwrap();
+    assert_eq!(out["entity"]["inside_block"], "DOOR");
+    assert!((out["entity"]["length"].as_f64().unwrap() - 1.8).abs() < 1e-9);
+
+    let out = run(
+        &mut session,
+        "measure_length",
+        json!({ "handle": leaf, "chain": [scaled] }),
+    )
+    .unwrap();
+    assert!((out["measurement"]["value"].as_f64().unwrap() - 1.8).abs() < 1e-9);
+    assert_eq!(out["measurement"]["chain"], json!([scaled]));
+    assert!(matches!(
+        run(
+            &mut session,
+            "measure_length",
+            json!({ "chain": [scaled], "points": [[0, 0], [1, 0]] })
+        ),
+        Err(ToolError::BadInput(_))
+    ));
+}

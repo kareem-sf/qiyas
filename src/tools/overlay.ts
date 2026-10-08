@@ -1,7 +1,7 @@
 /** Violet line work drawn over the drawing: the rubber band of a measure in progress, and the
  *  points of the selected take-off line. */
 import type { Measurement } from "../api";
-import type { Batch } from "../viewport/batch";
+import { matchingRanges, type Batch, type Target } from "../viewport/batch";
 import type { Bounds, Point } from "../viewport/camera";
 import type { Tool } from "../viewport/Viewport";
 
@@ -21,15 +21,24 @@ export function overlaySegments(points: Point[], cursor: Point | null, tool: Too
 /** Where a take-off line sits: around its points, else around its entities as drawn in `batch`.
  *  `null` when neither is on the current batch. */
 export function measurementBounds(m: Measurement, batch: Batch | null): Bounds | null {
-  return around(m.points, m.points.length === 0 ? m.handles : [], batch);
+  return around(m.points, m.points.length === 0 ? measurementTargets(m) : [], batch);
 }
 
-/** Around the entities `handles` as drawn in `batch`; `null` when none is on it. */
+/** Around the entities `handles` (on the sheet) as drawn in `batch`; `null` when none is on it. */
 export function handlesBounds(handles: number[], batch: Batch | null): Bounds | null {
-  return around([], handles, batch);
+  return around(
+    [],
+    handles.map((handle) => ({ handle, chain: [] })),
+    batch,
+  );
 }
 
-function around(points: Point[], entities: number[], batch: Batch | null): Bounds | null {
+/** What a take-off line measured: its entities, inside the blocks of its chain if it has one. */
+export function measurementTargets(m: Measurement): Target[] {
+  return m.handles.map((handle) => ({ handle, chain: m.chain }));
+}
+
+function around(points: Point[], entities: Target[], batch: Batch | null): Bounds | null {
   const min: Point = [Infinity, Infinity];
   const max: Point = [-Infinity, -Infinity];
   const add = (x: number, y: number) => {
@@ -39,11 +48,9 @@ function around(points: Point[], entities: number[], batch: Batch | null): Bound
     max[1] = Math.max(max[1], y);
   };
   for (const [x, y] of points) add(x, y);
-  if (entities.length > 0 && batch) {
-    const handles = new Set(entities.map(BigInt));
+  if (batch) {
     const [ox, oy] = batch.origin;
-    for (const { handle, first, count } of batch.ranges) {
-      if (!handles.has(handle)) continue;
+    for (const [first, count] of matchingRanges(batch, entities)) {
       for (let i = 4 * first; i < 4 * (first + count); i += 2) {
         add(batch.segments[i] + ox, batch.segments[i + 1] + oy);
       }

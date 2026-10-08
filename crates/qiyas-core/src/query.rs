@@ -10,7 +10,7 @@ use opencadcodec::{CadDocument, EntityType};
 use qiyas_geom::{flatten, insert_instances, Xform};
 use serde::{Deserialize, Serialize};
 
-use crate::session::{variant_name, Extent};
+use crate::session::{effective_block_name, variant_name, Extent};
 use crate::{Session, BATCH_TOL};
 
 /// Most rows one `find_entities` page returns.
@@ -123,6 +123,7 @@ impl Session {
         let needle = f.text_contains.as_deref().map(str::to_lowercase);
         let within = f.within.map(normalized_box);
         let sheet = self.sheet_block(f.sheet.as_deref());
+        let doc = &self.drawing.doc;
         let matches: Vec<&EntityType> = self
             .drawing
             .entities_in(&sheet)
@@ -138,7 +139,11 @@ impl Session {
             })
             .filter(|e| {
                 block.as_ref().is_none_or(|b| match e {
-                    EntityType::Insert(insert) => *b == normalize_name(&insert.block_name),
+                    // Either name of a dynamic block's anonymous copy matches.
+                    EntityType::Insert(insert) => {
+                        *b == normalize_name(&insert.block_name)
+                            || *b == normalize_name(&effective_block_name(doc, insert))
+                    }
                     _ => false,
                 })
             })
@@ -201,7 +206,8 @@ impl Session {
     }
 
     /// Block references on a sheet per block and layer, on visible layers only, most first.
-    /// Counts top-level references, like the count command.
+    /// Counts top-level references, like the count command, by the insert's own layer; a dynamic
+    /// block's anonymous copies count as the dynamic block.
     pub fn block_summary(&self, sheet: Option<&str>) -> Vec<BlockCount> {
         self.block_counts(sheet, true)
     }
@@ -218,7 +224,7 @@ impl Session {
     fn block_counts(&self, sheet: Option<&str>, as_shown: bool) -> Vec<BlockCount> {
         let sheet = self.sheet_block(sheet);
         // (block, layer, attribute values when split by them) -> (count, attribute values).
-        type Key<'a> = (&'a str, &'a str, Vec<String>);
+        type Key<'a> = (String, &'a str, Vec<String>);
         let mut counts: HashMap<Key, (usize, BTreeSet<String>)> = HashMap::new();
         for e in self.drawing.entities_in(&sheet) {
             if let EntityType::Insert(insert) = e {
@@ -242,8 +248,9 @@ impl Session {
                 } else {
                     values.iter().cloned().collect()
                 };
+                let block = effective_block_name(&self.drawing.doc, insert);
                 let entry = counts
-                    .entry((insert.block_name.as_str(), common.layer.as_str(), split))
+                    .entry((block, common.layer.as_str(), split))
                     .or_default();
                 entry.0 += 1;
                 entry.1.extend(values);
@@ -252,7 +259,7 @@ impl Session {
         let mut summary: Vec<BlockCount> = counts
             .into_iter()
             .map(|((block_name, layer, _), (count, values))| BlockCount {
-                block_name: block_name.to_string(),
+                block_name,
                 layer: layer.to_string(),
                 count,
                 attributes: values.into_iter().collect(),
@@ -282,14 +289,14 @@ impl Session {
     }
 
     fn entity_row(&self, e: &EntityType) -> EntityRow {
-        let Extent { length, area, .. } = self.extent(e);
+        let Extent { length, area, .. } = self.extent(e, &Xform::identity());
         let texts = texts_of(e);
         EntityRow {
             handle: e.common().handle.value(),
             kind: variant_name(e),
             layer: e.common().layer.clone(),
             block_name: match e {
-                EntityType::Insert(insert) => Some(insert.block_name.clone()),
+                EntityType::Insert(insert) => Some(effective_block_name(&self.drawing.doc, insert)),
                 _ => None,
             },
             text: (!texts.is_empty()).then(|| texts.join(" | ")),
@@ -302,14 +309,7 @@ impl Session {
     /// The entity's flattened points in world coordinates; for an entity that does not
     /// flatten (a dimension or table), the corners of its own bounding box.
     fn points_of(&self, e: &EntityType) -> Vec<[f64; 2]> {
-        let mut paths = Vec::new();
-        flatten(
-            &self.drawing.doc,
-            e,
-            &Xform::identity(),
-            BATCH_TOL,
-            &mut paths,
-        );
+        let paths = flatten(&self.drawing.doc, e, &Xform::identity(), BATCH_TOL).into_paths();
         let points: Vec<[f64; 2]> = paths.into_iter().flat_map(|p| p.points).collect();
         if !points.is_empty() {
             return points;

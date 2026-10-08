@@ -8,8 +8,8 @@ use std::sync::{MutexGuard, PoisonError};
 use qiyas_ai::prompt::Lang;
 use qiyas_ai::{Agent, AgentEvent};
 use qiyas_core::{
-    Boq, Command, Conflict, CoreError, DrawingInfo, EntityInfo, Measurement, Outcome, Session,
-    Source, Total,
+    Boq, Command, Conflict, CoreError, DrawingInfo, EntityInfo, Measurement, Outcome, Picked,
+    Session, Source, Total,
 };
 use serde::Serialize;
 use tauri::ipc::Response;
@@ -83,13 +83,20 @@ pub async fn pick(
     y: f64,
     tol: f64,
     state: State<'_, AppState>,
-) -> Result<Option<u64>, String> {
+) -> Result<Option<Picked>, String> {
     with_session(&state, |s| Ok(s.pick([x, y], tol)))
 }
 
+/// One entity; `chain` (outermost block reference first) for an entity inside blocks.
 #[tauri::command]
-pub async fn entity_info(handle: u64, state: State<'_, AppState>) -> Result<EntityInfo, String> {
-    with_session(&state, |s| s.entity_info(handle))
+pub async fn entity_info(
+    handle: u64,
+    chain: Option<Vec<u64>>,
+    state: State<'_, AppState>,
+) -> Result<EntityInfo, String> {
+    with_session(&state, |s| {
+        s.entity_info(handle, chain.as_deref().unwrap_or_default())
+    })
 }
 
 /// Runs one command on the command bus; see `qiyas_core::Command`.

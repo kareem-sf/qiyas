@@ -1,7 +1,9 @@
+use std::collections::HashMap;
 use std::f64::consts::TAU;
 
-use opencadcodec::entities::{BoundaryEdge, EntityType, Insert};
-use opencadcodec::{CadDocument, Vector3};
+use opencadcodec::entities::{BoundaryEdge, EntityCommon, EntityType, Insert};
+use opencadcodec::types::Matrix3;
+use opencadcodec::{CadDocument, Color, Vector3};
 
 use crate::path::same_point;
 use crate::{Path, Xform};
@@ -16,129 +18,286 @@ const MAX_WORK: usize = 1_000_000;
 /// Bulges smaller than this are straight segments.
 const MIN_BULGE: f64 = 1e-12;
 
-/// Appends the 2D outline of `entity`, mapped through `xf`, to `out`.
-/// Curves are sampled so the chord error stays within `tol` after `xf` is applied.
-pub fn flatten(doc: &CadDocument, entity: &EntityType, xf: &Xform, tol: f64, out: &mut Vec<Path>) {
-    let mut budget = MAX_WORK;
-    flatten_at(doc, entity, xf, tol, out, 0, &mut budget);
+/// One flattened path with what it is drawn with. `layer` and `color` are resolved the AutoCAD
+/// way inside blocks: an entity on layer "0" takes its insert's layer, ByLayer takes that
+/// layer's colour, ByBlock takes the insert's colour (ByBlock stays only at the top level).
+#[derive(Debug, Clone, PartialEq)]
+pub struct FlatPath {
+    pub path: Path,
+    pub layer: String,
+    pub color: Color,
+    /// Handles of the block references the path sits inside, outermost first; empty at the top.
+    pub chain: Vec<u64>,
+    /// Handle of the entity the path comes from: the innermost one, or the insert itself for an
+    /// attribute's text box.
+    pub entity: u64,
+    /// Name of the xref the path comes from; always `None` for now.
+    pub xref: Option<String>,
 }
 
-fn flatten_at(
-    doc: &CadDocument,
-    entity: &EntityType,
-    xf: &Xform,
-    tol: f64,
-    out: &mut Vec<Path>,
-    depth: usize,
-    budget: &mut usize,
-) {
-    if *budget == 0 {
-        return;
+/// What `flatten` produced. `truncated` is true when block content was left out: nesting deeper
+/// than 32 (or a block inserting itself), or more than a million instances and paths.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FlattenOutcome {
+    pub paths: Vec<FlatPath>,
+    pub truncated: bool,
+}
+
+impl FlattenOutcome {
+    /// The bare paths, for measuring.
+    pub fn into_paths(self) -> Vec<Path> {
+        self.paths.into_iter().map(|f| f.path).collect()
     }
-    // Sample in entity coordinates with the tolerance shrunk by the transform's largest stretch.
-    let local_tol = tol / max_stretch(xf);
-    let (points, closed) = match entity {
-        EntityType::Line(e) => (vec![xy(&e.start), xy(&e.end)], false),
-        EntityType::LwPolyline(e) => {
-            let vertices: Vec<_> = e
-                .vertices
-                .iter()
-                .map(|v| ([v.location.x, v.location.y], v.bulge))
-                .collect();
-            (bulge_points(&vertices, e.is_closed, local_tol), e.is_closed)
-        }
-        EntityType::Polyline2D(e) => {
-            let vertices: Vec<_> = e
-                .vertices
-                .iter()
-                .map(|v| (xy(&v.location), v.bulge))
-                .collect();
-            (
-                bulge_points(&vertices, e.is_closed(), local_tol),
-                e.is_closed(),
-            )
-        }
-        EntityType::Polyline(e) => (
-            e.vertices.iter().map(|v| xy(&v.location)).collect(),
-            e.is_closed(),
-        ),
-        EntityType::Polyline3D(e) => (
-            e.vertices.iter().map(|v| xy(&v.position)).collect(),
-            e.is_closed(),
-        ),
-        EntityType::Circle(e) => (
-            arc_points(xy(&e.center), e.radius, 0.0, TAU, local_tol),
-            true,
-        ),
-        EntityType::Arc(e) => (
-            arc_points(
-                xy(&e.center),
-                e.radius,
-                e.start_angle,
-                e.end_angle,
-                local_tol,
-            ),
-            false,
-        ),
-        EntityType::Ellipse(e) => (
-            ellipse_points(
-                xy(&e.center),
-                xy(&e.major_axis),
-                e.minor_axis_ratio,
-                e.start_parameter,
-                e.end_parameter,
-                local_tol,
-            ),
-            sweep(e.start_parameter, e.end_parameter) == TAU,
-        ),
-        EntityType::Spline(e) => {
-            let defining = if e.fit_points.len() >= 2 {
-                &e.fit_points
-            } else {
-                &e.control_points
-            };
-            (defining.iter().map(xy).collect(), e.flags.closed)
-        }
-        EntityType::Hatch(e) => {
-            for path in &e.paths {
-                let mut ring = Vec::new();
-                for edge in &path.edges {
-                    extend_ring(&mut ring, edge_points(edge, local_tol));
+}
+
+/// The 2D outline of `entity`, mapped through `xf`. Curves are sampled so the chord error stays
+/// within `tol` after `xf` is applied. Entities in object coordinates (arcs, circles, polylines,
+/// hatches, text, inserts) are mapped through their extrusion normal first, so a mirrored block
+/// (normal 0,0,-1) lands where it is drawn. Invisible entities inside blocks are left out.
+pub fn flatten(doc: &CadDocument, entity: &EntityType, xf: &Xform, tol: f64) -> FlattenOutcome {
+    let mut walk = Walk {
+        doc,
+        tol,
+        out: Vec::new(),
+        budget: MAX_WORK,
+        truncated: false,
+        chain: Vec::new(),
+        layer_colors: HashMap::new(),
+    };
+    let style = walk.style(entity.common(), None);
+    walk.entity(entity, xf, &style, 0);
+    FlattenOutcome {
+        paths: walk.out,
+        truncated: walk.truncated,
+    }
+}
+
+/// The layer and colour an entity is drawn with.
+struct Style {
+    layer: String,
+    color: Color,
+}
+
+struct Walk<'a> {
+    doc: &'a CadDocument,
+    tol: f64,
+    out: Vec<FlatPath>,
+    /// Block instances plus paths still allowed.
+    budget: usize,
+    truncated: bool,
+    /// Inserts entered so far, outermost first.
+    chain: Vec<u64>,
+    /// Each layer's colour by its name as written, so a block drawn many times looks it up once.
+    layer_colors: HashMap<String, Color>,
+}
+
+impl Walk<'_> {
+    /// The style of an entity with `common`, inside a block reference drawn with `parent`
+    /// (`None` at the top level).
+    fn style(&mut self, common: &EntityCommon, parent: Option<&Style>) -> Style {
+        let layer = match parent {
+            Some(p) if common.layer == "0" => &p.layer,
+            _ => &common.layer,
+        };
+        let color = match common.color {
+            Color::ByLayer => match self.layer_colors.get(layer.as_str()) {
+                Some(c) => *c,
+                None => {
+                    let c = self
+                        .doc
+                        .layers
+                        .get(layer)
+                        .map_or(Color::ByLayer, |l| l.color);
+                    self.layer_colors.insert(layer.clone(), c);
+                    c
                 }
-                push(out, xf, ring, true, budget);
-            }
+            },
+            Color::ByBlock => parent.map_or(Color::ByBlock, |p| p.color),
+            other => other,
+        };
+        Style {
+            layer: layer.clone(),
+            color,
+        }
+    }
+
+    fn entity(&mut self, entity: &EntityType, xf: &Xform, style: &Style, depth: usize) {
+        if self.budget == 0 {
+            self.truncated = true;
             return;
         }
-        EntityType::Insert(e) => {
-            if depth >= MAX_DEPTH {
+        let handle = entity.common().handle.value();
+        let xf = &match ocs_of(entity) {
+            Some(ocs) => ocs.then(xf),
+            None => *xf,
+        };
+        // Sample in entity coordinates with the tolerance shrunk by the transform's largest stretch.
+        let local_tol = self.tol / max_stretch(xf);
+        let (points, closed) = match entity {
+            EntityType::Line(e) => (vec![xy(&e.start), xy(&e.end)], false),
+            EntityType::LwPolyline(e) => {
+                let vertices: Vec<_> = e
+                    .vertices
+                    .iter()
+                    .map(|v| ([v.location.x, v.location.y], v.bulge))
+                    .collect();
+                (bulge_points(&vertices, e.is_closed, local_tol), e.is_closed)
+            }
+            EntityType::Polyline2D(e) => {
+                let vertices: Vec<_> = e
+                    .vertices
+                    .iter()
+                    .map(|v| (xy(&v.location), v.bulge))
+                    .collect();
+                (
+                    bulge_points(&vertices, e.is_closed(), local_tol),
+                    e.is_closed(),
+                )
+            }
+            EntityType::Polyline(e) => (
+                e.vertices.iter().map(|v| xy(&v.location)).collect(),
+                e.is_closed(),
+            ),
+            EntityType::Polyline3D(e) => (
+                e.vertices.iter().map(|v| xy(&v.position)).collect(),
+                e.is_closed(),
+            ),
+            EntityType::Circle(e) => (
+                arc_points(xy(&e.center), e.radius, 0.0, TAU, local_tol),
+                true,
+            ),
+            EntityType::Arc(e) => (
+                arc_points(
+                    xy(&e.center),
+                    e.radius,
+                    e.start_angle,
+                    e.end_angle,
+                    local_tol,
+                ),
+                false,
+            ),
+            EntityType::Ellipse(e) => (
+                ellipse_points(
+                    xy(&e.center),
+                    xy(&e.major_axis),
+                    minor_axis(&e.normal, &e.major_axis, e.minor_axis_ratio),
+                    e.start_parameter,
+                    e.end_parameter,
+                    local_tol,
+                ),
+                sweep(e.start_parameter, e.end_parameter) == TAU,
+            ),
+            EntityType::Spline(e) => {
+                let defining = if e.fit_points.len() >= 2 {
+                    &e.fit_points
+                } else {
+                    &e.control_points
+                };
+                (defining.iter().map(xy).collect(), e.flags.closed)
+            }
+            EntityType::Hatch(e) => {
+                for path in &e.paths {
+                    let mut ring = Vec::new();
+                    for edge in &path.edges {
+                        extend_ring(&mut ring, edge_points(edge, local_tol));
+                    }
+                    self.push(ring, true, xf, style, handle);
+                }
                 return;
             }
-            for instance in insert_instances(doc, e, xf) {
-                if *budget == 0 {
-                    return;
-                }
-                *budget -= 1;
-                for child in doc.entities_in_block(&e.block_name) {
-                    flatten_at(doc, child, &instance, tol, out, depth + 1, budget);
-                }
+            EntityType::Insert(e) => {
+                self.insert(e, xf, style, depth);
+                return;
             }
+            EntityType::Text(e) => (
+                text_box(&e.insertion_point, e.height, e.rotation, &e.value),
+                true,
+            ),
+            EntityType::MText(e) => (
+                text_box(&e.insertion_point, e.height, e.rotation, &e.value),
+                true,
+            ),
+            _ => return,
+        };
+        self.push(points, closed, xf, style, handle);
+    }
+
+    /// The insert's attribute text boxes (picked as the insert), then its block's content.
+    fn insert(&mut self, e: &Insert, xf: &Xform, style: &Style, depth: usize) {
+        let handle = e.common.handle.value();
+        // Attributes sit where the insert sits, not in the block's coordinates.
+        for a in &e.attributes {
+            if a.common.invisible || a.flags.invisible || a.value.is_empty() {
+                continue;
+            }
+            let at = ocs(&a.normal, a.insertion_point.z).map_or(*xf, |o| o.then(xf));
+            let points = text_box(&a.insertion_point, a.height, a.rotation, &a.value);
+            let attribute_style = self.style(&a.common, Some(style));
+            self.push(points, true, &at, &attribute_style, handle);
+        }
+        if depth >= MAX_DEPTH {
+            self.truncated = true;
             return;
         }
-        EntityType::Text(e) => (
-            text_box(&e.insertion_point, e.height, e.rotation, &e.value),
-            true,
-        ),
-        EntityType::MText(e) => (
-            text_box(&e.insertion_point, e.height, e.rotation, &e.value),
-            true,
-        ),
-        _ => return,
-    };
-    push(out, xf, points, closed, budget);
+        self.chain.push(handle);
+        let doc = self.doc;
+        // Styles depend only on the block's entities, not on where each instance is.
+        let children: Vec<(&EntityType, Style)> = doc
+            .entities_in_block(&e.block_name)
+            .filter(|child| !child.common().invisible)
+            .map(|child| (child, self.style(child.common(), Some(style))))
+            .collect();
+        for instance in insert_instances(doc, e, xf) {
+            if self.budget == 0 {
+                self.truncated = true;
+                break;
+            }
+            self.budget -= 1;
+            for (child, child_style) in &children {
+                self.entity(child, &instance, child_style, depth + 1);
+            }
+        }
+        self.chain.pop();
+    }
+
+    /// Maps `points` through `xf` and appends them as a path, spending one unit of the budget;
+    /// a closed path drops a final point that repeats its first.
+    fn push(
+        &mut self,
+        mut points: Vec<[f64; 2]>,
+        closed: bool,
+        xf: &Xform,
+        style: &Style,
+        entity: u64,
+    ) {
+        if points.is_empty() {
+            return;
+        }
+        if self.budget == 0 {
+            self.truncated = true;
+            return;
+        }
+        self.budget -= 1;
+        if closed && points.len() > 1 && same_point(points[0], points[points.len() - 1]) {
+            points.pop();
+        }
+        self.out.push(FlatPath {
+            path: Path {
+                points: points.into_iter().map(|p| xf.apply(p)).collect(),
+                closed,
+            },
+            layer: style.layer.clone(),
+            color: style.color,
+            chain: self.chain.clone(),
+            entity,
+            xref: None,
+        });
+    }
 }
 
 /// Block-to-world transform of each instance of `e` (one per array cell), followed by `xf`.
-/// Nothing when the block is missing. Lazy, so a caller can stop early on a huge array.
+/// Includes the insert's own extrusion normal. Nothing when the block is missing. Lazy, so a
+/// caller can stop early on a huge array.
 pub fn insert_instances<'a>(
     doc: &CadDocument,
     e: &'a Insert,
@@ -148,6 +307,10 @@ pub fn insert_instances<'a>(
         Xform::translate(-block.base_point.x, -block.base_point.y)
             .then(&Xform::scale(e.x_scale(), e.y_scale()))
     });
+    let to_world = match ocs(&e.normal, e.insert_point.z) {
+        Some(o) => o.then(xf),
+        None => *xf,
+    };
     base.into_iter().flat_map(move |base| {
         (0..e.column_count.max(1)).flat_map(move |col| {
             (0..e.row_count.max(1)).map(move |row| {
@@ -159,10 +322,53 @@ pub fn insert_instances<'a>(
                 base.then(&offset)
                     .then(&Xform::rotate(e.rotation))
                     .then(&Xform::translate(e.insert_point.x, e.insert_point.y))
-                    .then(xf)
+                    .then(&to_world)
             })
         })
     })
+}
+
+/// The object-to-world transform of an entity stored in object coordinates, projected on plan;
+/// `None` when it needs none (world-coordinate entities, and normals along +Z). Inserts apply
+/// theirs in `insert_instances`.
+fn ocs_of(entity: &EntityType) -> Option<Xform> {
+    match entity {
+        EntityType::Arc(e) => ocs(&e.normal, e.center.z),
+        EntityType::Circle(e) => ocs(&e.normal, e.center.z),
+        EntityType::LwPolyline(e) => ocs(&e.normal, e.elevation),
+        EntityType::Polyline2D(e) => ocs(&e.normal, e.elevation),
+        EntityType::Hatch(e) => ocs(&e.normal, e.elevation),
+        EntityType::Text(e) => ocs(&e.normal, e.insertion_point.z),
+        _ => None,
+    }
+}
+
+/// The plan projection of the AutoCAD arbitrary-axis transform for `normal`, at height `z` in
+/// object coordinates. `None` for +Z (identity) or a zero normal.
+pub(crate) fn ocs(normal: &Vector3, z: f64) -> Option<Xform> {
+    let up = normal.x.abs() < 1e-12 && normal.y.abs() < 1e-12 && normal.z > 0.0;
+    if up || normal.length() < 1e-12 {
+        return None;
+    }
+    let m = Matrix3::arbitrary_axis(*normal).m;
+    Some(Xform {
+        m: [
+            [m[0][0], m[0][1], m[0][2] * z],
+            [m[1][0], m[1][1], m[1][2] * z],
+            [0.0, 0.0, 1.0],
+        ],
+    })
+}
+
+/// An ellipse's minor semi-axis on plan: the normal crossed with the major axis, times the ratio.
+fn minor_axis(normal: &Vector3, major: &Vector3, ratio: f64) -> [f64; 2] {
+    let n = if normal.length() < 1e-12 {
+        Vector3::new(0.0, 0.0, 1.0)
+    } else {
+        normal.normalize()
+    };
+    let m = n.cross(major);
+    [m.x * ratio, m.y * ratio]
 }
 
 /// Points on a circular arc, counter-clockwise from `a0` to `a1` (radians), ends included.
@@ -179,7 +385,7 @@ pub fn arc_points(center: [f64; 2], r: f64, a0: f64, a1: f64, tol: f64) -> Vec<[
 }
 
 /// Counter-clockwise sweep from `a0` to `a1` in `(0, TAU]`; equal angles mean a full turn.
-fn sweep(a0: f64, a1: f64) -> f64 {
+pub(crate) fn sweep(a0: f64, a1: f64) -> f64 {
     let s = (a1 - a0).rem_euclid(TAU);
     if s < 1e-12 {
         TAU
@@ -198,14 +404,13 @@ fn segment_count(r: f64, sweep: f64, tol: f64) -> usize {
 fn ellipse_points(
     center: [f64; 2],
     major: [f64; 2],
-    ratio: f64,
+    minor: [f64; 2],
     t0: f64,
     t1: f64,
     tol: f64,
 ) -> Vec<[f64; 2]> {
     let sweep = sweep(t0, t1);
     let n = segment_count(major[0].hypot(major[1]), sweep, tol);
-    let minor = [-major[1] * ratio, major[0] * ratio];
     (0..=n)
         .map(|i| {
             let (s, c) = (t0 + sweep * i as f64 / n as f64).sin_cos();
@@ -290,10 +495,11 @@ fn edge_points(edge: &BoundaryEdge, tol: f64) -> Vec<[f64; 2]> {
                 [a.major_axis_endpoint.x, a.major_axis_endpoint.y],
             );
             let ratio = a.minor_axis_ratio;
+            let minor = [-major[1] * ratio, major[0] * ratio];
             if a.counter_clockwise {
-                ellipse_points(c, major, ratio, a.start_angle, a.end_angle, tol)
+                ellipse_points(c, major, minor, a.start_angle, a.end_angle, tol)
             } else {
-                let mut points = ellipse_points(c, major, ratio, -a.end_angle, -a.start_angle, tol);
+                let mut points = ellipse_points(c, major, minor, -a.end_angle, -a.start_angle, tol);
                 points.reverse();
                 points
             }
@@ -330,28 +536,6 @@ fn text_box(insertion: &Vector3, height: f64, rotation: f64, value: &str) -> Vec
         .into_iter()
         .map(|p| place.apply(p))
         .collect()
-}
-
-/// Maps `points` through `xf` and appends them as a path, spending one unit of `budget`;
-/// a closed path drops a final point that repeats its first.
-fn push(
-    out: &mut Vec<Path>,
-    xf: &Xform,
-    mut points: Vec<[f64; 2]>,
-    closed: bool,
-    budget: &mut usize,
-) {
-    if points.is_empty() || *budget == 0 {
-        return;
-    }
-    *budget -= 1;
-    if closed && points.len() > 1 && same_point(points[0], points[points.len() - 1]) {
-        points.pop();
-    }
-    out.push(Path {
-        points: points.into_iter().map(|p| xf.apply(p)).collect(),
-        closed,
-    });
 }
 
 /// The largest factor by which `xf` stretches a unit length along either axis.

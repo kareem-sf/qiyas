@@ -1,7 +1,8 @@
 /** The measure tools: which clicks become which take-off command. The rules live in a pure reducer;
  *  the hook does the async picking around it and hands each finished command to the app. */
 import { useEffect, useReducer } from "react";
-import type { Command, EntityInfo } from "../api";
+import type { Command, EntityInfo, Picked } from "../api";
+import type { Target } from "../viewport/batch";
 import type { Point } from "../viewport/camera";
 import type { Tool } from "../viewport/Viewport";
 
@@ -19,8 +20,11 @@ export type ToolState = {
   pendingCommand: Command | null;
   /** An i18n key for the status bar, or "". */
   hint: string;
-  /** Entity picked by `select`, waiting for a second click to be measured. */
-  highlighted: number | null;
+  /** Values for the `{name}` slots of `hint`. */
+  hintArgs: Record<string, string> | null;
+  /** What `select` picked, waiting to be measured: the entity itself, or with `whole` the
+   *  top-level block reference it sits in. `path` names the blocks along its chain. */
+  selected: { picked: Picked; path: string[]; whole: boolean } | null;
   lastClick: { screen: Point; time: number } | null;
 };
 
@@ -30,8 +34,9 @@ export type ToolEvent =
       world: Point;
       screen: Point;
       time: number;
-      /** Entity under the click (`select` and `count` only), and its info (`count` only). */
-      picked: number | null;
+      /** What is under the click (`select` and `count` only), and its info: for `count` the
+       *  top-level entity's, for `select` the picked entity's inside its blocks. */
+      picked: Picked | null;
       info: EntityInfo | null;
     }
   | { type: "finish" }
@@ -52,11 +57,41 @@ export const initialToolState = (tool: Tool): ToolState => ({
   points: [],
   pendingCommand: null,
   hint: tool === "select" ? "" : PROMPT[tool],
-  highlighted: null,
+  hintArgs: null,
+  selected: null,
   lastClick: null,
 });
 
+const samePick = (a: Picked, b: Picked) =>
+  a.top === b.top && a.entity === b.entity && a.chain.join(",") === b.chain.join(",");
+
+/** What a `select` choice draws and measures. */
+export function selectedTarget(selected: ToolState["selected"]): Target | null {
+  if (!selected) return null;
+  const { picked, whole } = selected;
+  return whole || picked.chain.length === 0
+    ? { handle: picked.top, chain: [] }
+    : { handle: picked.entity, chain: picked.chain };
+}
+
+/** The status bar line for a `select` choice: which block it is in, or which block it is. */
+function selectHint(s: ToolState, selected: NonNullable<ToolState["selected"]>): ToolState {
+  const { path, whole } = selected;
+  if (path.length === 0) return { ...s, selected, hint: "", hintArgs: null };
+  return whole
+    ? { ...s, selected, hint: "measure.wholeBlock", hintArgs: { name: path[0] } }
+    : { ...s, selected, hint: "measure.insideBlock", hintArgs: { name: path[path.length - 1] } };
+}
+
+function measureSelected(s: ToolState): ToolState {
+  const target = selectedTarget(s.selected);
+  if (!target) return s;
+  const pendingCommand: Command = { type: "measure_entity", handle: target.handle, chain: target.chain };
+  return { ...s, selected: null, hint: "", hintArgs: null, pendingCommand };
+}
+
 function finish(s: ToolState): ToolState {
+  if (s.tool === "select") return measureSelected(s);
   const need = s.tool === "area" ? 3 : 2;
   if (s.tool !== "distance" && s.tool !== "area") return s;
   if (s.points.length < need) return { ...s, hint: PROMPT[s.tool] };
@@ -88,12 +123,20 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
           return double
             ? { ...finish(s), lastClick: null }
             : { ...clicked, points: [...s.points, event.world] };
-        case "select":
-          if (event.picked !== null && event.picked === s.highlighted) {
-            const handle = event.picked;
-            return { ...clicked, highlighted: null, pendingCommand: { type: "measure_entity", handle } };
+        case "select": {
+          const picked = event.picked;
+          if (picked === null) return { ...clicked, selected: null, hint: "", hintArgs: null };
+          const current = s.selected;
+          if (current && samePick(current.picked, picked)) {
+            // Inside a block, a slow second click swaps the entity for the whole block and back;
+            // a double click (or Enter) measures. Elsewhere the second click measures.
+            if (picked.chain.length > 0 && !double) {
+              return selectHint(clicked, { ...current, whole: !current.whole });
+            }
+            return measureSelected(clicked);
           }
-          return { ...clicked, highlighted: event.picked };
+          return selectHint(clicked, { picked, path: event.info?.block_path ?? [], whole: false });
+        }
         case "count":
           // The second click of a double click would count the same block twice.
           if (double) return clicked;
@@ -112,8 +155,8 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
 }
 
 export type ToolApi = {
-  pick(x: number, y: number, tol: number): Promise<number | null>;
-  entityInfo(handle: number): Promise<EntityInfo>;
+  pick(x: number, y: number, tol: number): Promise<Picked | null>;
+  entityInfo(handle: number, chain?: number[]): Promise<EntityInfo>;
   /** Applies a finished command. */
   run(cmd: Command): void;
   onError(e: unknown): void;
@@ -133,13 +176,17 @@ export function useTool(tool: Tool, api: ToolApi) {
 
   async function onClick(world: Point, screen: Point, worldPerPixel: number) {
     const time = performance.now();
-    let picked: number | null = null;
+    let picked: Picked | null = null;
     let info: EntityInfo | null = null;
     try {
       if (tool === "select" || tool === "count") {
         picked = await api.pick(world[0], world[1], PICK_PX * worldPerPixel);
       }
-      if (tool === "count" && picked !== null) info = await api.entityInfo(picked);
+      if (tool === "count" && picked !== null) info = await api.entityInfo(picked.top);
+      // Inside a block, the block names go to the status bar.
+      if (tool === "select" && picked !== null && picked.chain.length > 0) {
+        info = await api.entityInfo(picked.entity, picked.chain);
+      }
     } catch (e) {
       api.onError(e);
       return;
@@ -150,7 +197,9 @@ export function useTool(tool: Tool, api: ToolApi) {
   return {
     points: state.points,
     hint: state.hint,
-    highlighted: state.highlighted,
+    hintArgs: state.hintArgs,
+    /** What `select` would measure now, to draw highlighted. */
+    highlighted: selectedTarget(state.selected),
     onClick,
     finish: () => dispatch({ type: "finish" }),
     escape: () => dispatch({ type: "escape" }),

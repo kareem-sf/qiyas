@@ -1,5 +1,5 @@
 import { useEffect, useImperativeHandle, useRef, useState, type PointerEvent, type Ref } from "react";
-import type { Batch } from "./batch";
+import type { Batch, Target } from "./batch";
 import {
   fitBounds,
   pan,
@@ -19,7 +19,7 @@ export type ViewportHandle = { fitExtents(): void; fitTo(bounds: Bounds): void }
 
 type Props = {
   batch: Batch | null;
-  highlight: Set<bigint>;
+  highlight: Target[];
   tool: Tool;
   theme: Theme;
   /** Violet segments `x0 y0 x1 y1` in absolute drawing coordinates, drawn over the drawing. */

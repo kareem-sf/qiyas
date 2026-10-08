@@ -74,6 +74,13 @@ pub struct Measurement {
     /// the user or the AI gave; the comparison doesn't report such lines as missing from the BOQ.
     #[serde(default)]
     pub auto_description: bool,
+    /// The block references the measured entity sits inside, outermost first; empty for an
+    /// entity on the sheet or a drawn shape.
+    #[serde(default)]
+    pub chain: Vec<u64>,
+    /// The block names along `chain`, outermost first, for showing where the entity is.
+    #[serde(default)]
+    pub block_path: Vec<String>,
 }
 
 impl Measurement {
@@ -110,6 +117,8 @@ impl Measurement {
             height: None,
             boq_code: None,
             auto_description: false,
+            chain: Vec::new(),
+            block_path: Vec::new(),
         }
     }
 }

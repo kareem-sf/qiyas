@@ -72,18 +72,23 @@ pub fn render_png(
         stroke(&mut pixmap, path, [r, g, b], 1.0);
     }
 
-    let ranges: HashMap<u64, (u32, u32)> = batch
-        .ranges
-        .iter()
-        .map(|&(handle, first, count)| (handle, (first, count)))
-        .collect();
     let mut overlay = PathBuilder::new();
     for m in measurements {
         let points: Vec<(f32, f32)> = m.points.iter().map(|p| to_px(p[0], p[1])).collect();
         match points.as_slice() {
             [] => {
-                for (first, count) in m.handles.iter().filter_map(|h| ranges.get(h)) {
-                    for i in *first as usize..(*first + *count) as usize {
+                // An entity on the sheet by its top handle; one inside blocks by handle and chain.
+                let drawn = batch.ranges.iter().filter(|r| {
+                    m.handles.iter().any(|&h| {
+                        if m.chain.is_empty() {
+                            r.top == h
+                        } else {
+                            r.entity == h && batch.chain_of(r) == m.chain.as_slice()
+                        }
+                    })
+                });
+                for r in drawn {
+                    for i in r.first as usize..(r.first + r.count) as usize {
                         let s = segment(i);
                         if !outside(s) {
                             let (x0, y0) = to_px(s[0], s[1]);

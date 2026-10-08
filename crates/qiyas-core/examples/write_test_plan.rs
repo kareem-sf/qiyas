@@ -210,8 +210,14 @@ fn build() -> CadDocument {
 }
 
 fn measure(session: &mut Session, label: &str, at: [f64; 2]) {
-    let handle = session.pick(at, 0.02).expect(label);
-    match session.run(Command::MeasureEntity { handle }).unwrap() {
+    let picked = session.pick(at, 0.02).expect(label);
+    match session
+        .run(Command::MeasureEntity {
+            handle: picked.entity,
+            chain: picked.chain,
+        })
+        .unwrap()
+    {
         Outcome::Measured { measurement } => println!(
             "{label:<22} {:>10.3} {}",
             measurement.shown, measurement.unit
