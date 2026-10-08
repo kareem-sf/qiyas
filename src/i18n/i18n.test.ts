@@ -27,3 +27,11 @@ test("t interpolates and falls back to the key", () => {
   expect(result.current("recovered", { n: 3 })).toBe("Recovered with 3 problems");
   expect(result.current("no.such.key")).toBe("no.such.key");
 });
+
+test("arabic problem count reads right for any number", () => {
+  const { result } = renderHook(() => ({ t: useT(), language: useLanguage() }), {
+    wrapper: LanguageProvider,
+  });
+  act(() => result.current.language.setLang("ar"));
+  expect(result.current.t("recovered", { n: 2 })).toBe("تمت الاستعادة مع مشكلات: 2");
+});

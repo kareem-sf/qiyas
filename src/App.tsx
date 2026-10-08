@@ -1,5 +1,5 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { openDrawing, renderBatch, setLayerHidden, setSheet, type DrawingInfo } from "./api";
 import { useLanguage, useT } from "./i18n";
 import { LayersPanel } from "./shell/LayersPanel";
@@ -40,6 +40,8 @@ export default function App() {
   const viewportBox = useRef<HTMLDivElement>(null);
   /** Set when the next batch is a new drawing or sheet, so the view fits it once it is drawn. */
   const fitNext = useRef(false);
+  /** True while a layer change talks to the core; clicks meanwhile are dropped, so they can't interleave. */
+  const layerBusy = useRef(false);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -99,34 +101,53 @@ export default function App() {
       await redraw(true);
     });
 
-  const toggleLayer = (name: string) =>
-    run(async () => {
-      const hide = !hidden.has(name);
-      await setLayerHidden(name, hide);
-      const next = new Set(hidden);
-      if (hide) next.add(name);
-      else next.delete(name);
-      setHidden(next);
+  /** Moves the hidden set to `target`, one core call per changed layer. Whatever happens, the panel
+   *  shows the calls that went through and the canvas is redrawn from the core. */
+  async function applyHidden(target: Set<string>) {
+    if (layerBusy.current) return;
+    layerBusy.current = true;
+    const done = new Set(hidden);
+    let failure: string | null = null;
+    try {
+      for (const l of info?.layers ?? []) {
+        const hide = target.has(l.name);
+        if (done.has(l.name) === hide) continue;
+        await setLayerHidden(l.name, hide);
+        if (hide) done.add(l.name);
+        else done.delete(l.name);
+      }
+    } catch (e) {
+      failure = String(e);
+    }
+    setHidden(done);
+    try {
       await redraw();
-    });
+    } catch (e) {
+      failure ??= String(e);
+    }
+    setError(failure);
+    layerBusy.current = false;
+  }
+
+  // Stable between pointer moves, so the memoised layers panel doesn't re-render with the cursor.
+  const toggleLayer = useCallback(
+    (name: string) => {
+      const next = new Set(hidden);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      applyHidden(next);
+    },
+    [hidden, info],
+  );
 
   /** Shows only `name`: hides every other layer and unhides it. */
-  const isolateLayer = (name: string) =>
-    run(async () => {
-      const next = new Set(info!.layers.map((l) => l.name).filter((n) => n !== name));
-      for (const l of info!.layers) {
-        if (next.has(l.name) !== hidden.has(l.name)) await setLayerHidden(l.name, next.has(l.name));
-      }
-      setHidden(next);
-      await redraw();
-    });
+  const isolateLayer = useCallback(
+    (name: string) =>
+      applyHidden(new Set(info?.layers.map((l) => l.name).filter((n) => n !== name))),
+    [hidden, info],
+  );
 
-  const showAll = () =>
-    run(async () => {
-      for (const name of hidden) await setLayerHidden(name, false);
-      setHidden(new Set());
-      await redraw();
-    });
+  const showAll = useCallback(() => applyHidden(new Set()), [hidden, info]);
 
   // Hand the keyboard back to the drawing, so Space pans instead of pressing a button.
   const focusDrawing = () => viewportBox.current?.focus();
@@ -137,7 +158,7 @@ export default function App() {
   }
 
   const fileName = info?.path.split(/[\\/]/).pop() ?? "";
-  const message = opening ? t("opening") : (error ?? (info ? fileName : t("noDrawing")));
+  const message = opening ? t("opening") : info ? fileName : t("noDrawing");
   // Unknown units are measured as millimetres; the status bar says so.
   const units = info ? t(`unit.${info.units === "unknown" ? "millimetres" : info.units}`) : "";
 
@@ -194,6 +215,11 @@ export default function App() {
               onMove={(p) => setCursor(p)}
             />
           </div>
+          {error && (
+            <div className="error" role="alert">
+              {error}
+            </div>
+          )}
           {info && <SheetTabs sheets={info.sheets} active={sheet} onSelect={chooseSheet} />}
         </main>
       </div>

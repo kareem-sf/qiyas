@@ -33,6 +33,22 @@
   color-scheme: dark;
 }
 
+/* First paint, before the app sets data-theme: follow the system. Same values as above. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --bg: var(--ink);
+    --fg: var(--paper);
+    --panel: #17181c;
+    --muted: #a39f98;
+    --rule: rgb(249 248 244 / 0.12);
+    --hover: rgb(249 248 244 / 0.08);
+    --accent: var(--face-light);
+    --accent-soft: rgb(110 74 158 / 0.45);
+    --warn: #e9b35f;
+    color-scheme: dark;
+  }
+}
+
 * {
   box-sizing: border-box;
 }
@@ -44,7 +60,8 @@ body {
   font: 13px/1.4 "Instrument Sans", system-ui, sans-serif;
 }
 
-:root[dir="rtl"] body {
+:root[dir="rtl"] body,
+:lang(ar) {
   font-family: "Thmanyah Sans", "Instrument Sans", system-ui, sans-serif;
 }
 
@@ -111,8 +128,14 @@ button[aria-pressed="true"] {
   flex: 1;
   min-height: 0;
 }
-.viewport:focus {
-  outline: none;
+.viewport:focus-visible {
+  outline-offset: -2px;
+}
+.error {
+  padding: 4px 10px;
+  color: var(--warn);
+  background: var(--panel);
+  border-top: 1px solid var(--rule);
 }
 
 /* Ribbon */

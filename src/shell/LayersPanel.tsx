@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { LayerInfo } from "../api";
 import { useT } from "../i18n";
 
@@ -9,8 +10,15 @@ type Props = {
   onShowAll(): void;
 };
 
-/** The drawing's layers: colour, name, an eye to hide or show, and isolate to show only that one. */
-export function LayersPanel({ layers, hidden, onToggle, onIsolate, onShowAll }: Props) {
+/** The drawing's layers: colour, name, an eye to hide or show, and isolate to show only that one.
+ *  Memoised: the app re-renders on every pointer move (cursor in the status bar). */
+export const LayersPanel = memo(function LayersPanel({
+  layers,
+  hidden,
+  onToggle,
+  onIsolate,
+  onShowAll,
+}: Props) {
   const t = useT();
   return (
     <aside className="layers">
@@ -25,6 +33,8 @@ export function LayersPanel({ layers, hidden, onToggle, onIsolate, onShowAll }: 
           // Off and frozen layers stay hidden whatever the user does (the drawing says so).
           const locked = l.off || l.frozen;
           const visible = !locked && !hidden.has(l.name);
+          const eyeLabel = `${t("visible")}: ${l.name}`;
+          const isolateLabel = `${t("isolate")}: ${l.name}`;
           return (
             <li key={l.name} className={visible ? undefined : "dim"}>
               <span className="swatch" style={{ background: `rgb(${l.color.join(",")})` }} />
@@ -34,8 +44,8 @@ export function LayersPanel({ layers, hidden, onToggle, onIsolate, onShowAll }: 
               <button
                 type="button"
                 className="icon"
-                aria-label={t("visible")}
-                title={t("visible")}
+                aria-label={eyeLabel}
+                title={eyeLabel}
                 aria-pressed={visible}
                 disabled={locked}
                 onClick={() => onToggle(l.name)}
@@ -48,8 +58,9 @@ export function LayersPanel({ layers, hidden, onToggle, onIsolate, onShowAll }: 
               <button
                 type="button"
                 className="icon"
-                aria-label={t("isolate")}
-                title={t("isolate")}
+                aria-label={isolateLabel}
+                title={isolateLabel}
+                disabled={locked}
                 onClick={() => onIsolate(l.name)}
               >
                 <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -63,4 +74,4 @@ export function LayersPanel({ layers, hidden, onToggle, onIsolate, onShowAll }: 
       </ul>
     </aside>
   );
-}
+});

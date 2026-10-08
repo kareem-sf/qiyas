@@ -13,7 +13,9 @@ export function StatusBar({ cursor, units, unitsWarning, problems, message }: Pr
   const t = useT();
   return (
     <footer className="status">
-      <span className="message">{message}</span>
+      <span className="message" role="status" aria-live="polite">
+        {message}
+      </span>
       {problems > 0 && <span className="warn">{t("recovered", { n: problems })}</span>}
       {unitsWarning && <span className="warn">{t("unitsUnknown")}</span>}
       {units && <span>{units}</span>}
