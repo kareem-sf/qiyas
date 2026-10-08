@@ -2508,6 +2508,8 @@ version = "0.1.0"
 dependencies = [
  "opencadcodec",
  "qiyas-core",
+ "qiyas-geom",
+ "qiyas-render",
  "serde",
  "tempfile",
  "thiserror 2.0.21",
@@ -2517,6 +2519,7 @@ dependencies = [
 name = "qiyas-desktop"
 version = "0.1.0"
 dependencies = [
+ "qiyas-core",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
