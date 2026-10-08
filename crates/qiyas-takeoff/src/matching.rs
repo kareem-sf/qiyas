@@ -3,13 +3,37 @@
 
 use std::collections::BTreeSet;
 
-/// Words that say nothing about the work. Compared after `fold`.
-const STOP_WORDS: [&str; 10] = [
-    "the", "of", "and", "in", "to", "for", "و", "في", "من", "إلى",
+use qiyas_core::BlockCount;
+
+/// Words that say nothing about the work, units and sizes among them. Compared after `fold` and
+/// after digits are removed ("50mm" is "mm").
+const STOP_WORDS: [&str; 22] = [
+    "the",
+    "of",
+    "and",
+    "in",
+    "to",
+    "for",
+    "و",
+    "في",
+    "من",
+    "إلى",
+    "mm",
+    "cm",
+    "m",
+    "m2",
+    "m3",
+    "thk",
+    "thick",
+    "thickness",
+    "nos",
+    "no",
+    "nr",
+    "pcs",
 ];
 /// Arabic article and the prepositions fused with it, longest first.
 const ARTICLES: [&str; 6] = ["وال", "بال", "كال", "فال", "لل", "ال"];
-/// Two descriptions match when this share of the shorter one's tokens is in the other.
+/// Two descriptions match when more than this share of the shorter one's tokens is in the other.
 const MATCH_SHARE: f64 = 0.5;
 /// The units the BOQ import knows; any other is the workbook's own text.
 pub(crate) const STANDARD_UNITS: [&str; 6] = ["m", "m2", "m3", "pcs", "kg", "t"];
@@ -19,7 +43,7 @@ pub(crate) const STANDARD_UNITS: [&str; 6] = ["m", "m2", "m3", "pcs", "kg", "t"]
 pub(crate) fn fold(text: &str) -> String {
     text.to_lowercase()
         .chars()
-        .filter(|c| !matches!(c, '\u{064B}'..='\u{0670}' | '\u{0640}'))
+        .filter(|c| !matches!(c, '\u{064B}'..='\u{065F}' | '\u{0670}' | '\u{0640}'))
         .map(|c| match c {
             'أ' | 'إ' | 'آ' | 'ٱ' => 'ا',
             'ى' => 'ي',
@@ -29,15 +53,12 @@ pub(crate) fn fold(text: &str) -> String {
         .collect()
 }
 
-/// The words of a description: folded, split at anything not a letter or digit, digits removed,
-/// stop words and one-letter words dropped, the Arabic article (also fused with و ب ك ف ل)
-/// taken off.
-pub(crate) fn tokens(text: &str) -> BTreeSet<String> {
-    let stop: Vec<String> = STOP_WORDS.iter().map(|w| fold(w)).collect();
+/// The words of a text: folded, split at anything not a letter or digit, digits removed,
+/// one-letter words dropped, the Arabic article (also fused with و ب ك ف ل) taken off.
+pub(crate) fn words(text: &str) -> BTreeSet<String> {
     fold(text)
         .split(|c: char| !c.is_alphanumeric())
         .map(|word| word.chars().filter(|c| !c.is_numeric()).collect::<String>())
-        .filter(|word| !stop.contains(word))
         .map(|word| {
             ARTICLES
                 .iter()
@@ -51,11 +72,21 @@ pub(crate) fn tokens(text: &str) -> BTreeSet<String> {
         .collect()
 }
 
-/// True when at least half the tokens of the shorter description are in the other (`tokens`
-/// of each).
+/// The words of a description without the stop words: what descriptions are matched on.
+pub(crate) fn tokens(text: &str) -> BTreeSet<String> {
+    let stop: Vec<String> = STOP_WORDS.iter().map(|w| fold(w)).collect();
+    let mut words = words(text);
+    words.retain(|w| !stop.contains(w));
+    words
+}
+
+/// Two descriptions (`tokens` of each) match when they share 2 tokens or more (or their one
+/// token each is the same) and more than half the tokens of the shorter one.
 pub(crate) fn overlaps(a: &BTreeSet<String>, b: &BTreeSet<String>) -> bool {
+    let shared = a.intersection(b).count();
     let shorter = a.len().min(b.len());
-    shorter > 0 && a.intersection(b).count() as f64 / shorter as f64 >= MATCH_SHARE
+    let enough = shared >= 2 || (shared == 1 && a.len() == 1 && b.len() == 1);
+    enough && shared as f64 / shorter as f64 > MATCH_SHARE
 }
 
 /// The key measurements are grouped by: folded, digits and punctuation removed, spaces
@@ -78,35 +109,90 @@ pub(crate) fn unit_key(unit: &str) -> String {
         .to_lowercase()
 }
 
-/// The floor names in a sheet name: GF, G, FF, SF, TF, RF, B1, L1 to L99, 1F to 99F, and
-/// الأرضي، الأول، الثاني، الثالث, as whole words in any case.
+/// The floors a sheet name names, as whole words in any case, each as one canonical name so
+/// that "Level 01" and "L1" are the same floor:
+/// - GF, G, ground, الأرضي → GF; RF, roof, السطح → RF; mezzanine, الميزانين → MZ;
+/// - FF, first, الأول → L1; SF, second, الثاني → L2; TF, third, الثالث → L3; fourth, الرابع → L4;
+/// - L1 to L99, 1F to 99F, and a number after level, floor, lvl, طابق or دور → L and the number;
+/// - B1 to B9 → B and the number; basement, البدروم → B.
+///
+/// A bare sheet number ("A-01") is not a floor.
 pub(crate) fn floor_tokens(sheet: &str) -> BTreeSet<String> {
-    let arabic: Vec<String> = ["الأرضي", "الأول", "الثاني", "الثالث"]
-        .iter()
-        .map(|w| fold(w))
-        .collect();
-    sheet
+    let words: Vec<String> = sheet
         .split(|c: char| !(c.is_alphanumeric() || c == '_'))
-        .filter_map(|word| {
-            let upper = word.to_uppercase();
-            let folded = fold(word);
-            if is_floor(&upper) {
-                Some(upper)
-            } else {
-                arabic.contains(&folded).then_some(folded)
+        .filter(|w| !w.is_empty())
+        .map(fold)
+        .collect();
+    let mut floors = BTreeSet::new();
+    for (i, word) in words.iter().enumerate() {
+        if let Some(floor) = named_floor(word) {
+            floors.insert(floor);
+        } else if LEVEL_WORDS.iter().any(|w| fold(w) == *word) {
+            let number = words.get(i + 1).and_then(|n| floor_number(n, 2));
+            if let Some(n) = number {
+                floors.insert(format!("L{n}"));
             }
-        })
-        .collect()
+        }
+    }
+    floors
 }
 
-fn is_floor(word: &str) -> bool {
-    let digits = |s: &str, most: usize| {
-        (1..=most).contains(&s.len()) && s.chars().all(|c| c.is_ascii_digit())
-    };
-    matches!(word, "GF" | "G" | "FF" | "SF" | "TF" | "RF")
-        || word.strip_prefix('B').is_some_and(|d| digits(d, 1))
-        || word.strip_prefix('L').is_some_and(|d| digits(d, 2))
-        || word.strip_suffix('F').is_some_and(|d| digits(d, 2))
+/// Words a floor number follows.
+const LEVEL_WORDS: [&str; 7] = ["level", "floor", "lvl", "طابق", "الطابق", "دور", "الدور"];
+
+/// The canonical floor of one folded word, if it names one by itself.
+fn named_floor(word: &str) -> Option<String> {
+    const NAMED: [(&str, &str); 22] = [
+        ("gf", "GF"),
+        ("g", "GF"),
+        ("ground", "GF"),
+        ("الأرضي", "GF"),
+        ("rf", "RF"),
+        ("roof", "RF"),
+        ("السطح", "RF"),
+        ("mezzanine", "MZ"),
+        ("الميزانين", "MZ"),
+        ("ff", "L1"),
+        ("first", "L1"),
+        ("الأول", "L1"),
+        ("sf", "L2"),
+        ("second", "L2"),
+        ("الثاني", "L2"),
+        ("tf", "L3"),
+        ("third", "L3"),
+        ("الثالث", "L3"),
+        ("fourth", "L4"),
+        ("الرابع", "L4"),
+        ("basement", "B"),
+        ("البدروم", "B"),
+    ];
+    if let Some((_, floor)) = NAMED.iter().find(|(w, _)| fold(w) == word) {
+        return Some(floor.to_string());
+    }
+    if let Some(n) = word.strip_prefix('b').and_then(|d| floor_number(d, 1)) {
+        return Some(format!("B{n}"));
+    }
+    word.strip_prefix('l')
+        .or_else(|| word.strip_suffix('f'))
+        .and_then(|d| floor_number(d, 2))
+        .map(|n| format!("L{n}"))
+}
+
+/// `text` as a floor number of 1 to `most` digits (Arabic-Indic too), without leading zeros.
+fn floor_number(text: &str, most: usize) -> Option<u32> {
+    let digits: String = text.chars().map(ascii_digit).collect();
+    ((1..=most).contains(&digits.chars().count()) && digits.chars().all(|c| c.is_ascii_digit()))
+        .then(|| digits.parse().ok())
+        .flatten()
+}
+
+/// Arabic-Indic digits as ASCII digits; other characters as they are.
+fn ascii_digit(c: char) -> char {
+    match c {
+        '\u{0660}'..='\u{0669}' => char::from(b'0' + (c as u32 - 0x0660) as u8),
+        '\u{06F0}'..='\u{06F9}' => char::from(b'0' + (c as u32 - 0x06F0) as u8),
+        c => c,
+    }
 }
 
 /// A sheet of schedules: its name says "schedule" or "جدول".
@@ -119,26 +205,31 @@ pub(crate) fn leading_number(cell: &str) -> Option<f64> {
     let digits: String = cell
         .trim()
         .chars()
-        .map(|c| match c {
-            '\u{0660}'..='\u{0669}' => char::from(b'0' + (c as u32 - 0x0660) as u8),
-            '\u{06F0}'..='\u{06F9}' => char::from(b'0' + (c as u32 - 0x06F0) as u8),
-            '٫' => '.',
-            c => c,
-        })
+        .map(|c| if c == '٫' { '.' } else { ascii_digit(c) })
         .take_while(|c| c.is_ascii_digit() || *c == '.')
         .collect();
     digits.parse().ok()
 }
 
-/// A block is the one a schedule mark names when its name is the mark, or has the mark as one of
-/// its words ("DOOR-D1" for "D1"), in any case.
-pub(crate) fn block_has_mark(block: &str, mark: &str) -> bool {
-    let (block, mark) = (block.to_lowercase(), mark.trim().to_lowercase());
-    !mark.is_empty()
-        && (block == mark
-            || block
+/// The block references of `b` are the ones a schedule mark names when one of their attribute
+/// values is the mark, or the block's name is the mark, or (for a mark of 2 characters or more
+/// with a letter and a digit, like "D1") the name has the mark as one of its words ("DOOR-D1").
+/// All in any case.
+pub(crate) fn names_mark(b: &BlockCount, mark: &str) -> bool {
+    let mark = mark.trim().to_lowercase();
+    if mark.is_empty() {
+        return false;
+    }
+    let name = b.block_name.to_lowercase();
+    let as_word = mark.chars().count() >= 2
+        && mark.chars().any(char::is_alphabetic)
+        && mark.chars().any(char::is_numeric);
+    name == mark
+        || (as_word
+            && name
                 .split(|c: char| !c.is_alphanumeric())
                 .any(|w| w == mark))
+        || b.attributes.iter().any(|a| a.trim().to_lowercase() == mark)
 }
 
 #[cfg(test)]
@@ -158,13 +249,44 @@ mod tests {
     }
 
     #[test]
+    fn descriptions_need_two_shared_tokens() {
+        let m = |a: &str, b: &str| overlaps(&tokens(a), &tokens(b));
+        assert!(m("خرسانة مسلحة للأعمدة", "خرسانة الأعمدة"));
+        assert!(m("Concrete slab GF", "Reinforced concrete slab"));
+        assert!(m("Plaster", "plaster"));
+        assert!(!m("Concrete columns", "Reinforced concrete slabs"));
+        assert!(!m("Screed 50mm", "Plaster 20mm thick"));
+        // Half is not more than half.
+        assert!(!m("concrete slab beam column", "concrete slab stair wall"));
+    }
+
+    #[test]
     fn floors_are_whole_words() {
-        assert_eq!(floor_tokens("GF Plan"), BTreeSet::from(["GF".to_string()]));
-        assert!(floor_tokens("L02 - Lighting").contains("L02"));
-        assert!(floor_tokens("1f furniture").contains("1F"));
-        assert!(floor_tokens("GF_PLAN").is_empty());
-        assert!(floor_tokens("Gfx Plan").is_empty());
-        assert!(!floor_tokens("مخطط الطابق الأرضي").is_empty());
+        let f = |name: &str| floor_tokens(name).into_iter().collect::<Vec<_>>();
+        assert_eq!(f("GF Plan"), ["GF"]);
+        assert_eq!(f("L02 - Lighting"), ["L2"]);
+        assert_eq!(f("1f furniture"), ["L1"]);
+        assert_eq!(f("Level 01 Plan"), f("Level 01 RCP"));
+        assert_eq!(f("Level 01 Plan"), ["L1"]);
+        assert_eq!(f("Ground Floor Plan"), ["GF"]);
+        assert_eq!(f("Ground Floor Furniture"), ["GF"]);
+        assert_eq!(f("Floor 3"), ["L3"]);
+        assert_eq!(f("مخطط الدور ٢"), ["L2"]);
+        assert_eq!(f("مخطط الطابق الأرضي"), ["GF"]);
+        assert_eq!(f("Basement B2"), ["B", "B2"]);
+        assert!(f("A-01").is_empty());
+        assert!(f("GF_PLAN").is_empty());
+        assert!(f("Gfx Plan").is_empty());
+        assert!(f("Floor Plan").is_empty());
+    }
+
+    fn block(name: &str, attributes: &[&str]) -> BlockCount {
+        BlockCount {
+            block_name: name.to_string(),
+            layer: "0".to_string(),
+            count: 1,
+            attributes: attributes.iter().map(|a| a.to_string()).collect(),
+        }
     }
 
     #[test]
@@ -172,8 +294,12 @@ mod tests {
         assert_eq!(leading_number(" 4 nos"), Some(4.0));
         assert_eq!(leading_number("٤"), Some(4.0));
         assert_eq!(leading_number("-"), None);
-        assert!(block_has_mark("DOOR-D1", "d1"));
-        assert!(block_has_mark("D1", "D1"));
-        assert!(!block_has_mark("D10", "D1"));
+        assert!(names_mark(&block("DOOR-D1", &[]), "d1"));
+        assert!(names_mark(&block("D1", &[]), "D1"));
+        assert!(!names_mark(&block("D10", &[]), "D1"));
+        assert!(!names_mark(&block("A-DOOR", &[]), "A"));
+        assert!(names_mark(&block("A", &[]), "a"));
+        assert!(names_mark(&block("DOOR", &["D1"]), "d1"));
+        assert!(!names_mark(&block("DOOR", &["D2"]), "D1"));
     }
 }

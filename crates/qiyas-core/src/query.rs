@@ -1,7 +1,7 @@
 //! Read-only questions about the open drawing: what is there, what it says, what it measures.
 //! These are the AI's eyes; nothing here changes the session.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use opencadcodec::entities::mtext_format::parse_mtext;
 use opencadcodec::entities::Dimension;
@@ -111,6 +111,8 @@ pub struct BlockCount {
     pub block_name: String,
     pub layer: String,
     pub count: usize,
+    /// The distinct attribute values (trimmed, not empty) of the references counted, sorted.
+    pub attributes: Vec<String>,
 }
 
 impl Session {
@@ -201,24 +203,59 @@ impl Session {
     /// Block references on a sheet per block and layer, on visible layers only, most first.
     /// Counts top-level references, like the count command.
     pub fn block_summary(&self, sheet: Option<&str>) -> Vec<BlockCount> {
+        self.block_counts(sheet, true)
+    }
+
+    /// Block references on a sheet as the file has them: layers the user has hidden count, only
+    /// layers off or frozen in the drawing do not. One row per block, layer and set of attribute
+    /// values, so the references tagged "D1" are counted apart from those tagged "D2". Used by
+    /// the comparison, which must not change with what the user is looking at.
+    pub fn block_summary_in_file(&self, sheet: Option<&str>) -> Vec<BlockCount> {
+        self.block_counts(sheet, false)
+    }
+
+    /// `block_summary` when `as_shown`, else `block_summary_in_file`.
+    fn block_counts(&self, sheet: Option<&str>, as_shown: bool) -> Vec<BlockCount> {
         let sheet = self.sheet_block(sheet);
-        let mut counts: HashMap<(&str, &str), usize> = HashMap::new();
+        // (block, layer, attribute values when split by them) -> (count, attribute values).
+        type Key<'a> = (&'a str, &'a str, Vec<String>);
+        let mut counts: HashMap<Key, (usize, BTreeSet<String>)> = HashMap::new();
         for e in self.drawing.entities_in(&sheet) {
             if let EntityType::Insert(insert) = e {
                 let common = e.common();
-                if !common.invisible && self.layer_visible(&common.layer) {
-                    *counts
-                        .entry((insert.block_name.as_str(), common.layer.as_str()))
-                        .or_default() += 1;
+                let counted = if as_shown {
+                    self.layer_visible(&common.layer)
+                } else {
+                    self.layer_on(&common.layer)
+                };
+                if common.invisible || !counted {
+                    continue;
                 }
+                let values: BTreeSet<String> = insert
+                    .attributes
+                    .iter()
+                    .map(|a| a.value.trim().to_string())
+                    .filter(|v| !v.is_empty())
+                    .collect();
+                let split = if as_shown {
+                    Vec::new()
+                } else {
+                    values.iter().cloned().collect()
+                };
+                let entry = counts
+                    .entry((insert.block_name.as_str(), common.layer.as_str(), split))
+                    .or_default();
+                entry.0 += 1;
+                entry.1.extend(values);
             }
         }
         let mut summary: Vec<BlockCount> = counts
             .into_iter()
-            .map(|((block_name, layer), count)| BlockCount {
+            .map(|((block_name, layer, _), (count, values))| BlockCount {
                 block_name: block_name.to_string(),
                 layer: layer.to_string(),
                 count,
+                attributes: values.into_iter().collect(),
             })
             .collect();
         summary.sort_by(|a, b| {
@@ -226,6 +263,7 @@ impl Session {
                 .cmp(&a.count)
                 .then_with(|| a.block_name.cmp(&b.block_name))
                 .then_with(|| a.layer.cmp(&b.layer))
+                .then_with(|| a.attributes.cmp(&b.attributes))
         });
         summary
     }

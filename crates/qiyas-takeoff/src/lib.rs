@@ -15,8 +15,9 @@ pub const DEFAULT_TOLERANCE: f64 = 5.0;
 
 /// Compares the session's BOQ and take-off with the schedules and block counts of every sheet,
 /// keeps the conflicts and schedules on the session (one undo step, made by `source`) and
-/// returns the conflicts. Sheets are named by their layout names. Conflicts found before keep
-/// their status and note.
+/// returns the conflicts. Sheets are named by their layout names. Blocks are counted as the file
+/// has them (`Session::block_summary_in_file`), so layers the user has hidden still count.
+/// Conflicts found before keep their status and note.
 pub fn compare_session(
     session: &mut Session,
     default_tol: f64,
@@ -40,7 +41,7 @@ pub fn compare_session(
         schedules.extend(session.read_tables(Some(&sheet.block)));
         blocks.push((
             sheet.name.clone(),
-            session.block_summary(Some(&sheet.block)),
+            session.block_summary_in_file(Some(&sheet.block)),
         ));
     }
     // The engine sees sheet names, as the user does; the session keeps the schedules as read.

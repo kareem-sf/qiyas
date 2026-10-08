@@ -146,3 +146,30 @@ fn block_summary_counts_per_block() {
     session.set_layer_hidden("A-DOOR", true);
     assert!(session.block_summary(None).is_empty());
 }
+
+#[test]
+fn block_summary_in_file_ignores_what_the_user_hides() {
+    let (_dir, mut session) = open(qiyas_core::fixtures::write_sample);
+    session.set_layer_hidden("A-DOOR", true);
+    let summary = session.block_summary_in_file(None);
+    assert_eq!(summary.len(), 1);
+    assert_eq!(
+        (summary[0].block_name.as_str(), summary[0].count),
+        ("DOOR", 3)
+    );
+}
+
+#[test]
+fn block_counts_carry_attribute_values() {
+    let (_dir, session) = open(qiyas_core::fixtures::write_schedule);
+    for summary in [
+        session.block_summary(None),
+        session.block_summary_in_file(None),
+    ] {
+        let tag = summary.iter().find(|b| b.block_name == "TAG").unwrap();
+        assert_eq!(
+            (tag.count, tag.attributes.clone()),
+            (1, vec!["D9".to_string()])
+        );
+    }
+}

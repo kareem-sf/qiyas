@@ -11,7 +11,7 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
 use crate::matching::{
-    block_has_mark, floor_tokens, group_key, is_schedule_sheet, leading_number, overlaps, tokens,
+    floor_tokens, group_key, is_schedule_sheet, leading_number, names_mark, overlaps, tokens,
     unit_key, STANDARD_UNITS,
 };
 
@@ -93,8 +93,8 @@ struct Found {
     measurements: Vec<String>,
     schedule: Option<String>,
     sheets: Vec<String>,
-    /// What else tells this finding apart from others of its kind: a block name, a schedule
-    /// mark, a description group.
+    /// What else tells this finding apart from others of its kind: a BOQ row, a block name, a
+    /// schedule mark, a description group.
     subject: String,
     expected: Option<f64>,
     found: Option<f64>,
@@ -169,7 +169,9 @@ fn fnv1a(text: &str) -> u64 {
     })
 }
 
-/// Quantity mismatches, unit doubts and work not in the drawings, item by item.
+/// Quantity mismatches, unit doubts and work not in the drawings, item by item. Only unlinked
+/// measurements can show that an item without links is in the drawings: a linked one is evidence
+/// for its own item only. Findings carry the item's row, so items sharing a code stay apart.
 fn boq_items(
     boq: &Boq,
     quantities: &[&Measurement],
@@ -177,8 +179,17 @@ fn boq_items(
     units_label: &str,
     out: &mut Vec<Found>,
 ) {
-    let described: Vec<BTreeSet<String>> =
-        quantities.iter().map(|m| tokens(&m.description)).collect();
+    let described: Vec<BTreeSet<String>> = quantities
+        .iter()
+        .filter(|m| !is_linked(m))
+        .map(|m| tokens(&m.description))
+        .collect();
+    let mut push = |f: Found, item: &BoqItem| {
+        out.push(Found {
+            subject: format!("row {}", item.row),
+            ..f
+        })
+    };
     for item in &boq.items {
         let code = item.code.trim();
         let links: Vec<&Measurement> = quantities
@@ -189,7 +200,7 @@ fn boq_items(
         if links.is_empty() {
             let words = tokens(&item.description);
             if item.quantity != 0.0 && !described.iter().any(|d| overlaps(&words, d)) {
-                out.push(not_in_drawings(item));
+                push(not_in_drawings(item), item);
             }
             continue;
         }
@@ -197,19 +208,25 @@ fn boq_items(
         let (same, other): (Vec<&Measurement>, Vec<&Measurement>) =
             links.iter().partition(|m| unit_key(&m.unit) == unit);
         if !other.is_empty() {
-            out.push(other_unit(item, &other));
+            push(other_unit(item, &other), item);
             // The sum would mix units: no quantity check.
             continue;
         }
-        if !STANDARD_UNITS.contains(&unit.as_str()) {
-            out.push(raw_unit(item, &same));
+        // A unit of the workbook's own is a doubt unless every link is in exactly that unit.
+        if !STANDARD_UNITS.contains(&unit.as_str()) && same.iter().any(|m| m.unit != item.unit) {
+            push(raw_unit(item, &same), item);
         }
         let sum: f64 = same.iter().map(|m| m.shown).sum();
         let tol = item.tolerance.unwrap_or(default_tol);
         if let Some(f) = mismatch(item, sum, tol, units_label) {
-            out.push(f.of(&same));
+            push(f.of(&same), item);
         }
     }
+}
+
+/// Linked to a BOQ code.
+fn is_linked(m: &Measurement) -> bool {
+    m.boq_code.as_deref().is_some_and(|c| !c.trim().is_empty())
 }
 
 /// The quantity mismatch of `item` against the linked `sum`, or `None` within `tol` percent.
@@ -337,8 +354,6 @@ fn not_in_drawings(item: &BoqItem) -> Found {
     f.boq_code = (!code.is_empty()).then(|| code.to_string());
     f.expected = Some(item.quantity);
     f.unit.clone_from(u);
-    // Code-less items are told apart by their description.
-    f.subject = group_key(&item.description);
     f
 }
 
@@ -347,8 +362,7 @@ fn missing_from_boq(boq: &Boq, quantities: &[&Measurement], out: &mut Vec<Found>
     let items: Vec<BTreeSet<String>> = boq.items.iter().map(|i| tokens(&i.description)).collect();
     let mut groups: BTreeMap<String, Vec<&Measurement>> = BTreeMap::new();
     for m in quantities {
-        let linked = m.boq_code.as_deref().is_some_and(|c| !c.trim().is_empty());
-        if linked {
+        if is_linked(m) {
             continue;
         }
         let words = tokens(&m.description);
@@ -396,7 +410,7 @@ fn missing_from_boq(boq: &Boq, quantities: &[&Measurement], out: &mut Vec<Found>
 }
 
 /// For a schedule with a count column and a mark column: each row whose mark names blocks on
-/// the plans, when the plans count another number.
+/// the plans (`names_mark`), when the plans count another number.
 fn schedule_vs_plan(
     schedule: &Schedule,
     blocks: &[(String, Vec<BlockCount>)],
@@ -417,21 +431,28 @@ fn schedule_vs_plan(
         if mark.is_empty() {
             continue;
         }
-        let mut matched = false;
         let mut per_sheet: Vec<(&str, usize)> = Vec::new();
-        for (sheet, counts) in &plans {
+        // Sheets of one floor show the same rooms: per floor, the most any of its sheets counts.
+        // A sheet that names no floor is a floor of its own.
+        let mut per_floor: BTreeMap<String, usize> = BTreeMap::new();
+        for (i, (sheet, counts)) in plans.iter().enumerate() {
             let n: usize = counts
                 .iter()
-                .filter(|b| block_has_mark(&b.block_name, mark))
-                .inspect(|_| matched = true)
+                .filter(|b| names_mark(b, mark))
                 .map(|b| b.count)
                 .sum();
             if n > 0 {
                 per_sheet.push((sheet, n));
             }
+            let floor = floor_tokens(sheet)
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| format!("#{i}"));
+            let most = per_floor.entry(floor).or_default();
+            *most = (*most).max(n);
         }
-        let shown: usize = per_sheet.iter().map(|(_, n)| n).sum();
-        if !matched || (shown as f64 - listed).abs() < 1e-9 {
+        let shown: usize = per_floor.values().sum();
+        if per_sheet.is_empty() || (shown as f64 - listed).abs() < 1e-9 {
             continue;
         }
         let where_ = per_sheet

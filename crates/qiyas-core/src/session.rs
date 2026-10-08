@@ -355,13 +355,17 @@ impl Session {
             .hidden_layers
             .iter()
             .any(|n| normalize_name(n) == key);
-        let off = self
+        !hidden && self.layer_on(layer)
+    }
+
+    /// False when the drawing has the layer off or frozen, whatever the user has hidden.
+    pub(crate) fn layer_on(&self, layer: &str) -> bool {
+        !self
             .drawing
             .doc
             .layers
             .get(layer)
-            .is_some_and(|l| l.flags.off || l.flags.frozen);
-        !hidden && !off
+            .is_some_and(|l| l.flags.off || l.flags.frozen)
     }
 
     /// Runs `f` on the cached batch, rebuilding it first if the sheet or visibility changed.

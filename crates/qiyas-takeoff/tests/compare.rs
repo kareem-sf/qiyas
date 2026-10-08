@@ -46,7 +46,48 @@ fn blocks(counts: &[(&str, usize)]) -> Vec<BlockCount> {
             block_name: name.to_string(),
             layer: "0".to_string(),
             count: *count,
+            attributes: Vec::new(),
         })
+        .collect()
+}
+
+/// References of `name` tagged with `attributes`.
+fn tagged(name: &str, count: usize, attributes: &[&str]) -> BlockCount {
+    BlockCount {
+        block_name: name.to_string(),
+        layer: "0".to_string(),
+        count,
+        attributes: attributes.iter().map(|a| a.to_string()).collect(),
+    }
+}
+
+/// A schedule with a Mark and a Qty column.
+fn door_schedule(rows: &[(&str, &str)]) -> Schedule {
+    Schedule {
+        name: "Door Schedule".to_string(),
+        sheet: "Schedules".to_string(),
+        source: 0,
+        columns: vec!["Mark".into(), "Qty".into()],
+        rows: rows
+            .iter()
+            .map(|(mark, qty)| vec![mark.to_string(), qty.to_string()])
+            .collect(),
+    }
+}
+
+/// The schedule-vs-plan conflicts of `schedule` against `sheets`.
+fn against_plans(schedule: &Schedule, sheets: &[(String, Vec<BlockCount>)]) -> Vec<Conflict> {
+    let empty = Takeoff::default();
+    let inputs = CompareInputs {
+        boq: None,
+        takeoff: &empty,
+        schedules: std::slice::from_ref(schedule),
+        blocks: sheets,
+        units_label: "metres",
+    };
+    compare(&inputs, 5.0, &[])
+        .into_iter()
+        .filter(|c| c.kind == ConflictKind::ScheduleVsPlan)
         .collect()
 }
 
@@ -270,8 +311,9 @@ fn drawing_vs_drawing_compares_sheets_of_one_floor() {
 
 #[test]
 fn unit_doubt_for_length_vs_area() {
+    // "ls" is not exactly the item's "LS".
     let mut lump = m(Kind::Item, 1.0, "Preliminaries", "GF Plan", Some("B.1"));
-    lump.unit = "LS".to_string();
+    lump.unit = "ls".to_string();
     let takeoff = takeoff(vec![
         m(Kind::Length, 12.0, "Skirting", "GF Plan", Some("A.1")),
         m(Kind::Area, 30.0, "Tiles", "GF Plan", Some("A.1")),
@@ -297,8 +339,105 @@ fn unit_doubt_for_length_vs_area() {
         tiles.reason,
         "BOQ item A.1 is in m2, but 1 linked measurement is in another unit: 12.000 m"
     );
-    // An item in a unit of its own, with links, is a doubt too.
+    // An item in a unit of its own, with links not exactly in that unit, is a doubt too.
     assert!(doubts.iter().any(|c| c.boq_code.as_deref() == Some("B.1")));
+
+    // Links exactly in the item's own unit: no doubt.
+    let mut exact = takeoff.clone();
+    exact.items[2].unit = "LS".to_string();
+    let conflicts = run(&bill, &exact, &[]);
+    assert!(!conflicts
+        .iter()
+        .any(|c| c.boq_code.as_deref() == Some("B.1")));
+}
+
+#[test]
+fn linked_measurements_are_evidence_only_for_their_item() {
+    let takeoff = takeoff(vec![m(
+        Kind::Area,
+        40.0,
+        "Internal plaster to walls",
+        "GF Plan",
+        Some("A.1"),
+    )]);
+    let bill = boq(vec![
+        item("A.1", "Internal plaster to walls", "m2", 40.0),
+        item("A.2", "External plaster to walls", "m2", 60.0),
+    ]);
+    let conflicts = run(&bill, &takeoff, &[]);
+    let missing = of_kind(&conflicts, ConflictKind::NotInDrawings);
+    assert_eq!(missing.len(), 1, "{conflicts:#?}");
+    assert_eq!(missing[0].boq_code.as_deref(), Some("A.2"));
+}
+
+#[test]
+fn descriptions_need_more_than_one_shared_word() {
+    let takeoff = takeoff(vec![
+        m(Kind::Volume, 8.0, "Concrete columns", "GF Plan", None),
+        m(Kind::Area, 50.0, "Screed 50mm", "GF Plan", None),
+    ]);
+    let bill = boq(vec![
+        item("A.1", "Reinforced concrete slabs", "m3", 20.0),
+        item("A.2", "Plaster 20mm thick", "m2", 50.0),
+    ]);
+    let conflicts = run(&bill, &takeoff, &[]);
+    assert_eq!(
+        of_kind(&conflicts, ConflictKind::MissingFromBoq).len(),
+        2,
+        "{conflicts:#?}"
+    );
+    assert_eq!(of_kind(&conflicts, ConflictKind::NotInDrawings).len(), 2);
+}
+
+#[test]
+fn items_sharing_a_code_keep_separate_conflicts() {
+    let takeoff = slab_takeoff();
+    let mut second = item("A.1", "Slab", "m2", 150.0);
+    second.row = 5;
+    let bill = boq(vec![item("A.1", "Slab", "m2", 120.0), second]);
+    let conflicts = run(&bill, &takeoff, &[]);
+    assert_eq!(conflicts.len(), 2, "{conflicts:#?}");
+    assert_ne!(conflicts[0].id, conflicts[1].id);
+    assert!(conflicts[1].hash_key.ends_with("|row 5"));
+}
+
+#[test]
+fn marks_match_block_names_and_attribute_values() {
+    let schedule = door_schedule(&[("D1", "5"), ("A", "1")]);
+    let sheets = vec![
+        (
+            "GF Plan".to_string(),
+            vec![
+                tagged("D1", 1, &[]),
+                tagged("DOOR-D1", 1, &[]),
+                // Tagged D1 by attribute.
+                tagged("DOOR", 2, &["D1"]),
+                tagged("DOOR", 4, &["D2"]),
+                // Name and attribute both say D1: counted once.
+                tagged("D1", 1, &["D1"]),
+                // A one-letter mark matches whole names only.
+                tagged("A-DOOR", 3, &[]),
+            ],
+        ),
+        ("Site".to_string(), vec![tagged("A", 1, &[])]),
+    ];
+    let conflicts = against_plans(&schedule, &sheets);
+    // D1: 1 + 1 + 2 + 1 = 5, as listed; A: 1, as listed.
+    assert!(conflicts.is_empty(), "{conflicts:#?}");
+}
+
+#[test]
+fn sheets_of_one_floor_count_once() {
+    let schedule = |n: &str| door_schedule(&[("D1", n)]);
+    let sheet = |name: &str, n: usize| (name.to_string(), blocks(&[("D1", n)]));
+    let one_floor = [sheet("GF Plan", 12), sheet("GF Furniture", 12)];
+    assert!(against_plans(&schedule("12"), &one_floor).is_empty());
+    let two_floors = [sheet("GF Plan", 12), sheet("FF Plan", 12)];
+    assert!(against_plans(&schedule("24"), &two_floors).is_empty());
+    let short = [sheet("GF Plan", 12), sheet("FF Plan", 10)];
+    let conflicts = against_plans(&schedule("24"), &short);
+    assert_eq!(conflicts.len(), 1);
+    assert_eq!(conflicts[0].found, Some(22.0));
 }
 
 #[test]

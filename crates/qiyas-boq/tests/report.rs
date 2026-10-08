@@ -13,7 +13,7 @@ fn conflict(id: &str, kind: ConflictKind, status: ConflictStatus) -> Conflict {
         found: None,
         unit: "m2".to_string(),
         reason: "BOQ says 120.000 m2".to_string(),
-        reason_ar: String::new(),
+        reason_ar: "جدول الكميات يذكر 120.000 م²".to_string(),
         status,
         note: "Checked".to_string(),
         created: "2026-10-09T00:00:00Z".to_string(),
@@ -39,7 +39,7 @@ fn export_conflicts_is_readable_by_calamine() {
     let mut book: Xlsx<_> = open_workbook(&path).unwrap();
     let sheet = book.worksheet_range("Conflicts").unwrap();
     let row = |r: u32| -> Vec<String> {
-        (0..10)
+        (0..12)
             .map(|c| {
                 sheet
                     .get((r as usize, c))
@@ -50,7 +50,17 @@ fn export_conflicts_is_readable_by_calamine() {
     assert_eq!(
         row(0),
         [
-            "Kind", "BOQ code", "Reason", "Expected", "Found", "Unit", "Sheets", "Status", "Note",
+            "Kind",
+            "BOQ code",
+            "Schedule",
+            "Reason",
+            "Reason (Arabic)",
+            "Expected",
+            "Found",
+            "Unit",
+            "Sheets",
+            "Status",
+            "Note",
             "Id"
         ]
     );
@@ -59,7 +69,9 @@ fn export_conflicts_is_readable_by_calamine() {
         [
             "Quantity mismatch",
             "A.1",
+            "",
             "BOQ says 120.000 m2",
+            "جدول الكميات يذكر 120.000 م²",
             "120",
             "",
             "m2",
@@ -69,7 +81,7 @@ fn export_conflicts_is_readable_by_calamine() {
             "c2"
         ]
     );
-    assert_eq!(sheet.get((1, 3)), Some(&Data::Float(120.0)));
+    assert_eq!(sheet.get((1, 5)), Some(&Data::Float(120.0)));
     assert_eq!(sheet.height(), 4);
 
     let summary = book.worksheet_range("Summary").unwrap();

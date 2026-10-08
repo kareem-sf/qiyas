@@ -1,4 +1,4 @@
-use opencadcodec::{CadDocument, DxfWriter, EntityType, Line};
+use opencadcodec::{CadDocument, DxfWriter, EntityType, Line, Text, Vector3};
 use qiyas_ai::{catalogue, execute, ToolError, ToolOutput};
 use qiyas_core::{Boq, BoqItem, Command, EntityFilter, Kind, Session, Source};
 use serde_json::{json, Value};
@@ -427,6 +427,31 @@ fn compare_and_conflict_tools_work() {
 
     let err = run(&mut session, "compare_boq", json!({ "tolerance": -1 })).unwrap_err();
     assert!(matches!(err, ToolError::BadInput(_)), "{err:?}");
+}
+
+#[test]
+fn compare_counts_blocks_on_layers_the_user_hides() {
+    // The sample (three DOOR references on A-DOOR) with a schedule saying 2 doors.
+    let mut doc = qiyas_core::fixtures::sample_doc();
+    let grid = [["MARK", "QTY"], ["DOOR", "2"], ["WINDOW", "1"]];
+    for (r, row) in grid.iter().enumerate() {
+        for (c, value) in row.iter().enumerate() {
+            let at = Vector3::new(100.0 + 2.0 * c as f64, 100.0 - 0.5 * r as f64, 0.0);
+            let text = Text::with_value(*value, at).with_height(0.25);
+            doc.add_entity(EntityType::Text(text)).unwrap();
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("doors.dxf");
+    DxfWriter::new(&doc).write_to_file(&path).unwrap();
+    let mut session = Session::open(&path).unwrap();
+    session.set_layer_hidden("A-DOOR", true);
+
+    let out = run(&mut session, "compare_boq", json!({})).unwrap();
+    assert_eq!(out["total"], 1, "{out}");
+    assert_eq!(out["rows"][0]["kind"], "schedule_vs_plan");
+    assert_eq!(out["rows"][0]["expected"], 2.0);
+    assert_eq!(out["rows"][0]["found"], 3.0, "hidden doors still count");
 }
 
 #[test]

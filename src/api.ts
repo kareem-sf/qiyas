@@ -87,7 +87,8 @@ export type Schedule = {
   rows: string[][];
 };
 
-export type BlockCount = { block_name: string; layer: string; count: number };
+/** References of one block on one layer; `attributes` are their distinct attribute values. */
+export type BlockCount = { block_name: string; layer: string; count: number; attributes: string[] };
 
 export const openDrawing = (path: string) => invoke<DrawingInfo>("open_drawing", { path });
 
