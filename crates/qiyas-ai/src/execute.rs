@@ -161,7 +161,18 @@ pub fn execute(
             };
             (edit(session, cmd, &id, source)?, 0)
         }
-        "import_boq" | "list_boq" | "compare_boq" | "list_conflicts" | "resolve_conflict" => {
+        "import_boq" => (import_boq(session, parse(input)?, source)?, 0),
+        "list_boq" => {
+            let Paged { offset } = parse(input)?;
+            let boq = session.boq.as_ref().ok_or_else(|| {
+                bad("No BOQ is imported yet; import_boq imports one from an Excel file")
+            })?;
+            let mut out = page(boq.items.clone(), offset);
+            out["source"] = json!(boq.source);
+            out["skipped_rows"] = json!(boq.skipped_rows);
+            (out, offset)
+        }
+        "compare_boq" | "list_conflicts" | "resolve_conflict" => {
             return Err(ToolError::NotAvailable(BOQ_LATER.to_string()));
         }
         "add_markup" => (add_markup(session, parse(input)?, source)?, 0),
@@ -282,6 +293,12 @@ struct Id {
 struct SetText {
     id: String,
     text: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ImportBoq {
+    path: String,
 }
 
 #[derive(Deserialize)]
@@ -501,6 +518,28 @@ fn add_measurement(
         note: input.note,
     };
     measured(session.run_as(cmd, source)?)
+}
+
+/// Reads the workbook at `path` and makes it the session's BOQ (an undo step). Returns a summary,
+/// not the items: list_boq pages through those.
+fn import_boq(session: &mut Session, input: ImportBoq, source: Source) -> Result<Value, ToolError> {
+    // A wrong path or a sheet with no header is the model's to fix, so both are bad input.
+    let boq = qiyas_boq::import_boq(std::path::Path::new(&input.path))
+        .map_err(|e| ToolError::BadInput(e.to_string()))?;
+    let mut sections: Vec<&str> = Vec::new();
+    for item in &boq.items {
+        if !item.section.is_empty() && sections.last() != Some(&item.section.as_str()) {
+            sections.push(&item.section);
+        }
+    }
+    let out = json!({
+        "source": boq.source,
+        "items": boq.items.len(),
+        "skipped_rows": boq.skipped_rows,
+        "sections": sections,
+    });
+    session.run_as(Command::SetBoq { boq }, source)?;
+    Ok(out)
 }
 
 fn add_markup(

@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+qiyas-boq = { path = "../qiyas-boq" }
 qiyas-core = { path = "../qiyas-core" }
 qiyas-render = { path = "../qiyas-render" }
 serde.workspace = true
@@ -23,5 +24,6 @@ base64 = "0.22"
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util", "time"] }
 opencadcodec.workspace = true
+rust_xlsxwriter.workspace = true
 tempfile.workspace = true
 qiyas-core = { path = "../qiyas-core", features = ["fixtures"] }

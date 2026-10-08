@@ -141,6 +141,33 @@ export type Measurement = {
 
 export type Total = { kind: Kind; unit: Measurement["unit"]; count: number; sum: number };
 
+/** One BOQ line (`qiyas_core::BoqItem`). */
+export type BoqItem = {
+  code: string;
+  description: string;
+  /** "m", "m2", "m3", "pcs", "kg", "t", or the workbook's own text. */
+  unit: string;
+  quantity: number;
+  rate: number | null;
+  /** The section heading above the item; "" when none. */
+  section: string;
+  /** Allowed difference in percent; null: the user's setting. */
+  tolerance: number | null;
+  /** The item's row in its sheet, from 1 as Excel shows it. */
+  row: number;
+};
+
+/** An imported bill of quantities (`qiyas_core::Boq`). */
+export type Boq = {
+  /** The workbook it was read from. */
+  source: string;
+  /** RFC 3339. */
+  imported: string;
+  items: BoqItem[];
+  /** Item rows left out because their quantity is not a number. */
+  skipped_rows: number;
+};
+
 /** The command bus (`qiyas_core::Command`). Points are in drawing coordinates. */
 export type Command =
   | { type: "measure_distance"; points: [number, number][] }
@@ -165,7 +192,11 @@ export type Command =
     }
   | { type: "set_height"; id: string; height: number }
   | { type: "link_boq"; id: string; code: string | null }
-  | { type: "set_note"; id: string; text: string };
+  | { type: "set_note"; id: string; text: string }
+  /** Replaces the BOQ; `importBoq` reads one from Excel and runs this. */
+  | { type: "set_boq"; boq: Boq }
+  /** Allowed difference in percent (0 or more) for the BOQ items with `code`; null: the user's setting. */
+  | { type: "set_boq_tolerance"; code: string; percent: number | null };
 
 export type Outcome =
   | { type: "measured"; measurement: Measurement }
@@ -196,6 +227,10 @@ export const saveDrawingAs = (path: string) => invoke<void>("save_drawing_as", {
 
 /** Writes the take-off and its totals to an Excel workbook at `path`. */
 export const exportTakeoff = (path: string) => invoke<void>("export_takeoff", { path });
+
+/** Reads the BOQ in the Excel workbook at `path` (English or Arabic headers) and makes it the
+ *  drawing's BOQ, as an undo step. Rejects with "No BOQ header found. …" when no sheet has one. */
+export const importBoq = (path: string) => invoke<Boq>("import_boq", { path });
 
 /** Who answers the in-app assistant. */
 export type Provider = "anthropic" | "openai_compatible";

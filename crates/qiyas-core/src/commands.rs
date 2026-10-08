@@ -1,4 +1,4 @@
-//! The command bus: every change to the take-off goes through `Session::run` (the user) or
+//! The command bus: every change to the take-off or the BOQ goes through `Session::run` (the user) or
 //! `Session::run_as` (the AI, or an outside AI through MCP).
 
 use opencadcodec::tables::normalize_name;
@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::session::variant_name;
 use crate::takeoff::in_metres;
-use crate::{CoreError, Kind, Measurement, Session, Source};
+use crate::{Boq, CoreError, Kind, Measurement, Session, Source};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -75,14 +75,32 @@ pub enum Command {
         id: String,
         text: String,
     },
+    /// Replaces the BOQ with `boq`, usually one just read by `qiyas_boq::import_boq`.
+    SetBoq {
+        boq: Boq,
+    },
+    /// Sets the allowed difference, in percent (0 or more), of every BOQ item with `code`;
+    /// `None` goes back to the user's setting.
+    SetBoqTolerance {
+        code: String,
+        percent: Option<f64>,
+    },
 }
 
 impl Command {
-    /// Whether the command changes the take-off and so is an undo step.
+    /// Whether the command changes the take-off or the BOQ and so is an undo step.
     pub(crate) fn is_undoable(&self) -> bool {
         !matches!(
             self,
             Command::SetLayerHidden { .. } | Command::SetSheet { .. }
+        )
+    }
+
+    /// Whether the command changes the BOQ rather than the take-off.
+    pub(crate) fn changes_boq(&self) -> bool {
+        matches!(
+            self,
+            Command::SetBoq { .. } | Command::SetBoqTolerance { .. }
         )
     }
 }
@@ -97,7 +115,7 @@ pub enum Outcome {
         id: String,
     },
     Changed,
-    /// The command named a measurement that does not exist.
+    /// The command named a measurement or BOQ item that does not exist.
     Nothing,
 }
 
@@ -201,6 +219,26 @@ impl Session {
                     m.note = text;
                     Ok(())
                 });
+            }
+            Command::SetBoq { boq } => {
+                self.boq = Some(boq);
+                return Ok(Outcome::Changed);
+            }
+            Command::SetBoqTolerance { code, percent } => {
+                if percent.is_some_and(|p| !(p >= 0.0 && p.is_finite())) {
+                    return Err(invalid("The tolerance must be a percentage of 0 or more"));
+                }
+                let mut items = self
+                    .boq
+                    .iter_mut()
+                    .flat_map(|b| &mut b.items)
+                    .filter(|i| i.code == code)
+                    .peekable();
+                if items.peek().is_none() {
+                    return Ok(Outcome::Nothing);
+                }
+                items.for_each(|i| i.tolerance = percent);
+                return Ok(Outcome::Changed);
             }
         };
         measurement.source = source.name().to_string();

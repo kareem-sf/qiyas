@@ -254,15 +254,21 @@ pub fn catalogue() -> Vec<ToolSpec> {
         ),
         tool(
             "import_boq",
-            "Import a bill of quantities from an Excel file on the user's computer.",
+            "Import a bill of quantities from an Excel file on the user's computer; it replaces \
+             the BOQ imported before (the user can undo it). Headers may be English or Arabic. \
+             Returns the number of items, the sections, and how many item rows were left out \
+             because their quantity is not a number; list_boq gives the items.",
             json!({ "path": { "type": "string", "description": "Full path of the .xlsx file." } }),
             &["path"],
             true,
         ),
         tool(
             "list_boq",
-            "The imported BOQ items: code, description, unit, quantity, rate and section.",
-            json!({}),
+            "The imported BOQ items: code, description, unit (m, m2, m3, pcs, kg, t, or as \
+             written), quantity, rate, section, tolerance in percent (null: the user's setting) \
+             and the row in the workbook. Paged: total counts every item; pass next_offset as \
+             offset for the next page.",
+            json!({ "offset": offset() }),
             &[],
             false,
         ),

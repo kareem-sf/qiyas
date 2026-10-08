@@ -102,7 +102,7 @@ pub struct LiveState {
     /// The sheet shown now.
     pub sheet: String,
     pub takeoff: Vec<Total>,
-    /// The loaded BOQ, `None` until the BOQ tasks land.
+    /// The imported BOQ's file name; `None` when there is none.
     pub boq: Option<String>,
     /// Conflicts between the BOQ and the take-off (0 until the comparison engine lands).
     pub conflicts: usize,
@@ -119,7 +119,11 @@ impl LiveState {
             file: file_name(session),
             sheet: sheet_name(session),
             takeoff: session.takeoff.totals(),
-            boq: None,
+            boq: session.boq.as_ref().map(|b| {
+                std::path::Path::new(&b.source)
+                    .file_name()
+                    .map_or_else(|| b.source.clone(), |n| n.to_string_lossy().into_owned())
+            }),
             conflicts: 0,
         }
     }

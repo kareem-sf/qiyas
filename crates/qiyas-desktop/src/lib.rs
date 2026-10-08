@@ -37,6 +37,7 @@ pub fn run() {
             commands::save_drawing,
             commands::save_drawing_as,
             commands::export_takeoff,
+            commands::import_boq,
             commands::get_settings,
             commands::set_settings,
             commands::set_api_key,

@@ -10,6 +10,15 @@ use thiserror::Error;
 pub enum BoqError {
     #[error("The workbook could not be written: {0}")]
     Xlsx(String),
+    #[error("The workbook could not be read: {0}")]
+    Read(String),
+    /// No sheet has a row naming description, unit and quantity columns.
+    #[error(
+        "No BOQ header found. Sheets tried: {}. The header row needs Description, Unit and \
+         Quantity columns (or الوصف، الوحدة، الكمية).",
+        sheets_tried.join(", ")
+    )]
+    NoHeader { sheets_tried: Vec<String> },
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }

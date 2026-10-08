@@ -1,4 +1,4 @@
-//! The `.qiyas` project file: the take-off, saved as JSON next to the drawing.
+//! The `.qiyas` project file: the take-off and the BOQ, saved as JSON next to the drawing.
 
 use std::fs::File;
 use std::io::Write;
@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{CoreError, Takeoff};
+use crate::{Boq, CoreError, Takeoff};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Project {
@@ -16,6 +16,9 @@ pub struct Project {
     /// The drawing's file name, without its folder.
     pub drawing: String,
     pub takeoff: Takeoff,
+    /// The imported BOQ. Files saved before BOQ import have none, and load too.
+    #[serde(default)]
+    pub boq: Option<Boq>,
 }
 
 /// The project file of `drawing`: same folder, same stem, extension `qiyas`.
@@ -111,6 +114,7 @@ mod tests {
             version: 1,
             drawing: "villa.dwg".to_string(),
             takeoff: Takeoff::default(),
+            boq: None,
         };
         assert!(save(&path, &project).is_err());
         assert!(!dir.path().join("villa.qiyas.tmp").exists());

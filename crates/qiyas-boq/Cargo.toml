@@ -7,9 +7,11 @@ rust-version.workspace = true
 
 [dependencies]
 qiyas-core = { path = "../qiyas-core" }
+calamine.workspace = true
 rust_xlsxwriter.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-calamine.workspace = true
+serde_json.workspace = true
 tempfile.workspace = true
+qiyas-core = { path = "../qiyas-core", features = ["fixtures"] }

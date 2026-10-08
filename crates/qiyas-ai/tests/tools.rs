@@ -358,8 +358,6 @@ fn missing_handles_blocks_and_ids_are_bad_input() {
 fn not_available_tools_say_so() {
     let (_dir, mut session) = sample();
     for (name, input) in [
-        ("import_boq", json!({ "path": "boq.xlsx" })),
-        ("list_boq", json!({})),
         ("compare_boq", json!({ "tolerance": 5 })),
         ("list_conflicts", json!({})),
         (
@@ -415,4 +413,42 @@ fn heights_are_metres_and_zoom_returns_bounds() {
     let takeoff = run(&mut session, "list_takeoff", json!({})).unwrap();
     assert_eq!(takeoff["rows"].as_array().unwrap().len(), 1);
     assert_eq!(takeoff["totals"][0]["unit"], "m3");
+}
+
+#[test]
+fn import_boq_and_list_boq() {
+    let (dir, mut session) = sample();
+    let err = run(&mut session, "list_boq", json!({})).unwrap_err();
+    assert!(matches!(err, ToolError::BadInput(_)), "{err:?}");
+
+    let path = dir.path().join("boq.xlsx");
+    let mut book = rust_xlsxwriter::Workbook::new();
+    let sheet = book.add_worksheet();
+    sheet
+        .write_row(0, 0, ["Item", "Description", "Unit", "Quantity"])
+        .unwrap();
+    sheet.write_string(1, 1, "Finishes").unwrap();
+    sheet
+        .write_row(2, 0, ["F.1", "Floor tiles", "sqm"])
+        .unwrap();
+    sheet.write_number(2, 3, 48.0).unwrap();
+    book.save(&path).unwrap();
+
+    let missing = json!({ "path": dir.path().join("nope.xlsx") });
+    let err = run(&mut session, "import_boq", missing).unwrap_err();
+    assert!(matches!(err, ToolError::BadInput(_)), "{err:?}");
+
+    let out = run(&mut session, "import_boq", json!({ "path": path })).unwrap();
+    assert_eq!(out["items"], 1);
+    assert_eq!(out["sections"], json!(["Finishes"]));
+    assert_eq!(session.top_step_source(), Some(Source::Ai));
+
+    let out = run(&mut session, "list_boq", json!({})).unwrap();
+    assert_eq!(out["total"], 1);
+    assert_eq!(out["rows"][0]["code"], "F.1");
+    assert_eq!(out["rows"][0]["unit"], "m2");
+    assert_eq!(out["rows"][0]["section"], "Finishes");
+
+    assert!(session.undo_if(Source::Ai));
+    assert_eq!(session.boq, None);
 }

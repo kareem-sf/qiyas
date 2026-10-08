@@ -1,5 +1,6 @@
 //! Qiyas core: the document, selection, undo and redo, command bus.
 
+mod boq;
 mod commands;
 mod drawing;
 mod embed;
@@ -14,6 +15,7 @@ mod takeoff;
 mod undo;
 mod units;
 
+pub use boq::{Boq, BoqItem};
 pub use commands::{Command, Outcome};
 pub use drawing::{Drawing, LayerInfo, Sheet};
 pub use embed::{embed_measurements, read_embedded};

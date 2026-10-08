@@ -8,7 +8,7 @@ use std::sync::{MutexGuard, PoisonError};
 use qiyas_ai::prompt::Lang;
 use qiyas_ai::{Agent, AgentEvent};
 use qiyas_core::{
-    Command, CoreError, DrawingInfo, EntityInfo, Measurement, Outcome, Session, Total,
+    Boq, Command, CoreError, DrawingInfo, EntityInfo, Measurement, Outcome, Session, Total,
 };
 use serde::Serialize;
 use tauri::ipc::Response;
@@ -150,6 +150,18 @@ pub async fn export_takeoff(path: String, state: State<'_, AppState>) -> Result<
         Ok((s.takeoff.items.clone(), s.takeoff.totals(), title))
     })?;
     qiyas_boq::export_takeoff(Path::new(&path), &items, &totals, &title).map_err(|e| e.to_string())
+}
+
+/// Reads the BOQ in the Excel workbook at `path` and makes it the drawing's BOQ (an undo step);
+/// returns it.
+#[tauri::command]
+pub async fn import_boq(path: String, state: State<'_, AppState>) -> Result<Boq, String> {
+    // Read the workbook before taking the lock, so a slow read doesn't block other commands.
+    let boq = qiyas_boq::import_boq(Path::new(&path)).map_err(|e| e.to_string())?;
+    with_session(&state, |s| {
+        s.run(Command::SetBoq { boq: boq.clone() })?;
+        Ok(boq)
+    })
 }
 
 #[tauri::command]

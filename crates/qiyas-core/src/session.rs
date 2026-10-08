@@ -11,8 +11,8 @@ use serde::Serialize;
 
 use crate::embed::{embed_measurements, read_embedded};
 use crate::project::{self, project_path, Project};
-use crate::undo::History;
-use crate::{Command, CoreError, Drawing, LayerInfo, Outcome, Sheet, Source, Takeoff, Units};
+use crate::undo::{History, Snapshot};
+use crate::{Boq, Command, CoreError, Drawing, LayerInfo, Outcome, Sheet, Source, Takeoff, Units};
 
 /// Flatten tolerance for drawing on screen, in drawing units.
 pub const BATCH_TOL: f64 = 0.05;
@@ -27,6 +27,8 @@ pub struct Session {
     pub sheet: String,
     pub visibility: Visibility,
     pub takeoff: Takeoff,
+    /// The imported BOQ; `None` until one is imported.
+    pub boq: Option<Boq>,
     history: History,
     /// Batch and pick index of the last sheet and visibility drawn; rebuilt when either changes.
     cache: RefCell<Option<Cached>>,
@@ -64,14 +66,15 @@ pub struct EntityInfo {
 }
 
 impl Session {
-    /// Opens a drawing on its model sheet with nothing hidden, with the take-off from its project
-    /// file when there is one, else from the measurements embedded in the drawing. A project file
+    /// Opens a drawing on its model sheet with nothing hidden, with the take-off and BOQ from its
+    /// project file when there is one, else from the measurements embedded in the drawing. A project file
     /// that can't be read is a problem, not a failure. When the project file exists it wins: the
     /// embedded measurements are ignored and rewritten on the next save.
     pub fn open(path: &Path) -> Result<Session, CoreError> {
         let mut drawing = Drawing::open(path)?;
         let sheet = drawing.sheets()[0].block.clone();
         let mut takeoff = Takeoff::default();
+        let mut boq = None;
         let project_file = project_path(path);
         if project_file.exists() {
             match project::load(&project_file) {
@@ -85,6 +88,7 @@ impl Session {
                             .push(format!("Project file was saved for {}", project.drawing));
                     }
                     takeoff = project.takeoff;
+                    boq = project.boq;
                 }
                 // Keep a copy, since the next save replaces the unreadable file.
                 Err(e) => drawing
@@ -104,18 +108,20 @@ impl Session {
             sheet,
             visibility: Visibility::default(),
             takeoff,
+            boq,
             history: History::default(),
             cache: RefCell::new(None),
         })
     }
 
-    /// Saves the take-off to the drawing's project file and returns its path.
+    /// Saves the take-off and the BOQ to the drawing's project file and returns its path.
     pub fn save_project(&self) -> Result<PathBuf, CoreError> {
         let path = project_path(&self.drawing.path);
         let project = Project {
             version: 2,
             drawing: project::file_name(&self.drawing.path),
             takeoff: self.takeoff.clone(),
+            boq: self.boq.clone(),
         };
         project::save(&path, &project)?;
         Ok(path)
@@ -246,10 +252,14 @@ impl Session {
         self.run_as(cmd, Source::User)
     }
 
-    /// Runs `cmd` for `source` and, when it changes the take-off, records an undo step. New
-    /// measurements are marked as made by `source`.
+    /// Runs `cmd` for `source` and, when it changes the take-off or the BOQ, records an undo step.
+    /// New measurements are marked as made by `source`.
     pub fn run_as(&mut self, cmd: Command, source: Source) -> Result<Outcome, CoreError> {
-        let before = cmd.is_undoable().then(|| self.takeoff.clone());
+        let before = match (cmd.is_undoable(), cmd.changes_boq()) {
+            (false, _) => None,
+            (true, true) => Some(Snapshot::Boq(self.boq.clone())),
+            (true, false) => Some(Snapshot::Takeoff(self.takeoff.clone())),
+        };
         let outcome = self.execute(cmd, source)?;
         if let Some(before) = before {
             if !matches!(outcome, Outcome::Nothing) {
@@ -259,12 +269,12 @@ impl Session {
         Ok(outcome)
     }
 
-    /// Undoes the last take-off change. False when there is nothing to undo.
+    /// Undoes the last take-off or BOQ change. False when there is nothing to undo.
     pub fn undo(&mut self) -> bool {
-        self.history.undo(&mut self.takeoff)
+        self.history.undo(&mut self.takeoff, &mut self.boq)
     }
 
-    /// Undoes the last take-off change only when `source` made it. False otherwise, with nothing
+    /// Undoes the last take-off or BOQ change only when `source` made it. False otherwise, with nothing
     /// changed: the AI's Undo never takes back a change the user made after it.
     pub fn undo_if(&mut self, source: Source) -> bool {
         self.history.top_source() == Some(source) && self.undo()
@@ -275,9 +285,9 @@ impl Session {
         self.history.top_source()
     }
 
-    /// Redoes the last undone take-off change. False when there is nothing to redo.
+    /// Redoes the last undone take-off or BOQ change. False when there is nothing to redo.
     pub fn redo(&mut self) -> bool {
-        self.history.redo(&mut self.takeoff)
+        self.history.redo(&mut self.takeoff, &mut self.boq)
     }
 
     pub fn can_undo(&self) -> bool {

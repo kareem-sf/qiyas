@@ -3148,9 +3148,11 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "opencadcodec",
+ "qiyas-boq",
  "qiyas-core",
  "qiyas-render",
  "reqwest",
+ "rust_xlsxwriter",
  "rustls",
  "serde",
  "serde_json",
@@ -3168,6 +3170,7 @@ dependencies = [
  "calamine",
  "qiyas-core",
  "rust_xlsxwriter",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.21",
 ]
