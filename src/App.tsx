@@ -2,9 +2,11 @@ import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   aiUndo,
+  boq as readBoq,
   drawingInfo,
   entityInfo,
   exportTakeoff,
+  importBoq,
   openDrawing,
   pick,
   redo,
@@ -19,6 +21,7 @@ import {
   totals,
   undo,
   type AiUi,
+  type Boq,
   type Command,
   type DrawingInfo,
   type Measurement,
@@ -27,6 +30,7 @@ import {
 import { AssistantPanel } from "./ai/AssistantPanel";
 import type { ToolCardItem } from "./ai/messages";
 import { useAssistant } from "./ai/useAssistant";
+import { BoqPanel } from "./boq/BoqPanel";
 import { useLanguage, useT } from "./i18n";
 import { About } from "./shell/About";
 import { LayersPanel } from "./shell/LayersPanel";
@@ -39,6 +43,7 @@ import { handlesBounds, measurementBounds, overlaySegments } from "./tools/overl
 import { shortcutFor } from "./tools/shortcuts";
 import { useTool } from "./tools/useTool";
 import { parseBatch, type Batch } from "./viewport/batch";
+import type { Bounds } from "./viewport/camera";
 import type { Theme } from "./viewport/gl";
 import { Viewport, type ViewportHandle } from "./viewport/Viewport";
 
@@ -79,8 +84,12 @@ export default function App() {
   const [items, setItems] = useState<Measurement[]>([]);
   const [itemTotals, setItemTotals] = useState<Total[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  /** The drawing's imported BOQ. */
+  const [bill, setBill] = useState<Boq | null>(null);
+  /** The BOQ item whose linked measurements are shown. */
+  const [boqCode, setBoqCode] = useState<string | null>(null);
   /** The right panel's tab. */
-  const [sideTab, setSideTab] = useState<"takeoff" | "assistant">("takeoff");
+  const [sideTab, setSideTab] = useState<"takeoff" | "boq" | "assistant">("takeoff");
   /** Entities the assistant pointed at (Show on a tool card, or a zoom it asked for). */
   const [aiHighlight, setAiHighlight] = useState<number[]>([]);
   const viewport = useRef<ViewportHandle>(null);
@@ -124,10 +133,12 @@ export default function App() {
     }
   }
 
-  async function refreshTakeoff() {
-    const [nextItems, nextTotals] = await Promise.all([takeoff(), totals()]);
+  /** Re-reads the take-off and the BOQ, after anything that may have changed them. */
+  async function refreshTakeoffAndBoq() {
+    const [nextItems, nextTotals, nextBoq] = await Promise.all([takeoff(), totals(), readBoq()]);
     setItems(nextItems);
     setItemTotals(nextTotals);
+    setBill(nextBoq);
   }
 
   /** Saves the take-off next to the drawing. A failure is shown once and turns autosave off, but the
@@ -149,7 +160,7 @@ export default function App() {
       const outcome = await runCommand(cmd);
       if (outcome.type === "nothing") return;
       changed = true;
-      await refreshTakeoff();
+      await refreshTakeoffAndBoq();
       if (outcome.type === "measured") setSelectedId(outcome.measurement.id);
     });
     if (changed) await autosave();
@@ -167,7 +178,7 @@ export default function App() {
     await run(async () => {
       if (!info || !(await step())) return;
       changed = true;
-      await refreshTakeoff();
+      await refreshTakeoffAndBoq();
     });
     if (changed) await autosave();
   }
@@ -203,7 +214,7 @@ export default function App() {
     lang,
     onMutated: async () => {
       await run(async () => {
-        await refreshTakeoff();
+        await refreshTakeoffAndBoq();
         await redraw();
       });
       await autosave();
@@ -228,7 +239,7 @@ export default function App() {
       let undone = false;
       await run(async () => {
         undone = await aiUndo();
-        if (undone) await refreshTakeoff();
+        if (undone) await refreshTakeoffAndBoq();
       });
       if (undone) {
         markUndone(card.id);
@@ -254,9 +265,10 @@ export default function App() {
       setSheetBlock(next.sheets[0]?.block ?? "");
       setHidden(new Set());
       setSelectedId(null);
+      setBoqCode(null);
       setAiHighlight([]);
       measure.escape();
-      await refreshTakeoff();
+      await refreshTakeoffAndBoq();
       await redraw(true);
     });
     setOpening(false);
@@ -324,6 +336,27 @@ export default function App() {
       setNotice(t("export.done", { path }));
     });
   }
+
+  /** Asks for an Excel BOQ and makes it the drawing's BOQ (an undo step), then shows it. */
+  async function importBoqFile() {
+    if (!info) return;
+    const path = await open({ filters: [{ name: "Excel", extensions: ["xlsx", "xlsm"] }] });
+    if (typeof path !== "string") return;
+    let changed = false;
+    await run(async () => {
+      await importBoq(path);
+      changed = true;
+      setBoqCode(null);
+      setSideTab("boq");
+      await refreshTakeoffAndBoq();
+    });
+    if (changed) await autosave();
+  }
+
+  // Stable for the memoised BOQ panel, which would otherwise re-render on every pointer move.
+  const importBoqRef = useRef(importBoqFile);
+  importBoqRef.current = importBoqFile;
+  const onImportBoq = useCallback(() => importBoqRef.current(), []);
 
   const chooseSheet = (block: string) =>
     run(async () => {
@@ -402,6 +435,7 @@ export default function App() {
       } else if (action === "escape") {
         measure.escape();
         setSelectedId(null);
+        setBoqCode(null);
         setAiHighlight([]);
       } else if (action === "finish") {
         // Enter on a focused button presses it; don't also finish the measure.
@@ -420,15 +454,57 @@ export default function App() {
     (m) => m.id === selectedId && m.sheet.toLowerCase() === sheet.toLowerCase(),
   );
 
+  const onSheet = (m: Measurement) => m.sheet.toLowerCase() === sheet.toLowerCase();
+
+  /** The measurements on the sheet in view linked to the selected BOQ item. */
+  const boqLinked = useMemo(
+    () =>
+      boqCode !== null && bill?.items.some((i) => i.code === boqCode)
+        ? items.filter((m) => m.boq_code === boqCode && onSheet(m))
+        : [],
+    [boqCode, bill, items, sheet],
+  );
+
   const selectRow = useCallback(
     (id: string) => {
       setSelectedId(id);
+      setBoqCode(null);
       const m = items.find((i) => i.id === id);
       if (m?.sheet.toLowerCase() !== sheet.toLowerCase()) return;
       const bounds = measurementBounds(m, batch);
       if (bounds) viewport.current?.fitTo(bounds);
     },
     [items, sheet, batch],
+  );
+  /** Selects a BOQ item: its linked measurements on this sheet light up and fill the view. */
+  const selectBoq = useCallback(
+    (code: string) => {
+      setBoqCode(code);
+      setSelectedId(null);
+      setAiHighlight([]);
+      let box: Bounds | null = null;
+      for (const m of items) {
+        if (code === "" || m.boq_code !== code || !onSheet(m)) continue;
+        const b = measurementBounds(m, batch);
+        if (!b) continue;
+        box = box
+          ? [
+              [Math.min(box[0][0], b[0][0]), Math.min(box[0][1], b[0][1])],
+              [Math.max(box[1][0], b[1][0]), Math.max(box[1][1], b[1][1])],
+            ]
+          : b;
+      }
+      if (box) viewport.current?.fitTo(box);
+    },
+    [items, sheet, batch],
+  );
+  const linkRow = useCallback(
+    (id: string, code: string | null) => apply({ type: "link_boq", id, code }),
+    [],
+  );
+  const setTolerance = useCallback(
+    (code: string, percent: number | null) => apply({ type: "set_boq_tolerance", code, percent }),
+    [],
   );
   const removeRow = useCallback((id: string) => apply({ type: "remove_measurement", id }), []);
   const renameRow = useCallback(
@@ -437,19 +513,22 @@ export default function App() {
   );
 
   const highlight = useMemo(() => {
-    const handles = new Set([...(selected?.handles ?? []), ...aiHighlight].map(BigInt));
+    const linked = boqLinked.flatMap((m) => m.handles);
+    const handles = new Set([...(selected?.handles ?? []), ...linked, ...aiHighlight].map(BigInt));
     if (measure.highlighted !== null) handles.add(BigInt(measure.highlighted));
     return handles;
-  }, [selected, measure.highlighted, aiHighlight]);
+  }, [selected, boqLinked, measure.highlighted, aiHighlight]);
 
-  const selectedOverlay = useMemo(
-    () =>
-      // A count's points are the counted places, not a line to draw.
-      selected && selected.kind !== "count" && selected.points.length > 0
-        ? overlaySegments(selected.points, null, selected.kind === "area" ? "area" : "distance")
-        : null,
-    [selected],
-  );
+  const selectedOverlay = useMemo(() => {
+    // A count's points are the counted places, not a line to draw.
+    const outlines = (selected ? [selected] : boqLinked)
+      .filter((m) => m.kind !== "count" && m.points.length > 0)
+      .map((m) => overlaySegments(m.points, null, m.kind === "area" ? "area" : "distance"));
+    if (outlines.length === 0) return null;
+    const all = new Float64Array(outlines.reduce((n, o) => n + o.length, 0));
+    outlines.reduce((at, o) => (all.set(o, at), at + o.length), 0);
+    return all;
+  }, [selected, boqLinked]);
   const rubberBand = useMemo(
     () => (measure.points.length > 0 ? overlaySegments(measure.points, cursor, tool) : null),
     [measure.points, cursor, tool],
@@ -476,6 +555,7 @@ export default function App() {
           onSave={info ? saveFile : undefined}
           onSaveAs={info ? saveFileAs : undefined}
           onExport={info ? exportFile : undefined}
+          onImportBoq={info ? importBoqFile : undefined}
           onUndo={() => history(undo)}
           onRedo={() => history(redo)}
           onZoomExtents={() => {
@@ -558,7 +638,8 @@ export default function App() {
           )}
           {info && <SheetTabs sheets={info.sheets} active={sheet} onSelect={chooseSheet} />}
         </main>
-        <div className="side">
+        {/* The BOQ table needs more room than the take-off. */}
+        <div className={sideTab === "boq" ? "side wide" : "side"}>
           <div className="side-tabs" role="tablist">
             <button
               type="button"
@@ -573,6 +654,16 @@ export default function App() {
             <button
               type="button"
               role="tab"
+              id="tab-boq"
+              aria-controls="panel-boq"
+              aria-selected={sideTab === "boq"}
+              onClick={() => setSideTab("boq")}
+            >
+              {t("boq")}
+            </button>
+            <button
+              type="button"
+              role="tab"
               id="tab-assistant"
               aria-controls="panel-assistant"
               aria-selected={sideTab === "assistant"}
@@ -582,7 +673,7 @@ export default function App() {
               {assistant.busy && <span className="spinner" aria-hidden="true" />}
             </button>
           </div>
-          {/* Both stay mounted, so a draft or a running answer survives a tab switch. */}
+          {/* All stay mounted, so a draft, a search or a running answer survives a tab switch. */}
           <div
             className="side-panel"
             role="tabpanel"
@@ -597,6 +688,24 @@ export default function App() {
               onSelect={selectRow}
               onRemove={removeRow}
               onRename={renameRow}
+              boq={bill}
+              onLink={linkRow}
+            />
+          </div>
+          <div
+            className="side-panel"
+            role="tabpanel"
+            id="panel-boq"
+            aria-labelledby="tab-boq"
+            hidden={sideTab !== "boq"}
+          >
+            <BoqPanel
+              boq={bill}
+              takeoff={items}
+              selectedCode={boqCode}
+              onSelect={selectBoq}
+              onImport={info ? onImportBoq : undefined}
+              onTolerance={setTolerance}
             />
           </div>
           <div

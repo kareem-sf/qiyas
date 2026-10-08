@@ -232,6 +232,9 @@ export const exportTakeoff = (path: string) => invoke<void>("export_takeoff", { 
  *  drawing's BOQ, as an undo step. Rejects with "No BOQ header found. …" when no sheet has one. */
 export const importBoq = (path: string) => invoke<Boq>("import_boq", { path });
 
+/** The drawing's BOQ; null when none is imported. */
+export const boq = () => invoke<Boq | null>("boq");
+
 /** Who answers the in-app assistant. */
 export type Provider = "anthropic" | "openai_compatible";
 

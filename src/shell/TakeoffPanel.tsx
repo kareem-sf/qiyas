@@ -1,5 +1,6 @@
-import { memo, useRef, useState } from "react";
-import type { Kind, Measurement, Total } from "../api";
+import { memo, useCallback, useRef, useState } from "react";
+import type { Boq, Kind, Measurement, Total } from "../api";
+import { LinkPicker } from "../boq/LinkPicker";
 import { useT } from "../i18n";
 
 type Props = {
@@ -9,6 +10,10 @@ type Props = {
   onSelect(id: string): void;
   onRemove(id: string): void;
   onRename(id: string, text: string): void;
+  /** The BOQ to link rows to; null disables the link buttons. */
+  boq: Boq | null;
+  /** Links the row to the BOQ item `code`, or unlinks it (null). */
+  onLink(id: string, code: string | null): void;
 };
 
 /** Quantities keep Latin digits in both languages: counts as whole numbers, the rest with three
@@ -16,8 +21,8 @@ type Props = {
 const qty = (n: number, kind: Kind) => (kind === "count" ? n.toFixed(0) : n.toFixed(3));
 
 /** The take-off: one row per measurement (click to show it on the drawing, double click or the pen
- *  to rename, the cross to remove) and the totals per kind underneath. Memoised: the app re-renders
- *  on every pointer move. */
+ *  to rename, the chain to link it to a BOQ item, the cross to remove) and the totals per kind
+ *  underneath. Memoised: the app re-renders on every pointer move. */
 export const TakeoffPanel = memo(function TakeoffPanel({
   items,
   totals,
@@ -25,12 +30,18 @@ export const TakeoffPanel = memo(function TakeoffPanel({
   onSelect,
   onRemove,
   onRename,
+  boq,
+  onLink,
 }: Props) {
   const t = useT();
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   /** Set by Escape, so the blur that ends the edit doesn't save it. */
   const cancelled = useRef(false);
+  /** The row whose BOQ link is being picked. */
+  const [linking, setLinking] = useState<string | null>(null);
+  const closePicker = useCallback(() => setLinking(null), []);
+  const linked = items.find((m) => m.id === linking);
 
   function startEdit(m: Measurement) {
     setDraft(m.description);
@@ -57,6 +68,7 @@ export const TakeoffPanel = memo(function TakeoffPanel({
                 <th>{t("description")}</th>
                 <th className="num">{t("quantity")}</th>
                 <th>{t("unit")}</th>
+                <th>{t("boq.column")}</th>
                 <th>{t("layer")}</th>
                 <th />
               </tr>
@@ -65,6 +77,7 @@ export const TakeoffPanel = memo(function TakeoffPanel({
               {items.map((m) => {
                 const renameLabel = `${t("rename")}: ${m.description}`;
                 const removeLabel = `${t("remove")}: ${m.description}`;
+                const linkLabel = boq ? `${t("boq.link")}: ${m.description}` : t("boq.importFirst");
                 return (
                   <tr
                     key={m.id}
@@ -111,6 +124,9 @@ export const TakeoffPanel = memo(function TakeoffPanel({
                     </td>
                     <td className="num">{qty(m.shown, m.kind)}</td>
                     <td>{t(`qty.${m.unit}`)}</td>
+                    <td title={m.boq_code ?? undefined} className={m.boq_code ? undefined : "muted"}>
+                      {m.boq_code ?? "—"}
+                    </td>
                     <td title={m.layer}>{m.layer}</td>
                     <td>
                       <div className="actions">
@@ -126,6 +142,22 @@ export const TakeoffPanel = memo(function TakeoffPanel({
                         >
                           <svg viewBox="0 0 16 16" aria-hidden="true">
                             <path d="M3 13l.6-2.6L10.8 3.2l2 2-7.2 7.2Z" />
+                          </svg>
+                        </button>
+                        <button
+                          type="button"
+                          className="icon"
+                          aria-label={linkLabel}
+                          title={linkLabel}
+                          aria-haspopup="dialog"
+                          disabled={!boq}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setLinking(m.id);
+                          }}
+                        >
+                          <svg viewBox="0 0 16 16" aria-hidden="true">
+                            <path d="M6.5 9.5l3-3M7 4.5l1-1a2.5 2.5 0 0 1 3.5 3.5l-1 1M9 11.5l-1 1a2.5 2.5 0 0 1-3.5-3.5l1-1" />
                           </svg>
                         </button>
                         <button
@@ -150,6 +182,18 @@ export const TakeoffPanel = memo(function TakeoffPanel({
             </tbody>
           </table>
         </div>
+      )}
+      {boq && linked && (
+        <LinkPicker
+          title={linked.description}
+          items={boq.items}
+          current={linked.boq_code}
+          onPick={(code) => {
+            setLinking(null);
+            if (code !== linked.boq_code) onLink(linked.id, code);
+          }}
+          onClose={closePicker}
+        />
       )}
       <h2 className="heading panel-head">{t("totals")}</h2>
       <ul className="totals" aria-label={t("totals")}>

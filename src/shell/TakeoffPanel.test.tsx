@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
-import type { Measurement, Total } from "../api";
+import type { Boq, Measurement, Total } from "../api";
+import { boqItem } from "../boq/testItems";
 import { TakeoffPanel } from "./TakeoffPanel";
 
 afterEach(cleanup);
@@ -40,6 +41,8 @@ test("takeoff panel lists items and totals", () => {
       onSelect={onSelect}
       onRemove={onRemove}
       onRename={onRename}
+      boq={null}
+      onLink={() => {}}
     />,
   );
 
@@ -79,6 +82,8 @@ test("counts show as whole numbers", () => {
       onSelect={() => {}}
       onRemove={() => {}}
       onRename={() => {}}
+      boq={null}
+      onLink={() => {}}
     />,
   );
   const [, body] = screen.getAllByRole("rowgroup");
@@ -89,4 +94,35 @@ test("counts show as whole numbers", () => {
   expect(area.textContent).toContain("15.000");
   expect(count.textContent).toContain("3 pcs");
   expect(count.textContent).not.toContain("3.000");
+});
+
+test("the BOQ column and the link picker", () => {
+  const onLink = vi.fn();
+  const boq: Boq = {
+    source: "boq.xlsx",
+    imported: "2026-10-08T00:00:00Z",
+    skipped_rows: 0,
+    items: [boqItem("A.1", "Block walls", "m", 10), boqItem("A.2", "Plaster", "m2", 5)],
+  };
+  const items = [item("a", "Wall run", 10, { boq_code: "A.1" }), item("b", "Kerb", 5)];
+  const props = { items, totals: [], selectedId: null, onSelect() {}, onRemove() {}, onRename() {} };
+  const { rerender } = render(<TakeoffPanel {...props} boq={null} onLink={onLink} />);
+  const [, body] = screen.getAllByRole("rowgroup");
+  const rows = within(body).getAllByRole("row");
+  expect(within(rows[0]).getByText("A.1")).toBeTruthy();
+  expect(within(rows[1]).getByText("—")).toBeTruthy();
+  const button = within(rows[1]).getByRole("button", { name: "Import a BOQ first" }) as HTMLButtonElement;
+  expect(button.disabled).toBe(true);
+
+  rerender(<TakeoffPanel {...props} boq={boq} onLink={onLink} />);
+  fireEvent.click(screen.getByRole("button", { name: "Link: Kerb" }));
+  const search = screen.getByRole("searchbox", { name: "Search…" });
+  fireEvent.change(search, { target: { value: "plaster" } });
+  fireEvent.keyDown(search, { key: "Enter" });
+  expect(onLink).toHaveBeenCalledWith("b", "A.2");
+  expect(screen.queryByRole("dialog")).toBeNull();
+
+  fireEvent.click(screen.getByRole("button", { name: "Link: Wall run" }));
+  fireEvent.click(screen.getByRole("button", { name: "Unlink" }));
+  expect(onLink).toHaveBeenLastCalledWith("a", null);
 });

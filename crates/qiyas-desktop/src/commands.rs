@@ -164,6 +164,12 @@ pub async fn import_boq(path: String, state: State<'_, AppState>) -> Result<Boq,
     })
 }
 
+/// The drawing's BOQ; null when none is imported.
+#[tauri::command]
+pub async fn boq(state: State<'_, AppState>) -> Result<Option<Boq>, String> {
+    with_session(&state, |s| Ok(s.boq.clone()))
+}
+
 #[tauri::command]
 pub async fn get_settings(state: State<'_, AppState>) -> Result<Settings, String> {
     Ok(state
@@ -510,6 +516,7 @@ mod tests {
                     takeoff,
                     run_command,
                     undo,
+                    boq,
                     ai_undo,
                     ai_send,
                     ai_cancel,
@@ -686,6 +693,25 @@ mod tests {
         assert_eq!(ipc.call("undo", json!({})), Ok(json!(true)));
         assert_eq!(ipc.call("ai_undo", json!({})), Ok(json!(true)));
         assert_eq!(ipc.call("takeoff", json!({})), Ok(json!([])));
+    }
+
+    #[test]
+    fn boq_reads_the_sessions_bill_and_follows_undo() {
+        let ipc = Ipc::open();
+        assert_eq!(ipc.call("boq", json!({})), Ok(Value::Null));
+        let item = json!({
+            "code": "A.1", "description": "Walls", "unit": "m", "quantity": 12.0,
+            "rate": null, "section": "Masonry", "tolerance": null, "row": 3
+        });
+        let bill = json!({
+            "source": "boq.xlsx", "imported": "2026-10-08T00:00:00Z",
+            "items": [item], "skipped_rows": 1
+        });
+        let cmd = json!({ "type": "set_boq", "boq": bill });
+        ipc.call("run_command", json!({ "cmd": cmd })).unwrap();
+        assert_eq!(ipc.call("boq", json!({})), Ok(bill));
+        assert_eq!(ipc.call("undo", json!({})), Ok(json!(true)));
+        assert_eq!(ipc.call("boq", json!({})), Ok(Value::Null));
     }
 
     #[test]
