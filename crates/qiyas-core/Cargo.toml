@@ -6,3 +6,14 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+opencadcodec.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+# Integration tests don't see the library's cfg(test), so they turn the fixtures on this way.
+qiyas-core = { path = ".", features = ["fixtures"] }
+
+[features]
+fixtures = []
