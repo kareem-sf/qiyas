@@ -1,5 +1,7 @@
 //! The `.qiyas` project file: the take-off, saved as JSON next to the drawing.
 
+use std::fs::File;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -33,14 +35,55 @@ pub(crate) fn load(path: &Path) -> Result<Project, CoreError> {
     serde_json::from_str(&text).map_err(|e| CoreError::Project(e.to_string()))
 }
 
-/// Writes `project` to `path` as pretty JSON: to `<path>.tmp` first, then renamed over `path`,
-/// so a crash mid-write never leaves a half-written project.
+/// Writes `project` to `path` as pretty JSON: to `<path>.tmp` first, synced to disk, then renamed
+/// over `path`, so a crash mid-write never leaves a half-written project. On failure the temp
+/// file is removed.
 pub(crate) fn save(path: &Path, project: &Project) -> Result<(), CoreError> {
     let text =
         serde_json::to_string_pretty(project).map_err(|e| CoreError::Project(e.to_string()))?;
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");
-    std::fs::write(&tmp, text)?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
+    let tmp = PathBuf::from(tmp);
+    let written = write_synced(&tmp, text.as_bytes()).and_then(|()| std::fs::rename(&tmp, path));
+    if written.is_err() {
+        // Best effort: the error that matters is the write or rename one.
+        let _ = std::fs::remove_file(&tmp);
+    }
+    Ok(written?)
+}
+
+fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut file = File::create(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()
+}
+
+/// Copies the unreadable project file at `path` to `<path>.bak`; returns the backup's file name.
+pub(crate) fn back_up(path: &Path) -> std::io::Result<String> {
+    let mut bak = path.as_os_str().to_owned();
+    bak.push(".bak");
+    let bak = PathBuf::from(bak);
+    std::fs::copy(path, &bak)?;
+    Ok(file_name(&bak))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_save_removes_the_temp_file() {
+        let dir = tempfile::tempdir().unwrap();
+        // A non-empty folder where the project should go: the rename fails.
+        let path = dir.path().join("villa.qiyas");
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("keep"), "").unwrap();
+        let project = Project {
+            version: 1,
+            drawing: "villa.dwg".to_string(),
+            takeoff: Takeoff::default(),
+        };
+        assert!(save(&path, &project).is_err());
+        assert!(!dir.path().join("villa.qiyas.tmp").exists());
+    }
 }

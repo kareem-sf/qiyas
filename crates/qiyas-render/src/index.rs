@@ -17,10 +17,12 @@ impl PickIndex {
     pub fn new(batch: &Batch) -> Self {
         let segments = batch
             .segments
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .zip(&batch.handles)
             .map(|(s, &handle)| {
-                let [x0, y0, x1, y1] = [s[0], s[1], s[2], s[3]].map(f64::from);
+                let [x0, y0, x1, y1] = s.map(f64::from);
                 GeomWithData::new(Line::new([x0, y0], [x1, y1]), handle)
             })
             .collect();

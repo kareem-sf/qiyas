@@ -70,17 +70,21 @@ fn project_file_is_pretty_json_with_the_drawing_name() {
 }
 
 #[test]
-fn corrupt_project_opens_with_a_problem_and_an_empty_takeoff() {
+fn corrupt_project_is_backed_up_and_opens_with_a_problem_and_an_empty_takeoff() {
     let (_dir, drawing) = sample();
-    std::fs::write(project_path(&drawing), "{ not json").unwrap();
+    let corrupt = b"{ not json";
+    std::fs::write(project_path(&drawing), corrupt).unwrap();
     let session = Session::open(&drawing).unwrap();
     assert!(session.takeoff.items.is_empty());
+    let backup = drawing.with_file_name("sample.qiyas.bak");
+    assert_eq!(std::fs::read(&backup).unwrap(), corrupt);
     assert!(
         session
             .drawing
             .problems
             .iter()
-            .any(|p| p.starts_with("Project file could not be read: ")),
+            .any(|p| p
+                .starts_with("Project file could not be read (backed up to sample.qiyas.bak): ")),
         "{:?}",
         session.drawing.problems
     );
@@ -104,6 +108,22 @@ fn project_for_another_drawing_still_loads_with_a_problem() {
             .drawing
             .problems
             .contains(&"Project file was saved for other.dwg".to_string()),
+        "{:?}",
+        session.drawing.problems
+    );
+}
+
+#[test]
+fn drawing_name_matches_ignoring_case() {
+    let (_dir, drawing) = sample();
+    let session = Session::open(&drawing).unwrap();
+    let path = session.save_project().unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, text.replace("sample.dxf", "SAMPLE.DXF")).unwrap();
+
+    let session = Session::open(&drawing).unwrap();
+    assert!(
+        session.drawing.problems.is_empty(),
         "{:?}",
         session.drawing.problems
     );

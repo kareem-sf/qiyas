@@ -73,16 +73,25 @@ impl Session {
         if project_file.exists() {
             match project::load(&project_file) {
                 Ok(project) => {
-                    if project.drawing != project::file_name(path) {
+                    if !project
+                        .drawing
+                        .eq_ignore_ascii_case(&project::file_name(path))
+                    {
                         drawing
                             .problems
                             .push(format!("Project file was saved for {}", project.drawing));
                     }
                     takeoff = project.takeoff;
                 }
+                // Keep a copy, since the next save replaces the unreadable file.
                 Err(e) => drawing
                     .problems
-                    .push(format!("Project file could not be read: {e}")),
+                    .push(match project::back_up(&project_file) {
+                        Ok(bak) => {
+                            format!("Project file could not be read (backed up to {bak}): {e}")
+                        }
+                        Err(_) => format!("Project file could not be read: {e}"),
+                    }),
             }
         }
         Ok(Session {

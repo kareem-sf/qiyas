@@ -6,7 +6,7 @@ resolver = "2"
 version = "0.1.0"
 edition = "2021"
 license = "UNLICENSED"
-rust-version = "1.85"
+rust-version = "1.88"
 
 [workspace.dependencies]
 opencadcodec = { git = "https://github.com/HakanSeven12/opencadcodec.git", rev = "a35f43e", features = ["serde"] }

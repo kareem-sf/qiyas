@@ -408,6 +408,7 @@ export default function App() {
         units={units}
         unitsWarning={info?.units === "unknown"}
         problems={info?.problems.length ?? 0}
+        problemsText={info?.problems.join("\n") ?? ""}
         message={message}
       />
     </div>
