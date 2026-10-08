@@ -14,6 +14,7 @@ import {
   openDrawing,
   pick,
   redo,
+  batchVersion,
   renderBatch,
   runCommand,
   saveDrawing,
@@ -101,6 +102,12 @@ export default function App() {
   const [theme, setTheme] = useState<Theme>(initialTheme);
   const [info, setInfo] = useState<DrawingInfo | null>(null);
   const [batch, setBatch] = useState<Batch | null>(null);
+  /** The batch in hand and the core's version of it (`batchVersion`), so a redraw that changed
+   *  nothing on the sheet doesn't fetch the whole batch again. */
+  const batchHeld = useRef<Batch | null>(null);
+  const batchVersionRef = useRef<number | null>(null);
+  /** Bumped to run the fit effect when a redraw keeps the batch it has. */
+  const [fitTick, setFitTick] = useState(0);
   const [sheet, setSheetBlock] = useState("");
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [tool, setTool] = useState<Tool>("select");
@@ -153,7 +160,7 @@ export default function App() {
     const box = ids && unionBounds(items.filter((m) => ids.includes(m.id)), batch);
     if (box) viewport.current?.fitTo(box);
     else viewport.current?.fitExtents();
-  }, [batch]);
+  }, [batch, fitTick]);
 
   function chooseTheme(next: Theme) {
     setTheme(next);
@@ -233,8 +240,23 @@ export default function App() {
     if (changed) await autosave();
   }
 
+  /** Draws the core's current batch. When the core says the drawing, sheet and layers are as they
+   *  were at the last draw, the batch in hand stays and only the fit (if asked) happens. */
   async function redraw(fit = false) {
-    const next = parseBatch(await renderBatch());
+    const version = await batchVersion();
+    if (version === batchVersionRef.current && batchHeld.current) {
+      // Nothing to send; the effect below still fits the view once the window has rendered.
+      if (fit) {
+        fitNext.current = true;
+        setFitTick((n) => n + 1);
+      }
+      return;
+    }
+    const bytes = await renderBatch();
+    if (!bytes) return;
+    const next = parseBatch(bytes);
+    batchVersionRef.current = version;
+    batchHeld.current = next;
     fitNext.current = fit;
     setBatch(next);
   }
@@ -339,6 +361,8 @@ export default function App() {
     setOpening(true);
     await run(async () => {
       const next = await openDrawing(path);
+      batchVersionRef.current = null;
+      batchHeld.current = null;
       autosaveOff.current = false;
       setInfo(next);
       // The core opens a drawing on its first sheet.

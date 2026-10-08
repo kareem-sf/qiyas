@@ -27,6 +27,7 @@ pub fn run() {
             commands::drawing_info,
             commands::set_sheet,
             commands::set_layer_hidden,
+            commands::batch_version,
             commands::render_batch,
             commands::pick,
             commands::entity_info,

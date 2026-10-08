@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::fmt::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use opencadcodec::entities::Insert;
 use opencadcodec::tables::normalize_name;
@@ -25,6 +26,10 @@ pub const BATCH_TOL: f64 = 0.05;
 /// so arcs measure close to their true length.
 pub(crate) const MEASURE_TOL: f64 = 1e-3;
 
+/// Gives every opened session its own number, so the batch version of one drawing never equals
+/// that of another opened later in the same window.
+static NEXT_EPOCH: AtomicU64 = AtomicU64::new(1);
+
 /// The open drawing and what the user is looking at. Tauri-free, so it can be tested directly.
 pub struct Session {
     pub drawing: Drawing,
@@ -39,6 +44,10 @@ pub struct Session {
     /// The schedules read off every sheet at the last comparison.
     pub schedules: Vec<Schedule>,
     history: History,
+    /// Which session this is; see `NEXT_EPOCH`.
+    epoch: u64,
+    /// Counts the changes to the drawing itself (not the take-off), which is all a batch shows.
+    document_revision: u64,
     /// Batch and pick index of the last sheet and visibility drawn; rebuilt when either changes.
     cache: RefCell<Option<Cached>>,
 }
@@ -245,6 +254,8 @@ impl Session {
             conflicts,
             schedules,
             history: History::default(),
+            epoch: NEXT_EPOCH.fetch_add(1, Ordering::Relaxed),
+            document_revision: 0,
             cache: RefCell::new(None),
         })
     }
@@ -303,6 +314,7 @@ impl Session {
         self.drawing.doc = doc;
         // The embedded entities are part of the drawing now: draw and pick them too.
         *self.cache.get_mut() = None;
+        self.document_revision += 1;
         self.drawing.path = path.to_path_buf();
         self.save_project().map_err(|e| {
             CoreError::Unwritable(format!(
@@ -362,6 +374,39 @@ impl Session {
         self.with_cache(|cached| cached.batch.clone())
     }
 
+    /// Names what `batch` would give: it changes when the sheet, the hidden layers or the
+    /// drawing itself change, and not for take-off, BOQ or conflict changes, undo or redo.
+    /// A 64-bit FNV-1a hash of the session, sheet, hidden layers (sorted, case-folded) and
+    /// document revision, cut to 53 bits so it survives a trip through a JavaScript number.
+    pub fn batch_version(&self) -> u64 {
+        let mut hash = Fnv::new();
+        hash.write(&self.epoch.to_le_bytes());
+        hash.write(self.sheet.as_bytes());
+        hash.write(&[0xFF]);
+        let mut hidden: Vec<String> = self
+            .visibility
+            .hidden_layers
+            .iter()
+            .map(|n| normalize_name(n))
+            .collect();
+        hidden.sort();
+        for name in hidden {
+            hash.write(name.as_bytes());
+            hash.write(&[0xFF]);
+        }
+        hash.write(&self.document_revision.to_le_bytes());
+        hash.0 & ((1 << 53) - 1)
+    }
+
+    /// The batch as `Batch::to_bytes` lays it out, or `None` when `if_version` is the current
+    /// `batch_version`, so the caller keeps the batch it already holds.
+    pub fn batch_bytes_if(&self, if_version: Option<u64>) -> Option<Vec<u8>> {
+        if if_version == Some(self.batch_version()) {
+            return None;
+        }
+        Some(self.batch().to_bytes())
+    }
+
     /// The entity nearest to `p` (drawing coordinates) within `tol`, among what is drawn, down
     /// to the entity inside any blocks.
     pub fn pick(&self, p: [f64; 2], tol: f64) -> Option<Picked> {
@@ -418,6 +463,9 @@ impl Session {
             Part::Boq => Snapshot::Boq(self.boq.clone()),
             Part::Conflicts => Snapshot::Conflicts(self.conflicts.clone(), self.schedules.clone()),
         });
+        // No command changes the drawing's geometry yet, so none bumps `document_revision`. The
+        // first one that does (drawing and editing commands), and anything that changes xrefs or
+        // underlays, must bump it here, or the window keeps showing the old batch.
         let outcome = self.execute(cmd, source)?;
         if let Some(before) = before {
             if !matches!(outcome, Outcome::Nothing) {
@@ -488,27 +536,6 @@ impl Session {
         }
     }
 
-    /// False when the user has hidden the layer or the drawing has it off or frozen.
-    pub(crate) fn layer_visible(&self, layer: &str) -> bool {
-        let key = normalize_name(layer);
-        let hidden = self
-            .visibility
-            .hidden_layers
-            .iter()
-            .any(|n| normalize_name(n) == key);
-        !hidden && self.layer_on(layer)
-    }
-
-    /// False when the drawing has the layer off or frozen, whatever the user has hidden.
-    pub(crate) fn layer_on(&self, layer: &str) -> bool {
-        !self
-            .drawing
-            .doc
-            .layers
-            .get(layer)
-            .is_some_and(|l| l.flags.off || l.flags.frozen)
-    }
-
     /// Runs `f` on the cached batch, rebuilding it first if the sheet or visibility changed.
     fn with_cache<R>(&self, f: impl FnOnce(&Cached) -> R) -> R {
         let mut cache = self.cache.borrow_mut();
@@ -525,6 +552,21 @@ impl Session {
             });
         }
         f(cache.as_ref().expect("cache was just filled"))
+    }
+}
+
+/// 64-bit FNV-1a.
+struct Fnv(u64);
+
+impl Fnv {
+    fn new() -> Self {
+        Fnv(0xcbf2_9ce4_8422_2325)
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 = (self.0 ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3);
+        }
     }
 }
 

@@ -4,6 +4,7 @@
 use opencadcodec::tables::normalize_name;
 use opencadcodec::EntityType;
 use qiyas_geom::Path;
+use qiyas_render::layer_shown;
 use serde::{Deserialize, Serialize};
 
 use crate::session::{effective_block_name, locate, variant_name};
@@ -483,7 +484,7 @@ impl Session {
             })
             .filter(|c| {
                 !c.invisible
-                    && self.layer_visible(&c.layer)
+                    && layer_shown(&self.drawing.doc, &self.visibility, &c.layer)
                     && only_on
                         .as_ref()
                         .is_none_or(|l| *l == normalize_name(&c.layer))

@@ -1,10 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
-use opencadcodec::tables::normalize_name;
 use opencadcodec::{CadDocument, Color, Handle};
 use qiyas_geom::{flatten, Path, Xform};
 
 use crate::color::resolve_color;
+use crate::visibility::layer_shown;
 
 /// First four bytes of a batch: "BYIQ" read as bytes, `0x51495942` as a little-endian `u32`.
 pub const MAGIC: u32 = 0x5149_5942;
@@ -70,21 +70,12 @@ pub struct Visibility {
 /// hides only those parts of a block. Colours are the inner entity's, ByBlock and ByLayer
 /// resolved as AutoCAD does.
 pub fn build_batch(doc: &CadDocument, sheet_block: &str, vis: &Visibility, tol: f64) -> Batch {
-    let hidden: HashSet<String> = vis
-        .hidden_layers
-        .iter()
-        .map(|n| normalize_name(n))
-        .collect();
     // By layer name as written, so the many paths of a block look their layer up once.
     let mut shown_layers: HashMap<String, bool> = HashMap::new();
     let mut shown = |layer: &str| match shown_layers.get(layer) {
         Some(&shown) => shown,
         None => {
-            let shown = !hidden.contains(&normalize_name(layer))
-                && !doc
-                    .layers
-                    .get(layer)
-                    .is_some_and(|l| l.flags.off || l.flags.frozen);
+            let shown = layer_shown(doc, vis, layer);
             shown_layers.insert(layer.to_string(), shown);
             shown
         }

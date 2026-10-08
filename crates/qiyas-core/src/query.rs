@@ -8,6 +8,7 @@ use opencadcodec::entities::Dimension;
 use opencadcodec::tables::normalize_name;
 use opencadcodec::{CadDocument, EntityType};
 use qiyas_geom::{flatten, insert_instances, Xform};
+use qiyas_render::{layer_on_in_file, layer_shown};
 use serde::{Deserialize, Serialize};
 
 use crate::session::{effective_block_name, variant_name, Extent};
@@ -230,9 +231,9 @@ impl Session {
             if let EntityType::Insert(insert) = e {
                 let common = e.common();
                 let counted = if as_shown {
-                    self.layer_visible(&common.layer)
+                    layer_shown(&self.drawing.doc, &self.visibility, &common.layer)
                 } else {
-                    self.layer_on(&common.layer)
+                    layer_on_in_file(&self.drawing.doc, &common.layer)
                 };
                 if common.invisible || !counted {
                     continue;

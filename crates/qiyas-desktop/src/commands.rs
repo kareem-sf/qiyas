@@ -71,10 +71,29 @@ pub async fn set_layer_hidden(
     })
 }
 
-/// The current sheet's line batch, in the binary layout of `Batch::to_bytes`.
+/// Names the current sheet's line batch; it changes only when the batch would.
 #[tauri::command]
-pub async fn render_batch(state: State<'_, AppState>) -> Result<Response, String> {
-    with_session(&state, |s| Ok(Response::new(s.batch().to_bytes())))
+pub async fn batch_version(state: State<'_, AppState>) -> Result<u64, String> {
+    with_session(&state, |s| Ok(s.batch_version()))
+}
+
+/// The current sheet's line batch, in the binary layout of `Batch::to_bytes`. When `if_version` is
+/// the current `batch_version`, only the 8 bytes `NOT_MODIFIED`: the window keeps its batch.
+#[tauri::command]
+pub async fn render_batch(
+    if_version: Option<u64>,
+    state: State<'_, AppState>,
+) -> Result<Response, String> {
+    with_session(&state, |s| Ok(Response::new(batch_response(s, if_version))))
+}
+
+/// "QINM" and four zero bytes, in place of a batch that is unchanged. A batch starts with "BYIQ".
+const NOT_MODIFIED: [u8; 8] = [0x51, 0x49, 0x4E, 0x4D, 0, 0, 0, 0];
+
+fn batch_response(session: &Session, if_version: Option<u64>) -> Vec<u8> {
+    session
+        .batch_bytes_if(if_version)
+        .unwrap_or_else(|| NOT_MODIFIED.to_vec())
 }
 
 #[tauri::command]

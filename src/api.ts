@@ -112,8 +112,22 @@ export const setSheet = (block: string) => invoke<void>("set_sheet", { block });
 export const setLayerHidden = (name: string, hidden: boolean) =>
   invoke<void>("set_layer_hidden", { name, hidden });
 
-/** Raw bytes of the current sheet's batch; decode with `parseBatch`. */
-export const renderBatch = () => invoke<ArrayBuffer>("render_batch");
+/** Names the current sheet's batch: the same number means the same batch. */
+export const batchVersion = () => invoke<number>("batch_version");
+
+/** What `render_batch` sends instead of a batch that is still `ifVersion`: "QINM" and four zeros. */
+export function isNotModified(bytes: ArrayBuffer): boolean {
+  const marker = [0x51, 0x49, 0x4e, 0x4d, 0, 0, 0, 0];
+  const got = new Uint8Array(bytes);
+  return got.length === marker.length && marker.every((b, i) => got[i] === b);
+}
+
+/** Raw bytes of the current sheet's batch; decode with `parseBatch`. `null` when the batch is
+ *  still `ifVersion` (from `batchVersion`), so the caller keeps the one it has. */
+export async function renderBatch(ifVersion?: number): Promise<ArrayBuffer | null> {
+  const bytes = await invoke<ArrayBuffer>("render_batch", { ifVersion });
+  return isNotModified(bytes) ? null : bytes;
+}
 
 /** The entity nearest to the drawing point (x, y) within `tol` drawing units, down to the entity
  *  inside any blocks. */
