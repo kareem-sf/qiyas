@@ -16,6 +16,8 @@ export type Renderer = {
   /** `null` clears the drawing. */
   setBatch(b: Batch | null): void;
   setHighlight(handles: Set<bigint>): void;
+  /** Violet segments `x0 y0 x1 y1` in absolute drawing coordinates, drawn on top; `null` for none. */
+  setOverlay(segments: Float64Array | null): void;
   draw(camera: Camera, theme: Theme): void;
   dispose(): void;
 };
@@ -107,10 +109,20 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
   gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, highlightIndices);
   gl.bindVertexArray(null);
 
+  // The overlay has positions only; u_color gives its colour.
+  const overlayVao = gl.createVertexArray();
+  const overlayPositions = gl.createBuffer();
+  gl.bindVertexArray(overlayVao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, overlayPositions);
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+  gl.bindVertexArray(null);
+
   let batch: Batch | null = null;
   let vertexCount = 0;
   let highlight = new Set<bigint>();
   let highlightCount = 0;
+  let overlay: Float64Array | null = null;
 
   function uploadHighlight() {
     const indices: number[] = [];
@@ -153,12 +165,16 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       uploadHighlight();
     },
 
+    setOverlay(segments) {
+      overlay = segments;
+    },
+
     draw(camera, theme) {
       const light = theme === "light";
       gl.viewport(0, 0, canvas.width, canvas.height);
       gl.clearColor(...(light ? PAPER : INK), 1);
       gl.clear(gl.COLOR_BUFFER_BIT);
-      if (!batch || vertexCount === 0) return;
+      if (!batch) return;
 
       gl.useProgram(program);
       gl.bindVertexArray(vao);
@@ -170,20 +186,37 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       gl.uniform4f(uColor, 0, 0, 0, 0);
       gl.drawArrays(gl.LINES, 0, vertexCount);
 
-      if (highlightCount > 0) {
-        // Line width is 1 device pixel on most platforms, so thicken the highlight by redrawing
-        // it nudged one device pixel at a time across and down.
-        const dpr = canvas.width / camera.width;
-        const steps = Math.max(2, Math.round(HIGHLIGHT_PX * dpr));
-        const px = 2 / canvas.width;
-        const py = 2 / canvas.height;
+      // Line width is 1 device pixel on most platforms, so violet work is thickened by redrawing
+      // it nudged one device pixel at a time across and down.
+      const dpr = canvas.width / camera.width;
+      const steps = Math.max(2, Math.round(HIGHLIGHT_PX * dpr));
+      const px = 2 / canvas.width;
+      const py = 2 / canvas.height;
+      const thick = (drawOnce: () => void) => {
         gl.uniform4f(uColor, ...VIOLET, 1);
         for (let i = 0; i < steps; i++) {
           for (const [dx, dy] of i === 0 ? [[0, 0]] : [[i, 0], [0, -i]]) {
             gl.uniform2f(uOffset, dx * px, dy * py);
-            gl.drawElements(gl.LINES, highlightCount, gl.UNSIGNED_INT, 0);
+            drawOnce();
           }
         }
+      };
+
+      if (highlightCount > 0) {
+        thick(() => gl.drawElements(gl.LINES, highlightCount, gl.UNSIGNED_INT, 0));
+      }
+
+      if (overlay && overlay.length > 0) {
+        // Relative to the batch origin in f64 first, like the batch itself (see the top comment).
+        const relative = new Float32Array(overlay.length);
+        for (let i = 0; i < overlay.length; i += 2) {
+          relative[i] = overlay[i] - batch.origin[0];
+          relative[i + 1] = overlay[i + 1] - batch.origin[1];
+        }
+        gl.bindVertexArray(overlayVao);
+        gl.bindBuffer(gl.ARRAY_BUFFER, overlayPositions);
+        gl.bufferData(gl.ARRAY_BUFFER, relative, gl.DYNAMIC_DRAW);
+        thick(() => gl.drawArrays(gl.LINES, 0, relative.length / 2));
       }
       gl.bindVertexArray(null);
     },
@@ -195,6 +228,8 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       gl.deleteBuffer(colors);
       gl.deleteBuffer(highlightIndices);
       gl.deleteVertexArray(vao);
+      gl.deleteBuffer(overlayPositions);
+      gl.deleteVertexArray(overlayVao);
       gl.deleteProgram(program);
     },
   };

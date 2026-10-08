@@ -1,17 +1,42 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { openDrawing, renderBatch, setLayerHidden, setSheet, type DrawingInfo } from "./api";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  entityInfo,
+  openDrawing,
+  pick,
+  redo,
+  renderBatch,
+  runCommand,
+  setLayerHidden,
+  setSheet,
+  takeoff,
+  totals,
+  undo,
+  type Command,
+  type DrawingInfo,
+  type Measurement,
+  type Total,
+} from "./api";
 import { useLanguage, useT } from "./i18n";
 import { LayersPanel } from "./shell/LayersPanel";
 import { Ribbon, type Tool } from "./shell/Ribbon";
 import { SheetTabs } from "./shell/SheetTabs";
 import { StatusBar } from "./shell/StatusBar";
+import { TakeoffPanel } from "./shell/TakeoffPanel";
+import { measurementBounds, overlaySegments } from "./tools/overlay";
+import { useTool } from "./tools/useTool";
 import { parseBatch, type Batch } from "./viewport/batch";
 import type { Theme } from "./viewport/gl";
 import { Viewport, type ViewportHandle } from "./viewport/Viewport";
 
-const NO_HIGHLIGHT = new Set<bigint>();
 const THEME_KEY = "qiyas.theme";
+
+/** Focus is in a text field: keys are typing, not shortcuts. */
+const typing = (e: KeyboardEvent) =>
+  e.target instanceof HTMLElement &&
+  (e.target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName));
+
+const TOOL_KEYS: Record<string, Tool> = { d: "distance", a: "area", c: "count", s: "select" };
 
 /** The stored theme, else the system's. */
 function initialTheme(): Theme {
@@ -36,6 +61,9 @@ export default function App() {
   const [cursor, setCursor] = useState<[number, number] | null>(null);
   const [opening, setOpening] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [items, setItems] = useState<Measurement[]>([]);
+  const [itemTotals, setItemTotals] = useState<Total[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const viewport = useRef<ViewportHandle>(null);
   const viewportBox = useRef<HTMLDivElement>(null);
   /** Set when the next batch is a new drawing or sheet, so the view fits it once it is drawn. */
@@ -73,6 +101,33 @@ export default function App() {
     }
   }
 
+  async function refreshTakeoff() {
+    const [nextItems, nextTotals] = await Promise.all([takeoff(), totals()]);
+    setItems(nextItems);
+    setItemTotals(nextTotals);
+  }
+
+  /** Runs a take-off command; a new measurement becomes the selected row. */
+  const apply = (cmd: Command) =>
+    run(async () => {
+      const outcome = await runCommand(cmd);
+      if (outcome.type === "nothing") return;
+      await refreshTakeoff();
+      if (outcome.type === "measured") setSelectedId(outcome.measurement.id);
+    });
+
+  const measure = useTool(tool, {
+    pick,
+    entityInfo,
+    run: apply,
+    onError: (e) => setError(String(e)),
+  });
+
+  const history = (step: () => Promise<boolean>) =>
+    run(async () => {
+      if (info && (await step())) await refreshTakeoff();
+    });
+
   async function redraw(fit = false) {
     const next = parseBatch(await renderBatch());
     fitNext.current = fit;
@@ -89,6 +144,9 @@ export default function App() {
       // The core opens a drawing on its first sheet.
       setSheetBlock(next.sheets[0]?.block ?? "");
       setHidden(new Set());
+      setSelectedId(null);
+      measure.escape();
+      await refreshTakeoff();
       await redraw(true);
     });
     setOpening(false);
@@ -98,6 +156,7 @@ export default function App() {
     run(async () => {
       await setSheet(block);
       setSheetBlock(block);
+      measure.escape();
       await redraw(true);
     });
 
@@ -157,8 +216,80 @@ export default function App() {
     focusDrawing();
   }
 
+  // Keyboard: tool letters, Escape, Enter, undo and redo. Re-bound each render, so it sees fresh state.
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (typing(e) || e.altKey || e.metaKey) return;
+      const key = e.key.toLowerCase();
+      if (e.ctrlKey) {
+        if (key === "z" && !e.shiftKey) history(undo);
+        else if (key === "y" || (key === "z" && e.shiftKey)) history(redo);
+        else return;
+        e.preventDefault();
+      } else if (e.key === "Escape") {
+        measure.escape();
+        setSelectedId(null);
+      } else if (e.key === "Enter") {
+        // Enter on a focused button presses it; don't also finish the measure.
+        if (e.target instanceof HTMLButtonElement) return;
+        measure.finish();
+      } else if (TOOL_KEYS[key] && !e.shiftKey && !e.repeat) {
+        chooseTool(TOOL_KEYS[key]);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  });
+
+  /** The selected row, when it was measured on the sheet in view. */
+  const selected = items.find(
+    (m) => m.id === selectedId && m.sheet.toLowerCase() === sheet.toLowerCase(),
+  );
+
+  const selectRow = useCallback(
+    (id: string) => {
+      setSelectedId(id);
+      const m = items.find((i) => i.id === id);
+      if (m?.sheet.toLowerCase() !== sheet.toLowerCase()) return;
+      const bounds = measurementBounds(m, batch);
+      if (bounds) viewport.current?.fitTo(bounds);
+    },
+    [items, sheet, batch],
+  );
+  const removeRow = useCallback((id: string) => apply({ type: "remove_measurement", id }), []);
+  const renameRow = useCallback(
+    (id: string, text: string) => apply({ type: "set_description", id, text }),
+    [],
+  );
+
+  const highlight = useMemo(() => {
+    const handles = new Set((selected?.handles ?? []).map(BigInt));
+    if (measure.highlighted !== null) handles.add(BigInt(measure.highlighted));
+    return handles;
+  }, [selected, measure.highlighted]);
+
+  const selectedOverlay = useMemo(
+    () =>
+      selected && selected.points.length > 0
+        ? overlaySegments(selected.points, null, selected.kind === "area" ? "area" : "distance")
+        : null,
+    [selected],
+  );
+  const rubberBand = useMemo(
+    () => (measure.points.length > 0 ? overlaySegments(measure.points, cursor, tool) : null),
+    [measure.points, cursor, tool],
+  );
+  // A measure in progress hides the selected row's outline.
+  const overlay = rubberBand ?? selectedOverlay;
+
   const fileName = info?.path.split(/[\\/]/).pop() ?? "";
-  const message = opening ? t("opening") : info ? fileName : t("noDrawing");
+  const message = opening
+    ? t("opening")
+    : measure.hint
+      ? t(measure.hint)
+      : info
+        ? fileName
+        : t("noDrawing");
   // Unknown units are measured as millimetres; the status bar says so.
   const units = info ? t(`unit.${info.units === "unknown" ? "millimetres" : info.units}`) : "";
 
@@ -169,6 +300,8 @@ export default function App() {
           active={tool}
           onTool={chooseTool}
           onOpen={openFile}
+          onUndo={() => history(undo)}
+          onRedo={() => history(redo)}
           onZoomExtents={() => {
             viewport.current?.fitExtents();
             focusDrawing();
@@ -208,10 +341,11 @@ export default function App() {
             <Viewport
               ref={viewport}
               batch={batch}
-              highlight={NO_HIGHLIGHT}
+              highlight={highlight}
+              overlay={overlay}
               tool={tool}
               theme={theme}
-              onClick={() => {}}
+              onClick={measure.onClick}
               onMove={(p) => setCursor(p)}
             />
           </div>
@@ -222,6 +356,14 @@ export default function App() {
           )}
           {info && <SheetTabs sheets={info.sheets} active={sheet} onSelect={chooseSheet} />}
         </main>
+        <TakeoffPanel
+          items={items}
+          totals={itemTotals}
+          selectedId={selectedId}
+          onSelect={selectRow}
+          onRemove={removeRow}
+          onRename={renameRow}
+        />
       </div>
       <StatusBar
         cursor={cursor}

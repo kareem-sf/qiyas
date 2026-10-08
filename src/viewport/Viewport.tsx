@@ -1,18 +1,21 @@
 import { useEffect, useImperativeHandle, useRef, useState, type PointerEvent, type Ref } from "react";
 import type { Batch } from "./batch";
-import { fitBounds, pan, screenToWorld, zoomAt, type Camera, type Point } from "./camera";
+import { fitBounds, pan, screenToWorld, zoomAt, type Bounds, type Camera, type Point } from "./camera";
 import { createRenderer, type Renderer, type Theme } from "./gl";
 
 export type Tool = "select" | "distance" | "area" | "count" | "zoomWindow";
 
-export type ViewportHandle = { fitExtents(): void };
+export type ViewportHandle = { fitExtents(): void; fitTo(bounds: Bounds): void };
 
 type Props = {
   batch: Batch | null;
   highlight: Set<bigint>;
   tool: Tool;
   theme: Theme;
-  onClick(world: Point, screen: Point): void;
+  /** Violet segments `x0 y0 x1 y1` in absolute drawing coordinates, drawn over the drawing. */
+  overlay?: Float64Array | null;
+  /** A left click; `worldPerPixel` is the zoom at that moment, for pick tolerances. */
+  onClick(world: Point, screen: Point, worldPerPixel: number): void;
   onMove(world: Point): void;
   ref?: Ref<ViewportHandle>;
 };
@@ -27,7 +30,7 @@ type Drag = { kind: "pan" | "zoomWindow"; start: Point; last: Point };
 
 /** The drawing canvas: wheel zoom at the cursor, middle or space drag to pan, double middle click
  *  for extents, and a drag rectangle to zoom into when the tool is `zoomWindow`. */
-export function Viewport({ batch, highlight, tool, theme, onClick, onMove, ref }: Props) {
+export function Viewport({ batch, highlight, tool, theme, overlay = null, onClick, onMove, ref }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const renderer = useRef<Renderer | null>(null);
   const camera = useRef<Camera>({ cx: 0, cy: 0, scale: 1, width: 1, height: 1 });
@@ -57,7 +60,11 @@ export function Viewport({ batch, highlight, tool, theme, onClick, onMove, ref }
     if (b) setCamera(fitBounds(camera.current, b.bounds, FIT_MARGIN_PX));
   }
 
-  useImperativeHandle(ref, () => ({ fitExtents }), []);
+  useImperativeHandle(
+    ref,
+    () => ({ fitExtents, fitTo: (b) => setCamera(fitBounds(camera.current, b, FIT_MARGIN_PX)) }),
+    [],
+  );
 
   useEffect(() => {
     const canvas = canvasRef.current!;
@@ -134,6 +141,11 @@ export function Viewport({ batch, highlight, tool, theme, onClick, onMove, ref }
     requestDraw();
   }, [highlight]);
 
+  useEffect(() => {
+    renderer.current!.setOverlay(overlay);
+    requestDraw();
+  }, [overlay]);
+
   const local = (e: PointerEvent): Point => {
     const r = e.currentTarget.getBoundingClientRect();
     return [e.clientX - r.left, e.clientY - r.top];
@@ -162,7 +174,7 @@ export function Viewport({ batch, highlight, tool, theme, onClick, onMove, ref }
       startDrag(e, "zoomWindow", p);
       setZoomBox([p, p]);
     } else if (e.button === 0) {
-      onClick(screenToWorld(camera.current, p), p);
+      onClick(screenToWorld(camera.current, p), p, camera.current.scale);
     }
   }
 
