@@ -12,17 +12,41 @@ pub enum Kind {
     Length,
     Area,
     Count,
+    /// An area times a height.
+    Volume,
+    /// A quantity in a unit of its own, e.g. 5 bags; not worked out from geometry.
+    Item,
 }
 
-/// One take-off line. `value` is in drawing units (units² for areas, pieces for counts);
-/// `shown` is the same quantity in `unit`.
+/// Who asked for a command: the user, the in-app AI, or an outside AI through MCP.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Source {
+    User,
+    Ai,
+    Mcp,
+}
+
+impl Source {
+    /// "user", "ai" or "mcp", as stored in `Measurement::source`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Source::User => "user",
+            Source::Ai => "ai",
+            Source::Mcp => "mcp",
+        }
+    }
+}
+
+/// One take-off line. `value` is in drawing units (units² for areas, units³ for volumes, pieces
+/// for counts, the item's own unit for items); `shown` is the same quantity in `unit`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Measurement {
     /// UUID v4.
     pub id: String,
     pub kind: Kind,
     pub value: f64,
-    /// "m", "m2" or "pcs".
+    /// "m", "m2", "m3", "pcs", or an item's own unit.
     pub unit: String,
     pub shown: f64,
     pub description: String,
@@ -35,16 +59,23 @@ pub struct Measurement {
     pub points: Vec<[f64; 2]>,
     pub block_name: Option<String>,
     pub self_intersecting: bool,
-    /// "user" or "ai".
+    /// "user", "ai" or "mcp" (see `Source`).
     pub source: String,
     pub note: String,
     /// RFC 3339.
     pub created: String,
+    /// A volume's height, in drawing units.
+    #[serde(default)]
+    pub height: Option<f64>,
+    /// Code of the BOQ item this line is linked to.
+    #[serde(default)]
+    pub boq_code: Option<String>,
 }
 
 impl Measurement {
     /// A new user measurement made now, converted to metres with `units`. The caller
-    /// fills in handles, points, block name and the self-intersection flag.
+    /// fills in handles, points, block name, the self-intersection flag, a volume's height
+    /// and an item's unit (left empty here).
     pub fn new(
         kind: Kind,
         value: f64,
@@ -53,12 +84,7 @@ impl Measurement {
         layer: String,
         sheet: String,
     ) -> Measurement {
-        let f = units.to_metres();
-        let (unit, shown) = match kind {
-            Kind::Length => ("m", value * f),
-            Kind::Area => ("m2", value * f * f),
-            Kind::Count => ("pcs", value),
-        };
+        let (unit, shown) = in_metres(kind, value, units);
         Measurement {
             id: uuid::Uuid::new_v4().to_string(),
             kind,
@@ -77,7 +103,21 @@ impl Measurement {
             created: OffsetDateTime::now_utc()
                 .format(&Rfc3339)
                 .expect("UTC now formats as RFC 3339"),
+            height: None,
+            boq_code: None,
         }
+    }
+}
+
+/// The unit a `kind` is shown in ("" for an item, whose unit is its own) and `value` in it.
+pub(crate) fn in_metres(kind: Kind, value: f64, units: Units) -> (&'static str, f64) {
+    let f = units.to_metres();
+    match kind {
+        Kind::Length => ("m", value * f),
+        Kind::Area => ("m2", value * f * f),
+        Kind::Volume => ("m3", value * f * f * f),
+        Kind::Count => ("pcs", value),
+        Kind::Item => ("", value),
     }
 }
 

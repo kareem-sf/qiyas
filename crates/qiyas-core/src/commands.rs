@@ -1,5 +1,5 @@
-//! The command bus: every change to the take-off goes through `Session::run`, whether the
-//! user or the AI asks for it.
+//! The command bus: every change to the take-off goes through `Session::run` (the user) or
+//! `Session::run_as` (the AI, or an outside AI through MCP).
 
 use opencadcodec::tables::normalize_name;
 use opencadcodec::{EntityType, Handle};
@@ -7,7 +7,8 @@ use qiyas_geom::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::session::variant_name;
-use crate::{CoreError, Kind, Measurement, Session};
+use crate::takeoff::in_metres;
+use crate::{CoreError, Kind, Measurement, Session, Source};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -44,6 +45,36 @@ pub enum Command {
     SetSheet {
         block: String,
     },
+    /// A measurement of any kind, described by the caller (usually the AI). Geometry is `points`
+    /// (drawing coordinates) or `handles` (measured from the entities' flattened paths, summed),
+    /// not both. A length, area or count is worked out from the geometry, so `value` must be
+    /// `None`; a volume is an area from the geometry times `height` (drawing units, above 0); an
+    /// item needs `value` and `unit` and may have no geometry.
+    AddMeasurement {
+        kind: Kind,
+        value: Option<f64>,
+        unit: Option<String>,
+        height: Option<f64>,
+        points: Vec<[f64; 2]>,
+        handles: Vec<u64>,
+        description: String,
+        note: String,
+    },
+    /// Turns an area into a volume of that area times `height` (drawing units, above 0), keeping
+    /// its geometry; on a volume, changes its height.
+    SetHeight {
+        id: String,
+        height: f64,
+    },
+    /// Links the measurement to the BOQ item `code`; `None` unlinks it.
+    LinkBoq {
+        id: String,
+        code: Option<String>,
+    },
+    SetNote {
+        id: String,
+        text: String,
+    },
 }
 
 impl Command {
@@ -71,9 +102,10 @@ pub enum Outcome {
 }
 
 impl Session {
-    /// Carries out `cmd` without recording an undo step; `run` does that.
-    pub(crate) fn execute(&mut self, cmd: Command) -> Result<Outcome, CoreError> {
-        let measurement = match cmd {
+    /// Carries out `cmd` without recording an undo step; `run_as` does that. A new measurement
+    /// is marked as made by `source`.
+    pub(crate) fn execute(&mut self, cmd: Command, source: Source) -> Result<Outcome, CoreError> {
+        let mut measurement = match cmd {
             Command::MeasureDistance { points } => {
                 if points.len() < 2 {
                     return Err(invalid("A distance needs at least 2 points"));
@@ -124,11 +156,175 @@ impl Session {
                 self.set_sheet(&block)?;
                 return Ok(Outcome::Changed);
             }
+            Command::AddMeasurement {
+                kind,
+                value,
+                unit,
+                height,
+                points,
+                handles,
+                description,
+                note,
+            } => {
+                let mut m = self.add_measurement(kind, value, unit, height, points, handles)?;
+                m.description = description;
+                m.note = note;
+                m
+            }
+            Command::SetHeight { id, height } => {
+                check_height(height)?;
+                let units = self.drawing.units;
+                return self.edit(&id, |m| {
+                    let area = match (m.kind, m.height) {
+                        (Kind::Area, _) => m.value,
+                        (Kind::Volume, Some(old)) if old > 0.0 => m.value / old,
+                        _ => return Err(invalid("Only an area or a volume takes a height")),
+                    };
+                    let value = area * height;
+                    let (unit, shown) = in_metres(Kind::Volume, value, units);
+                    m.kind = Kind::Volume;
+                    m.value = value;
+                    m.unit = unit.to_string();
+                    m.shown = shown;
+                    m.height = Some(height);
+                    Ok(())
+                });
+            }
+            Command::LinkBoq { id, code } => {
+                return self.edit(&id, |m| {
+                    m.boq_code = code;
+                    Ok(())
+                });
+            }
+            Command::SetNote { id, text } => {
+                return self.edit(&id, |m| {
+                    m.note = text;
+                    Ok(())
+                });
+            }
         };
+        measurement.source = source.name().to_string();
         self.takeoff.add(measurement.clone());
         Ok(Outcome::Measured {
             measurement: Box::new(measurement),
         })
+    }
+
+    /// Runs `f` on the measurement with `id`: `Changed`, or `Nothing` when there is none.
+    fn edit(
+        &mut self,
+        id: &str,
+        f: impl FnOnce(&mut Measurement) -> Result<(), CoreError>,
+    ) -> Result<Outcome, CoreError> {
+        match self.takeoff.items.iter_mut().find(|m| m.id == id) {
+            Some(m) => f(m).map(|()| Outcome::Changed),
+            None => Ok(Outcome::Nothing),
+        }
+    }
+
+    /// The measurement of an `AddMeasurement`, without its description and note.
+    fn add_measurement(
+        &self,
+        kind: Kind,
+        value: Option<f64>,
+        unit: Option<String>,
+        height: Option<f64>,
+        points: Vec<[f64; 2]>,
+        handles: Vec<u64>,
+    ) -> Result<Measurement, CoreError> {
+        if kind != Kind::Item && points.is_empty() && handles.is_empty() {
+            return Err(invalid("A measurement needs geometry"));
+        }
+        if !points.is_empty() && !handles.is_empty() {
+            return Err(invalid("Give points or handles, not both"));
+        }
+        if kind == Kind::Item {
+            if !value.is_some_and(f64::is_finite) {
+                return Err(invalid("An item needs a value"));
+            }
+            if unit.as_deref().is_none_or(|u| u.trim().is_empty()) {
+                return Err(invalid("An item needs a unit"));
+            }
+        } else if value.is_some() || unit.is_some() {
+            return Err(invalid(
+                "Only an item takes a value and a unit; this is measured from its geometry",
+            ));
+        }
+        match (kind, height) {
+            (Kind::Volume, Some(h)) => check_height(h)?,
+            (Kind::Volume, None) => return Err(invalid("A volume needs a height")),
+            (_, Some(_)) => return Err(invalid("Only a volume takes a height")),
+            (_, None) => {}
+        }
+        let entities = handles
+            .iter()
+            .map(|&h| {
+                self.drawing
+                    .doc
+                    .get_entity(Handle::new(h))
+                    .ok_or(CoreError::NoSuchEntity(h))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut self_intersecting = false;
+        let value = match kind {
+            Kind::Length if !points.is_empty() => {
+                if points.len() < 2 {
+                    return Err(invalid("A distance needs at least 2 points"));
+                }
+                Path {
+                    points: points.clone(),
+                    closed: false,
+                }
+                .length()
+            }
+            Kind::Length => entities
+                .iter()
+                .map(|e| {
+                    self.extent(e)
+                        .length
+                        .ok_or_else(|| invalid("This entity has no length"))
+                })
+                .sum::<Result<f64, _>>()?,
+            Kind::Area | Kind::Volume if !points.is_empty() => {
+                if points.len() < 3 {
+                    return Err(invalid("An area needs at least 3 points"));
+                }
+                let ring = Path {
+                    points: points.clone(),
+                    closed: true,
+                };
+                self_intersecting = ring.self_intersects();
+                ring.area()
+            }
+            Kind::Area | Kind::Volume => entities
+                .iter()
+                .map(|e| {
+                    let extent = self.extent(e);
+                    self_intersecting |= extent.self_intersecting;
+                    extent
+                        .area
+                        .ok_or_else(|| invalid("This entity has no area"))
+                })
+                .sum::<Result<f64, _>>()?,
+            // One piece per point or per handle, whichever was given.
+            Kind::Count => points.len().max(handles.len()) as f64,
+            Kind::Item => value.unwrap_or_default(),
+        };
+        let value = match height {
+            Some(h) => value * h,
+            None => value,
+        };
+        let layer = entities.first().map_or("", |e| e.common().layer.as_str());
+        let mut m = self.measurement(kind, value, "", layer);
+        if kind == Kind::Item {
+            m.unit = unit.unwrap_or_default();
+        }
+        m.height = height;
+        m.self_intersecting = self_intersecting;
+        m.points = points;
+        m.handles = handles;
+        Ok(m)
     }
 
     /// A measurement on the current sheet in the drawing's units.
@@ -203,6 +399,15 @@ impl Session {
         m.handles = handles;
         m.block_name = Some(block_name);
         m
+    }
+}
+
+/// A height must be a number above 0.
+fn check_height(height: f64) -> Result<(), CoreError> {
+    if height > 0.0 && height.is_finite() {
+        Ok(())
+    } else {
+        Err(invalid("The height must be more than 0"))
     }
 }
 

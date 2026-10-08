@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use qiyas_core::{project_path, Command, Project, Session};
+use qiyas_core::{project_path, Command, Kind, Outcome, Project, Session};
 
 /// Writes the sample drawing (DXF, metres) into a fresh temp dir. The dir must outlive the test body.
 fn sample() -> (tempfile::TempDir, PathBuf) {
@@ -62,9 +62,9 @@ fn project_file_is_pretty_json_with_the_drawing_name() {
     let mut session = Session::open(&drawing).unwrap();
     session.run(distance()).unwrap();
     let text = std::fs::read_to_string(session.save_project().unwrap()).unwrap();
-    assert!(text.contains("\n  \"version\": 1"), "{text}");
+    assert!(text.contains("\n  \"version\": 2"), "{text}");
     let project: Project = serde_json::from_str(&text).unwrap();
-    assert_eq!(project.version, 1);
+    assert_eq!(project.version, 2);
     assert_eq!(project.drawing, "sample.dxf");
     assert_eq!(project.takeoff.items.len(), 1);
 }
@@ -127,4 +127,101 @@ fn drawing_name_matches_ignoring_case() {
         "{:?}",
         session.drawing.problems
     );
+}
+
+#[test]
+fn link_boq_round_trips_in_project() {
+    let (_dir, drawing) = sample();
+    let mut session = Session::open(&drawing).unwrap();
+    let Outcome::Measured { measurement } = session
+        .run(Command::MeasureArea {
+            points: vec![[0.0, 0.0], [4.0, 0.0], [4.0, 3.0], [0.0, 3.0]],
+        })
+        .unwrap()
+    else {
+        panic!("expected a measurement")
+    };
+    let id = measurement.id;
+    for cmd in [
+        Command::LinkBoq {
+            id: id.clone(),
+            code: Some("A.1".to_string()),
+        },
+        Command::SetNote {
+            id: id.clone(),
+            text: "Check the slab edge".to_string(),
+        },
+        Command::SetHeight {
+            id: id.clone(),
+            height: 0.2,
+        },
+    ] {
+        assert!(matches!(session.run(cmd).unwrap(), Outcome::Changed));
+    }
+    let gone = Command::LinkBoq {
+        id: "nope".to_string(),
+        code: None,
+    };
+    assert!(matches!(session.run(gone).unwrap(), Outcome::Nothing));
+    session.save_project().unwrap();
+
+    let reopened = Session::open(&drawing).unwrap();
+    let m = reopened.takeoff.get(&id).unwrap();
+    assert_eq!(m.boq_code.as_deref(), Some("A.1"));
+    assert_eq!(m.note, "Check the slab edge");
+    assert_eq!((m.kind, m.height), (Kind::Volume, Some(0.2)));
+
+    // Linking and notes are undoable; unlinking clears the code.
+    assert!(session.undo() && session.undo());
+    assert_eq!(session.takeoff.get(&id).unwrap().note, "");
+    assert_eq!(
+        session.takeoff.get(&id).unwrap().boq_code.as_deref(),
+        Some("A.1")
+    );
+    session
+        .run(Command::LinkBoq {
+            id: id.clone(),
+            code: None,
+        })
+        .unwrap();
+    assert_eq!(session.takeoff.get(&id).unwrap().boq_code, None);
+
+    // A version-1 file, as Phase 1 wrote it, still loads.
+    let v1 = r#"{
+  "version": 1,
+  "drawing": "sample.dxf",
+  "takeoff": {
+    "items": [
+      {
+        "id": "4b0e7a52-3f1c-4d8e-9a57-0c2f4e7b9d11",
+        "kind": "area",
+        "value": 12.0,
+        "unit": "m2",
+        "shown": 12.0,
+        "description": "Area",
+        "layer": "",
+        "sheet": "*Model_Space",
+        "handles": [],
+        "points": [[0.0, 0.0], [4.0, 0.0], [4.0, 3.0], [0.0, 3.0]],
+        "block_name": null,
+        "self_intersecting": false,
+        "source": "user",
+        "note": "",
+        "created": "2026-10-01T09:00:00Z"
+      }
+    ]
+  }
+}"#;
+    std::fs::write(project_path(&drawing), v1).unwrap();
+    let old = Session::open(&drawing).unwrap();
+    assert!(
+        old.drawing.problems.is_empty(),
+        "{:?}",
+        old.drawing.problems
+    );
+    let m = &old.takeoff.items[0];
+    assert_eq!((m.kind, m.value, m.height), (Kind::Area, 12.0, None));
+    assert_eq!(m.boq_code, None);
+    let project: Project = serde_json::from_str(v1).unwrap();
+    assert_eq!(project.version, 1);
 }

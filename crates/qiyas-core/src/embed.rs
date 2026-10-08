@@ -2,10 +2,13 @@
 //! layer, carrying the measurement in xdata, so the take-off survives a trip through another CAD
 //! program and can be rebuilt when the project file is missing.
 //!
-//! Xdata record of app `QIYAS`, in order: `String(id)`, `String(kind)` ("length", "area" or
-//! "count"), `Real(value)` in drawing units, `String(description)`, `String(layer)`,
-//! `String(sheet)`, `String(block_name or "")`. A count writes one point per counted reference,
-//! each with the whole count's record.
+//! Xdata record of app `QIYAS`, in order: `String(id)`, `String(kind)` ("length", "area",
+//! "count", "volume" or "item"), `Real(value)` in drawing units, `String(description)`,
+//! `String(layer)`, `String(sheet)`, `String(block_name or "")`; then, for a volume only,
+//! `Real(height)` and, for an item only, `String(unit)`. A count writes one point per counted
+//! reference, each with the whole count's record. A volume is drawn like an area, on
+//! `QIYAS-AREA`; an item with geometry is drawn like a length, on `QIYAS-ITEM`, and an item
+//! without geometry is not written.
 
 use std::collections::HashMap;
 
@@ -24,8 +27,9 @@ const APP: &str = "QIYAS";
 fn layer_of(kind: Kind) -> (&'static str, u8) {
     match kind {
         Kind::Length => ("QIYAS-LENGTH", 6),
-        Kind::Area => ("QIYAS-AREA", 5),
+        Kind::Area | Kind::Volume => ("QIYAS-AREA", 5),
         Kind::Count => ("QIYAS-COUNT", 4),
+        Kind::Item => ("QIYAS-ITEM", 2),
     }
 }
 
@@ -34,11 +38,13 @@ fn kind_name(kind: Kind) -> &'static str {
         Kind::Length => "length",
         Kind::Area => "area",
         Kind::Count => "count",
+        Kind::Volume => "volume",
+        Kind::Item => "item",
     }
 }
 
 /// Replaces the measurement entities in `doc` with `items`: removes every entity carrying `QIYAS`
-/// xdata, then adds one polyline per path of a length or area and one point per counted reference
+/// xdata, then adds one polyline per path of a length, area, volume or item and one point per counted reference
 /// (or per stored point, for a count rebuilt from the drawing), on the measurement's sheet. A count
 /// reference that is not a block reference is skipped.
 pub fn embed_measurements(doc: &mut CadDocument, items: &[Measurement]) {
@@ -57,7 +63,8 @@ pub fn embed_measurements(doc: &mut CadDocument, items: &[Measurement]) {
         app.handle = doc.allocate_handle();
         doc.app_ids.add(app).expect("checked it is missing");
     }
-    for kind in [Kind::Length, Kind::Area, Kind::Count] {
+    // Volumes share the area layer.
+    for kind in [Kind::Length, Kind::Area, Kind::Count, Kind::Item] {
         let (name, index) = layer_of(kind);
         if !doc.layers.contains(name) {
             let mut layer = Layer::new(name);
@@ -71,12 +78,12 @@ pub fn embed_measurements(doc: &mut CadDocument, items: &[Measurement]) {
     let mut shapes: Vec<(EntityType, &Measurement)> = Vec::new();
     for m in items {
         match m.kind {
-            Kind::Length | Kind::Area => {
+            Kind::Length | Kind::Area | Kind::Volume | Kind::Item => {
                 for points in shape_paths(doc, m) {
                     let mut line = LwPolyline::from_points(
                         points.iter().map(|p| Vector2::new(p[0], p[1])).collect(),
                     );
-                    line.is_closed = m.kind == Kind::Area;
+                    line.is_closed = closed(m.kind);
                     shapes.push((EntityType::LwPolyline(line), m));
                 }
             }
@@ -116,8 +123,13 @@ pub fn embed_measurements(doc: &mut CadDocument, items: &[Measurement]) {
     }
 }
 
+/// Whether the kind is drawn as closed rings: areas and volumes.
+fn closed(kind: Kind) -> bool {
+    matches!(kind, Kind::Area | Kind::Volume)
+}
+
 /// The picked points as one path, or for a measured entity the vertices of each of its paths
-/// (each closed path, for an area). Empty when there is nothing to draw.
+/// (each closed path, for an area or volume). Empty when there is nothing to draw.
 fn shape_paths(doc: &CadDocument, m: &Measurement) -> Vec<Vec<[f64; 2]>> {
     if !m.points.is_empty() {
         return vec![m.points.clone()];
@@ -133,7 +145,7 @@ fn shape_paths(doc: &CadDocument, m: &Measurement) -> Vec<Vec<[f64; 2]>> {
     flatten(doc, entity, &Xform::identity(), MEASURE_TOL, &mut paths);
     paths
         .into_iter()
-        .filter(|p| m.kind == Kind::Length || p.closed)
+        .filter(|p| !closed(m.kind) || p.closed)
         .map(|p| p.points)
         .collect()
 }
@@ -150,6 +162,11 @@ fn record(m: &Measurement) -> ExtendedDataRecord {
         XDataValue::String(m.block_name.clone().unwrap_or_default()),
     ] {
         record.add_value(value);
+    }
+    match m.kind {
+        Kind::Volume => record.add_value(XDataValue::Real(m.height.unwrap_or_default())),
+        Kind::Item => record.add_value(XDataValue::String(m.unit.clone())),
+        Kind::Length | Kind::Area | Kind::Count => {}
     }
     record
 }
@@ -189,7 +206,7 @@ pub fn read_embedded(doc: &CadDocument) -> Vec<Measurement> {
                     .iter()
                     .map(|v| [v.location.x, v.location.y])
                     .collect();
-                m.self_intersecting = m.kind == Kind::Area
+                m.self_intersecting = closed(m.kind)
                     && Path {
                         points: m.points.clone(),
                         closed: true,
@@ -204,15 +221,22 @@ pub fn read_embedded(doc: &CadDocument) -> Vec<Measurement> {
 
 /// A measurement from one record, made now by the user, with no points or handles yet.
 fn parse(record: &ExtendedDataRecord, units: Units) -> Option<Measurement> {
+    let values = record.values.as_slice();
+    let (head, extra) = match values {
+        [head @ .., extra] if values.len() == 8 => (head, Some(extra)),
+        _ => (values, None),
+    };
     let [XDataValue::String(id), XDataValue::String(kind), XDataValue::Real(value), XDataValue::String(description), XDataValue::String(layer), XDataValue::String(sheet), XDataValue::String(block_name)] =
-        record.values.as_slice()
+        head
     else {
         return None;
     };
-    let kind = match kind.as_str() {
-        "length" => Kind::Length,
-        "area" => Kind::Area,
-        "count" => Kind::Count,
+    let kind = match (kind.as_str(), extra) {
+        ("length", None) => Kind::Length,
+        ("area", None) => Kind::Area,
+        ("count", None) => Kind::Count,
+        ("volume", Some(XDataValue::Real(_))) => Kind::Volume,
+        ("item", Some(XDataValue::String(_))) => Kind::Item,
         _ => return None,
     };
     let mut m = Measurement::new(
@@ -225,5 +249,10 @@ fn parse(record: &ExtendedDataRecord, units: Units) -> Option<Measurement> {
     );
     m.id = id.clone();
     m.block_name = (!block_name.is_empty()).then(|| block_name.clone());
+    match extra {
+        Some(XDataValue::Real(height)) => m.height = Some(*height),
+        Some(XDataValue::String(unit)) => m.unit = unit.clone(),
+        _ => {}
+    }
     Some(m)
 }

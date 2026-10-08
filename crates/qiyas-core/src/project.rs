@@ -10,7 +10,8 @@ use crate::{CoreError, Takeoff};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Project {
-    /// Always 1 for now.
+    /// 2 since volumes, items and BOQ links; version-1 files load too (their measurements
+    /// have no height or BOQ code).
     pub version: u32,
     /// The drawing's file name, without its folder.
     pub drawing: String,

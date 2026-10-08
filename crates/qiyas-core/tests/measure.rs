@@ -1,5 +1,5 @@
 use opencadcodec::{DxfWriter, EntityType};
-use qiyas_core::{Command, CoreError, Kind, Measurement, Outcome, Session};
+use qiyas_core::{Command, CoreError, Kind, Measurement, Outcome, Session, Source};
 
 /// Opens the sample drawing (DXF, metres) in a session. The temp dir must outlive the test body.
 fn sample_session() -> (tempfile::TempDir, Session) {
@@ -264,4 +264,293 @@ fn totals_group_by_kind_and_unit() {
     );
     let kinds: Vec<_> = session.takeoff.totals().iter().map(|t| t.kind).collect();
     assert_eq!(kinds, [Kind::Area, Kind::Length]);
+}
+
+/// An `AddMeasurement` of `kind` with no value, unit, height, geometry or text; tests fill in
+/// what they need.
+fn add(kind: Kind) -> Command {
+    Command::AddMeasurement {
+        kind,
+        value: None,
+        unit: None,
+        height: None,
+        points: Vec::new(),
+        handles: Vec::new(),
+        description: String::new(),
+        note: String::new(),
+    }
+}
+
+/// `cmd` with its `AddMeasurement` fields changed by `f`.
+fn with(
+    mut cmd: Command,
+    f: impl FnOnce(
+        &mut Option<f64>,
+        &mut Option<String>,
+        &mut Option<f64>,
+        &mut Vec<[f64; 2]>,
+        &mut Vec<u64>,
+    ),
+) -> Command {
+    let Command::AddMeasurement {
+        value,
+        unit,
+        height,
+        points,
+        handles,
+        ..
+    } = &mut cmd
+    else {
+        unreachable!()
+    };
+    f(value, unit, height, points, handles);
+    cmd
+}
+
+fn is_invalid(result: Result<Outcome, CoreError>) -> bool {
+    matches!(result, Err(CoreError::InvalidCommand(_)))
+}
+
+#[test]
+fn volume_from_area_and_height() {
+    let (_dir, mut session) = sample_session();
+    let slab = with(add(Kind::Volume), |_, _, h, p, _| {
+        *h = Some(0.2);
+        *p = RECT_4X3.to_vec();
+    });
+    let m = measure(&mut session, slab.clone());
+    assert_eq!(m.kind, Kind::Volume);
+    assert_eq!(m.unit, "m3");
+    assert!((m.value - 2.4).abs() < 1e-12, "{}", m.value);
+    assert!((m.shown - 2.4).abs() < 1e-12, "{}", m.shown);
+    assert_eq!(m.height, Some(0.2));
+    assert_eq!(m.points, RECT_4X3);
+
+    // A volume needs a positive height, and its value comes from the geometry.
+    let no_height = with(slab.clone(), |_, _, h, _, _| *h = None);
+    let flat = with(slab.clone(), |_, _, h, _, _| *h = Some(0.0));
+    let given = with(slab.clone(), |v, _, _, _, _| *v = Some(2.4));
+    let unit = with(slab, |_, u, _, _, _| *u = Some("m3".to_string()));
+    for cmd in [no_height, flat, given, unit] {
+        assert!(is_invalid(session.run(cmd)));
+    }
+
+    // From a closed entity too: the 4 x 3 rectangle.
+    let rect = handle_of(&session, |e| matches!(e, EntityType::LwPolyline(_)));
+    let m = measure(
+        &mut session,
+        with(add(Kind::Volume), |_, _, h, _, hs| {
+            *h = Some(0.5);
+            *hs = vec![rect];
+        }),
+    );
+    assert!((m.shown - 6.0).abs() < 1e-9, "{}", m.shown);
+    assert_eq!(m.layer, "A-WALL");
+
+    // In millimetres the volume is shown in cubic metres.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mm.dxf");
+    let mut doc = qiyas_core::fixtures::sample_doc();
+    doc.header.insertion_units = 4;
+    DxfWriter::new(&doc).write_to_file(&path).unwrap();
+    let mut session = Session::open(&path).unwrap();
+    let m = measure(
+        &mut session,
+        with(add(Kind::Volume), |_, _, h, p, _| {
+            *h = Some(200.0);
+            *p = vec![[0.0, 0.0], [4000.0, 0.0], [4000.0, 3000.0], [0.0, 3000.0]];
+        }),
+    );
+    assert!((m.shown - 2.4).abs() < 1e-9, "{}", m.shown);
+}
+
+#[test]
+fn item_measurement_keeps_its_unit() {
+    let (_dir, mut session) = sample_session();
+    let bags = with(add(Kind::Item), |v, u, _, _, _| {
+        *v = Some(5.0);
+        *u = Some("bags".to_string());
+    });
+    let m = measure(&mut session, bags.clone());
+    assert_eq!(m.kind, Kind::Item);
+    assert_eq!((m.value, m.shown), (5.0, 5.0));
+    assert_eq!(m.unit, "bags");
+    assert!(m.points.is_empty() && m.handles.is_empty());
+
+    // An item needs both its value and its unit.
+    let no_value = with(bags.clone(), |v, _, _, _, _| *v = None);
+    let no_unit = with(bags.clone(), |_, u, _, _, _| *u = None);
+    let blank_unit = with(bags, |_, u, _, _, _| *u = Some(" ".to_string()));
+    for cmd in [no_value, no_unit, blank_unit] {
+        assert!(is_invalid(session.run(cmd)));
+    }
+}
+
+#[test]
+fn add_measurement_requires_geometry() {
+    let (_dir, mut session) = sample_session();
+    for kind in [Kind::Length, Kind::Area, Kind::Count] {
+        match session.run(add(kind)) {
+            Err(CoreError::InvalidCommand(why)) => assert_eq!(why, "A measurement needs geometry"),
+            other => panic!("expected InvalidCommand, got {other:?}"),
+        }
+    }
+    assert!(is_invalid(
+        session.run(with(add(Kind::Volume), |_, _, h, _, _| { *h = Some(1.0) }))
+    ));
+    assert!(session.takeoff.items.is_empty());
+
+    // Lengths, areas and counts are worked out from the geometry, never given.
+    let given = with(add(Kind::Length), |v, _, _, p, _| {
+        *v = Some(3.0);
+        *p = vec![[0.0, 0.0], [3.0, 0.0]];
+    });
+    assert!(is_invalid(session.run(given)));
+    let height = with(add(Kind::Area), |_, _, h, p, _| {
+        *h = Some(1.0);
+        *p = RECT_4X3.to_vec();
+    });
+    assert!(is_invalid(session.run(height)));
+
+    let rect = handle_of(&session, |e| matches!(e, EntityType::LwPolyline(_)));
+    let line = handle_of(&session, |e| matches!(e, EntityType::Line(_)));
+    let doors: Vec<u64> = session
+        .drawing
+        .entities_in("*Model_Space")
+        .filter(|e| matches!(e, EntityType::Insert(_)))
+        .map(|e| e.common().handle.value())
+        .collect();
+    let m = measure(
+        &mut session,
+        with(add(Kind::Area), |_, _, _, _, hs| *hs = vec![rect]),
+    );
+    assert_eq!((m.kind, m.value, m.unit.as_str()), (Kind::Area, 12.0, "m2"));
+    assert_eq!(m.handles, [rect]);
+    let m = measure(
+        &mut session,
+        with(add(Kind::Length), |_, _, _, _, hs| *hs = vec![line, rect]),
+    );
+    assert_eq!((m.kind, m.value), (Kind::Length, 24.0));
+    let m = measure(
+        &mut session,
+        with(add(Kind::Count), |_, _, _, _, hs| *hs = doors.clone()),
+    );
+    assert_eq!(
+        (m.kind, m.value, m.unit.as_str()),
+        (Kind::Count, 3.0, "pcs")
+    );
+    let m = measure(
+        &mut session,
+        with(add(Kind::Count), |_, _, _, p, _| {
+            *p = vec![[1.0, 1.0], [2.0, 2.0]]
+        }),
+    );
+    assert_eq!(m.value, 2.0);
+    let m = measure(
+        &mut session,
+        with(add(Kind::Length), |_, _, _, p, _| {
+            *p = vec![[0.0, 0.0], [3.0, 4.0]]
+        }),
+    );
+    assert_eq!(m.value, 5.0);
+
+    // A line has no area; a handle must name an entity.
+    assert!(is_invalid(
+        session.run(with(add(Kind::Area), |_, _, _, _, hs| *hs = vec![line]))
+    ));
+    assert!(matches!(
+        session.run(with(add(Kind::Length), |_, _, _, _, hs| *hs = vec![0xDEAD_BEEF])),
+        Err(CoreError::NoSuchEntity(0xDEAD_BEEF))
+    ));
+}
+
+#[test]
+fn run_as_ai_marks_source() {
+    let (_dir, mut session) = sample_session();
+    let distance = || Command::MeasureDistance {
+        points: vec![[0.0, 0.0], [3.0, 0.0]],
+    };
+    let sources: Vec<String> = [Source::Ai, Source::Mcp, Source::User]
+        .into_iter()
+        .map(|source| match session.run_as(distance(), source).unwrap() {
+            Outcome::Measured { measurement } => measurement.source,
+            other => panic!("expected a measurement, got {other:?}"),
+        })
+        .collect();
+    assert_eq!(sources, ["ai", "mcp", "user"]);
+    assert_eq!(measure(&mut session, distance()).source, "user");
+
+    let cmd = Command::AddMeasurement {
+        kind: Kind::Area,
+        value: None,
+        unit: None,
+        height: None,
+        points: RECT_4X3.to_vec(),
+        handles: Vec::new(),
+        description: "Slab".to_string(),
+        note: "From the AI".to_string(),
+    };
+    let m = match session.run_as(cmd, Source::Ai).unwrap() {
+        Outcome::Measured { measurement } => *measurement,
+        other => panic!("expected a measurement, got {other:?}"),
+    };
+    assert_eq!(
+        (m.source.as_str(), m.description.as_str(), m.note.as_str()),
+        ("ai", "Slab", "From the AI")
+    );
+    // An AI change is undoable like any other.
+    assert!(session.undo());
+    assert!(session.takeoff.get(&m.id).is_none());
+}
+
+#[test]
+fn set_height_is_undoable() {
+    let (_dir, mut session) = sample_session();
+    let a = measure(&mut session, area(&RECT_4X3));
+    let set = |height: f64| Command::SetHeight {
+        id: a.id.clone(),
+        height,
+    };
+    assert!(matches!(session.run(set(0.2)).unwrap(), Outcome::Changed));
+    let v = session.takeoff.get(&a.id).unwrap().clone();
+    assert_eq!(
+        (v.kind, v.unit.as_str(), v.height),
+        (Kind::Volume, "m3", Some(0.2))
+    );
+    assert!((v.value - 2.4).abs() < 1e-12 && (v.shown - 2.4).abs() < 1e-12);
+    assert_eq!(v.points, RECT_4X3);
+
+    // A new height on a volume keeps its area.
+    session.run(set(0.5)).unwrap();
+    let v = session.takeoff.get(&a.id).unwrap();
+    assert!((v.shown - 6.0).abs() < 1e-12, "{}", v.shown);
+
+    assert!(session.undo());
+    assert!((session.takeoff.get(&a.id).unwrap().shown - 2.4).abs() < 1e-12);
+    assert!(session.undo());
+    let back = session.takeoff.get(&a.id).unwrap();
+    assert_eq!(
+        (back.kind, back.value, back.unit.as_str(), back.height),
+        (Kind::Area, 12.0, "m2", None)
+    );
+    assert!(session.redo());
+    assert_eq!(session.takeoff.get(&a.id).unwrap().kind, Kind::Volume);
+
+    assert!(is_invalid(session.run(set(0.0))));
+    assert!(is_invalid(session.run(set(-1.0))));
+    let d = measure(
+        &mut session,
+        Command::MeasureDistance {
+            points: vec![[0.0, 0.0], [1.0, 0.0]],
+        },
+    );
+    assert!(is_invalid(session.run(Command::SetHeight {
+        id: d.id,
+        height: 1.0
+    })));
+    let none = Command::SetHeight {
+        id: "nope".to_string(),
+        height: 1.0,
+    };
+    assert!(matches!(session.run(none).unwrap(), Outcome::Nothing));
 }

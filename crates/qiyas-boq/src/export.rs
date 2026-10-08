@@ -95,11 +95,11 @@ fn write_totals(
     Ok(())
 }
 
-/// Counts are whole numbers; lengths and areas keep three decimals.
+/// Counts are whole numbers; everything else keeps three decimals.
 fn num_format(kind: Kind) -> &'static str {
     match kind {
         Kind::Count => "0",
-        Kind::Length | Kind::Area => "0.000",
+        Kind::Length | Kind::Area | Kind::Volume | Kind::Item => "0.000",
     }
 }
 
@@ -112,6 +112,8 @@ fn kind_name(kind: Kind) -> &'static str {
         Kind::Length => "length",
         Kind::Area => "area",
         Kind::Count => "count",
+        Kind::Volume => "volume",
+        Kind::Item => "item",
     }
 }
 

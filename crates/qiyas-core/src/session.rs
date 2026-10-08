@@ -12,7 +12,7 @@ use serde::Serialize;
 use crate::embed::{embed_measurements, read_embedded};
 use crate::project::{self, project_path, Project};
 use crate::undo::History;
-use crate::{Command, CoreError, Drawing, LayerInfo, Outcome, Sheet, Takeoff, Units};
+use crate::{Command, CoreError, Drawing, LayerInfo, Outcome, Sheet, Source, Takeoff, Units};
 
 /// Flatten tolerance for drawing on screen, in drawing units.
 pub const BATCH_TOL: f64 = 0.05;
@@ -113,7 +113,7 @@ impl Session {
     pub fn save_project(&self) -> Result<PathBuf, CoreError> {
         let path = project_path(&self.drawing.path);
         let project = Project {
-            version: 1,
+            version: 2,
             drawing: project::file_name(&self.drawing.path),
             takeoff: self.takeoff.clone(),
         };
@@ -241,10 +241,16 @@ impl Session {
         })
     }
 
-    /// Runs `cmd` and, when it changes the take-off, records an undo step.
+    /// Runs `cmd` for the user; see `run_as`.
     pub fn run(&mut self, cmd: Command) -> Result<Outcome, CoreError> {
+        self.run_as(cmd, Source::User)
+    }
+
+    /// Runs `cmd` for `source` and, when it changes the take-off, records an undo step. New
+    /// measurements are marked as made by `source`.
+    pub fn run_as(&mut self, cmd: Command, source: Source) -> Result<Outcome, CoreError> {
         let before = cmd.is_undoable().then(|| self.takeoff.clone());
-        let outcome = self.execute(cmd)?;
+        let outcome = self.execute(cmd, source)?;
         if let Some(before) = before {
             if !matches!(outcome, Outcome::Nothing) {
                 self.history.record(before);

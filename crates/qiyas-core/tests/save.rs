@@ -302,9 +302,13 @@ fn malformed_records_are_skipped() {
     ];
     let mut unknown_kind = wrong_type.clone();
     unknown_kind[0] = XDataValue::String("unknown".to_string());
-    unknown_kind[1] = XDataValue::String("volume".to_string());
+    unknown_kind[1] = XDataValue::String("weight".to_string());
     unknown_kind[2] = XDataValue::Real(1.0);
-    for values in [short, wrong_type, unknown_kind] {
+    // A volume needs its height in an 8th slot.
+    let mut flat_volume = unknown_kind.clone();
+    flat_volume[0] = XDataValue::String("flat".to_string());
+    flat_volume[1] = XDataValue::String("volume".to_string());
+    for values in [short, wrong_type, unknown_kind, flat_volume] {
         let mut record = ExtendedDataRecord::new("QIYAS");
         record.values = values;
         let mut point = Point::new();
@@ -424,4 +428,67 @@ fn project_file_failure_says_the_drawing_was_saved() {
     assert_eq!(session.drawing.path, out);
     // The saved drawing is the one in memory now.
     assert!(session.drawing.doc.layers.get("QIYAS-LENGTH").is_some());
+}
+
+#[test]
+fn volume_embeds_and_rebuilds_with_height() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = qiyas_core::fixtures::write_sample(dir.path(), "dxf");
+    let mut session = Session::open(&source).unwrap();
+    let add =
+        |kind, value, unit: Option<&str>, height, points: Vec<[f64; 2]>| Command::AddMeasurement {
+            kind,
+            value,
+            unit: unit.map(str::to_string),
+            height,
+            points,
+            handles: Vec::new(),
+            description: "Slab".to_string(),
+            note: String::new(),
+        };
+    let rect = vec![[0.0, 0.0], [4.0, 0.0], [4.0, 3.0], [0.0, 3.0]];
+    for cmd in [
+        add(Kind::Volume, None, None, Some(0.2), rect.clone()),
+        add(
+            Kind::Item,
+            Some(5.0),
+            Some("bags"),
+            None,
+            vec![[1.0, 1.0], [2.0, 1.0]],
+        ),
+        // No geometry: stays in the project file only.
+        add(Kind::Item, Some(2.0), Some("t"), None, Vec::new()),
+    ] {
+        session.run(cmd).unwrap();
+    }
+    let out = dir.path().join("out.dwg");
+    session.save_as(&out).unwrap();
+    std::fs::remove_file(project_path(&out)).unwrap();
+
+    let reopened = Session::open(&out).unwrap();
+    let on_area: Vec<bool> = reopened
+        .drawing
+        .doc
+        .entities()
+        .filter(|e| e.common().layer == "QIYAS-AREA")
+        .map(|e| matches!(e, EntityType::LwPolyline(p) if p.is_closed))
+        .collect();
+    assert_eq!(on_area, [true]);
+    let items = &reopened.takeoff.items;
+    assert_eq!(items.len(), 2, "{items:?}");
+    let before = &session.takeoff.items;
+    let v = &items[0];
+    assert_eq!(
+        (v.id.as_str(), v.kind, v.unit.as_str()),
+        (before[0].id.as_str(), Kind::Volume, "m3")
+    );
+    assert_eq!(v.height, Some(0.2));
+    assert!((v.value - before[0].value).abs() < 1e-9 && (v.shown - 2.4).abs() < 1e-9);
+    assert_eq!(v.points, rect);
+    let item = &items[1];
+    assert_eq!(
+        (item.kind, item.value, item.shown, item.unit.as_str()),
+        (Kind::Item, 5.0, 5.0, "bags")
+    );
+    assert_eq!(item.points, [[1.0, 1.0], [2.0, 1.0]]);
 }

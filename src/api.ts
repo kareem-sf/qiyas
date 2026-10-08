@@ -49,14 +49,21 @@ export const pick = (x: number, y: number, tol: number) =>
 
 export const entityInfo = (handle: number) => invoke<EntityInfo>("entity_info", { handle });
 
-export type Kind = "length" | "area" | "count";
+export type Kind = "length" | "area" | "count" | "volume" | "item";
 
-/** One take-off line. `value` is in drawing units (units² for areas); `shown` is in `unit`. */
+/** Who made a measurement: the user, the in-app AI, or an outside AI through MCP. */
+export type Source = "user" | "ai" | "mcp";
+
+/**
+ * One take-off line. `value` is in drawing units (units² for areas, units³ for volumes, the
+ * item's own unit for items); `shown` is in `unit`.
+ */
 export type Measurement = {
   id: string;
   kind: Kind;
   value: number;
-  unit: "m" | "m2" | "pcs";
+  /** "m", "m2", "m3", "pcs", or an item's own unit. */
+  unit: string;
   shown: number;
   description: string;
   layer: string;
@@ -65,9 +72,13 @@ export type Measurement = {
   points: [number, number][];
   block_name: string | null;
   self_intersecting: boolean;
-  source: "user" | "ai";
+  source: Source;
   note: string;
   created: string;
+  /** A volume's height, in drawing units. */
+  height: number | null;
+  /** Code of the linked BOQ item. */
+  boq_code: string | null;
 };
 
 export type Total = { kind: Kind; unit: Measurement["unit"]; count: number; sum: number };
@@ -81,7 +92,22 @@ export type Command =
   | { type: "remove_measurement"; id: string }
   | { type: "set_description"; id: string; text: string }
   | { type: "set_layer_hidden"; name: string; hidden: boolean }
-  | { type: "set_sheet"; block: string };
+  | { type: "set_sheet"; block: string }
+  /** Length, area and count values come from the geometry (points or handles, not both). */
+  | {
+      type: "add_measurement";
+      kind: Kind;
+      value: number | null;
+      unit: string | null;
+      height: number | null;
+      points: [number, number][];
+      handles: number[];
+      description: string;
+      note: string;
+    }
+  | { type: "set_height"; id: string; height: number }
+  | { type: "link_boq"; id: string; code: string | null }
+  | { type: "set_note"; id: string; text: string };
 
 export type Outcome =
   | { type: "measured"; measurement: Measurement }
