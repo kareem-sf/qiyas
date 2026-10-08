@@ -3,8 +3,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   aiUndo,
   boq as readBoq,
+  compare,
+  conflicts as readConflicts,
   drawingInfo,
   entityInfo,
+  exportConflicts,
   exportTakeoff,
   importBoq,
   openDrawing,
@@ -23,6 +26,7 @@ import {
   type AiUi,
   type Boq,
   type Command,
+  type Conflict,
   type DrawingInfo,
   type Measurement,
   type Total,
@@ -31,6 +35,8 @@ import { AssistantPanel } from "./ai/AssistantPanel";
 import type { ToolCardItem } from "./ai/messages";
 import { useAssistant } from "./ai/useAssistant";
 import { BoqPanel } from "./boq/BoqPanel";
+import { ConflictsPanel, type ResolveCommand } from "./boq/ConflictsPanel";
+import { openCount } from "./boq/conflictsMath";
 import { useLanguage, useT } from "./i18n";
 import { About } from "./shell/About";
 import { LayersPanel } from "./shell/LayersPanel";
@@ -53,6 +59,22 @@ const THEME_KEY = "qiyas.theme";
 const typing = (e: KeyboardEvent) =>
   e.target instanceof HTMLElement &&
   (e.target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName));
+
+/** The box around the measurements' bounds on the drawing, or null when none has bounds. */
+function unionBounds(ms: Measurement[], batch: Batch | null): Bounds | null {
+  let box: Bounds | null = null;
+  for (const m of ms) {
+    const b = measurementBounds(m, batch);
+    if (!b) continue;
+    box = box
+      ? [
+          [Math.min(box[0][0], b[0][0]), Math.min(box[0][1], b[0][1])],
+          [Math.max(box[1][0], b[1][0]), Math.max(box[1][1], b[1][1])],
+        ]
+      : b;
+  }
+  return box;
+}
 
 /** The stored theme, else the system's. */
 function initialTheme(): Theme {
@@ -88,14 +110,22 @@ export default function App() {
   const [bill, setBill] = useState<Boq | null>(null);
   /** The BOQ item whose linked measurements are shown. */
   const [boqCode, setBoqCode] = useState<string | null>(null);
+  /** The last comparison's conflicts. */
+  const [conflicts, setConflicts] = useState<Conflict[]>([]);
+  /** A comparison ran for this drawing, so no conflicts means none were found. */
+  const [compared, setCompared] = useState(false);
+  /** The measurements a conflict's Show pointed at. */
+  const [conflictIds, setConflictIds] = useState<string[]>([]);
   /** The right panel's tab. */
-  const [sideTab, setSideTab] = useState<"takeoff" | "boq" | "assistant">("takeoff");
+  const [sideTab, setSideTab] = useState<"takeoff" | "boq" | "conflicts" | "assistant">("takeoff");
   /** Entities the assistant pointed at (Show on a tool card, or a zoom it asked for). */
   const [aiHighlight, setAiHighlight] = useState<number[]>([]);
   const viewport = useRef<ViewportHandle>(null);
   const viewportBox = useRef<HTMLDivElement>(null);
   /** Set when the next batch is a new drawing or sheet, so the view fits it once it is drawn. */
   const fitNext = useRef(false);
+  /** Measurements to fit instead of the whole sheet, when a conflict's Show changed the sheet. */
+  const fitIds = useRef<string[] | null>(null);
   /** True while a layer change talks to the core; clicks meanwhile are dropped, so they can't interleave. */
   const layerBusy = useRef(false);
   /** Set when autosave failed for this drawing, so the error shows once, not after every click. A new
@@ -110,7 +140,11 @@ export default function App() {
   useEffect(() => {
     if (!fitNext.current) return;
     fitNext.current = false;
-    viewport.current?.fitExtents();
+    const ids = fitIds.current;
+    fitIds.current = null;
+    const box = ids && unionBounds(items.filter((m) => ids.includes(m.id)), batch);
+    if (box) viewport.current?.fitTo(box);
+    else viewport.current?.fitExtents();
   }, [batch]);
 
   function chooseTheme(next: Theme) {
@@ -133,12 +167,20 @@ export default function App() {
     }
   }
 
-  /** Re-reads the take-off and the BOQ, after anything that may have changed them. */
+  /** Re-reads the take-off, the BOQ and the conflicts, after anything that may have changed them. */
   async function refreshTakeoffAndBoq() {
-    const [nextItems, nextTotals, nextBoq] = await Promise.all([takeoff(), totals(), readBoq()]);
+    const [nextItems, nextTotals, nextBoq, nextConflicts] = await Promise.all([
+      takeoff(),
+      totals(),
+      readBoq(),
+      readConflicts(),
+    ]);
     setItems(nextItems);
     setItemTotals(nextTotals);
     setBill(nextBoq);
+    setConflicts(nextConflicts);
+    // Conflicts kept in the project file come from an earlier comparison.
+    if (nextConflicts.length > 0) setCompared(true);
   }
 
   /** Saves the take-off next to the drawing. A failure is shown once and turns autosave off, but the
@@ -212,7 +254,8 @@ export default function App() {
 
   const assistant = useAssistant({
     lang,
-    onMutated: async () => {
+    onMutated: async (tool) => {
+      if (tool === "compare_boq") setCompared(true);
       await run(async () => {
         await refreshTakeoffAndBoq();
         await redraw();
@@ -267,6 +310,8 @@ export default function App() {
       setSelectedId(null);
       setBoqCode(null);
       setAiHighlight([]);
+      setConflictIds([]);
+      setCompared(false);
       measure.escape();
       await refreshTakeoffAndBoq();
       await redraw(true);
@@ -358,11 +403,54 @@ export default function App() {
   importBoqRef.current = importBoqFile;
   const onImportBoq = useCallback(() => importBoqRef.current(), []);
 
-  const chooseSheet = (block: string) =>
+  /** Compares the BOQ and the take-off with the drawings (an undo step) and shows the conflicts. */
+  async function compareNow() {
+    if (!info) return;
+    let changed = false;
+    await run(async () => {
+      const found = await compare();
+      changed = true;
+      setConflicts(found);
+      setCompared(true);
+      setSideTab("conflicts");
+      setNotice(
+        found.length === 0 ? t("conflicts.none") : t("conflicts.found", { n: found.length }),
+      );
+    });
+    if (changed) await autosave();
+  }
+
+  /** Asks where to save the conflicts workbook, next to the drawing by default, and writes it. */
+  async function exportConflictsFile() {
+    if (!info) return;
+    const path = await save({
+      defaultPath: `${info.path.replace(/\.[^.\\/]*$/, "")}-conflicts.xlsx`,
+      filters: [{ name: "Excel", extensions: ["xlsx"] }],
+    });
+    if (!path) return;
+    await run(async () => {
+      await exportConflicts(path).catch((e) => {
+        throw t("export.failed", { error: String(e) });
+      });
+      setNotice(t("export.done", { path }));
+    });
+  }
+
+  // Stable for the memoised conflicts panel.
+  const compareRef = useRef(compareNow);
+  compareRef.current = compareNow;
+  const onCompare = useCallback(() => compareRef.current(), []);
+  const exportConflictsRef = useRef(exportConflictsFile);
+  exportConflictsRef.current = exportConflictsFile;
+  const onExportConflicts = useCallback(() => exportConflictsRef.current(), []);
+
+  /** Shows the sheet `block`, fitted to the measurements `fit` when given, else to the whole sheet. */
+  const chooseSheet = (block: string, fit?: string[]) =>
     run(async () => {
       await setSheet(block);
       setSheetBlock(block);
       measure.escape();
+      fitIds.current = fit ?? null;
       await redraw(true);
     });
 
@@ -437,6 +525,7 @@ export default function App() {
         setSelectedId(null);
         setBoqCode(null);
         setAiHighlight([]);
+        setConflictIds([]);
       } else if (action === "finish") {
         // Enter on a focused button presses it; don't also finish the measure.
         if (e.target instanceof HTMLButtonElement) return;
@@ -465,10 +554,17 @@ export default function App() {
     [boqCode, bill, items, sheet],
   );
 
+  /** The measurements on the sheet in view that a conflict's Show pointed at. */
+  const conflictLinked = useMemo(
+    () => items.filter((m) => conflictIds.includes(m.id) && onSheet(m)),
+    [conflictIds, items, sheet],
+  );
+
   const selectRow = useCallback(
     (id: string) => {
       setSelectedId(id);
       setBoqCode(null);
+      setConflictIds([]);
       const m = items.find((i) => i.id === id);
       if (m?.sheet.toLowerCase() !== sheet.toLowerCase()) return;
       const bounds = measurementBounds(m, batch);
@@ -482,22 +578,43 @@ export default function App() {
       setBoqCode(code);
       setSelectedId(null);
       setAiHighlight([]);
-      let box: Bounds | null = null;
-      for (const m of items) {
-        if (code === "" || m.boq_code !== code || !onSheet(m)) continue;
-        const b = measurementBounds(m, batch);
-        if (!b) continue;
-        box = box
-          ? [
-              [Math.min(box[0][0], b[0][0]), Math.min(box[0][1], b[0][1])],
-              [Math.max(box[1][0], b[1][0]), Math.max(box[1][1], b[1][1])],
-            ]
-          : b;
-      }
+      setConflictIds([]);
+      const linked = items.filter((m) => code !== "" && m.boq_code === code && onSheet(m));
+      const box = unionBounds(linked, batch);
       if (box) viewport.current?.fitTo(box);
     },
     [items, sheet, batch],
   );
+  /** Shows what a conflict is about: its measurements lit up and filling the view (moving to their
+   *  sheet when none is on this one); else its BOQ item in the BOQ tab; else its first sheet. */
+  const showConflict = useCallback(
+    (c: Conflict) => {
+      const involved = items.filter((m) => c.measurements.includes(m.id));
+      if (involved.length > 0) {
+        setSelectedId(null);
+        setBoqCode(null);
+        setAiHighlight([]);
+        setConflictIds(involved.map((m) => m.id));
+        const here = involved.filter(onSheet);
+        if (here.length > 0) {
+          const box = unionBounds(here, batch);
+          if (box) viewport.current?.fitTo(box);
+        } else {
+          const ids = involved.filter((m) => m.sheet === involved[0].sheet).map((m) => m.id);
+          chooseSheet(involved[0].sheet, ids);
+        }
+      } else if (c.boq_code) {
+        setSideTab("boq");
+        selectBoq(c.boq_code);
+      } else {
+        const target = info?.sheets.find((s) => c.sheets.includes(s.name));
+        if (target && target.block.toLowerCase() !== sheet.toLowerCase()) chooseSheet(target.block);
+      }
+    },
+    [items, sheet, batch, info, selectBoq],
+  );
+  const resolveConflict = useCallback((cmd: ResolveCommand) => apply(cmd), []);
+  const openBoqTab = useCallback(() => setSideTab("boq"), []);
   const linkRow = useCallback(
     (id: string, code: string | null) => apply({ type: "link_boq", id, code }),
     [],
@@ -513,22 +630,22 @@ export default function App() {
   );
 
   const highlight = useMemo(() => {
-    const linked = boqLinked.flatMap((m) => m.handles);
+    const linked = [...boqLinked, ...conflictLinked].flatMap((m) => m.handles);
     const handles = new Set([...(selected?.handles ?? []), ...linked, ...aiHighlight].map(BigInt));
     if (measure.highlighted !== null) handles.add(BigInt(measure.highlighted));
     return handles;
-  }, [selected, boqLinked, measure.highlighted, aiHighlight]);
+  }, [selected, boqLinked, conflictLinked, measure.highlighted, aiHighlight]);
 
   const selectedOverlay = useMemo(() => {
     // A count's points are the counted places, not a line to draw.
-    const outlines = (selected ? [selected] : boqLinked)
+    const outlines = (selected ? [selected] : [...boqLinked, ...conflictLinked])
       .filter((m) => m.kind !== "count" && m.points.length > 0)
       .map((m) => overlaySegments(m.points, null, m.kind === "area" ? "area" : "distance"));
     if (outlines.length === 0) return null;
     const all = new Float64Array(outlines.reduce((n, o) => n + o.length, 0));
     outlines.reduce((at, o) => (all.set(o, at), at + o.length), 0);
     return all;
-  }, [selected, boqLinked]);
+  }, [selected, boqLinked, conflictLinked]);
   const rubberBand = useMemo(
     () => (measure.points.length > 0 ? overlaySegments(measure.points, cursor, tool) : null),
     [measure.points, cursor, tool],
@@ -536,6 +653,7 @@ export default function App() {
   // A measure in progress hides the selected row's outline.
   const overlay = rubberBand ?? selectedOverlay;
 
+  const openConflicts = openCount(conflicts);
   const fileName = info?.path.split(/[\\/]/).pop() ?? "";
   const message = opening
     ? t("opening")
@@ -556,6 +674,8 @@ export default function App() {
           onSaveAs={info ? saveFileAs : undefined}
           onExport={info ? exportFile : undefined}
           onImportBoq={info ? importBoqFile : undefined}
+          onCompare={info ? compareNow : undefined}
+          onExportConflicts={info ? exportConflictsFile : undefined}
           onUndo={() => history(undo)}
           onRedo={() => history(redo)}
           onZoomExtents={() => {
@@ -638,8 +758,8 @@ export default function App() {
           )}
           {info && <SheetTabs sheets={info.sheets} active={sheet} onSelect={chooseSheet} />}
         </main>
-        {/* The BOQ table needs more room than the take-off. */}
-        <div className={sideTab === "boq" ? "side wide" : "side"}>
+        {/* The BOQ table and the conflicts need more room than the take-off. */}
+        <div className={sideTab === "boq" || sideTab === "conflicts" ? "side wide" : "side"}>
           <div className="side-tabs" role="tablist">
             <button
               type="button"
@@ -660,6 +780,21 @@ export default function App() {
               onClick={() => setSideTab("boq")}
             >
               {t("boq")}
+            </button>
+            <button
+              type="button"
+              role="tab"
+              id="tab-conflicts"
+              aria-controls="panel-conflicts"
+              aria-selected={sideTab === "conflicts"}
+              onClick={() => setSideTab("conflicts")}
+            >
+              {t("conflicts")}
+              {openConflicts > 0 && (
+                <span className="tab-count" title={t("conflicts.openCount", { n: openConflicts })}>
+                  {openConflicts}
+                </span>
+              )}
             </button>
             <button
               type="button"
@@ -706,6 +841,24 @@ export default function App() {
               onSelect={selectBoq}
               onImport={info ? onImportBoq : undefined}
               onTolerance={setTolerance}
+            />
+          </div>
+          <div
+            className="side-panel"
+            role="tabpanel"
+            id="panel-conflicts"
+            aria-labelledby="tab-conflicts"
+            hidden={sideTab !== "conflicts"}
+          >
+            <ConflictsPanel
+              conflicts={conflicts}
+              compared={compared}
+              hasBoq={bill !== null}
+              onCompare={info ? onCompare : undefined}
+              onExport={info ? onExportConflicts : undefined}
+              onShow={showConflict}
+              onResolve={resolveConflict}
+              onOpenBoq={openBoqTab}
             />
           </div>
           <div

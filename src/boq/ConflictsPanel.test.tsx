@@ -1,0 +1,163 @@
+// @vitest-environment jsdom
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, expect, test, vi } from "vitest";
+import { ConflictsPanel } from "./ConflictsPanel";
+import { conflict } from "./testItems";
+
+afterEach(cleanup);
+
+const conflicts = [
+  conflict("c1", "unit_doubt", "Linked in m2, BOQ in m", { boq_code: "A.3", unit: "m" }),
+  conflict("c2", "quantity_mismatch", "Walls: BOQ 16, measured 10", {
+    boq_code: "A.1",
+    expected: 16,
+    found: 10,
+    unit: "m",
+    measurements: ["w1"],
+    sheets: ["Model"],
+    note: "Check the GF plan",
+  }),
+  conflict("c3", "quantity_mismatch", "Plaster: BOQ 12, measured 14", {
+    boq_code: "A.2",
+    expected: 12,
+    found: 14,
+    unit: "m2",
+    status: "resolved",
+  }),
+  conflict("c4", "schedule_vs_plan", "Door D1: schedule 4, plan 3", {
+    expected: 4,
+    found: 3,
+    unit: "pcs",
+    sheets: ["GF Plan", "Schedules"],
+  }),
+];
+
+function renderPanel(more: Partial<Parameters<typeof ConflictsPanel>[0]> = {}) {
+  const props = {
+    conflicts,
+    compared: true,
+    hasBoq: true,
+    onCompare: vi.fn(),
+    onExport: vi.fn(),
+    onShow: vi.fn(),
+    onResolve: vi.fn(),
+    onOpenBoq: vi.fn(),
+    ...more,
+  };
+  render(<ConflictsPanel {...props} />);
+  return props;
+}
+
+const groups = () =>
+  screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent);
+const reasons = () => [...document.querySelectorAll(".reason")].map((p) => p.textContent);
+
+test("rows are grouped by kind, in kind order, with their counts and details", () => {
+  const props = renderPanel();
+  expect(groups()).toEqual(["Quantity mismatch 2", "Schedule vs plan 1", "Unit doubt 1"]);
+  expect(reasons()).toEqual([
+    "Walls: BOQ 16, measured 10",
+    "Plaster: BOQ 12, measured 14",
+    "Door D1: schedule 4, plan 3",
+    "Linked in m2, BOQ in m",
+  ]);
+  const walls = screen.getByText("Walls: BOQ 16, measured 10").closest("li")!;
+  expect(within(walls).getByTitle("Expected → found").textContent).toBe("16.000 → 10.000 m");
+  expect(within(walls).getByText("A.1")).toBeTruthy();
+  expect(within(walls).getByText("Model")).toBeTruthy();
+  expect(within(walls).getByRole("button", { name: "Check the GF plan" })).toBeTruthy();
+  const doors = screen.getByText("Door D1: schedule 4, plan 3").closest("li")!;
+  expect(within(doors).getByTitle("Expected → found").textContent).toBe("4 → 3 pcs");
+  expect(within(doors).getByText("GF Plan, Schedules")).toBeTruthy();
+  // Resolved and ignored rows are muted.
+  const plaster = screen.getByText("Plaster: BOQ 12, measured 14").closest("li")!;
+  expect(plaster.className).toContain("done");
+  expect(walls.className).not.toContain("done");
+
+  fireEvent.click(within(walls).getByRole("button", { name: "Show" }));
+  expect(props.onShow).toHaveBeenCalledWith(conflicts[1]);
+  fireEvent.click(screen.getByRole("button", { name: "Compare" }));
+  expect(props.onCompare).toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Export conflicts" }));
+  expect(props.onExport).toHaveBeenCalled();
+});
+
+test("the status filter hides resolved ones; kind chips filter and count", () => {
+  renderPanel();
+  const status = screen.getByRole("group", { name: "Status" });
+  fireEvent.click(within(status).getByRole("button", { name: "Open" }));
+  expect(reasons()).not.toContain("Plaster: BOQ 12, measured 14");
+  expect(groups()).toEqual(["Quantity mismatch 1", "Schedule vs plan 1", "Unit doubt 1"]);
+
+  const kinds = screen.getByRole("group", { name: "Kind" });
+  expect(within(kinds).getAllByRole("button").map((b) => b.textContent)).toEqual([
+    "All 3",
+    "Quantity mismatch 1",
+    "Schedule vs plan 1",
+    "Unit doubt 1",
+  ]);
+  fireEvent.click(within(kinds).getByRole("button", { name: "Unit doubt 1" }));
+  expect(reasons()).toEqual(["Linked in m2, BOQ in m"]);
+
+  // Ignored: nothing matches; the chips stay.
+  fireEvent.click(within(status).getByRole("button", { name: "Ignored" }));
+  expect(screen.getByText("No conflicts match the filter")).toBeTruthy();
+  fireEvent.click(within(kinds).getByRole("button", { name: "All 0" }));
+  fireEvent.click(within(status).getByRole("button", { name: "Resolved" }));
+  expect(reasons()).toEqual(["Plaster: BOQ 12, measured 14"]);
+});
+
+test("changing the status keeps the note; editing the note keeps the status", () => {
+  const props = renderPanel();
+  const walls = screen.getByText("Walls: BOQ 16, measured 10").closest("li")!;
+  fireEvent.change(within(walls).getByRole("combobox", { name: "Status" }), {
+    target: { value: "ignored" },
+  });
+  expect(props.onResolve).toHaveBeenCalledWith({
+    type: "resolve_conflict",
+    id: "c2",
+    status: "ignored",
+    note: "Check the GF plan",
+  });
+
+  const plaster = screen.getByText("Plaster: BOQ 12, measured 14").closest("li")!;
+  fireEvent.click(within(plaster).getByRole("button", { name: "Note…" }));
+  const input = within(plaster).getByRole("textbox", { name: "Note…" });
+  fireEvent.change(input, { target: { value: "  Site measured  " } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  fireEvent.blur(input);
+  expect(props.onResolve).toHaveBeenLastCalledWith({
+    type: "resolve_conflict",
+    id: "c3",
+    status: "resolved",
+    note: "Site measured",
+  });
+
+  // Escape drops the edit.
+  vi.mocked(props.onResolve).mockClear();
+  fireEvent.click(within(walls).getByRole("button", { name: "Check the GF plan" }));
+  const again = within(walls).getByRole("textbox", { name: "Note…" });
+  fireEvent.change(again, { target: { value: "other" } });
+  fireEvent.keyDown(again, { key: "Escape" });
+  fireEvent.blur(again);
+  expect(props.onResolve).not.toHaveBeenCalled();
+});
+
+test("empty states: no BOQ, not compared, none found", () => {
+  const props = renderPanel({ conflicts: [], hasBoq: false, compared: false });
+  expect(screen.getByText(/No BOQ loaded, import one first/)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Go to the BOQ" }));
+  expect(props.onOpenBoq).toHaveBeenCalled();
+  expect((screen.getByRole("button", { name: "Export conflicts" }) as HTMLButtonElement).disabled).toBe(
+    true,
+  );
+  cleanup();
+  renderPanel({ conflicts: [], compared: false });
+  expect(screen.getByText("Not compared yet, press Compare.")).toBeTruthy();
+  cleanup();
+  renderPanel({ conflicts: [] });
+  expect(screen.getByText("No conflicts")).toBeTruthy();
+  cleanup();
+  renderPanel({ conflicts: [], onCompare: undefined });
+  expect((screen.getByRole("button", { name: "Compare" }) as HTMLButtonElement).disabled).toBe(true);
+});

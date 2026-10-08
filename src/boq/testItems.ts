@@ -1,5 +1,5 @@
-/** Small BOQ items and take-off rows for the BOQ tests. */
-import type { BoqItem, Measurement } from "../api";
+/** Small BOQ items, take-off rows and conflicts for the BOQ tests. */
+import type { BoqItem, Conflict, ConflictKind, Measurement } from "../api";
 
 export const boqItem = (
   code: string,
@@ -43,5 +43,29 @@ export const row = (
   created: "2026-10-08T00:00:00Z",
   height: null,
   boq_code,
+  ...more,
+});
+
+export const conflict = (
+  id: string,
+  kind: ConflictKind,
+  reason: string,
+  more: Partial<Conflict> = {},
+): Conflict => ({
+  id,
+  kind,
+  boq_code: null,
+  measurements: [],
+  schedule: null,
+  sheets: [],
+  expected: null,
+  found: null,
+  unit: "",
+  reason,
+  reason_ar: `${reason} (ar)`,
+  status: "open",
+  note: "",
+  created: "2026-10-08T00:00:00Z",
+  hash_key: id,
   ...more,
 });

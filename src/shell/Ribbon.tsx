@@ -13,6 +13,8 @@ type Props = {
   onSaveAs?(): void;
   onExport?(): void;
   onImportBoq?(): void;
+  onCompare?(): void;
+  onExportConflicts?(): void;
   onZoomExtents(): void;
   onUndo?(): void;
   onRedo?(): void;
@@ -82,6 +84,8 @@ export function Ribbon(props: Props) {
           action("saveAs", props.onSaveAs),
           action("exportTakeoff", props.onExport),
           action("importBoq", props.onImportBoq),
+          action("compare", props.onCompare),
+          action("exportConflicts", props.onExportConflicts),
           <span key="sep" className="sep" />,
           action("undo", props.onUndo),
           action("redo", props.onRedo),

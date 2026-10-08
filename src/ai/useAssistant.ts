@@ -18,8 +18,8 @@ import { EMPTY, reduce, type Transcript } from "./messages";
 
 type Options = {
   lang: Lang;
-  /** A tool changed the take-off: refresh it and redraw. */
-  onMutated(): void;
+  /** A tool changed the take-off (`tool` is its name): refresh it and redraw. */
+  onMutated(tool: string): void;
   /** A tool asks the window to show something (a sheet, a zoom, other layers). */
   onUi(ui: AiUi): void;
   /** Sending failed for want of a key or an address: open the settings. */
@@ -49,8 +49,8 @@ export function useAssistant({ lang, onMutated, onUi, onNeedSettings }: Options)
   // The listeners are set up once; they call the latest callbacks through this.
   const callbacks = useRef({ onMutated, onUi, onNeedSettings });
   callbacks.current = { onMutated, onUi, onNeedSettings };
-  /** Whether each tool call of the turn changes the take-off, by id. */
-  const mutating = useRef(new Map<string, boolean>());
+  /** The turn's tool calls that change the take-off: their names, by id. */
+  const mutating = useRef(new Map<string, string>());
 
   const refreshStatus = useCallback(() => {
     aiStatus()
@@ -68,9 +68,10 @@ export function useAssistant({ lang, onMutated, onUi, onNeedSettings }: Options)
       });
     on<AgentEvent>("ai:event", (event) => {
       dispatch(event);
-      if (event.type === "tool_call") mutating.current.set(event.id, event.mutating);
+      if (event.type === "tool_call" && event.mutating) mutating.current.set(event.id, event.name);
       if (event.type === "tool_result" && !event.is_error) {
-        if (mutating.current.get(event.id)) callbacks.current.onMutated();
+        const tool = mutating.current.get(event.id);
+        if (tool) callbacks.current.onMutated(tool);
         if (event.ui) callbacks.current.onUi(event.ui);
       }
     });
