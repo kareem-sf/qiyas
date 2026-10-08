@@ -3,19 +3,24 @@ use std::f64::consts::TAU;
 use opencadcodec::entities::{BoundaryEdge, EntityType};
 use opencadcodec::{CadDocument, Vector3};
 
+use crate::path::same_point;
 use crate::{Path, Xform};
 
 /// Deepest block nesting followed; deeper inserts (or cycles) are skipped.
 const MAX_DEPTH: usize = 32;
 /// Upper bound on segments per curve, so a zero or tiny `tol` cannot exhaust memory.
 const MAX_SEGMENTS: usize = 1 << 16;
-/// Points closer than this (drawing units) are treated as the same point.
-const SAME_POINT: f64 = 1e-9;
+/// Most block instances plus paths one `flatten` call produces; past it, output stops.
+/// Keeps a block that inserts itself, or a huge nested array, from hanging the app.
+const MAX_WORK: usize = 1_000_000;
+/// Bulges smaller than this are straight segments.
+const MIN_BULGE: f64 = 1e-12;
 
 /// Appends the 2D outline of `entity`, mapped through `xf`, to `out`.
 /// Curves are sampled so the chord error stays within `tol` after `xf` is applied.
 pub fn flatten(doc: &CadDocument, entity: &EntityType, xf: &Xform, tol: f64, out: &mut Vec<Path>) {
-    flatten_at(doc, entity, xf, tol, out, 0);
+    let mut budget = MAX_WORK;
+    flatten_at(doc, entity, xf, tol, out, 0, &mut budget);
 }
 
 fn flatten_at(
@@ -25,7 +30,11 @@ fn flatten_at(
     tol: f64,
     out: &mut Vec<Path>,
     depth: usize,
+    budget: &mut usize,
 ) {
+    if *budget == 0 {
+        return;
+    }
     // Sample in entity coordinates with the tolerance shrunk by the transform's largest stretch.
     let local_tol = tol / max_stretch(xf);
     let (points, closed) = match entity {
@@ -96,7 +105,7 @@ fn flatten_at(
                 for edge in &path.edges {
                     extend_ring(&mut ring, edge_points(edge, local_tol));
                 }
-                push(out, xf, ring, true);
+                push(out, xf, ring, true, budget);
             }
             return;
         }
@@ -111,6 +120,10 @@ fn flatten_at(
                 .then(&Xform::scale(e.x_scale(), e.y_scale()));
             for col in 0..e.column_count.max(1) {
                 for row in 0..e.row_count.max(1) {
+                    if *budget == 0 {
+                        return;
+                    }
+                    *budget -= 1;
                     // Array offsets sit in the insert's own axes, so they rotate with it.
                     let offset = Xform::translate(
                         f64::from(col) * e.column_spacing,
@@ -122,7 +135,7 @@ fn flatten_at(
                         .then(&Xform::translate(e.insert_point.x, e.insert_point.y))
                         .then(xf);
                     for child in doc.entities_in_block(&e.block_name) {
-                        flatten_at(doc, child, &instance, tol, out, depth + 1);
+                        flatten_at(doc, child, &instance, tol, out, depth + 1, budget);
                     }
                 }
             }
@@ -138,7 +151,7 @@ fn flatten_at(
         ),
         _ => return,
     };
-    push(out, xf, points, closed);
+    push(out, xf, points, closed, budget);
 }
 
 /// Points on a circular arc, counter-clockwise from `a0` to `a1` (radians), ends included.
@@ -205,7 +218,7 @@ fn bulge_points(vertices: &[([f64; 2], f64)], closed: bool, tol: f64) -> Vec<[f6
     for i in 0..segments {
         let (p0, bulge) = vertices[i];
         let p1 = vertices[(i + 1) % n].0;
-        if bulge != 0.0 {
+        if bulge.abs() >= MIN_BULGE {
             points.extend(bulge_interior(p0, p1, bulge, tol));
         }
         points.push(p1);
@@ -308,12 +321,19 @@ fn text_box(insertion: &Vector3, height: f64, rotation: f64, value: &str) -> Vec
         .collect()
 }
 
-/// Maps `points` through `xf` and appends them as a path; a closed path drops a final
-/// point that repeats its first.
-fn push(out: &mut Vec<Path>, xf: &Xform, mut points: Vec<[f64; 2]>, closed: bool) {
-    if points.is_empty() {
+/// Maps `points` through `xf` and appends them as a path, spending one unit of `budget`;
+/// a closed path drops a final point that repeats its first.
+fn push(
+    out: &mut Vec<Path>,
+    xf: &Xform,
+    mut points: Vec<[f64; 2]>,
+    closed: bool,
+    budget: &mut usize,
+) {
+    if points.is_empty() || *budget == 0 {
         return;
     }
+    *budget -= 1;
     if closed && points.len() > 1 && same_point(points[0], points[points.len() - 1]) {
         points.pop();
     }
@@ -327,10 +347,6 @@ fn push(out: &mut Vec<Path>, xf: &Xform, mut points: Vec<[f64; 2]>, closed: bool
 fn max_stretch(xf: &Xform) -> f64 {
     let m = &xf.m;
     m[0][0].hypot(m[1][0]).max(m[0][1].hypot(m[1][1]))
-}
-
-fn same_point(a: [f64; 2], b: [f64; 2]) -> bool {
-    (a[0] - b[0]).abs() <= SAME_POINT && (a[1] - b[1]).abs() <= SAME_POINT
 }
 
 fn xy(v: &Vector3) -> [f64; 2] {

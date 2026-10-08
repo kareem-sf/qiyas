@@ -1,3 +1,6 @@
+/// Points closer than this (drawing units) are treated as the same point.
+const SAME_POINT: f64 = 1e-9;
+
 /// A flattened polyline in drawing units. A closed path does not repeat its first point.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Path {
@@ -23,7 +26,7 @@ impl Path {
 
     /// True when two non-adjacent segments meet (parallel overlaps are not detected).
     pub fn self_intersects(&self) -> bool {
-        first_crossing(&self.points, self.closed).is_some()
+        first_crossing(&distinct(&self.points, self.closed), self.closed).is_some()
     }
 
     /// `[[min_x, min_y], [max_x, max_y]]`, or `None` for an empty path.
@@ -41,6 +44,25 @@ impl Path {
         let n = self.points.len();
         (0..edge_count(n, self.closed)).map(move |i| (self.points[i], self.points[(i + 1) % n]))
     }
+}
+
+/// `points` without consecutive repeats; a closed path also drops a last point equal to
+/// its first. Repeats would make neighbouring segments look like they touch.
+fn distinct(points: &[[f64; 2]], closed: bool) -> Vec<[f64; 2]> {
+    let mut out: Vec<[f64; 2]> = Vec::with_capacity(points.len());
+    for &p in points {
+        if out.last().is_none_or(|&last| !same_point(last, p)) {
+            out.push(p);
+        }
+    }
+    if closed && out.len() > 1 && same_point(out[0], out[out.len() - 1]) {
+        out.pop();
+    }
+    out
+}
+
+pub(crate) fn same_point(a: [f64; 2], b: [f64; 2]) -> bool {
+    (a[0] - b[0]).abs() <= SAME_POINT && (a[1] - b[1]).abs() <= SAME_POINT
 }
 
 /// Segments in a path of `n` points; a closed path of three or more adds the closing one.
@@ -73,8 +95,9 @@ fn shoelace(points: &[[f64; 2]]) -> f64 {
 /// Splits a closed ring at its first crossing until every loop is simple, then
 /// sums the loop areas. Each split leaves both loops with fewer points, so it ends.
 fn loops_area(points: &[[f64; 2]]) -> f64 {
-    match first_crossing(points, true) {
-        None => shoelace(points),
+    let points = distinct(points, true);
+    match first_crossing(&points, true) {
+        None => shoelace(&points),
         Some((i, j, x)) => {
             let mut outer: Vec<[f64; 2]> = points[..=i].to_vec();
             outer.push(x);
