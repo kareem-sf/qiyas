@@ -1,0 +1,22 @@
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "UNLICENSED"
+rust-version = "1.85"
+
+[workspace.dependencies]
+opencadcodec = { git = "https://github.com/HakanSeven12/opencadcodec.git", rev = "a35f43e", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tauri = "2.11"
+tauri-build = "2.6"
+tauri-plugin-dialog = "2.7"
+rstar = "0.12"
+rust_xlsxwriter = "0.9"
+calamine = "0.36"
+tempfile = "3"
