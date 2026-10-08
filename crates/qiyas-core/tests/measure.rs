@@ -554,3 +554,35 @@ fn set_height_is_undoable() {
     };
     assert!(matches!(session.run(none).unwrap(), Outcome::Nothing));
 }
+
+#[test]
+fn undo_if_refuses_when_top_step_is_users() {
+    let (_dir, mut session) = sample_session();
+    assert_eq!(session.top_step_source(), None);
+    assert!(!session.undo_if(Source::Ai), "nothing to undo");
+
+    session.run_as(area(&RECT_4X3), Source::Ai).unwrap();
+    measure(&mut session, area(&RECT_4X3));
+    assert_eq!(session.top_step_source(), Some(Source::User));
+    let ids = |s: &Session| {
+        s.takeoff
+            .items
+            .iter()
+            .map(|m| m.id.clone())
+            .collect::<Vec<_>>()
+    };
+    let before = ids(&session);
+    assert_eq!(before.len(), 2);
+    assert!(!session.undo_if(Source::Ai), "the user's change is on top");
+    assert_eq!(ids(&session), before, "nothing changed");
+    assert!(session.can_undo());
+
+    assert!(session.undo());
+    assert_eq!(session.top_step_source(), Some(Source::Ai));
+    assert!(session.undo_if(Source::Ai));
+    assert!(session.takeoff.items.is_empty());
+
+    // Redo keeps who made the step.
+    assert!(session.redo());
+    assert_eq!(session.top_step_source(), Some(Source::Ai));
+}

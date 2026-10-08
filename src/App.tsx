@@ -1,6 +1,7 @@
 import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  aiUndo,
   drawingInfo,
   entityInfo,
   exportTakeoff,
@@ -220,13 +221,23 @@ export default function App() {
     [batch],
   );
 
-  const { markUndone } = assistant;
+  const { markUndone, markUndoStale } = assistant;
+  /** Undoes the card's change, unless the take-off changed since (then the card says so). */
   const undoCard = useCallback(
     async (card: ToolCardItem) => {
-      await history(undo);
-      markUndone(card.id);
+      let undone = false;
+      await run(async () => {
+        undone = await aiUndo();
+        if (undone) await refreshTakeoff();
+      });
+      if (undone) {
+        markUndone(card.id);
+        await autosave();
+      } else {
+        markUndoStale(card.id);
+      }
     },
-    [info, markUndone],
+    [markUndone, markUndoStale],
   );
 
   const openSettings = useCallback(() => setSettingsOpen(true), []);

@@ -6,6 +6,16 @@
 
 use std::sync::{Arc, Mutex};
 
+/// Why `ai_send` refused a turn when a new conversation began while it was starting; the window
+/// shows `ai.restarted`.
+pub const RESTARTED: &str = "restarted";
+/// The error of `ai:done` when the turn's task panicked; the window shows `ai.crashed`.
+pub const CRASHED: &str = "crashed";
+
+/// Makes the provider instead of the settings and keychain, in tests.
+#[cfg(test)]
+pub type TestProvider = Arc<dyn Fn() -> Box<dyn Provider> + Send + Sync>;
+
 use qiyas_ai::anthropic::Anthropic;
 use qiyas_ai::openai::OpenAiCompatible;
 use qiyas_ai::prompt::Lang;
@@ -30,6 +40,8 @@ pub struct AiRun {
     language: Lang,
     /// Messages in the conversation after the last finished turn.
     messages: usize,
+    #[cfg(test)]
+    pub test_provider: Option<TestProvider>,
 }
 
 /// A turn handed to the background task.
@@ -98,7 +110,7 @@ impl AiRun {
     pub fn start(&mut self, agent: Agent, generation: u64) -> Result<Turn, String> {
         if generation != self.generation {
             self.busy = false;
-            return Err("A new conversation started; send the message again".into());
+            return Err(RESTARTED.into());
         }
         let cancel = CancellationToken::new();
         self.cancel = Some(cancel.clone());
@@ -117,6 +129,13 @@ impl AiRun {
             self.messages = agent.history().len();
             self.agent = Some(agent);
         }
+    }
+
+    /// After the turn's task panicked: nothing of the conversation is trusted any more, so the next
+    /// message starts a new one.
+    pub fn crashed(&mut self) {
+        self.new_conversation();
+        self.busy = false;
     }
 
     /// Cancels the running turn, if any.

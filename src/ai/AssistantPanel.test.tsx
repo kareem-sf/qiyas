@@ -17,13 +17,14 @@ const card: ToolCardItem = {
   ui: null,
   mutating: true,
   undone: false,
+  stale: false,
 };
 
-function setup(transcript: Transcript = EMPTY, busy = false) {
+function setup(transcript: Transcript = EMPTY, busy = false, error: string | null = null) {
   const assistant = {
     transcript,
     busy,
-    error: null,
+    error,
     status: { provider: "mock", model: "mock", has_key: true, busy, message_count: 0 },
     send: vi.fn().mockResolvedValue(true),
     cancel: vi.fn(),
@@ -77,6 +78,26 @@ test("Undo is only offered on the newest change, and not while busy", () => {
   expect(screen.queryByText("Undo")).toBeNull();
   expect(screen.getByText("Stop")).toBeTruthy();
   expect(screen.getByText("Working…")).toBeTruthy();
+});
+
+test("after an undo the card before it can be undone; a stale card says why", () => {
+  const older = { ...card, id: "t0" };
+  const { onUndo } = setup({ items: [older, { ...card, undone: true }] });
+  expect(screen.getByText("Undone")).toBeTruthy();
+  fireEvent.click(screen.getByText("Undo"));
+  expect(onUndo).toHaveBeenCalledWith(older);
+  cleanup();
+  setup({ items: [{ ...card, stale: true }] });
+  expect((screen.getByText("Undo") as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.getByText("Can't undo: the take-off changed since")).toBeTruthy();
+});
+
+test("a crash says so and offers a new conversation; the status line announces the end", () => {
+  const { assistant } = setup({ items: [{ kind: "user", text: "hi" }] }, false, "crashed");
+  expect(screen.getByRole("alert").textContent).toBe("The assistant crashed; start a new conversation.");
+  fireEvent.click(screen.getByText("Start a new conversation"));
+  expect(assistant.clear).toHaveBeenCalled();
+  expect(screen.getByRole("status").textContent).toBe("");
 });
 
 test("Enter sends and empties the box; Shift+Enter does not send", async () => {

@@ -37,6 +37,7 @@ export type Assistant = {
   cancel(): void;
   clear(): void;
   markUndone(id: string): void;
+  markUndoStale(id: string): void;
   refreshStatus(): void;
 };
 
@@ -126,10 +127,11 @@ export function useAssistant({ lang, onMutated, onUi, onNeedSettings }: Options)
   }, []);
 
   const markUndone = useCallback((id: string) => dispatch({ type: "undone", id }), []);
+  const markUndoStale = useCallback((id: string) => dispatch({ type: "undo_stale", id }), []);
 
   // One object per change, so memoised panels skip the app's pointer-move renders.
   return useMemo(
-    () => ({ transcript, busy, error, status, send, cancel, clear, markUndone, refreshStatus }),
-    [transcript, busy, error, status, send, cancel, clear, markUndone, refreshStatus],
+    () => ({ transcript, busy, error, status, send, cancel, clear, markUndone, markUndoStale, refreshStatus }),
+    [transcript, busy, error, status, send, cancel, clear, markUndone, markUndoStale, refreshStatus],
   );
 }

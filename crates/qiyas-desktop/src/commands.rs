@@ -41,8 +41,9 @@ pub async fn open_drawing<R: Runtime>(
     // Read the file before taking the lock, so a slow open doesn't block other commands.
     let session = Session::open(Path::new(&path)).map_err(|e| e.to_string())?;
     let info = session.info();
-    *state.session.lock().unwrap_or_else(PoisonError::into_inner) = Some(session);
+    // Stop a running turn first, so it can't run another tool on the new drawing.
     new_conversation(&app, &state);
+    *state.session.lock().unwrap_or_else(PoisonError::into_inner) = Some(session);
     Ok(info)
 }
 
@@ -265,6 +266,12 @@ pub async fn ai_send<R: Runtime>(
         return Err("The message is empty".into());
     }
     let (kept, generation) = ai_run(&state).reserve()?;
+    // Gives the claim back on every way out before the turn starts, a panic included.
+    let mut claim = Claim {
+        state: &state,
+        generation,
+        armed: true,
+    };
     let language = ai_run(&state).language();
     let settings = state
         .settings
@@ -273,23 +280,44 @@ pub async fn ai_send<R: Runtime>(
         .clone();
     let mut agent = match kept {
         Some(agent) => agent,
-        None => match new_agent(&state, &settings, language).await {
-            Ok(agent) => agent,
-            Err(e) => {
-                ai_run(&state).release(None, generation);
-                return Err(e);
-            }
-        },
+        None => new_agent(&state, &settings, language).await?,
     };
     // Effort may have changed since the last message.
     agent.set_settings(ai::agent_settings(&settings, language));
-    let turn = ai_run(&state).start(agent, generation)?;
-    tauri::async_runtime::spawn(run_turn(app, turn, text));
+    let turn = ai_run(&state).start(agent, generation);
+    // `start` settles the claim either way.
+    claim.armed = false;
+    tauri::async_runtime::spawn(supervise(app, turn?, text));
     Ok(())
+}
+
+/// A turn claimed by `ai_send` but not started yet.
+struct Claim<'a> {
+    state: &'a AppState,
+    generation: u64,
+    armed: bool,
+}
+
+impl Drop for Claim<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            ai_run(self.state).release(None, self.generation);
+        }
+    }
 }
 
 /// A new agent for the settings' provider, with its key from the keychain (or the mock).
 async fn new_agent(state: &AppState, settings: &Settings, language: Lang) -> Result<Agent, String> {
+    #[cfg(test)]
+    let test_provider = ai_run(state).test_provider.clone();
+    #[cfg(test)]
+    if let Some(make) = test_provider {
+        return Ok(Agent::new(
+            make(),
+            state.session.clone(),
+            ai::agent_settings(settings, language),
+        ));
+    }
     let provider = match ai::mock_provider(&state.session) {
         Some(mock) => mock,
         None => {
@@ -311,7 +339,31 @@ async fn new_agent(state: &AppState, settings: &Settings, language: Lang) -> Res
 }
 
 /// Runs one turn, forwarding its events to the window while its conversation is current.
-async fn run_turn<R: Runtime>(app: AppHandle<R>, turn: Turn, text: String) {
+/// Runs the turn on its own task and always ends it with `ai:done`: if the task panics, the
+/// conversation is dropped and the error is `CRASHED`.
+async fn supervise<R: Runtime>(app: AppHandle<R>, turn: Turn, text: String) {
+    let generation = turn.generation;
+    let task = tauri::async_runtime::spawn(run_turn(app.clone(), turn, text));
+    let error = match task.await {
+        Ok((agent, result)) => {
+            ai_run(&app.state::<AppState>()).finish(agent, generation);
+            result.err().map(|e| e.to_string())
+        }
+        Err(_) => {
+            ai_run(&app.state::<AppState>()).crashed();
+            Some(ai::CRASHED.to_string())
+        }
+    };
+    let _ = app.emit("ai:done", AiDone { error });
+}
+
+/// Runs one turn, forwarding its events to the window while its conversation is current, and
+/// gives the agent back.
+async fn run_turn<R: Runtime>(
+    app: AppHandle<R>,
+    turn: Turn,
+    text: String,
+) -> (Agent, Result<(), qiyas_ai::AiError>) {
     let Turn {
         mut agent,
         cancel,
@@ -328,9 +380,14 @@ async fn run_turn<R: Runtime>(app: AppHandle<R>, turn: Turn, text: String) {
     };
     // The agent drops the sender when the turn ends, which ends `forward`.
     let (result, ()) = tokio::join!(agent.run_turn(text, tx, cancel), forward);
-    ai_run(&app.state::<AppState>()).finish(agent, generation);
-    let error = result.err().map(|e| e.to_string());
-    let _ = app.emit("ai:done", AiDone { error });
+    (agent, result)
+}
+
+/// Undoes the assistant's last change, only if it is still the newest change to the take-off.
+/// False when the user (or nothing) changed it since.
+#[tauri::command]
+pub async fn ai_undo(state: State<'_, AppState>) -> Result<bool, String> {
+    with_session(&state, |s| Ok(s.undo_if(qiyas_core::Source::Ai)))
 }
 
 /// Stops the running turn; it ends with a "cancelled" stop.
@@ -408,7 +465,9 @@ pub async fn ai_status(state: State<'_, AppState>) -> Result<AiStatus, String> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc::{channel, Receiver};
+    use std::sync::Arc;
     use std::time::Duration;
 
     use serde_json::{json, Value};
@@ -437,6 +496,9 @@ mod tests {
                 .invoke_handler(tauri::generate_handler![
                     open_drawing,
                     takeoff,
+                    run_command,
+                    undo,
+                    ai_undo,
                     ai_send,
                     ai_cancel,
                     ai_clear,
@@ -544,6 +606,74 @@ mod tests {
         assert_eq!(ipc.next().0, "ai:cleared");
         let status = ipc.call("ai_status", json!({})).unwrap();
         assert_eq!(status["message_count"], 0);
+    }
+
+    /// Panics in its first turn (counted across the providers it makes), then answers "ok".
+    struct PanicsFirst(Arc<AtomicUsize>);
+    impl qiyas_ai::Provider for PanicsFirst {
+        fn stream_turn<'a>(
+            &'a self,
+            _: qiyas_ai::TurnRequest,
+            _: qiyas_ai::provider::Sink<'a>,
+        ) -> qiyas_ai::provider::BoxFuture<'a, Result<qiyas_ai::TurnResult, qiyas_ai::AiError>>
+        {
+            let first = self.0.fetch_add(1, Ordering::SeqCst) == 0;
+            Box::pin(async move {
+                assert!(!first, "the provider broke");
+                Ok(qiyas_ai::TurnResult {
+                    content: vec![qiyas_ai::ContentBlock::Text { text: "ok".into() }],
+                    stop_reason: qiyas_ai::StopReason::EndTurn,
+                    usage: Default::default(),
+                })
+            })
+        }
+    }
+
+    #[test]
+    fn a_panicking_turn_ends_with_an_error_and_frees_the_assistant() {
+        let ipc = Ipc::open();
+        let calls = Arc::new(AtomicUsize::new(0));
+        {
+            let state = ipc.webview.state::<AppState>();
+            let calls = calls.clone();
+            ai_run(&state).test_provider =
+                Some(Arc::new(move || Box::new(PanicsFirst(calls.clone()))));
+        }
+        ipc.call("ai_send", json!({ "text": "Measure" })).unwrap();
+        let (_, done) = ipc.turn();
+        assert_eq!(done, json!({ "error": "crashed" }));
+        let status = ipc.call("ai_status", json!({})).unwrap();
+        assert_eq!(status["busy"], false);
+        assert_eq!(status["message_count"], 0, "the conversation was dropped");
+
+        ipc.call("ai_send", json!({ "text": "Again" })).unwrap();
+        let (events, done) = ipc.turn();
+        assert_eq!(done, json!({ "error": null }));
+        assert_eq!(events.last().unwrap()["type"], "done");
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn ai_undo_takes_back_only_the_assistants_newest_change() {
+        let ipc = Ipc::open();
+        ipc.call("ai_send", json!({ "text": "Measure the wall" }))
+            .unwrap();
+        ipc.turn();
+        // The user measures after the assistant.
+        let cmd = json!({ "type": "measure_distance", "points": [[0.0, 0.0], [1.0, 0.0]] });
+        ipc.call("run_command", json!({ "cmd": cmd })).unwrap();
+        assert_eq!(ipc.call("ai_undo", json!({})), Ok(json!(false)));
+        assert_eq!(
+            ipc.call("takeoff", json!({}))
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(ipc.call("undo", json!({})), Ok(json!(true)));
+        assert_eq!(ipc.call("ai_undo", json!({})), Ok(json!(true)));
+        assert_eq!(ipc.call("takeoff", json!({})), Ok(json!([])));
     }
 
     #[test]

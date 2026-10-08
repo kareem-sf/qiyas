@@ -287,5 +287,9 @@ export const aiClear = () => invoke<void>("ai_clear");
 
 export const aiStatus = () => invoke<AiStatus>("ai_status");
 
+/** Undoes the assistant's newest change, only while it is still the newest change to the
+ *  take-off; false when it is not (the user changed the take-off since). */
+export const aiUndo = () => invoke<boolean>("ai_undo");
+
 /** The assistant answers in this language; a change starts a new conversation. */
 export const aiSetLanguage = (lang: "en" | "ar") => invoke<void>("ai_set_language", { lang });

@@ -253,7 +253,7 @@ impl Session {
         let outcome = self.execute(cmd, source)?;
         if let Some(before) = before {
             if !matches!(outcome, Outcome::Nothing) {
-                self.history.record(before);
+                self.history.record(before, source);
             }
         }
         Ok(outcome)
@@ -262,6 +262,17 @@ impl Session {
     /// Undoes the last take-off change. False when there is nothing to undo.
     pub fn undo(&mut self) -> bool {
         self.history.undo(&mut self.takeoff)
+    }
+
+    /// Undoes the last take-off change only when `source` made it. False otherwise, with nothing
+    /// changed: the AI's Undo never takes back a change the user made after it.
+    pub fn undo_if(&mut self, source: Source) -> bool {
+        self.history.top_source() == Some(source) && self.undo()
+    }
+
+    /// Who made the change `undo` would take back; None when there is nothing to undo.
+    pub fn top_step_source(&self) -> Option<Source> {
+        self.history.top_source()
     }
 
     /// Redoes the last undone take-off change. False when there is nothing to redo.

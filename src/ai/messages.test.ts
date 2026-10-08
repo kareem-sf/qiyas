@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import type { AgentEvent } from "../api";
-import { EMPTY, reduce, startNewOffered, type Action, type Transcript } from "./messages";
+import { EMPTY, reduce, startNewOffered, undoableCard, type Action, type Transcript } from "./messages";
 
 const run = (actions: Action[], from: Transcript = EMPTY) => actions.reduce(reduce, from);
 
@@ -116,4 +116,15 @@ test("unsend takes back the last user message only", () => {
   expect(run([{ type: "unsend" }], t)).toEqual(EMPTY);
   const answered = run([{ type: "text", text: "Hello" }], t);
   expect(run([{ type: "unsend" }], answered)).toEqual(answered);
+});
+
+test("the undoable card is the newest change not undone; a stale undo is kept on the card", () => {
+  const t = run([call("a"), result("a"), call("b", "list_layers", false), result("b"), call("c"), result("c")]);
+  expect(undoableCard(t)?.id).toBe("c");
+  const afterUndo = run([{ type: "undone", id: "c" }], t);
+  expect(undoableCard(afterUndo)?.id).toBe("a");
+  expect(undoableCard(run([{ type: "undone", id: "a" }], afterUndo))).toBeNull();
+  const stale = run([{ type: "undo_stale", id: "c" }], t);
+  expect(stale.items.at(-1)).toMatchObject({ id: "c", stale: true, undone: false });
+  expect(undoableCard(run([call("d"), result("d", { is_error: true })], t))?.id).toBe("c");
 });

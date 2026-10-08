@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import { useT } from "../i18n";
-import { startNewOffered, TOO_LONG, type Item, type ToolCardItem } from "./messages";
+import { Markdown } from "./Markdown";
+import { startNewOffered, TOO_LONG, undoableCard, type Item, type ToolCardItem } from "./messages";
 import { ToolCard } from "./ToolCard";
 import type { Assistant } from "./useAssistant";
 
@@ -15,66 +16,6 @@ type Props = {
 };
 
 const EXAMPLES = ["ai.example1", "ai.example2", "ai.example3"];
-
-/** `**bold**` and `code` inside a line, as text nodes only. */
-function inline(text: string): ReactNode[] {
-  return text.split(/(\*\*[^*\n]+\*\*|`[^`\n]+`)/g).map((part, i) => {
-    if (part.length > 4 && part.startsWith("**") && part.endsWith("**")) {
-      return <strong key={i}>{part.slice(2, -2)}</strong>;
-    }
-    if (part.length > 2 && part.startsWith("`") && part.endsWith("`")) {
-      return <code key={i}>{part.slice(1, -1)}</code>;
-    }
-    return part;
-  });
-}
-
-/** Markdown-lite: paragraphs (blank lines between), `-` bullets, bold and inline code. Never HTML. */
-export function Markdown({ text }: { text: string }) {
-  const blocks: ReactNode[] = [];
-  let para: string[] = [];
-  let bullets: string[] = [];
-  const flush = () => {
-    if (para.length > 0) {
-      const lines = para;
-      blocks.push(
-        <p key={blocks.length} dir="auto">
-          {lines.map((l, i) => (
-            <span key={i}>
-              {i > 0 && <br />}
-              {inline(l)}
-            </span>
-          ))}
-        </p>,
-      );
-    }
-    if (bullets.length > 0) {
-      blocks.push(
-        <ul key={blocks.length} dir="auto">
-          {bullets.map((b, i) => (
-            <li key={i}>{inline(b)}</li>
-          ))}
-        </ul>,
-      );
-    }
-    para = [];
-    bullets = [];
-  };
-  for (const line of text.split("\n")) {
-    const bullet = /^\s*[-*]\s+(.*)$/.exec(line);
-    if (bullet) {
-      if (para.length > 0) flush();
-      bullets.push(bullet[1]);
-    } else if (!line.trim()) {
-      flush();
-    } else {
-      if (bullets.length > 0) flush();
-      para.push(line);
-    }
-  }
-  flush();
-  return <>{blocks}</>;
-}
 
 /** The in-app assistant: the conversation, the tools it ran, and a box to write in. Memoised: the
  *  app re-renders on every pointer move. */
@@ -96,10 +37,17 @@ export const AssistantPanel = memo(function AssistantPanel({ assistant, onShow, 
     if (await assistant.send(text)) setDraft("");
   }
 
-  // Only the newest change can be undone from here: undo takes back the last step.
-  const lastChange = [...transcript.items]
-    .reverse()
-    .find((i): i is ToolCardItem => i.kind === "tool" && i.mutating && i.status === "done");
+  // Undo is offered on the card whose change is the assistant's newest still in the take-off.
+  const undoable = undoableCard(transcript);
+
+  // Said once per turn to screen readers, instead of reading out the streaming log.
+  const [announce, setAnnounce] = useState("");
+  const wasBusy = useRef(busy);
+  useEffect(() => {
+    if (wasBusy.current && !busy) setAnnounce(t("ai.finished"));
+    if (busy) setAnnounce("");
+    wasBusy.current = busy;
+  }, [busy]);
 
   function stopText(reason: string) {
     if (reason === "cancelled") return t("ai.cancelled");
@@ -114,6 +62,8 @@ export const AssistantPanel = memo(function AssistantPanel({ assistant, onShow, 
     if (e === "busy") return t("ai.busy");
     if (e === "no_api_key") return t("ai.noKey");
     if (e === "no_base_url") return t("ai.noBaseUrl");
+    if (e === "restarted") return t("ai.restarted");
+    if (e === "crashed") return t("ai.crashed");
     return e;
   }
 
@@ -140,7 +90,7 @@ export const AssistantPanel = memo(function AssistantPanel({ assistant, onShow, 
         );
       case "tool": {
         const canShow = item.handles.length > 0 || !!item.ui?.bounds;
-        const canUndo = !busy && item === lastChange && !item.undone;
+        const canUndo = !busy && item === undoable;
         return (
           <ToolCard
             key={i}
@@ -153,7 +103,7 @@ export const AssistantPanel = memo(function AssistantPanel({ assistant, onShow, 
       case "refused":
         return (
           <div key={i} className="msg notice refused" role="note">
-            <strong>{t("ai.refused")}</strong>
+            <strong className="heading">{t("ai.refused")}</strong>
             {item.text && <p dir="auto">{item.text}</p>}
             {item.category && <span className="category">{item.category}</span>}
           </div>
@@ -191,7 +141,10 @@ export const AssistantPanel = memo(function AssistantPanel({ assistant, onShow, 
           </svg>
         </button>
       </div>
-      <div className="assistant-log" ref={log} aria-live="polite">
+      <p className="sr-only" role="status" aria-live="polite">
+        {announce}
+      </p>
+      <div className="assistant-log" ref={log}>
         {empty ? (
           <div className="assistant-empty">
             <p>{t("ai.emptyTitle")}</p>
@@ -220,7 +173,7 @@ export const AssistantPanel = memo(function AssistantPanel({ assistant, onShow, 
             {t("ai.working")}
           </p>
         )}
-        {!busy && startNewOffered(transcript) && (
+        {!busy && (startNewOffered(transcript) || error === "crashed") && (
           <button type="button" className="primary new-conversation" onClick={assistant.clear}>
             {t("ai.newConversation")}
           </button>

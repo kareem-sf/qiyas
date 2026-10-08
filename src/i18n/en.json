@@ -142,5 +142,9 @@
   "tool.resolve_conflict": "Resolve difference",
   "tool.add_markup": "Add markup",
   "tool.zoom_to": "Zoom",
-  "tool.view_image": "Look at the drawing"
+  "tool.view_image": "Look at the drawing",
+  "ai.undoStale": "Can't undo: the take-off changed since",
+  "ai.restarted": "A new conversation started; send the message again.",
+  "ai.crashed": "The assistant crashed; start a new conversation.",
+  "ai.finished": "The assistant has finished"
 }

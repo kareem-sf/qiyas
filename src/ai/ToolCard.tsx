@@ -26,7 +26,7 @@ export function ToolCard({ card, onShow, onUndo }: Props) {
             </svg>
           )}
         </span>
-        <span className="tool-name">{label}</span>
+        <span className="tool-name heading">{label}</span>
         <span className="tool-status">
           {card.status === "running" ? t("ai.running") : card.status === "error" ? t("ai.failed") : ""}
         </span>
@@ -47,9 +47,12 @@ export function ToolCard({ card, onShow, onUndo }: Props) {
             <span className="tool-undone">{t("ai.undone")}</span>
           ) : (
             onUndo && (
-              <button type="button" onClick={onUndo}>
-                {t("ai.undo")}
-              </button>
+              <>
+                <button type="button" onClick={onUndo} disabled={card.stale}>
+                  {t("ai.undo")}
+                </button>
+                {card.stale && <span className="tool-undone">{t("ai.undoStale")}</span>}
+              </>
             )
           )}
         </div>

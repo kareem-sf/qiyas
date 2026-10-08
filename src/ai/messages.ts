@@ -18,6 +18,8 @@ export type ToolCardItem = {
   mutating: boolean;
   /** The user pressed Undo on this card. */
   undone: boolean;
+  /** Undo was refused: the take-off changed since this card's change. */
+  stale: boolean;
 };
 
 export type Item =
@@ -40,6 +42,7 @@ export type Action =
   /** The turn has ended (`ai:done`). */
   | { type: "end" }
   | { type: "undone"; id: string }
+  | { type: "undo_stale"; id: string }
   | { type: "clear" };
 
 export const EMPTY: Transcript = { items: [] };
@@ -93,6 +96,7 @@ export function reduce(state: Transcript, action: Action): Transcript {
             ui: null,
             mutating: action.mutating,
             undone: false,
+            stale: false,
           },
         ],
       };
@@ -123,9 +127,21 @@ export function reduce(state: Transcript, action: Action): Transcript {
       };
     case "undone":
       return { items: updateCard(items, action.id, (card) => ({ ...card, undone: true })) };
+    case "undo_stale":
+      return { items: updateCard(items, action.id, (card) => ({ ...card, stale: true })) };
     case "clear":
       return EMPTY;
   }
+}
+
+/** The card whose change is the assistant's newest still in the take-off: the newest done,
+ *  mutating card not undone yet. Undoing it makes the one before it the next. */
+export function undoableCard(t: Transcript): ToolCardItem | null {
+  for (let i = t.items.length - 1; i >= 0; i--) {
+    const item = t.items[i];
+    if (item.kind === "tool" && item.mutating && item.status === "done" && !item.undone) return item;
+  }
+  return null;
 }
 
 /** The transcript ends where only a new conversation helps: a refusal, or one grown too long. */

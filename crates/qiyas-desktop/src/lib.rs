@@ -48,6 +48,7 @@ pub fn run() {
             commands::ai_clear,
             commands::ai_status,
             commands::ai_set_language,
+            commands::ai_undo,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Qiyas");
