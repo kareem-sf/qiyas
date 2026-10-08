@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use base64::Engine;
-use qiyas_ai::mcp::{serve, OnMutated};
+use qiyas_ai::mcp::{serve, OnMutated, OnUi};
 use qiyas_core::{EntityFilter, Session};
 use rmcp::model::{CallToolRequestParams, CallToolResult, ClientConfig};
 use rmcp::service::RunningService;
@@ -25,6 +25,8 @@ struct Server {
     addr: SocketAddr,
     shutdown: CancellationToken,
     mutated: Arc<AtomicUsize>,
+    /// The `ui` of every tool result that had one, in order.
+    ui: Arc<Mutex<Vec<Value>>>,
 }
 
 impl Drop for Server {
@@ -55,12 +57,16 @@ async fn start(with_drawing: bool) -> Server {
     let on_mutated: OnMutated = Arc::new(move || {
         counter.fetch_add(1, Ordering::SeqCst);
     });
+    let ui = Arc::new(Mutex::new(Vec::new()));
+    let seen = ui.clone();
+    let on_ui: OnUi = Arc::new(move |v| seen.lock().unwrap().push(v));
     let addr = serve(
         session.clone(),
         0,
         TOKEN.into(),
         shutdown.clone(),
         on_mutated,
+        on_ui,
     )
     .await
     .unwrap();
@@ -70,6 +76,7 @@ async fn start(with_drawing: bool) -> Server {
         addr,
         shutdown,
         mutated,
+        ui,
     }
 }
 
@@ -141,6 +148,33 @@ async fn lists_the_catalogue_and_measures_as_mcp() {
     let result = call(&client, "list_sheets", json!({})).await;
     assert_ne!(result.is_error, Some(true), "{result:?}");
     assert_eq!(server.mutated.load(Ordering::SeqCst), 1);
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sheet_layer_and_zoom_changes_reach_the_window() {
+    let server = start(true).await;
+    let client = connect(server.addr, TOKEN).await.unwrap();
+    for (tool, args) in [
+        ("set_sheet", json!({ "sheet": "Model" })),
+        (
+            "show_layers",
+            json!({ "names": ["A-DOOR"], "visible": false }),
+        ),
+        ("zoom_to", json!({ "bounds": [[0, 0], [5, 5]] })),
+        // No ui: nothing is sent.
+        ("list_layers", json!({})),
+    ] {
+        let result = call(&client, tool, args).await;
+        assert_ne!(result.is_error, Some(true), "{tool}: {result:?}");
+    }
+    let ui = server.ui.lock().unwrap().clone();
+    let actions: Vec<&str> = ui.iter().map(|u| u["action"].as_str().unwrap()).collect();
+    assert_eq!(actions, ["show_sheet", "redraw", "zoom"]);
+    assert_eq!(ui[0]["sheet"], "*Model_Space");
+    assert_eq!(ui[1]["hidden"], json!(["A-DOOR"]));
+    // Showing a sheet or hiding layers is not a take-off change.
+    assert_eq!(server.mutated.load(Ordering::SeqCst), 0);
     client.cancel().await.unwrap();
 }
 
@@ -232,6 +266,7 @@ async fn a_restart_on_the_same_port_binds_again() {
         TOKEN.into(),
         shutdown.clone(),
         Arc::new(|| {}),
+        Arc::new(|_| {}),
     )
     .await
     .unwrap();

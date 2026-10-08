@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { fitBounds, screenToWorld, worldToScreen, zoomAt, type Camera } from "./camera";
+import { fitBounds, resized, visibleBounds, screenToWorld, worldToScreen, zoomAt, type Camera } from "./camera";
 
 test("round trip world/screen", () => {
   const c: Camera = { cx: 0, cy: 0, scale: 0.5, width: 800, height: 600 };
@@ -30,4 +30,19 @@ test("fitBounds centres and fits the longer side", () => {
   expect(f.cx).toBe(20);
   expect(f.cy).toBe(5);
   expect(f.scale).toBe(40 / (800 - 40));
+});
+
+test("a narrower canvas keeps the whole view, and widening again restores it", () => {
+  const wide: Camera = { cx: 50, cy: 20, scale: 0.1, width: 1000, height: 600 };
+  // What the user last looked at: 100 x 60 world units round (50, 20).
+  const view = visibleBounds(wide);
+  const narrow = resized(wide, 720, 600, view);
+  expect(narrow.width).toBe(720);
+  expect([narrow.cx, narrow.cy]).toEqual([50, 20]);
+  // Nothing on either side is cut off.
+  expect(screenToWorld(narrow, [0, 0])[0]).toBeLessThanOrEqual(0 + 1e-9);
+  expect(screenToWorld(narrow, [720, 0])[0]).toBeGreaterThanOrEqual(100 - 1e-9);
+  const back = resized(narrow, 1000, 600, view);
+  expect(back.scale).toBeCloseTo(0.1, 12);
+  expect([back.cx, back.cy]).toEqual([50, 20]);
 });

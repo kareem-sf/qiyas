@@ -1,6 +1,16 @@
 import { useEffect, useImperativeHandle, useRef, useState, type PointerEvent, type Ref } from "react";
 import type { Batch } from "./batch";
-import { fitBounds, pan, screenToWorld, zoomAt, type Bounds, type Camera, type Point } from "./camera";
+import {
+  fitBounds,
+  pan,
+  resized,
+  screenToWorld,
+  visibleBounds,
+  zoomAt,
+  type Bounds,
+  type Camera,
+  type Point,
+} from "./camera";
 import { createRenderer, type Renderer, type Theme } from "./gl";
 
 export type Tool = "select" | "distance" | "area" | "count" | "zoomWindow";
@@ -34,6 +44,8 @@ export function Viewport({ batch, highlight, tool, theme, overlay = null, onClic
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const renderer = useRef<Renderer | null>(null);
   const camera = useRef<Camera>({ cx: 0, cy: 0, scale: 1, width: 1, height: 1 });
+  /** The world box the user (or the app) last chose to show; a resize keeps it in view. */
+  const view = useRef<Bounds | null>(null);
   const themeRef = useRef(theme);
   const batchRef = useRef(batch);
   const frame = useRef(0);
@@ -50,8 +62,9 @@ export function Viewport({ batch, highlight, tool, theme, overlay = null, onClic
     });
   }
 
-  function setCamera(c: Camera) {
+  function setCamera(c: Camera, keepView = false) {
     camera.current = c;
+    if (!keepView) view.current = visibleBounds(c);
     requestDraw();
   }
 
@@ -77,7 +90,10 @@ export function Viewport({ batch, highlight, tool, theme, overlay = null, onClic
       canvas.height = Math.max(1, Math.round(height * dpr));
       // A drawing fitted while the canvas had no size (hidden at load) is fitted again once it has.
       const hadNoSize = camera.current.width <= 1 || camera.current.height <= 1;
-      setCamera({ ...camera.current, width: Math.max(1, width), height: Math.max(1, height) });
+      const [w, h] = [Math.max(1, width), Math.max(1, height)];
+      // A side panel widening or narrowing the canvas keeps what was in view, centred.
+      if (hadNoSize || !view.current) setCamera({ ...camera.current, width: w, height: h });
+      else setCamera(resized(camera.current, w, h, view.current), true);
       if (hadNoSize) fitExtents();
     };
     // Measure now, so a batch arriving on the first render fits the real size.

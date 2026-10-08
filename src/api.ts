@@ -346,6 +346,9 @@ export const mcpStatus = () => invoke<McpStatus>("mcp_status");
 
 /** Sent when an outside AI app changed the take-off through the MCP server. */
 export const TAKEOFF_CHANGED = "takeoff:changed";
+/** Sent (with the tool result's `ui`) after an MCP tool showed another sheet, hid or showed layers,
+ *  or asked for a zoom. */
+export const SESSION_CHANGED = "session:changed";
 
 /** What the window should do after a tool, from the tool's result. Bounds in drawing coordinates. */
 export type AiUi = {

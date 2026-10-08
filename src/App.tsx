@@ -19,6 +19,7 @@ import {
   saveDrawing,
   saveDrawingAs,
   saveProject,
+  SESSION_CHANGED,
   setLayerHidden,
   setSheet,
   TAKEOFF_CHANGED,
@@ -256,12 +257,10 @@ export default function App() {
 
   const assistant = useAssistant({
     lang,
+    // The drawing itself is unchanged: the take-off is drawn from `items`, so no new batch.
     onMutated: async (tool) => {
       if (tool === "compare_boq") setCompared(true);
-      await run(async () => {
-        await refreshTakeoffAndBoq();
-        await redraw();
-      });
+      await run(refreshTakeoffAndBoq);
       await autosave();
     },
     onUi: applyAiUi,
@@ -272,22 +271,30 @@ export default function App() {
   // the assistant's changes. The listener is set up once and calls the latest code through this.
   const onMcpChange = useRef<() => Promise<void>>(async () => {});
   onMcpChange.current = async () => {
-    await run(async () => {
-      await refreshTakeoffAndBoq();
-      await redraw();
-    });
+    await run(refreshTakeoffAndBoq);
     await autosave();
+  };
+  // An outside AI app showed another sheet, hid or showed layers, or asked for a zoom: follow it,
+  // so the sheet tabs, the layers panel and the canvas show what the session now shows.
+  const onMcpUi = useRef<(ui: AiUi) => void>(() => {});
+  onMcpUi.current = (ui) => {
+    run(async () => {
+      setInfo(await drawingInfo());
+      applyAiUi(ui);
+    });
   };
   useEffect(() => {
     let gone = false;
-    let off: (() => void) | undefined;
-    listen(TAKEOFF_CHANGED, () => onMcpChange.current()).then((unlisten) => {
+    const offs: (() => void)[] = [];
+    const keep = (unlisten: () => void) => {
       if (gone) unlisten();
-      else off = unlisten;
-    });
+      else offs.push(unlisten);
+    };
+    listen(TAKEOFF_CHANGED, () => onMcpChange.current()).then(keep);
+    listen<AiUi>(SESSION_CHANGED, (e) => onMcpUi.current(e.payload)).then(keep);
     return () => {
       gone = true;
-      off?.();
+      offs.forEach((off) => off());
     };
   }, []);
 

@@ -29,6 +29,9 @@ use crate::{catalogue, execute, AiError, ToolError, ToolOutput};
 
 /// Called after a tool changed the take-off or the BOQ work, so the window refreshes.
 pub type OnMutated = Arc<dyn Fn() + Send + Sync>;
+/// Called with a tool result's `ui` (another sheet, other hidden layers, a zoom), so the window
+/// shows what the session now shows.
+pub type OnUi = Arc<dyn Fn(Value) + Send + Sync>;
 
 /// What a tool call answers when no drawing is open.
 pub const NO_DRAWING: &str = "No drawing is open";
@@ -46,13 +49,14 @@ pub async fn serve(
     token: String,
     shutdown: CancellationToken,
     on_mutated: OnMutated,
+    on_ui: OnUi,
 ) -> Result<SocketAddr, AiError> {
     let listener = bind(port).await?;
     let addr = listener
         .local_addr()
         .map_err(|e| AiError::Server(format!("127.0.0.1:{port}: {e}")))?;
 
-    let handler = Qiyas::new(session, on_mutated);
+    let handler = Qiyas::new(session, on_mutated, on_ui);
     // Browsers send `Origin`; only the server's own origin may call it, so a web page can't drive
     // Qiyas even with the token. MCP apps and the bridge send no `Origin` and pass.
     let port = addr.port();
@@ -134,13 +138,14 @@ fn same(a: &[u8], b: &[u8]) -> bool {
 struct Qiyas {
     session: Arc<Mutex<Option<Session>>>,
     on_mutated: OnMutated,
+    on_ui: OnUi,
     tools: Arc<Vec<Tool>>,
     /// The tools that change the take-off or the BOQ work.
     mutating: Arc<Vec<&'static str>>,
 }
 
 impl Qiyas {
-    fn new(session: Arc<Mutex<Option<Session>>>, on_mutated: OnMutated) -> Qiyas {
+    fn new(session: Arc<Mutex<Option<Session>>>, on_mutated: OnMutated, on_ui: OnUi) -> Qiyas {
         let specs = catalogue();
         let mutating = specs
             .iter()
@@ -160,6 +165,7 @@ impl Qiyas {
         Qiyas {
             session,
             on_mutated,
+            on_ui,
             tools: Arc::new(tools),
             mutating: Arc::new(mutating),
         }
@@ -214,8 +220,10 @@ impl ServerHandler for Qiyas {
             .map_err(|e| {
                 ErrorData::internal_error(format!("The tool {name} crashed: {e}"), None)
             })?;
+        let mut ui = None;
         let result = match output {
             Ok(ToolOutput::Json(value)) => {
+                ui = value.get("ui").cloned();
                 CallToolResult::success(vec![ContentBlock::text(value.to_string())])
             }
             Ok(ToolOutput::Image { png, caption }) => CallToolResult::success(vec![
@@ -228,6 +236,9 @@ impl ServerHandler for Qiyas {
         };
         if mutating {
             (self.on_mutated)();
+        }
+        if let Some(ui) = ui {
+            (self.on_ui)(ui);
         }
         Ok(result.into())
     }

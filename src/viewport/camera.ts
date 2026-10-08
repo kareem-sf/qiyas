@@ -51,3 +51,19 @@ export function fitBounds(c: Camera, [[x0, y0], [x1, y1]]: Bounds, marginPx: num
   // An empty or single-point drawing has no size to fit; keep the zoom.
   return { ...c, cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, scale: scale > 0 ? scale : c.scale };
 }
+
+/** The world box the canvas shows. */
+export function visibleBounds(c: Camera): Bounds {
+  const [hw, hh] = [(c.width / 2) * c.scale, (c.height / 2) * c.scale];
+  return [
+    [c.cx - hw, c.cy - hh],
+    [c.cx + hw, c.cy + hh],
+  ];
+}
+
+/** The camera for a canvas now `width` x `height` pixels: `view` (the box last shown on purpose)
+ *  stays centred and whole, so a narrower canvas zooms out instead of cutting the drawing off, and
+ *  the old size gives the old view back. */
+export function resized(c: Camera, width: number, height: number, view: Bounds): Camera {
+  return fitBounds({ ...c, width, height }, view, 0);
+}

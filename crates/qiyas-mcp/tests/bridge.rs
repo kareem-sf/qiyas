@@ -23,9 +23,16 @@ async fn app(shutdown: &CancellationToken) -> (tempfile::TempDir, String) {
     let dir = tempfile::tempdir().unwrap();
     let path = qiyas_core::fixtures::write_sample(dir.path(), "dxf");
     let session = Arc::new(Mutex::new(Some(Session::open(&path).unwrap())));
-    let addr = qiyas_ai::mcp::serve(session, 0, TOKEN.into(), shutdown.clone(), Arc::new(|| {}))
-        .await
-        .unwrap();
+    let addr = qiyas_ai::mcp::serve(
+        session,
+        0,
+        TOKEN.into(),
+        shutdown.clone(),
+        Arc::new(|| {}),
+        Arc::new(|_| {}),
+    )
+    .await
+    .unwrap();
     (dir, format!("http://{addr}/mcp"))
 }
 
