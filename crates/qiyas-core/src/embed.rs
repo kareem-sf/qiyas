@@ -7,8 +7,8 @@
 //! `String(layer)`, `String(sheet)`, `String(block_name or "")`; then, for a volume only,
 //! `Real(height)` and, for an item only, `String(unit)`. A count writes one point per counted
 //! reference, each with the whole count's record. A volume is drawn like an area, on
-//! `QIYAS-AREA`; an item with geometry is drawn like a length, on `QIYAS-ITEM`, and an item
-//! without geometry is not written.
+//! `QIYAS-AREA`; an item with geometry is drawn like a length, on `QIYAS-ITEM` (a markup, an item
+//! with unit "markup", on `QIYAS-MARKUP`), and an item without geometry is not written.
 
 use std::collections::HashMap;
 
@@ -22,6 +22,8 @@ use crate::session::MEASURE_TOL;
 use crate::{Kind, Measurement, Units};
 
 const APP: &str = "QIYAS";
+/// The layer markups (items with unit "markup") are drawn on, and its colour index.
+const MARKUP_LAYER: (&str, u8) = ("QIYAS-MARKUP", 1);
 
 /// The layer and its colour index for each kind.
 fn layer_of(kind: Kind) -> (&'static str, u8) {
@@ -30,6 +32,14 @@ fn layer_of(kind: Kind) -> (&'static str, u8) {
         Kind::Area | Kind::Volume => ("QIYAS-AREA", 5),
         Kind::Count => ("QIYAS-COUNT", 4),
         Kind::Item => ("QIYAS-ITEM", 2),
+    }
+}
+
+/// The layer a measurement is drawn on: its kind's, or the markup layer for a markup.
+fn layer_for(m: &Measurement) -> &'static str {
+    match m.kind {
+        Kind::Item if m.unit == "markup" => MARKUP_LAYER.0,
+        kind => layer_of(kind).0,
     }
 }
 
@@ -64,8 +74,8 @@ pub fn embed_measurements(doc: &mut CadDocument, items: &[Measurement]) {
         doc.app_ids.add(app).expect("checked it is missing");
     }
     // Volumes share the area layer.
-    for kind in [Kind::Length, Kind::Area, Kind::Count, Kind::Item] {
-        let (name, index) = layer_of(kind);
+    let layers = [Kind::Length, Kind::Area, Kind::Count, Kind::Item].map(layer_of);
+    for (name, index) in layers.into_iter().chain([MARKUP_LAYER]) {
         if !doc.layers.contains(name) {
             let mut layer = Layer::new(name);
             layer.handle = doc.allocate_handle();
@@ -113,7 +123,7 @@ pub fn embed_measurements(doc: &mut CadDocument, items: &[Measurement]) {
     for (mut entity, m) in shapes {
         let owner = doc.block_records.get(&m.sheet).map(|b| b.handle);
         let common = entity.common_mut();
-        common.layer = layer_of(m.kind).0.to_string();
+        common.layer = layer_for(m).to_string();
         if let Some(owner) = owner {
             common.owner_handle = owner;
         }

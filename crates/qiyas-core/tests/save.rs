@@ -492,3 +492,55 @@ fn volume_embeds_and_rebuilds_with_height() {
     );
     assert_eq!(item.points, [[1.0, 1.0], [2.0, 1.0]]);
 }
+
+#[test]
+fn markup_item_embeds_on_the_markup_layer() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = qiyas_core::fixtures::write_sample(dir.path(), "dxf");
+    let mut session = Session::open(&source).unwrap();
+    for unit in ["markup", "bags"] {
+        session
+            .run(Command::AddMeasurement {
+                kind: Kind::Item,
+                value: Some(0.0),
+                unit: Some(unit.to_string()),
+                height: None,
+                points: vec![[1.0, 1.0], [2.0, 1.0], [2.0, 2.0]],
+                handles: Vec::new(),
+                description: unit.to_string(),
+                note: String::new(),
+            })
+            .unwrap();
+    }
+    let out = dir.path().join("out.dxf");
+    session.save_as(&out).unwrap();
+    std::fs::remove_file(project_path(&out)).unwrap();
+
+    let reopened = Session::open(&out).unwrap();
+    let doc = &reopened.drawing.doc;
+    let layer_of = |description: &str| {
+        doc.entities()
+            .find(|e| {
+                e.common()
+                    .extended_data
+                    .get_record("QIYAS")
+                    .is_some_and(|r| {
+                        r.values.get(3) == Some(&XDataValue::String(description.to_string()))
+                    })
+            })
+            .map(|e| e.common().layer.clone())
+    };
+    assert_eq!(layer_of("markup").as_deref(), Some("QIYAS-MARKUP"));
+    assert_eq!(layer_of("bags").as_deref(), Some("QIYAS-ITEM"));
+    assert_eq!(
+        doc.layers.get("QIYAS-MARKUP").unwrap().color,
+        Color::Index(1)
+    );
+    let units: Vec<&str> = reopened
+        .takeoff
+        .items
+        .iter()
+        .map(|m| m.unit.as_str())
+        .collect();
+    assert_eq!(units, ["markup", "bags"]);
+}
