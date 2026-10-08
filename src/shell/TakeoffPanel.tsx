@@ -40,7 +40,12 @@ export const TakeoffPanel = memo(function TakeoffPanel({
   const cancelled = useRef(false);
   /** The row whose BOQ link is being picked. */
   const [linking, setLinking] = useState<string | null>(null);
-  const closePicker = useCallback(() => setLinking(null), []);
+  /** The link button that opened the picker; it gets the focus back when the picker closes. */
+  const opener = useRef<HTMLButtonElement | null>(null);
+  const closePicker = useCallback(() => {
+    setLinking(null);
+    opener.current?.focus();
+  }, []);
   const linked = items.find((m) => m.id === linking);
 
   function startEdit(m: Measurement) {
@@ -153,6 +158,7 @@ export const TakeoffPanel = memo(function TakeoffPanel({
                           disabled={!boq}
                           onClick={(e) => {
                             e.stopPropagation();
+                            opener.current = e.currentTarget;
                             setLinking(m.id);
                           }}
                         >
@@ -189,7 +195,7 @@ export const TakeoffPanel = memo(function TakeoffPanel({
           items={boq.items}
           current={linked.boq_code}
           onPick={(code) => {
-            setLinking(null);
+            closePicker();
             if (code !== linked.boq_code) onLink(linked.id, code);
           }}
           onClose={closePicker}

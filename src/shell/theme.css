@@ -578,10 +578,10 @@ button.link {
 :root[dir="rtl"] .boq tr.section th {
   font-feature-settings: "swsh";
 }
-.boq tbody tr:not(.section) {
+.boq tbody tr:not(.section, [aria-disabled="true"]) {
   cursor: pointer;
 }
-.boq tbody tr:not(.section):hover {
+.boq tbody tr:not(.section, [aria-disabled="true"]):hover {
   background: var(--hover);
 }
 .boq tbody tr[aria-current="true"] {

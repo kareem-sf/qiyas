@@ -108,7 +108,11 @@ test("search filters on code and description", () => {
 test("double click the tolerance to change it; empty goes back to the default", () => {
   const props = renderPanel();
   const tolerance = within(bodyRows()[2]).getAllByRole("cell")[7];
+  fireEvent.click(tolerance);
+  fireEvent.click(tolerance);
   fireEvent.doubleClick(tolerance);
+  // Editing the tolerance doesn't select the row and zoom to it.
+  expect(props.onSelect).not.toHaveBeenCalled();
   const input = screen.getByRole("spinbutton", { name: "Tolerance" });
   fireEvent.change(input, { target: { value: "12.5" } });
   fireEvent.keyDown(input, { key: "Enter" });
@@ -130,4 +134,15 @@ test("no BOQ: the import button, disabled without a drawing", () => {
   cleanup();
   renderPanel({ boq: null, onImport: undefined });
   expect((screen.getByRole("button", { name: "Import BOQ" }) as HTMLButtonElement).disabled).toBe(true);
+});
+
+test("an item without a code can't be selected", () => {
+  const props = renderPanel({
+    boq: { ...boq, items: [boqItem("", "Preliminaries", "item", 1), ...boq.items] },
+  });
+  const [first] = bodyRows();
+  expect(first.getAttribute("aria-disabled")).toBe("true");
+  fireEvent.click(within(first).getAllByRole("cell")[1]);
+  expect(props.onSelect).not.toHaveBeenCalled();
+  expect(bodyRows()[2].getAttribute("aria-disabled")).toBeNull();
 });

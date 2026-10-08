@@ -102,11 +102,14 @@ export const BoqPanel = memo(function BoqPanel({
     const others = measured.other.map((o) => `${qty(o.sum, o.unit)} ${unitLabel(t, o.unit)}`);
     const sum = measured.sum === null ? [] : [qty(measured.sum, item.unit)];
     const shown = [...sum, ...others].join(" · ");
+    // An item without a code can't be linked, so there is nothing to show for it.
+    const linkable = item.code !== "";
     rows.push(
       <tr
         key={i}
-        aria-current={(item.code !== "" && item.code === selectedCode) || undefined}
-        onClick={() => onSelect(item.code)}
+        aria-current={(linkable && item.code === selectedCode) || undefined}
+        aria-disabled={!linkable || undefined}
+        onClick={linkable ? () => onSelect(item.code) : undefined}
       >
         <td title={item.code}>{item.code}</td>
         <td title={item.description} dir="auto">
@@ -135,7 +138,10 @@ export const BoqPanel = memo(function BoqPanel({
         <td className="num">{measured.links.length}</td>
         <td
           className="num tol"
-          onDoubleClick={() => {
+          // Editing the tolerance doesn't select the row (and zoom) as well.
+          onClick={(e) => e.stopPropagation()}
+          onDoubleClick={(e) => {
+            e.stopPropagation();
             setDraft(item.tolerance === null ? "" : String(item.tolerance));
             setEditing(i);
           }}

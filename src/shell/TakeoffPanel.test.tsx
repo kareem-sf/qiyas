@@ -121,6 +121,13 @@ test("the BOQ column and the link picker", () => {
   fireEvent.keyDown(search, { key: "Enter" });
   expect(onLink).toHaveBeenCalledWith("b", "A.2");
   expect(screen.queryByRole("dialog")).toBeNull();
+  // The keyboard goes on from the button that opened the picker.
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "Link: Kerb" }));
+
+  fireEvent.click(screen.getByRole("button", { name: "Link: Kerb" }));
+  fireEvent.keyDown(screen.getByRole("searchbox"), { key: "Escape" });
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "Link: Kerb" }));
 
   fireEvent.click(screen.getByRole("button", { name: "Link: Wall run" }));
   fireEvent.click(screen.getByRole("button", { name: "Unlink" }));

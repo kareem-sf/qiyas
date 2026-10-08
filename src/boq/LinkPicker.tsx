@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import type { BoqItem } from "../api";
 import { useT } from "../i18n";
 import { matches, unitLabel } from "./boqMath";
@@ -15,13 +15,15 @@ type Props = {
 };
 
 /** Picks the BOQ item a take-off row is linked to: a search box over the items ("code ·
- *  description · unit"); arrows move, Enter or a click picks, Escape or a click outside closes. */
+ *  description · unit"); arrows move, Enter or a click picks, Escape or a click outside closes.
+ *  The opener gives focus back in `onPick` and `onClose`. */
 export function LinkPicker({ title, items, current, onPick, onClose }: Props) {
   const t = useT();
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const box = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLUListElement>(null);
+  const listId = useId();
   // An item without a code can't be linked to.
   const found = items.filter((i) => i.code !== "" && matches(i, query));
 
@@ -68,6 +70,8 @@ export function LinkPicker({ title, items, current, onPick, onClose }: Props) {
         aria-label={t("boq.search")}
         placeholder={t("boq.search")}
         value={query}
+        aria-controls={listId}
+        aria-activedescendant={found[active] ? `${listId}-${active}` : undefined}
         autoFocus
         onChange={(e) => {
           setQuery(e.target.value);
@@ -78,10 +82,11 @@ export function LinkPicker({ title, items, current, onPick, onClose }: Props) {
       {found.length === 0 ? (
         <p className="empty">{t("boq.noMatch")}</p>
       ) : (
-        <ul role="listbox" aria-label={t("boq")} ref={list}>
+        <ul role="listbox" id={listId} aria-label={t("boq")} ref={list}>
           {found.map((item, i) => (
             <li
               key={`${item.row}-${item.code}`}
+              id={`${listId}-${i}`}
               role="option"
               aria-selected={i === active}
               className={item.code === current ? "linked" : undefined}

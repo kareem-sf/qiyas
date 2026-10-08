@@ -23,7 +23,13 @@ test("search, arrows and Enter link the item", () => {
   const search = screen.getByRole("searchbox", { name: "Search…" });
   fireEvent.change(search, { target: { value: "walls" } });
   expect(screen.getAllByRole("option")).toHaveLength(2);
+  const listbox = screen.getByRole("listbox");
+  expect(search.getAttribute("aria-controls")).toBe(listbox.id);
+  expect(search.getAttribute("aria-activedescendant")).toBe(screen.getAllByRole("option")[0].id);
   fireEvent.keyDown(search, { key: "ArrowDown" });
+  const second = screen.getAllByRole("option")[1];
+  expect(second.getAttribute("aria-selected")).toBe("true");
+  expect(search.getAttribute("aria-activedescendant")).toBe(second.id);
   fireEvent.keyDown(search, { key: "Enter" });
   expect(onPick).toHaveBeenCalledWith("A.2");
 
