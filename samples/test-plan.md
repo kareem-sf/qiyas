@@ -47,3 +47,26 @@ The arc and the circle come out 0.02 % and 0.1 % short because curves are measur
 - Export take-off: the Excel file should list every row with these values and totals per kind.
 - Ctrl+S: a `test-plan.dwg.bak` appears next to the file; reopen and the measurements are still there even if you delete `test-plan.qiyas`.
 - Switch to Arabic: labels flip to the right, the ribbon reads قياس.
+
+## BOQ check
+
+`test-boq.xlsx` is a six-item BOQ for this drawing, made by
+`cargo run -p qiyas-boq --example write_test_boq -- samples/test-boq.xlsx`. Two quantities are wrong on purpose.
+
+| Code | Item | Unit | BOQ says | Drawing | Link to |
+|---|---|---|---|---|---|
+| A.1 | Block walls 200 mm | m | 42.000 | 42.000 | outer ring perimeter |
+| A.2 | Partition walls | m | 14.000 | 14.000 | both partitions (9 + 5) |
+| A.3 | Floor screed, living room | m² | 58.290 | 58.290 | living room area |
+| A.4 | Floor screed, bedroom | m² | **30.000** | 22.090 | bedroom area |
+| B.1 | Doors 900 mm | pcs | 3 | 3 | DOOR count |
+| B.2 | Windows 1200 mm | pcs | **4** | 5 | WINDOW count |
+
+Measure the six, import the BOQ, link each measurement to its row, and press Compare. The
+conflicts panel must show exactly two quantity mismatches: **A.4** (30.000 vs 22.090 m², −26.4 %)
+and **B.2** (4 vs 5 pcs, +25.0 %). Nothing else.
+
+`cargo run -p qiyas-ai --example phase2_walkthrough` does all of this through the AI tools and
+prints the conflicts. Without links (`-- --no-link`) the matching rules find nothing, because the
+default descriptions ("LwPolyline on A-ROOM") do not look like the BOQ text: link, or describe the
+measurements the way the BOQ does.
