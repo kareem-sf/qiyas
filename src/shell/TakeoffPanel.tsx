@@ -1,5 +1,5 @@
 import { memo, useRef, useState } from "react";
-import type { Measurement, Total } from "../api";
+import type { Kind, Measurement, Total } from "../api";
 import { useT } from "../i18n";
 
 type Props = {
@@ -11,8 +11,9 @@ type Props = {
   onRename(id: string, text: string): void;
 };
 
-/** Quantities keep Latin digits and three decimals in both languages. */
-const qty = (n: number) => n.toFixed(3);
+/** Quantities keep Latin digits in both languages: counts as whole numbers, the rest with three
+ *  decimals. */
+const qty = (n: number, kind: Kind) => (kind === "count" ? n.toFixed(0) : n.toFixed(3));
 
 /** The take-off: one row per measurement (click to show it on the drawing, double click or the pen
  *  to rename, the cross to remove) and the totals per kind underneath. Memoised: the app re-renders
@@ -108,7 +109,7 @@ export const TakeoffPanel = memo(function TakeoffPanel({
                         )}
                       </div>
                     </td>
-                    <td className="num">{qty(m.shown)}</td>
+                    <td className="num">{qty(m.shown, m.kind)}</td>
                     <td>{t(`qty.${m.unit}`)}</td>
                     <td title={m.layer}>{m.layer}</td>
                     <td>
@@ -157,7 +158,7 @@ export const TakeoffPanel = memo(function TakeoffPanel({
             <span className="kind">{t(total.kind)}</span>
             <span className="num">{total.count} ×</span>
             <span className="num">
-              {qty(total.sum)} {t(`qty.${total.unit}`)}
+              {qty(total.sum, total.kind)} {t(`qty.${total.unit}`)}
             </span>
           </li>
         ))}

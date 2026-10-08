@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, within } from "@testing-library/react";
-import { expect, test, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, expect, test, vi } from "vitest";
 import type { Measurement, Total } from "../api";
 import { TakeoffPanel } from "./TakeoffPanel";
+
+afterEach(cleanup);
 
 const item = (id: string, description: string, shown: number, more: Partial<Measurement> = {}): Measurement => ({
   id,
@@ -60,4 +62,29 @@ test("takeoff panel lists items and totals", () => {
   fireEvent.change(input, { target: { value: "Ground floor walls" } });
   fireEvent.keyDown(input, { key: "Enter" });
   expect(onRename).toHaveBeenCalledWith("a", "Ground floor walls");
+});
+
+test("counts show as whole numbers", () => {
+  const totals: Total[] = [
+    { kind: "area", unit: "m2", count: 1, sum: 15 },
+    { kind: "count", unit: "pcs", count: 1, sum: 3 },
+  ];
+  render(
+    <TakeoffPanel
+      items={[item("c", "Doors", 3, { kind: "count", unit: "pcs" })]}
+      totals={totals}
+      selectedId={null}
+      onSelect={() => {}}
+      onRemove={() => {}}
+      onRename={() => {}}
+    />,
+  );
+  const [, body] = screen.getAllByRole("rowgroup");
+  const [row] = within(body).getAllByRole("row");
+  expect(row.textContent).toContain("3pcs");
+  expect(row.textContent).not.toContain("3.000");
+  const [area, count] = within(screen.getByRole("list", { name: "Totals" })).getAllByRole("listitem");
+  expect(area.textContent).toContain("15.000");
+  expect(count.textContent).toContain("3 pcs");
+  expect(count.textContent).not.toContain("3.000");
 });
