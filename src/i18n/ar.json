@@ -85,6 +85,8 @@
   "settings.remove": "إزالة",
   "settings.mcp": "خادم MCP",
   "settings.mcpEnable": "السماح لتطبيقات الذكاء الاصطناعي الأخرى باستخدام قياس",
+  "settings.mcpListening": "يعمل على {addr}",
+  "settings.mcpStopped": "متوقف",
   "settings.port": "المنفذ",
   "settings.token": "الرمز",
   "settings.copy": "نسخ",

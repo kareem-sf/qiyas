@@ -18,9 +18,12 @@ tiny-skia.workspace = true
 # than reqwest's default aws-lc-rs, which needs a C/CMake build and carries the OpenSSL licence.
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "http2", "json"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
-tokio = { version = "1", features = ["macros", "sync", "time"] }
+tokio = { version = "1", features = ["macros", "sync", "time", "rt", "net"] }
 tokio-util = "0.7"
 base64 = "0.22"
+# The MCP server: rmcp (Apache-2.0) over Streamable HTTP, served by axum (MIT) on 127.0.0.1.
+rmcp = { version = "3.5", default-features = false, features = ["server", "transport-streamable-http-server"] }
+axum = { version = "0.8", default-features = false, features = ["tokio", "http1"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util", "time"] }
@@ -28,3 +31,4 @@ opencadcodec.workspace = true
 rust_xlsxwriter.workspace = true
 tempfile.workspace = true
 qiyas-core = { path = "../qiyas-core", features = ["fixtures"] }
+rmcp = { version = "3.5", default-features = false, features = ["client", "transport-streamable-http-client-reqwest"] }

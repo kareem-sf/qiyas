@@ -964,6 +964,10 @@ button.link {
   background: var(--panel);
   border-radius: 6px;
 }
+.settings .status {
+  margin: 0;
+  color: var(--muted);
+}
 .settings .snippet button {
   align-self: flex-end;
 }

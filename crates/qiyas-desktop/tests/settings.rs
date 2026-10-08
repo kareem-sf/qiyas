@@ -158,3 +158,24 @@ fn api_key_never_written_to_disk() {
         );
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn only_the_user_can_read_the_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    // A leftover temporary file from a crash, readable by all.
+    fs::create_dir_all(dir.path()).unwrap();
+    fs::write(dir.path().join("settings.json.tmp"), "{}").unwrap();
+    fs::set_permissions(
+        dir.path().join("settings.json.tmp"),
+        fs::Permissions::from_mode(0o644),
+    )
+    .unwrap();
+    settings::save(dir.path(), &Settings::default()).unwrap();
+    let mode = fs::metadata(dir.path().join("settings.json"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o600);
+}

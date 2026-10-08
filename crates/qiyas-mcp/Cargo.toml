@@ -1,0 +1,27 @@
+[package]
+name = "qiyas-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "The stdio bridge Claude Desktop and Claude Code spawn to reach the MCP server inside Qiyas"
+
+[[bin]]
+name = "qiyas-mcp"
+path = "src/main.rs"
+
+[dependencies]
+# MCP over stdio towards the AI app, and an MCP client over HTTP towards Qiyas (Apache-2.0).
+rmcp = { version = "3.5", default-features = false, features = ["server", "client", "transport-io", "transport-streamable-http-client-reqwest"] }
+# Only plain HTTP to 127.0.0.1 is used; the workspace build may still turn on reqwest's rustls,
+# which then needs a crypto provider installed.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio = { version = "1", features = ["macros", "rt", "io-std", "sync"] }
+
+[dev-dependencies]
+qiyas-ai = { path = "../qiyas-ai" }
+qiyas-core = { path = "../qiyas-core", features = ["fixtures"] }
+rmcp = { version = "3.5", default-features = false, features = ["client", "transport-child-process"] }
+tempfile.workspace = true
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "time", "io-util"] }
+tokio-util = "0.7"

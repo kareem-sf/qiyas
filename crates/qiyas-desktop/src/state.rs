@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use qiyas_core::Session;
 
 use crate::ai::AiRun;
+use crate::mcp::McpRun;
 use crate::settings::{self, Settings};
 
 /// Managed by Tauri and shared by every command.
@@ -16,6 +17,8 @@ pub struct AppState {
     pub config_dir: PathBuf,
     /// The in-app assistant's conversation and running turn.
     pub ai: Mutex<AiRun>,
+    /// The MCP server for outside AI apps.
+    pub mcp: Mutex<McpRun>,
 }
 
 impl AppState {
@@ -25,6 +28,7 @@ impl AppState {
             settings: Mutex::new(settings::load(&config_dir)),
             config_dir,
             ai: Mutex::new(AiRun::default()),
+            mcp: Mutex::new(McpRun::default()),
         }
     }
 }

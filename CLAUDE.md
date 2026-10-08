@@ -17,12 +17,13 @@ qiyas/
     qiyas-boq       Excel in and out (calamine to read, rust_xlsxwriter to write)
     qiyas-pdf       PDF import as vectors and text, PDF underlay pages, PDF plot
     qiyas-ai        tool catalogue over the command bus, MCP server, Claude client
+    qiyas-mcp       the stdio bridge Claude Desktop and Claude Code start (bundled beside the app)
     qiyas-desktop   the Tauri app: IPC, file dialogs, printing, keychain, updates
   src/              React + TypeScript + Vite: viewport, ribbon, command line, panels
   scripts/check.sh  cargo fmt, clippy, test, tsc, vitest, in one run
 ```
 
-The crates that exist now: `qiyas-core`, `qiyas-geom`, `qiyas-render`, `qiyas-takeoff`, `qiyas-boq`, `qiyas-ai` and `qiyas-desktop`. `qiyas-pdf` arrives in a later phase. The take-off, BOQ, schedule and conflict types live in `qiyas-core`; `qiyas-takeoff` holds the comparison engine.
+The crates that exist now: `qiyas-core`, `qiyas-geom`, `qiyas-render`, `qiyas-takeoff`, `qiyas-boq`, `qiyas-ai`, `qiyas-mcp` and `qiyas-desktop`. `qiyas-pdf` arrives in a later phase. The take-off, BOQ, schedule and conflict types live in `qiyas-core`; `qiyas-takeoff` holds the comparison engine.
 
 ## Global constraints
 
@@ -44,6 +45,29 @@ The crates that exist now: `qiyas-core`, `qiyas-geom`, `qiyas-render`, `qiyas-ta
 - Run the app: `pnpm tauri dev --config crates/qiyas-desktop/tauri.conf.json`.
 - The `.qiyas` project file is saved next to the drawing after every command.
 - Save keeps a `.bak` of the original drawing (e.g. `villa.dwg.bak`) before writing over it.
+
+## MCP
+
+Outside AI apps can drive Qiyas through its MCP server (the same tools as the in-app assistant;
+their measurements are marked `mcp`).
+
+- Turn it on in Settings, MCP server. It listens on `127.0.0.1:48123/mcp` (port in Settings) and
+  needs `Authorization: Bearer <token>`; the token is in Settings and in `settings.json` (mode
+  0600). The dialog shows whether it is listening.
+- Settings gives both setups, with the bridge's path filled in:
+  - Claude Code: `claude mcp add qiyas -e QIYAS_MCP_TOKEN=<token> -- <app folder>/qiyas-mcp`
+  - Claude Desktop (`claude_desktop_config.json`):
+    `{"mcpServers": {"qiyas": {"command": "<app folder>/qiyas-mcp", "env": {"QIYAS_MCP_TOKEN": "<token>"}}}}`
+- `qiyas-mcp` speaks MCP on stdio and forwards to the app over HTTP. `QIYAS_MCP_URL` overrides
+  the address (default `http://127.0.0.1:48123/mcp`). When the app is not running it answers
+  "Qiyas is not running or MCP is disabled in its settings".
+- Dev: `cargo build -p qiyas-mcp` puts the bridge in `target/debug`, the folder Settings shows
+  under `pnpm tauri dev`.
+- Bundling: `scripts/build-sidecar.sh` builds it in release into
+  `crates/qiyas-desktop/binaries/qiyas-mcp-<target triple>` (git-ignored), then
+  `pnpm tauri build --config crates/qiyas-desktop/tauri.bundle.conf.json` ships it beside the
+  app. The external binary lives in that extra config, not `tauri.conf.json`, so plain builds
+  and tests don't need the sidecar built first.
 
 ## Where the plans live
 

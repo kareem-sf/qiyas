@@ -85,6 +85,8 @@
   "settings.remove": "Remove",
   "settings.mcp": "MCP server",
   "settings.mcpEnable": "Let other AI apps use Qiyas",
+  "settings.mcpListening": "Listening on {addr}",
+  "settings.mcpStopped": "Not running",
   "settings.port": "Port",
   "settings.token": "Token",
   "settings.copy": "Copy",

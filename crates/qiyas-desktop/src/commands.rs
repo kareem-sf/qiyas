@@ -17,6 +17,7 @@ use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 use tokio::sync::mpsc;
 
 use crate::ai::{self, AiRun, Turn};
+use crate::mcp::{self, McpStatus};
 use crate::secrets;
 use crate::settings::{self, Settings};
 use crate::state::AppState;
@@ -209,7 +210,8 @@ pub async fn get_settings(state: State<'_, AppState>) -> Result<Settings, String
 }
 
 /// Checks and keeps new settings: written to disk first, then cached. Another provider, address
-/// or model starts a new assistant conversation.
+/// or model starts a new assistant conversation; MCP turned on or off, or another port or token,
+/// restarts the MCP server.
 #[tauri::command]
 pub async fn set_settings<R: Runtime>(
     settings: Settings,
@@ -217,7 +219,7 @@ pub async fn set_settings<R: Runtime>(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     settings::validate(&settings)?;
-    let changed = {
+    let (changed, mcp_changed) = {
         let mut cached = state
             .settings
             .lock()
@@ -225,11 +227,15 @@ pub async fn set_settings<R: Runtime>(
         settings::save(&state.config_dir, &settings)
             .map_err(|e| format!("The settings could not be saved: {e}"))?;
         let changed = ai::answerer_changed(&cached, &settings);
+        let mcp_changed = mcp::needs_restart(&cached, &settings);
         *cached = settings;
-        changed
+        (changed, mcp_changed)
     };
     if changed {
         new_conversation(&app, &state);
+    }
+    if mcp_changed {
+        mcp::restart(&app);
     }
     Ok(())
 }
@@ -273,12 +279,24 @@ pub async fn delete_api_key<R: Runtime>(
     Ok(())
 }
 
-/// The folder of the running app, where the `qiyas-mcp` bridge sits next to it.
+/// The folder of the running app, where the `qiyas-mcp` bridge sits next to it. In a dev build
+/// (`pnpm tauri dev`) that is `target/debug`, where `cargo build -p qiyas-mcp` puts the bridge.
 #[tauri::command]
 pub async fn app_dir() -> Result<String, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let dir = exe.parent().ok_or("The app's folder is unknown")?;
     Ok(dir.display().to_string())
+}
+
+/// Whether the MCP server is on, listening, or why it could not start.
+#[tauri::command]
+pub async fn mcp_status(state: State<'_, AppState>) -> Result<McpStatus, String> {
+    Ok(state
+        .mcp
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .status
+        .clone())
 }
 
 // ---- The in-app assistant ----
@@ -553,7 +571,10 @@ mod tests {
                     ai_send,
                     ai_cancel,
                     ai_clear,
-                    ai_status
+                    ai_status,
+                    get_settings,
+                    set_settings,
+                    mcp_status
                 ])
                 .build(mock_context(noop_assets()))
                 .unwrap();
@@ -798,5 +819,74 @@ mod tests {
         );
         let status = ipc.call("ai_status", json!({})).unwrap();
         assert_eq!(status["busy"], false);
+    }
+
+    /// Calls `mcp_status` until `done` holds for it, for up to 5 s.
+    fn mcp_status_until(ipc: &Ipc, done: impl Fn(&Value) -> bool) -> Value {
+        for _ in 0..100 {
+            let status = ipc.call("mcp_status", json!({})).unwrap();
+            if done(&status) {
+                return status;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        panic!("mcp_status never got there");
+    }
+
+    fn free_port() -> u16 {
+        std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port()
+    }
+
+    #[test]
+    fn the_mcp_server_follows_the_settings() {
+        let ipc = Ipc::open();
+        let status = ipc.call("mcp_status", json!({})).unwrap();
+        assert_eq!(
+            status,
+            json!({ "enabled": false, "listening": false, "addr": null, "error": null })
+        );
+
+        // On: it listens on the port.
+        let port = free_port();
+        let mut settings = ipc.call("get_settings", json!({})).unwrap();
+        settings["mcp_enabled"] = json!(true);
+        settings["mcp_port"] = json!(port);
+        ipc.call("set_settings", json!({ "settings": settings }))
+            .unwrap();
+        let status = mcp_status_until(&ipc, |s| s["listening"] == true);
+        assert_eq!(status["addr"], format!("127.0.0.1:{port}"));
+        assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_ok());
+
+        // A port another program holds: the status says why.
+        let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        settings["mcp_port"] = json!(taken.local_addr().unwrap().port());
+        ipc.call("set_settings", json!({ "settings": settings }))
+            .unwrap();
+        let status = mcp_status_until(&ipc, |s| !s["error"].is_null());
+        assert_eq!(status["listening"], false);
+        assert!(status["error"].as_str().unwrap().contains("127.0.0.1"));
+
+        // Off: the first port is free again.
+        settings["mcp_enabled"] = json!(false);
+        ipc.call("set_settings", json!({ "settings": settings }))
+            .unwrap();
+        let status = ipc.call("mcp_status", json!({})).unwrap();
+        assert_eq!(
+            (&status["enabled"], &status["listening"]),
+            (&json!(false), &json!(false))
+        );
+        let mut freed = false;
+        for _ in 0..100 {
+            if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+                freed = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(freed, "the server kept port {port}");
     }
 }

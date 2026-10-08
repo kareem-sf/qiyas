@@ -5,9 +5,11 @@ import {
   EFFORTS,
   getSettings,
   hasApiKey,
+  mcpStatus,
   setApiKey,
   setSettings,
   type Effort,
+  type McpStatus,
   type Provider,
   type Settings,
 } from "../api";
@@ -46,6 +48,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [key, setKey] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  const [mcp, setMcp] = useState<McpStatus | null>(null);
 
   useEffect(() => {
     // A modal dialog moves focus inside; give it back to the button that opened it on close.
@@ -57,6 +60,9 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     appDir()
       .then(setDir)
       .catch(() => setDir(""));
+    mcpStatus()
+      .then(setMcp)
+      .catch(() => setMcp(null));
     return () => opener?.focus();
   }, []);
 
@@ -208,6 +214,13 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                 />
                 <span>{t("settings.mcpEnable")}</span>
               </label>
+              {mcp && (
+                <p className="status" role="status">
+                  {mcp.listening
+                    ? t("settings.mcpListening", { addr: mcp.addr ?? "" })
+                    : (mcp.error ?? t("settings.mcpStopped"))}
+                </p>
+              )}
               <label>
                 <span>{t("settings.port")}</span>
                 <input

@@ -5,11 +5,14 @@
 //! The in-app assistant: Claude (`anthropic`) or any OpenAI-compatible service (`openai`) behind
 //! one `Provider` trait, the system prompt (`prompt`), and the loop that runs the model's tool
 //! calls on the shared session (`agent`).
+//!
+//! The MCP server for outside AI apps (`mcp`).
 
 pub mod agent;
 pub mod anthropic;
 mod execute;
 mod image;
+pub mod mcp;
 pub mod openai;
 pub mod prompt;
 pub mod provider;

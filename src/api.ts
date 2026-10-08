@@ -333,6 +333,20 @@ export const deleteApiKey = (provider: Provider) => invoke<void>("delete_api_key
 /** The running app's folder, where the `qiyas-mcp` bridge sits. */
 export const appDir = () => invoke<string>("app_dir");
 
+/** The MCP server for outside AI apps: on, listening, or why it could not start. */
+export type McpStatus = {
+  enabled: boolean;
+  listening: boolean;
+  /** "127.0.0.1:<port>" while listening. */
+  addr: string | null;
+  error: string | null;
+};
+
+export const mcpStatus = () => invoke<McpStatus>("mcp_status");
+
+/** Sent when an outside AI app changed the take-off through the MCP server. */
+export const TAKEOFF_CHANGED = "takeoff:changed";
+
 /** What the window should do after a tool, from the tool's result. Bounds in drawing coordinates. */
 export type AiUi = {
   /** "zoom", "show_sheet", "show_markup" or "redraw". */

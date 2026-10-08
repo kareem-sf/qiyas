@@ -4,7 +4,7 @@
 //! Plain functions over a directory, so tests run without Tauri.
 
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -151,11 +151,21 @@ pub fn load(dir: &Path) -> Settings {
     settings
 }
 
-/// Writes the settings to `dir` atomically: a temporary file, then a rename over the old one.
+/// Writes the settings to `dir` atomically: a temporary file, then a rename over the old one. On
+/// Unix only the user can read the file, since it holds the MCP token.
 pub fn save(dir: &Path, settings: &Settings) -> io::Result<()> {
     fs::create_dir_all(dir)?;
     let tmp = dir.join(format!("{FILE}.tmp"));
     let text = serde_json::to_string_pretty(settings).map_err(io::Error::other)?;
-    fs::write(&tmp, text)?;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options.open(&tmp)?;
+    // A temporary file left by a crash keeps its old mode; set it again.
+    #[cfg(unix)]
+    file.set_permissions(std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
+    file.write_all(text.as_bytes())?;
+    drop(file);
     fs::rename(&tmp, dir.join(FILE))
 }

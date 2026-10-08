@@ -1,5 +1,6 @@
 mod ai;
 mod commands;
+mod mcp;
 #[cfg(debug_assertions)]
 mod mock;
 pub mod secrets;
@@ -18,6 +19,7 @@ pub fn run() {
             }
             let config_dir = app.path().app_config_dir()?;
             app.manage(state::AppState::new(config_dir));
+            mcp::restart(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -48,6 +50,7 @@ pub fn run() {
             commands::has_api_key,
             commands::delete_api_key,
             commands::app_dir,
+            commands::mcp_status,
             commands::ai_send,
             commands::ai_cancel,
             commands::ai_clear,

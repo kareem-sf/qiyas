@@ -6,3 +6,4 @@ src/fonts/thmanyah/
 crates/*/gen/schemas/
 samples/*.qiyas
 samples/*.bak
+crates/qiyas-desktop/binaries/

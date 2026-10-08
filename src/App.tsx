@@ -1,3 +1,4 @@
+import { listen } from "@tauri-apps/api/event";
 import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -20,6 +21,7 @@ import {
   saveProject,
   setLayerHidden,
   setSheet,
+  TAKEOFF_CHANGED,
   takeoff,
   totals,
   undo,
@@ -265,6 +267,29 @@ export default function App() {
     onUi: applyAiUi,
     onNeedSettings: () => setSettingsOpen(true),
   });
+
+  // An outside AI app changed the take-off through the MCP server: show it and save it, as after
+  // the assistant's changes. The listener is set up once and calls the latest code through this.
+  const onMcpChange = useRef<() => Promise<void>>(async () => {});
+  onMcpChange.current = async () => {
+    await run(async () => {
+      await refreshTakeoffAndBoq();
+      await redraw();
+    });
+    await autosave();
+  };
+  useEffect(() => {
+    let gone = false;
+    let off: (() => void) | undefined;
+    listen(TAKEOFF_CHANGED, () => onMcpChange.current()).then((unlisten) => {
+      if (gone) unlisten();
+      else off = unlisten;
+    });
+    return () => {
+      gone = true;
+      off?.();
+    };
+  }, []);
 
   const showCard = useCallback(
     (card: ToolCardItem) => {

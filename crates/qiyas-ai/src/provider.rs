@@ -204,6 +204,9 @@ pub enum AiError {
     /// The stream broke off or carried an error event.
     #[error("The AI service's answer broke off: {0}")]
     Stream(String),
+    /// The MCP server could not start (the port is taken, say).
+    #[error("The MCP server could not start on {0}")]
+    Server(String),
 }
 
 impl AiError {

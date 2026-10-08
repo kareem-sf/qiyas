@@ -25,6 +25,7 @@ const api = vi.hoisted(() => ({
   setApiKey: vi.fn(),
   deleteApiKey: vi.fn(),
   appDir: vi.fn(),
+  mcpStatus: vi.fn(),
 }));
 
 vi.mock("../api", async (original) => ({ ...(await original<object>()), ...api }));
@@ -49,6 +50,7 @@ function setup(hasKey = false) {
   api.getSettings.mockResolvedValue(settings);
   api.hasApiKey.mockResolvedValue(hasKey);
   api.appDir.mockResolvedValue("/opt/Qiyas");
+  api.mcpStatus.mockResolvedValue({ enabled: false, listening: false, addr: null, error: null });
   api.setSettings.mockResolvedValue(undefined);
   api.setApiKey.mockResolvedValue(undefined);
   api.deleteApiKey.mockResolvedValue(undefined);
@@ -100,5 +102,33 @@ test("mcp snippets point at the bridge next to the app", () => {
   expect(win.claudeCode).toContain('-- "C:\\Program Files\\Qiyas\\qiyas-mcp.exe"');
   expect(JSON.parse(win.claudeDesktop).mcpServers.qiyas.command).toBe(
     "C:\\Program Files\\Qiyas\\qiyas-mcp.exe",
+  );
+});
+
+test("the MCP status line says whether the server listens", async () => {
+  setup();
+  expect(await screen.findByText("Not running")).toBeTruthy();
+  cleanup();
+
+  api.mcpStatus.mockResolvedValue({
+    enabled: true,
+    listening: true,
+    addr: "127.0.0.1:48123",
+    error: null,
+  });
+  render(<SettingsDialog onClose={() => {}} />);
+  expect(await screen.findByText("Listening on 127.0.0.1:48123")).toBeTruthy();
+  cleanup();
+
+  api.mcpStatus.mockResolvedValue({
+    enabled: true,
+    listening: false,
+    addr: null,
+    error: "The MCP server could not start on 127.0.0.1:48123: Address in use",
+  });
+  render(<SettingsDialog onClose={() => {}} />);
+  expect(await screen.findByRole("status")).toHaveProperty(
+    "textContent",
+    "The MCP server could not start on 127.0.0.1:48123: Address in use",
   );
 });
