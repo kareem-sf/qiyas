@@ -22,3 +22,15 @@ calamine = "0.36"
 tempfile = "3"
 uuid = { version = "1", features = ["v4"] }
 time = { version = "0.3", features = ["formatting"] }
+
+# Dependencies (the DWG reader above all) and the two hot crates that flatten and batch the
+# drawing are optimised in dev builds too, so `pnpm tauri dev` draws big drawings in about a second
+# instead of 20 s. The other Qiyas crates stay debug.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.dev.package.qiyas-geom]
+opt-level = 3
+
+[profile.dev.package.qiyas-render]
+opt-level = 3
