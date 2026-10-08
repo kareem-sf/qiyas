@@ -24,15 +24,29 @@ fn unreadable_file_is_an_error() {
 
 #[test]
 fn truncated_dwg_opens_with_problems() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = qiyas_core::fixtures::write_sample(dir.path(), "dwg");
-    let bytes = std::fs::read(&path).unwrap();
-    std::fs::write(&path, &bytes[..bytes.len() * 7 / 10]).unwrap();
-    match Drawing::open(&path) {
-        Ok(d) => assert!(!d.problems.is_empty(), "a cut file must report problems"),
-        Err(CoreError::Unreadable(_)) => {}
-        Err(other) => panic!("expected Unreadable, got {other:?}"),
+    // Cut each sample at several points. Every cut must open with problems or be Unreadable, never panic,
+    // and at least one cut must recover (open with problems).
+    let mut recovered = Vec::new();
+    for ext in ["dwg", "dxf"] {
+        for percent in [95, 90, 85, 80, 70] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = qiyas_core::fixtures::write_sample(dir.path(), ext);
+            let bytes = std::fs::read(&path).unwrap();
+            std::fs::write(&path, &bytes[..bytes.len() * percent / 100]).unwrap();
+            match Drawing::open(&path) {
+                Ok(d) => {
+                    assert!(
+                        !d.problems.is_empty(),
+                        "{ext} cut to {percent}% opened with no problems"
+                    );
+                    recovered.push(format!("{ext} {percent}%"));
+                }
+                Err(CoreError::Unreadable(_)) => {}
+                Err(other) => panic!("{ext} cut to {percent}%: expected Unreadable, got {other:?}"),
+            }
+        }
     }
+    assert!(!recovered.is_empty(), "no cut file opened with problems");
 }
 
 #[test]

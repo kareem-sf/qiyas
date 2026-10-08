@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use opencadcodec::objects::ObjectType;
-use opencadcodec::{CadDocument, DwgReadOptions, DwgReader, DxfReader, EntityType};
+use opencadcodec::{
+    CadDocument, DwgReadOptions, DwgReader, DxfReader, DxfReaderConfiguration, EntityType,
+};
 
 use crate::{CoreError, Units};
 
@@ -35,14 +37,20 @@ pub struct LayerInfo {
 impl Drawing {
     /// Opens a DXF (by extension) or DWG file. A file the reader can't make sense of is `Unreadable`.
     pub fn open(path: &Path) -> Result<Drawing, CoreError> {
-        // A missing or locked file is an Io error; anything the reader rejects is Unreadable.
+        // A missing file is an Io error; anything the reader rejects is Unreadable.
         std::fs::metadata(path)?;
         let is_dxf = path
             .extension()
             .and_then(|e| e.to_str())
             .is_some_and(|e| e.eq_ignore_ascii_case("dxf"));
         let outcome = if is_dxf {
-            DxfReader::from_file(path).and_then(|reader| reader.read_with_stats())
+            // Failsafe, like DWG: a partly broken DXF opens with problems instead of failing.
+            let config = DxfReaderConfiguration {
+                failsafe: true,
+                ..Default::default()
+            };
+            DxfReader::from_file(path)
+                .and_then(|reader| reader.with_configuration(config).read_with_stats())
         } else {
             DwgReader::from_file_with_options(path, DwgReadOptions::failsafe())
                 .and_then(|mut reader| reader.read_with_stats())
