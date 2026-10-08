@@ -55,5 +55,7 @@
   "measure.clickBlock": "انقر بلوكًا لعدّه",
   "qty.m": "م",
   "qty.m2": "م²",
-  "qty.pcs": "قطعة"
+  "qty.pcs": "قطعة",
+  "export.done": "تم التصدير إلى {path}",
+  "export.failed": "تعذّر التصدير: {error}"
 }

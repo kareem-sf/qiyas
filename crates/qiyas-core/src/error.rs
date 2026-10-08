@@ -12,4 +12,7 @@ pub enum CoreError {
     NoSuchEntity(u64),
     #[error("{0}")]
     InvalidCommand(String),
+    /// The project file is not valid JSON for a project; the parser's own words.
+    #[error("{0}")]
+    Project(String),
 }

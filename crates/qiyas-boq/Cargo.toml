@@ -1,0 +1,15 @@
+[package]
+name = "qiyas-boq"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+qiyas-core = { path = "../qiyas-core" }
+rust_xlsxwriter.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+calamine.workspace = true
+tempfile.workspace = true

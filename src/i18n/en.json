@@ -55,5 +55,7 @@
   "measure.clickBlock": "Click a block to count it",
   "qty.m": "m",
   "qty.m2": "m²",
-  "qty.pcs": "pcs"
+  "qty.pcs": "pcs",
+  "export.done": "Exported to {path}",
+  "export.failed": "Export failed: {error}"
 }

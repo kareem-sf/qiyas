@@ -18,6 +18,8 @@ pub fn run() {
             commands::redo,
             commands::takeoff,
             commands::totals,
+            commands::save_project,
+            commands::export_takeoff,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Qiyas");

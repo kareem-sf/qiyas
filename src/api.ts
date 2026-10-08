@@ -100,3 +100,9 @@ export const redo = () => invoke<boolean>("redo");
 export const takeoff = () => invoke<Measurement[]>("takeoff");
 
 export const totals = () => invoke<Total[]>("totals");
+
+/** Saves the take-off to the drawing's `.qiyas` project file; resolves to the path written. */
+export const saveProject = () => invoke<string>("save_project");
+
+/** Writes the take-off and its totals to an Excel workbook at `path`. */
+export const exportTakeoff = (path: string) => invoke<void>("export_takeoff", { path });

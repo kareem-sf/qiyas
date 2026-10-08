@@ -96,3 +96,24 @@ pub fn takeoff(state: State<'_, AppState>) -> Result<Vec<Measurement>, String> {
 pub fn totals(state: State<'_, AppState>) -> Result<Vec<Total>, String> {
     with_session(&state, |s| Ok(s.takeoff.totals()))
 }
+
+/// Saves the take-off to the drawing's `.qiyas` project file; returns the path written.
+#[tauri::command]
+pub fn save_project(state: State<'_, AppState>) -> Result<String, String> {
+    with_session(&state, |s| Ok(s.save_project()?.display().to_string()))
+        .map_err(|e| format!("The take-off could not be saved: {e}"))
+}
+
+/// Writes the take-off and its totals to an Excel workbook at `path`.
+#[tauri::command]
+pub fn export_takeoff(path: String, state: State<'_, AppState>) -> Result<(), String> {
+    // Copy the take-off out, so writing the file doesn't hold the lock.
+    let (items, totals, title) = with_session(&state, |s| {
+        let title = match s.drawing.path.file_name() {
+            Some(name) => format!("{} take-off", name.to_string_lossy()),
+            None => "Take-off".to_string(),
+        };
+        Ok((s.takeoff.items.clone(), s.takeoff.totals(), title))
+    })?;
+    qiyas_boq::export_takeoff(Path::new(&path), &items, &totals, &title).map_err(|e| e.to_string())
+}

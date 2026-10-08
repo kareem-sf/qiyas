@@ -10,6 +10,7 @@ opencadcodec.workspace = true
 qiyas-geom = { path = "../qiyas-geom" }
 qiyas-render = { path = "../qiyas-render" }
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 time.workspace = true
 uuid.workspace = true

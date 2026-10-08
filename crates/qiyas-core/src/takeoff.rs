@@ -91,7 +91,7 @@ pub struct Total {
 }
 
 /// The session's measurements, in the order they were made.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Takeoff {
     pub items: Vec<Measurement>,
 }

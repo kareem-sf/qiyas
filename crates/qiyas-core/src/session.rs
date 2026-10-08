@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::fmt::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use opencadcodec::tables::normalize_name;
 use opencadcodec::{EntityType, Handle};
@@ -9,6 +9,7 @@ use qiyas_geom::{flatten, Xform};
 use qiyas_render::{build_batch, Batch, PickIndex, Visibility};
 use serde::Serialize;
 
+use crate::project::{self, project_path, Project};
 use crate::undo::History;
 use crate::{Command, CoreError, Drawing, LayerInfo, Outcome, Sheet, Takeoff, Units};
 
@@ -62,18 +63,48 @@ pub struct EntityInfo {
 }
 
 impl Session {
-    /// Opens a drawing on its model sheet with nothing hidden.
+    /// Opens a drawing on its model sheet with nothing hidden, with the take-off from its project
+    /// file when there is one. A project file that can't be read is a problem, not a failure.
     pub fn open(path: &Path) -> Result<Session, CoreError> {
-        let drawing = Drawing::open(path)?;
+        let mut drawing = Drawing::open(path)?;
         let sheet = drawing.sheets()[0].block.clone();
+        let mut takeoff = Takeoff::default();
+        let project_file = project_path(path);
+        if project_file.exists() {
+            match project::load(&project_file) {
+                Ok(project) => {
+                    if project.drawing != project::file_name(path) {
+                        drawing
+                            .problems
+                            .push(format!("Project file was saved for {}", project.drawing));
+                    }
+                    takeoff = project.takeoff;
+                }
+                Err(e) => drawing
+                    .problems
+                    .push(format!("Project file could not be read: {e}")),
+            }
+        }
         Ok(Session {
             drawing,
             sheet,
             visibility: Visibility::default(),
-            takeoff: Takeoff::default(),
+            takeoff,
             history: History::default(),
             cache: RefCell::new(None),
         })
+    }
+
+    /// Saves the take-off to the drawing's project file and returns its path.
+    pub fn save_project(&self) -> Result<PathBuf, CoreError> {
+        let path = project_path(&self.drawing.path);
+        let project = Project {
+            version: 1,
+            drawing: project::file_name(&self.drawing.path),
+            takeoff: self.takeoff.clone(),
+        };
+        project::save(&path, &project)?;
+        Ok(path)
     }
 
     pub fn info(&self) -> DrawingInfo {

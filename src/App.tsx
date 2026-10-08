@@ -1,12 +1,14 @@
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   entityInfo,
+  exportTakeoff,
   openDrawing,
   pick,
   redo,
   renderBatch,
   runCommand,
+  saveProject,
   setLayerHidden,
   setSheet,
   takeoff,
@@ -61,6 +63,8 @@ export default function App() {
   const [cursor, setCursor] = useState<[number, number] | null>(null);
   const [opening, setOpening] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** A one-off status bar message, e.g. after an export; the next action clears it. */
+  const [notice, setNotice] = useState<string | null>(null);
   const [items, setItems] = useState<Measurement[]>([]);
   const [itemTotals, setItemTotals] = useState<Total[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -93,6 +97,7 @@ export default function App() {
 
   /** Runs an IPC step, showing its error in the status bar. */
   async function run(step: () => Promise<void>) {
+    setNotice(null);
     try {
       await step();
       setError(null);
@@ -107,14 +112,27 @@ export default function App() {
     setItemTotals(nextTotals);
   }
 
+  /** Saves the take-off next to the drawing. A failure is shown, but the work goes on. */
+  async function autosave() {
+    try {
+      await saveProject();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   /** Runs a take-off command; a new measurement becomes the selected row. */
-  const apply = (cmd: Command) =>
-    run(async () => {
+  async function apply(cmd: Command) {
+    let changed = false;
+    await run(async () => {
       const outcome = await runCommand(cmd);
       if (outcome.type === "nothing") return;
+      changed = true;
       await refreshTakeoff();
       if (outcome.type === "measured") setSelectedId(outcome.measurement.id);
     });
+    if (changed) await autosave();
+  }
 
   const measure = useTool(tool, {
     pick,
@@ -123,10 +141,15 @@ export default function App() {
     onError: (e) => setError(String(e)),
   });
 
-  const history = (step: () => Promise<boolean>) =>
-    run(async () => {
-      if (info && (await step())) await refreshTakeoff();
+  async function history(step: () => Promise<boolean>) {
+    let changed = false;
+    await run(async () => {
+      if (!info || !(await step())) return;
+      changed = true;
+      await refreshTakeoff();
     });
+    if (changed) await autosave();
+  }
 
   async function redraw(fit = false) {
     const next = parseBatch(await renderBatch());
@@ -150,6 +173,22 @@ export default function App() {
       await redraw(true);
     });
     setOpening(false);
+  }
+
+  /** Asks where to save the Excel take-off, next to the drawing by default, and writes it. */
+  async function exportFile() {
+    if (!info) return;
+    const path = await save({
+      defaultPath: `${info.path.replace(/\.[^.\\/]*$/, "")}-takeoff.xlsx`,
+      filters: [{ name: "Excel", extensions: ["xlsx"] }],
+    });
+    if (!path) return;
+    await run(async () => {
+      await exportTakeoff(path).catch((e) => {
+        throw t("export.failed", { error: String(e) });
+      });
+      setNotice(t("export.done", { path }));
+    });
   }
 
   const chooseSheet = (block: string) =>
@@ -287,9 +326,7 @@ export default function App() {
     ? t("opening")
     : measure.hint
       ? t(measure.hint)
-      : info
-        ? fileName
-        : t("noDrawing");
+      : (notice ?? (info ? fileName : t("noDrawing")));
   // Unknown units are measured as millimetres; the status bar says so.
   const units = info ? t(`unit.${info.units === "unknown" ? "millimetres" : info.units}`) : "";
 
@@ -300,6 +337,7 @@ export default function App() {
           active={tool}
           onTool={chooseTool}
           onOpen={openFile}
+          onExport={info ? exportFile : undefined}
           onUndo={() => history(undo)}
           onRedo={() => history(redo)}
           onZoomExtents={() => {
