@@ -11,6 +11,7 @@ type Props = {
   batch: Batch | null;
   highlight: Set<bigint>;
   tool: Tool;
+  theme: Theme;
   onClick(world: Point, screen: Point): void;
   onMove(world: Point): void;
   ref?: Ref<ViewportHandle>;
@@ -22,17 +23,15 @@ const DOUBLE_CLICK_MS = 400;
 /** Movement below this many pixels is still a click, not a drag. */
 const DRAG_PX = 4;
 
-const DARK_QUERY = "(prefers-color-scheme: dark)";
-
 type Drag = { kind: "pan" | "zoomWindow"; start: Point; last: Point };
 
 /** The drawing canvas: wheel zoom at the cursor, middle or space drag to pan, double middle click
  *  for extents, and a drag rectangle to zoom into when the tool is `zoomWindow`. */
-export function Viewport({ batch, highlight, tool, onClick, onMove, ref }: Props) {
+export function Viewport({ batch, highlight, tool, theme, onClick, onMove, ref }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const renderer = useRef<Renderer | null>(null);
   const camera = useRef<Camera>({ cx: 0, cy: 0, scale: 1, width: 1, height: 1 });
-  const theme = useRef<Theme>(matchMedia(DARK_QUERY).matches ? "dark" : "light");
+  const themeRef = useRef(theme);
   const batchRef = useRef(batch);
   const frame = useRef(0);
   const drag = useRef<Drag | null>(null);
@@ -44,7 +43,7 @@ export function Viewport({ batch, highlight, tool, onClick, onMove, ref }: Props
     if (frame.current) return;
     frame.current = requestAnimationFrame(() => {
       frame.current = 0;
-      renderer.current?.draw(camera.current, theme.current);
+      renderer.current?.draw(camera.current, themeRef.current);
     });
   }
 
@@ -105,20 +104,12 @@ export function Viewport({ batch, highlight, tool, onClick, onMove, ref }: Props
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onBlur);
 
-    const dark = matchMedia(DARK_QUERY);
-    const onTheme = () => {
-      theme.current = dark.matches ? "dark" : "light";
-      requestDraw();
-    };
-    dark.addEventListener("change", onTheme);
-
     return () => {
       observer.disconnect();
       canvas.removeEventListener("wheel", onWheel);
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
-      dark.removeEventListener("change", onTheme);
       cancelAnimationFrame(frame.current);
       frame.current = 0;
       renderer.current?.dispose();
@@ -126,12 +117,17 @@ export function Viewport({ batch, highlight, tool, onClick, onMove, ref }: Props
     };
   }, []);
 
+  // No fit here: hiding a layer gives a new batch but should keep the view. The app fits on open.
   useEffect(() => {
     batchRef.current = batch;
     renderer.current!.setBatch(batch);
-    fitExtents();
     requestDraw();
   }, [batch]);
+
+  useEffect(() => {
+    themeRef.current = theme;
+    requestDraw();
+  }, [theme]);
 
   useEffect(() => {
     renderer.current!.setHighlight(highlight);

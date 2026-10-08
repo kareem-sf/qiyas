@@ -1,0 +1,289 @@
+/* QS Mind brand tokens and the Qiyas shell layout. Light is the default; data-theme="dark" on <html>
+   swaps background and ink. */
+:root {
+  --ink: #0e0f12;
+  --stone: #f2eee7;
+  --paper: #f9f8f4;
+  --slate: #6e6a64;
+  --face-light: #c9a6e0;
+  --face-deep: #6e4a9e;
+
+  --bg: var(--paper);
+  --fg: var(--ink);
+  --panel: var(--stone);
+  --muted: var(--slate);
+  --rule: rgb(14 15 18 / 0.12);
+  --hover: rgb(14 15 18 / 0.06);
+  --accent: var(--face-deep);
+  --accent-soft: rgb(201 166 224 / 0.35);
+  --warn: #9a5b00;
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --bg: var(--ink);
+  --fg: var(--paper);
+  --panel: #17181c;
+  --muted: #a39f98;
+  --rule: rgb(249 248 244 / 0.12);
+  --hover: rgb(249 248 244 / 0.08);
+  --accent: var(--face-light);
+  --accent-soft: rgb(110 74 158 / 0.45);
+  --warn: #e9b35f;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 13px/1.4 "Instrument Sans", system-ui, sans-serif;
+}
+
+:root[dir="rtl"] body {
+  font-family: "Thmanyah Sans", "Instrument Sans", system-ui, sans-serif;
+}
+
+:root[dir="rtl"] :is(h1, h2, .heading) {
+  font-feature-settings: "swsh";
+}
+
+h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+button:hover:not(:disabled) {
+  background: var(--hover);
+}
+button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Layout: ribbon on top, layers | drawing in the middle, status bar at the bottom.
+   Flex rows follow the page direction, so in Arabic the layers panel moves to the right. */
+.app {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+}
+.top {
+  position: relative;
+  background: var(--panel);
+  border-bottom: 1px solid var(--rule);
+}
+.middle {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.work {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.viewport {
+  flex: 1;
+  min-height: 0;
+}
+.viewport:focus {
+  outline: none;
+}
+
+/* Ribbon */
+.ribbon-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 10px 0;
+}
+.app-name {
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--accent);
+  margin-inline-end: 14px;
+}
+.ribbon-tabs [role="tab"] {
+  border-radius: 6px 6px 0 0;
+  color: var(--muted);
+}
+.ribbon-tabs [role="tab"][aria-selected="true"] {
+  background: var(--bg);
+  color: var(--fg);
+  font-weight: 500;
+}
+.ribbon-panel {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 44px;
+  padding: 6px 10px;
+  background: var(--bg);
+}
+.sep {
+  width: 1px;
+  height: 20px;
+  margin: 0 6px;
+  background: var(--rule);
+}
+.prefs {
+  position: absolute;
+  top: 0;
+  inset-inline-end: 0;
+  display: flex;
+  gap: 12px;
+  padding: 6px 10px;
+}
+.prefs [role="group"] {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--muted);
+}
+.prefs [role="group"] span {
+  margin-inline-end: 4px;
+}
+.prefs button {
+  color: var(--fg);
+  padding: 2px 8px;
+}
+
+/* Layers panel */
+.layers {
+  width: 220px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border-inline-end: 1px solid var(--rule);
+}
+.layers-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+}
+.layers ul {
+  list-style: none;
+  margin: 0;
+  padding: 0 4px 8px;
+  overflow-y: auto;
+}
+.layers li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 6px;
+  border-radius: 6px;
+}
+.layers li:hover {
+  background: var(--hover);
+}
+.layers li.dim .name {
+  color: var(--muted);
+}
+.swatch {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  border-radius: 2px;
+  border: 1px solid var(--rule);
+}
+.name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+button.icon {
+  padding: 3px;
+  line-height: 0;
+}
+button.icon[aria-pressed] {
+  background: none;
+  border-color: transparent;
+}
+button.icon svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  stroke-linecap: round;
+}
+button.link {
+  color: var(--accent);
+  padding: 2px 6px;
+}
+
+/* Sheet tabs */
+.sheet-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 8px;
+  overflow-x: auto;
+  background: var(--panel);
+  border-top: 1px solid var(--rule);
+}
+.sheet-tabs button {
+  border-radius: 0 0 6px 6px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.sheet-tabs button[aria-selected="true"] {
+  background: var(--bg);
+  color: var(--fg);
+  font-weight: 500;
+}
+
+/* Status bar */
+.status {
+  display: flex;
+  gap: 16px;
+  padding: 3px 10px;
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--panel);
+  border-top: 1px solid var(--rule);
+}
+.status .message {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.status .warn {
+  color: var(--warn);
+}
+.status .cursor {
+  min-width: 18ch;
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}

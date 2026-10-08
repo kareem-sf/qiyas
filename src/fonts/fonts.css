@@ -1,0 +1,40 @@
+/* Instrument Sans (OFL, licence in instrument-sans/OFL.txt) for Latin text. */
+@font-face {
+  font-family: "Instrument Sans";
+  font-weight: 400;
+  font-display: swap;
+  src: url("./instrument-sans/InstrumentSans-Regular.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Instrument Sans";
+  font-weight: 500;
+  font-display: swap;
+  src: url("./instrument-sans/InstrumentSans-Medium.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Instrument Sans";
+  font-weight: 700;
+  font-display: swap;
+  src: url("./instrument-sans/InstrumentSans-Bold.woff2") format("woff2");
+}
+
+/* Thmanyah Sans (licensed) for Arabic. The files are never committed: scripts/fonts.sh copies them
+   into the git-ignored thmanyah/ folder. Without them the system Arabic font is used. */
+@font-face {
+  font-family: "Thmanyah Sans";
+  font-weight: 400;
+  font-display: swap;
+  src: url("./thmanyah/thmanyahsans-Regular.otf") format("opentype");
+}
+@font-face {
+  font-family: "Thmanyah Sans";
+  font-weight: 500;
+  font-display: swap;
+  src: url("./thmanyah/thmanyahsans-Medium.otf") format("opentype");
+}
+@font-face {
+  font-family: "Thmanyah Sans";
+  font-weight: 700;
+  font-display: swap;
+  src: url("./thmanyah/thmanyahsans-Bold.otf") format("opentype");
+}
