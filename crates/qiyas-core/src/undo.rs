@@ -1,8 +1,8 @@
-//! Undo and redo for the take-off and the BOQ, as whole snapshots: small enough at take-off
-//! sizes. A step keeps only the part its command changed, so editing the take-off never copies
-//! a long BOQ. Each step remembers who made it, so the AI can undo only its own last change.
+//! Undo and redo for the take-off, the BOQ and the conflicts, as whole snapshots: small enough
+//! at take-off sizes. A step keeps only the part its command changed, so editing the take-off
+//! never copies a long BOQ. Each step remembers who made it, so the AI can undo only its own last change.
 
-use crate::{Boq, Source, Takeoff};
+use crate::{Boq, Conflict, Schedule, Source, Takeoff};
 
 /// Most undo steps kept; the oldest is dropped first.
 const MAX_STEPS: usize = 200;
@@ -12,14 +12,27 @@ const MAX_STEPS: usize = 200;
 pub(crate) enum Snapshot {
     Takeoff(Takeoff),
     Boq(Option<Boq>),
+    Conflicts(Vec<Conflict>, Vec<Schedule>),
+}
+
+/// The parts of the session undo and redo put back.
+pub(crate) struct Parts<'a> {
+    pub takeoff: &'a mut Takeoff,
+    pub boq: &'a mut Option<Boq>,
+    pub conflicts: &'a mut Vec<Conflict>,
+    pub schedules: &'a mut Vec<Schedule>,
 }
 
 impl Snapshot {
     /// Puts this snapshot in place and returns what it replaced.
-    fn swap(self, takeoff: &mut Takeoff, boq: &mut Option<Boq>) -> Snapshot {
+    fn swap(self, parts: Parts) -> Snapshot {
         match self {
-            Snapshot::Takeoff(t) => Snapshot::Takeoff(std::mem::replace(takeoff, t)),
-            Snapshot::Boq(b) => Snapshot::Boq(std::mem::replace(boq, b)),
+            Snapshot::Takeoff(t) => Snapshot::Takeoff(std::mem::replace(parts.takeoff, t)),
+            Snapshot::Boq(b) => Snapshot::Boq(std::mem::replace(parts.boq, b)),
+            Snapshot::Conflicts(c, s) => Snapshot::Conflicts(
+                std::mem::replace(parts.conflicts, c),
+                std::mem::replace(parts.schedules, s),
+            ),
         }
     }
 }
@@ -43,22 +56,22 @@ impl History {
         self.undo.last().map(|(_, source)| *source)
     }
 
-    /// Puts the take-off or BOQ back to its state before the last command. False when there is
-    /// none.
-    pub(crate) fn undo(&mut self, takeoff: &mut Takeoff, boq: &mut Option<Boq>) -> bool {
+    /// Puts the take-off, BOQ or conflicts back to their state before the last command. False
+    /// when there is none.
+    pub(crate) fn undo(&mut self, parts: Parts) -> bool {
         let Some((before, source)) = self.undo.pop() else {
             return false;
         };
-        self.redo.push((before.swap(takeoff, boq), source));
+        self.redo.push((before.swap(parts), source));
         true
     }
 
     /// Redoes the last undone command. False when there is none.
-    pub(crate) fn redo(&mut self, takeoff: &mut Takeoff, boq: &mut Option<Boq>) -> bool {
+    pub(crate) fn redo(&mut self, parts: Parts) -> bool {
         let Some((after, source)) = self.redo.pop() else {
             return false;
         };
-        push_capped(&mut self.undo, (after.swap(takeoff, boq), source));
+        push_capped(&mut self.undo, (after.swap(parts), source));
         true
     }
 
@@ -85,13 +98,21 @@ mod tests {
     #[test]
     fn keeps_at_most_200_steps() {
         let mut history = History::default();
-        let mut takeoff = Takeoff::default();
-        let mut boq = None;
+        let (mut takeoff, mut boq, mut conflicts, mut schedules) =
+            (Takeoff::default(), None, Vec::new(), Vec::new());
         for _ in 0..MAX_STEPS + 5 {
             history.record(Snapshot::Takeoff(Takeoff::default()), Source::User);
         }
-        let undone =
-            std::iter::from_fn(|| history.undo(&mut takeoff, &mut boq).then_some(())).count();
+        let undone = std::iter::from_fn(|| {
+            let parts = Parts {
+                takeoff: &mut takeoff,
+                boq: &mut boq,
+                conflicts: &mut conflicts,
+                schedules: &mut schedules,
+            };
+            history.undo(parts).then_some(())
+        })
+        .count();
         assert_eq!(undone, MAX_STEPS);
     }
 }

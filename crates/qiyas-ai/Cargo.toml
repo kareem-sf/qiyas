@@ -9,6 +9,7 @@ rust-version.workspace = true
 qiyas-boq = { path = "../qiyas-boq" }
 qiyas-core = { path = "../qiyas-core" }
 qiyas-render = { path = "../qiyas-render" }
+qiyas-takeoff = { path = "../qiyas-takeoff" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

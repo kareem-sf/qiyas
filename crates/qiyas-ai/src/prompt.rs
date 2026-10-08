@@ -104,7 +104,7 @@ pub struct LiveState {
     pub takeoff: Vec<Total>,
     /// The imported BOQ's file name; `None` when there is none.
     pub boq: Option<String>,
-    /// Conflicts between the BOQ and the take-off (0 until the comparison engine lands).
+    /// Conflicts of the last comparison still open.
     pub conflicts: usize,
 }
 
@@ -124,7 +124,11 @@ impl LiveState {
                     .file_name()
                     .map_or_else(|| b.source.clone(), |n| n.to_string_lossy().into_owned())
             }),
-            conflicts: 0,
+            conflicts: session
+                .conflicts
+                .iter()
+                .filter(|c| c.status == qiyas_core::ConflictStatus::Open)
+                .count(),
         }
     }
 }
@@ -272,7 +276,12 @@ pub fn state_block(lang: Lang, state: &LiveState) -> String {
         (None, true) => "لم يُحمّل جدول كميات",
     };
     let _ = writeln!(s, "{}{boq}", t("BOQ: ", "جدول الكميات: "));
-    let _ = writeln!(s, "{}{}", t("Conflicts: ", "التعارضات: "), state.conflicts);
+    let _ = writeln!(
+        s,
+        "{}{}",
+        t("Open conflicts: ", "التعارضات المفتوحة: "),
+        state.conflicts
+    );
     s
 }
 
@@ -393,7 +402,7 @@ mod tests {
             en.contains("- count: 1 measurement, total 3.000 pcs"),
             "{en}"
         );
-        assert!(en.contains("Conflicts: 0"), "{en}");
+        assert!(en.contains("Open conflicts: 0"), "{en}");
         let ar = state_block(Lang::Ar, &state);
         assert!(
             ar.contains("- عدد: القياسات: 1، المجموع: 3.000 قطعة"),

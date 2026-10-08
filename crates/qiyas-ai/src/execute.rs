@@ -3,7 +3,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use qiyas_core::{Command, CoreError, EntityFilter, Kind, Outcome, Session, Source};
+use qiyas_core::{
+    Command, ConflictStatus, CoreError, EntityFilter, Kind, Outcome, Session, Source,
+};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -18,7 +20,6 @@ const DEFAULT_WIDTH: u32 = 1024;
 const MIN_WIDTH: u32 = 16;
 /// Margin around the whole sheet in `view_image`, as a share of its size.
 const MARGIN: f64 = 0.02;
-const BOQ_LATER: &str = "This tool arrives with the BOQ tasks; it is not available yet.";
 
 /// What a tool returns: JSON for the model, or a picture of the drawing.
 #[derive(Debug, Clone)]
@@ -172,8 +173,34 @@ pub fn execute(
             out["skipped_rows"] = json!(boq.skipped_rows);
             (out, offset)
         }
-        "compare_boq" | "list_conflicts" | "resolve_conflict" => {
-            return Err(ToolError::NotAvailable(BOQ_LATER.to_string()));
+        "compare_boq" => {
+            let Tolerance { tolerance } = parse(input)?;
+            let tolerance = tolerance.unwrap_or(qiyas_takeoff::DEFAULT_TOLERANCE);
+            let conflicts = qiyas_takeoff::compare_session(session, tolerance, source)?;
+            (conflicts_page(&conflicts, 0), 0)
+        }
+        "list_conflicts" => {
+            let Paged { offset } = parse(input)?;
+            (conflicts_page(&session.conflicts, offset), offset)
+        }
+        "resolve_conflict" => {
+            let Resolve { id, status, note } = parse(input)?;
+            let cmd = Command::ResolveConflict {
+                id: id.clone(),
+                status,
+                note,
+            };
+            match session.run_as(cmd, source)? {
+                Outcome::Nothing => {
+                    return Err(bad(&format!(
+                        "No conflict with id {id}; list_conflicts gives the ids"
+                    )))
+                }
+                _ => {
+                    let conflict = session.conflicts.iter().find(|c| c.id == id);
+                    (json!({ "conflict": conflict }), 0)
+                }
+            }
         }
         "add_markup" => (add_markup(session, parse(input)?, source)?, 0),
         "zoom_to" => (zoom_to(session, parse(input)?)?, 0),
@@ -306,6 +333,20 @@ struct ImportBoq {
 struct LinkBoq {
     id: String,
     code: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Tolerance {
+    tolerance: Option<f64>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Resolve {
+    id: String,
+    status: ConflictStatus,
+    note: String,
 }
 
 #[derive(Deserialize)]
@@ -657,6 +698,26 @@ fn page<T: serde::Serialize>(rows: Vec<T>, offset: usize) -> Value {
     let total = rows.len();
     let rows: Vec<T> = rows.into_iter().skip(offset).collect();
     json!({ "rows": rows, "total": total })
+}
+
+/// `conflicts` from `offset` on, with the counts of all of them per kind and per status.
+fn conflicts_page(conflicts: &[qiyas_core::Conflict], offset: usize) -> Value {
+    let mut by_kind = serde_json::Map::new();
+    let mut by_status = serde_json::Map::new();
+    for c in conflicts {
+        for (map, key) in [
+            (&mut by_kind, json!(c.kind)),
+            (&mut by_status, json!(c.status)),
+        ] {
+            let key = key.as_str().unwrap_or_default().to_string();
+            let n = map.get(&key).and_then(Value::as_u64).unwrap_or(0);
+            map.insert(key, json!(n + 1));
+        }
+    }
+    let mut out = page(conflicts.to_vec(), offset);
+    out["by_kind"] = Value::Object(by_kind);
+    out["by_status"] = Value::Object(by_status);
+    out
 }
 
 fn measured(outcome: Outcome) -> Result<Value, ToolError> {

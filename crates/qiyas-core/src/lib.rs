@@ -2,6 +2,7 @@
 
 mod boq;
 mod commands;
+mod conflict;
 mod drawing;
 mod embed;
 mod error;
@@ -17,6 +18,7 @@ mod units;
 
 pub use boq::{Boq, BoqItem};
 pub use commands::{Command, Outcome};
+pub use conflict::{Conflict, ConflictKind, ConflictStatus};
 pub use drawing::{Drawing, LayerInfo, Sheet};
 pub use embed::{embed_measurements, read_embedded};
 pub use error::CoreError;

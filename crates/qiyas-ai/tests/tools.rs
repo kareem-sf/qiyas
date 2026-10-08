@@ -1,6 +1,6 @@
 use opencadcodec::{CadDocument, DxfWriter, EntityType, Line};
 use qiyas_ai::{catalogue, execute, ToolError, ToolOutput};
-use qiyas_core::{EntityFilter, Kind, Session, Source};
+use qiyas_core::{Boq, BoqItem, Command, EntityFilter, Kind, Session, Source};
 use serde_json::{json, Value};
 
 /// Opens the sample drawing (DXF) in a session. The temp dir must outlive the test body.
@@ -355,35 +355,78 @@ fn missing_handles_blocks_and_ids_are_bad_input() {
 }
 
 #[test]
-fn not_available_tools_say_so() {
+fn compare_and_conflict_tools_work() {
     let (_dir, mut session) = sample();
-    for (name, input) in [
-        ("compare_boq", json!({ "tolerance": 5 })),
-        ("list_conflicts", json!({})),
-        (
-            "resolve_conflict",
-            json!({ "id": "c1", "status": "resolved", "note": "ok" }),
-        ),
-    ] {
-        let err = run(&mut session, name, input).unwrap_err();
-        match err {
-            ToolError::NotAvailable(why) => assert!(why.contains("BOQ"), "{name}: {why}"),
-            other => panic!("{name}: {other:?}"),
-        }
-    }
-
-    // link_boq already works: the command exists.
+    let item = |code: &str, description: &str, unit: &str, quantity: f64| BoqItem {
+        code: code.to_string(),
+        description: description.to_string(),
+        unit: unit.to_string(),
+        quantity,
+        rate: None,
+        section: String::new(),
+        tolerance: None,
+        row: 2,
+    };
+    let bill = Boq::new(
+        "boq.xlsx".to_string(),
+        vec![
+            item("A.1", "Walls", "m", 100.0),
+            item("A.2", "Roof waterproofing", "m2", 50.0),
+        ],
+        0,
+    );
+    session.run(Command::SetBoq { boq: bill }).unwrap();
     let out = run(
         &mut session,
         "measure_length",
-        json!({ "points": [[0, 0], [1, 0]] }),
+        json!({ "points": [[0, 0], [10, 0]] }),
     )
     .unwrap();
     let id = out["measurement"]["id"].as_str().unwrap().to_string();
     run(&mut session, "link_boq", json!({ "id": id, "code": "A.1" })).unwrap();
     assert_eq!(session.takeoff.items[0].boq_code.as_deref(), Some("A.1"));
-    run(&mut session, "link_boq", json!({ "id": id, "code": "" })).unwrap();
-    assert_eq!(session.takeoff.items[0].boq_code, None);
+
+    let out = run(&mut session, "compare_boq", json!({})).unwrap();
+    assert_eq!(out["total"], 2, "{out}");
+    assert_eq!(out["by_kind"]["quantity_mismatch"], 1, "{out}");
+    assert_eq!(out["by_kind"]["not_in_drawings"], 1, "{out}");
+    assert_eq!(out["by_status"]["open"], 2, "{out}");
+    assert_eq!(session.conflicts.len(), 2);
+    assert_eq!(session.top_step_source(), Some(Source::Ai));
+    let mismatch = out["rows"][0].clone();
+    assert_eq!(mismatch["kind"], "quantity_mismatch");
+    assert_eq!(mismatch["boq_code"], "A.1");
+    assert_eq!(mismatch["expected"], 100.0);
+    assert_eq!(mismatch["found"], 10.0);
+    let conflict_id = mismatch["id"].as_str().unwrap().to_string();
+
+    let out = run(
+        &mut session,
+        "resolve_conflict",
+        json!({ "id": conflict_id, "status": "ignored", "note": "Walls are on sheet 2" }),
+    )
+    .unwrap();
+    assert_eq!(out["conflict"]["status"], "ignored");
+    for input in [
+        json!({ "id": "nope", "status": "resolved", "note": "" }),
+        json!({ "id": conflict_id, "status": "done", "note": "" }),
+    ] {
+        let err = run(&mut session, "resolve_conflict", input).unwrap_err();
+        assert!(matches!(err, ToolError::BadInput(_)), "{err:?}");
+    }
+
+    // A new comparison keeps the status and note; a wider tolerance does not change the ids.
+    let out = run(&mut session, "compare_boq", json!({ "tolerance": 10 })).unwrap();
+    assert_eq!(out["rows"][0]["id"], conflict_id.as_str());
+    assert_eq!(out["rows"][0]["status"], "ignored");
+    assert_eq!(out["rows"][0]["note"], "Walls are on sheet 2");
+    let list = run(&mut session, "list_conflicts", json!({ "offset": 1 })).unwrap();
+    assert_eq!(list["total"], 2);
+    assert_eq!(list["rows"].as_array().unwrap().len(), 1);
+    assert_eq!(list["by_status"]["ignored"], 1);
+
+    let err = run(&mut session, "compare_boq", json!({ "tolerance": -1 })).unwrap_err();
+    assert!(matches!(err, ToolError::BadInput(_)), "{err:?}");
 }
 
 #[test]

@@ -1,4 +1,5 @@
-//! The `.qiyas` project file: the take-off and the BOQ, saved as JSON next to the drawing.
+//! The `.qiyas` project file: the take-off, the BOQ, the conflicts and the schedules, saved as
+//! JSON next to the drawing.
 
 use std::fs::File;
 use std::io::Write;
@@ -6,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Boq, CoreError, Takeoff};
+use crate::{Boq, Conflict, CoreError, Schedule, Takeoff};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Project {
@@ -19,6 +20,12 @@ pub struct Project {
     /// The imported BOQ. Files saved before BOQ import have none, and load too.
     #[serde(default)]
     pub boq: Option<Boq>,
+    /// The conflicts of the last comparison. Files saved before the comparison have none.
+    #[serde(default)]
+    pub conflicts: Vec<Conflict>,
+    /// The schedules read off the sheets at the last comparison.
+    #[serde(default)]
+    pub schedules: Vec<Schedule>,
 }
 
 /// The project file of `drawing`: same folder, same stem, extension `qiyas`.
@@ -115,6 +122,8 @@ mod tests {
             drawing: "villa.dwg".to_string(),
             takeoff: Takeoff::default(),
             boq: None,
+            conflicts: Vec::new(),
+            schedules: Vec::new(),
         };
         assert!(save(&path, &project).is_err());
         assert!(!dir.path().join("villa.qiyas.tmp").exists());

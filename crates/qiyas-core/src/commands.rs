@@ -1,4 +1,4 @@
-//! The command bus: every change to the take-off or the BOQ goes through `Session::run` (the user) or
+//! The command bus: every change to the take-off, the BOQ or the conflicts goes through `Session::run` (the user) or
 //! `Session::run_as` (the AI, or an outside AI through MCP).
 
 use opencadcodec::tables::normalize_name;
@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::session::variant_name;
 use crate::takeoff::in_metres;
-use crate::{Boq, CoreError, Kind, Measurement, Session, Source};
+use crate::{
+    Boq, Conflict, ConflictStatus, CoreError, Kind, Measurement, Schedule, Session, Source,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -85,23 +87,38 @@ pub enum Command {
         code: String,
         percent: Option<f64>,
     },
+    /// Replaces the conflicts with those of a new comparison (`qiyas_takeoff::compare`), and the
+    /// schedules with the ones it read off the sheets.
+    SetConflicts {
+        conflicts: Vec<Conflict>,
+        schedules: Vec<Schedule>,
+    },
+    /// Sets the status and note of the conflict `id`.
+    ResolveConflict {
+        id: String,
+        status: ConflictStatus,
+        note: String,
+    },
+}
+
+/// The part of the session a command changes, kept whole in its undo step.
+pub(crate) enum Part {
+    Takeoff,
+    Boq,
+    /// The conflicts and the schedules.
+    Conflicts,
 }
 
 impl Command {
-    /// Whether the command changes the take-off or the BOQ and so is an undo step.
-    pub(crate) fn is_undoable(&self) -> bool {
-        !matches!(
-            self,
-            Command::SetLayerHidden { .. } | Command::SetSheet { .. }
-        )
-    }
-
-    /// Whether the command changes the BOQ rather than the take-off.
-    pub(crate) fn changes_boq(&self) -> bool {
-        matches!(
-            self,
-            Command::SetBoq { .. } | Command::SetBoqTolerance { .. }
-        )
+    /// The part of the session the command changes, and so keeps in its undo step; `None` when
+    /// it is not an undo step.
+    pub(crate) fn changes(&self) -> Option<Part> {
+        match self {
+            Command::SetLayerHidden { .. } | Command::SetSheet { .. } => None,
+            Command::SetBoq { .. } | Command::SetBoqTolerance { .. } => Some(Part::Boq),
+            Command::SetConflicts { .. } | Command::ResolveConflict { .. } => Some(Part::Conflicts),
+            _ => Some(Part::Takeoff),
+        }
     }
 }
 
@@ -239,6 +256,24 @@ impl Session {
                 }
                 items.for_each(|i| i.tolerance = percent);
                 return Ok(Outcome::Changed);
+            }
+            Command::SetConflicts {
+                conflicts,
+                schedules,
+            } => {
+                self.conflicts = conflicts;
+                self.schedules = schedules;
+                return Ok(Outcome::Changed);
+            }
+            Command::ResolveConflict { id, status, note } => {
+                return Ok(match self.conflicts.iter_mut().find(|c| c.id == id) {
+                    Some(c) => {
+                        c.status = status;
+                        c.note = note;
+                        Outcome::Changed
+                    }
+                    None => Outcome::Nothing,
+                });
             }
         };
         measurement.source = source.name().to_string();

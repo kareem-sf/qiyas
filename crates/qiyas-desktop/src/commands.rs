@@ -8,7 +8,8 @@ use std::sync::{MutexGuard, PoisonError};
 use qiyas_ai::prompt::Lang;
 use qiyas_ai::{Agent, AgentEvent};
 use qiyas_core::{
-    Boq, Command, CoreError, DrawingInfo, EntityInfo, Measurement, Outcome, Session, Total,
+    Boq, Command, Conflict, CoreError, DrawingInfo, EntityInfo, Measurement, Outcome, Session,
+    Source, Total,
 };
 use serde::Serialize;
 use tauri::ipc::Response;
@@ -168,6 +169,34 @@ pub async fn import_boq(path: String, state: State<'_, AppState>) -> Result<Boq,
 #[tauri::command]
 pub async fn boq(state: State<'_, AppState>) -> Result<Option<Boq>, String> {
     with_session(&state, |s| Ok(s.boq.clone()))
+}
+
+/// Compares the BOQ and the take-off with the schedules and block counts of every sheet and keeps
+/// the conflicts (an undo step); returns them. `tolerance_default` is the allowed difference in
+/// percent for BOQ items with none of their own (5 when null).
+#[tauri::command]
+pub async fn compare(
+    tolerance_default: Option<f64>,
+    state: State<'_, AppState>,
+) -> Result<Vec<Conflict>, String> {
+    let tolerance = tolerance_default.unwrap_or(qiyas_takeoff::DEFAULT_TOLERANCE);
+    with_session(&state, |s| {
+        qiyas_takeoff::compare_session(s, tolerance, Source::User)
+    })
+}
+
+/// The conflicts of the last comparison, with their statuses and notes.
+#[tauri::command]
+pub async fn conflicts(state: State<'_, AppState>) -> Result<Vec<Conflict>, String> {
+    with_session(&state, |s| Ok(s.conflicts.clone()))
+}
+
+/// Writes the conflicts to an Excel workbook at `path`.
+#[tauri::command]
+pub async fn export_conflicts(path: String, state: State<'_, AppState>) -> Result<(), String> {
+    // Copy the conflicts out, so writing the file doesn't hold the lock.
+    let conflicts = with_session(&state, |s| Ok(s.conflicts.clone()))?;
+    qiyas_boq::report::export_conflicts(Path::new(&path), &conflicts).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -517,6 +546,9 @@ mod tests {
                     run_command,
                     undo,
                     boq,
+                    compare,
+                    conflicts,
+                    export_conflicts,
                     ai_undo,
                     ai_send,
                     ai_cancel,
@@ -712,6 +744,44 @@ mod tests {
         assert_eq!(ipc.call("boq", json!({})), Ok(bill));
         assert_eq!(ipc.call("undo", json!({})), Ok(json!(true)));
         assert_eq!(ipc.call("boq", json!({})), Ok(Value::Null));
+    }
+
+    #[test]
+    fn compare_keeps_the_conflicts_and_exports_them() {
+        let ipc = Ipc::open();
+        let item = json!({
+            "code": "A.1", "description": "Roof waterproofing", "unit": "m2", "quantity": 12.0,
+            "rate": null, "section": "", "tolerance": null, "row": 3
+        });
+        let bill = json!({
+            "source": "boq.xlsx", "imported": "2026-10-08T00:00:00Z",
+            "items": [item], "skipped_rows": 0
+        });
+        let cmd = json!({ "type": "set_boq", "boq": bill });
+        ipc.call("run_command", json!({ "cmd": cmd })).unwrap();
+        let found = ipc
+            .call("compare", json!({ "toleranceDefault": null }))
+            .unwrap();
+        assert_eq!(found[0]["kind"], "not_in_drawings", "{found}");
+        assert_eq!(ipc.call("conflicts", json!({})), Ok(found.clone()));
+
+        let id = found[0]["id"].clone();
+        let cmd =
+            json!({ "type": "resolve_conflict", "id": id, "status": "ignored", "note": "Later" });
+        ipc.call("run_command", json!({ "cmd": cmd })).unwrap();
+        assert_eq!(
+            ipc.call("conflicts", json!({})).unwrap()[0]["status"],
+            "ignored"
+        );
+
+        let path = ipc._dir.path().join("conflicts.xlsx");
+        ipc.call("export_conflicts", json!({ "path": path }))
+            .unwrap();
+        assert!(path.exists());
+
+        assert_eq!(ipc.call("undo", json!({})), Ok(json!(true)));
+        assert_eq!(ipc.call("undo", json!({})), Ok(json!(true)));
+        assert_eq!(ipc.call("conflicts", json!({})), Ok(json!([])));
     }
 
     #[test]

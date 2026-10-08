@@ -22,7 +22,7 @@ qiyas/
   scripts/check.sh  cargo fmt, clippy, test, tsc, vitest, in one run
 ```
 
-The crates that exist now: `qiyas-core`, `qiyas-geom`, `qiyas-render`, `qiyas-boq` and `qiyas-desktop`. `qiyas-takeoff`, `qiyas-pdf` and `qiyas-ai` arrive in later phases.
+The crates that exist now: `qiyas-core`, `qiyas-geom`, `qiyas-render`, `qiyas-takeoff`, `qiyas-boq`, `qiyas-ai` and `qiyas-desktop`. `qiyas-pdf` arrives in a later phase. The take-off, BOQ, schedule and conflict types live in `qiyas-core`; `qiyas-takeoff` holds the comparison engine.
 
 ## Global constraints
 

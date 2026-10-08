@@ -284,12 +284,15 @@ pub fn catalogue() -> Vec<ToolSpec> {
         ),
         tool(
             "compare_boq",
-            "Compare the take-off with the BOQ and list the conflicts: quantity mismatches, work \
-             missing from the BOQ or from the drawings, schedules that disagree with the plans.",
+            "Compare the take-off with the BOQ, the schedules and the block counts of every sheet, \
+             and list the conflicts: quantity mismatches, work missing from the BOQ or from the \
+             drawings, schedules that disagree with the plans, blocks counted differently on two \
+             sheets of one floor, doubtful units. Conflicts found before keep their status and \
+             note. When the result is cut, list_conflicts pages through the rest.",
             json!({
                 "tolerance": {
                     "type": "number",
-                    "description": "Allowed difference in percent; the user's setting when left out."
+                    "description": "Allowed difference in percent for BOQ items with no tolerance of their own; 5 when left out."
                 }
             }),
             &[],
@@ -297,8 +300,10 @@ pub fn catalogue() -> Vec<ToolSpec> {
         ),
         tool(
             "list_conflicts",
-            "The conflicts from the last comparison, with their status and notes.",
-            json!({}),
+            "The conflicts from the last comparison, with their status and notes, and their \
+             counts per kind and per status. Paged: total counts every conflict; pass \
+             next_offset as offset for the next page.",
+            json!({ "offset": offset() }),
             &[],
             false,
         ),

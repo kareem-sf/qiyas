@@ -168,6 +168,45 @@ export type Boq = {
   skipped_rows: number;
 };
 
+/** What a comparison found (`qiyas_core::ConflictKind`). */
+export type ConflictKind =
+  | "quantity_mismatch"
+  | "missing_from_boq"
+  | "not_in_drawings"
+  | "schedule_vs_plan"
+  | "drawing_vs_drawing"
+  | "unit_doubt";
+
+export type ConflictStatus = "open" | "resolved" | "ignored";
+
+/** One conflict of a comparison (`qiyas_core::Conflict`). Quantities are in `unit`. */
+export type Conflict = {
+  /** 16 hex digits, the same on every comparison for the same finding. */
+  id: string;
+  kind: ConflictKind;
+  boq_code: string | null;
+  /** Ids of the measurements involved, sorted. */
+  measurements: string[];
+  /** Name of the schedule involved. */
+  schedule: string | null;
+  /** Names of the sheets involved (layout names), sorted. */
+  sheets: string[];
+  /** What the BOQ or the schedule (or the first sheet) says. */
+  expected: number | null;
+  /** What the drawings measure (or the second sheet counts). */
+  found: number | null;
+  unit: string;
+  /** A short English sentence with the numbers in it. */
+  reason: string;
+  reason_ar: string;
+  status: ConflictStatus;
+  note: string;
+  /** When it was first found, RFC 3339. */
+  created: string;
+  /** What `id` is hashed from, for debugging. */
+  hash_key: string;
+};
+
 /** The command bus (`qiyas_core::Command`). Points are in drawing coordinates. */
 export type Command =
   | { type: "measure_distance"; points: [number, number][] }
@@ -196,7 +235,10 @@ export type Command =
   /** Replaces the BOQ; `importBoq` reads one from Excel and runs this. */
   | { type: "set_boq"; boq: Boq }
   /** Allowed difference in percent (0 or more) for the BOQ items with `code`; null: the user's setting. */
-  | { type: "set_boq_tolerance"; code: string; percent: number | null };
+  | { type: "set_boq_tolerance"; code: string; percent: number | null }
+  /** Replaces the conflicts and schedules; `compare` runs this. */
+  | { type: "set_conflicts"; conflicts: Conflict[]; schedules: Schedule[] }
+  | { type: "resolve_conflict"; id: string; status: ConflictStatus; note: string };
 
 export type Outcome =
   | { type: "measured"; measurement: Measurement }
@@ -234,6 +276,23 @@ export const importBoq = (path: string) => invoke<Boq>("import_boq", { path });
 
 /** The drawing's BOQ; null when none is imported. */
 export const boq = () => invoke<Boq | null>("boq");
+
+/** Compares the BOQ and the take-off with the schedules and block counts of every sheet and keeps
+ *  the conflicts, as an undo step; resolves to them. `tolerance` is the allowed difference in
+ *  percent for BOQ items with none of their own (5 when left out). Conflicts found before keep
+ *  their status and note. */
+export const compare = (tolerance?: number) =>
+  invoke<Conflict[]>("compare", { toleranceDefault: tolerance ?? null });
+
+/** The conflicts of the last comparison. */
+export const conflicts = () => invoke<Conflict[]>("conflicts");
+
+/** Sets a conflict's status and note, as an undo step. */
+export const resolveConflict = (id: string, status: ConflictStatus, note: string) =>
+  runCommand({ type: "resolve_conflict", id, status, note });
+
+/** Writes the conflicts to an Excel workbook at `path` (sheets "Conflicts" and "Summary"). */
+export const exportConflicts = (path: string) => invoke<void>("export_conflicts", { path });
 
 /** Who answers the in-app assistant. */
 export type Provider = "anthropic" | "openai_compatible";

@@ -1,0 +1,88 @@
+//! Writes the conflicts of a comparison to an Excel workbook.
+
+use std::path::Path;
+
+use qiyas_core::{Conflict, ConflictKind, ConflictStatus};
+use rust_xlsxwriter::{Format, RowNum, Workbook};
+
+use crate::BoqError;
+
+const HEADER: [&str; 10] = [
+    "Kind", "BOQ code", "Reason", "Expected", "Found", "Unit", "Sheets", "Status", "Note", "Id",
+];
+
+/// Writes `conflicts` to the workbook at `path`: sheet "Conflicts" with one row per conflict, and
+/// sheet "Summary" with the count of each kind, then of each status.
+pub fn export_conflicts(path: &Path, conflicts: &[Conflict]) -> Result<(), BoqError> {
+    let mut book = Workbook::new();
+    let bold = Format::new().set_bold();
+    let number = Format::new().set_num_format("0.000");
+
+    let sheet = book.add_worksheet().set_name("Conflicts")?;
+    sheet.write_row_with_format(0, 0, HEADER, &bold)?;
+    for (col, width) in [18, 10, 60, 12, 12, 8, 24, 10, 30, 18]
+        .into_iter()
+        .enumerate()
+    {
+        sheet.set_column_width(col as u16, width)?;
+    }
+    for (c, row) in conflicts.iter().zip(1..) {
+        sheet.write_string(row, 0, kind_name(c.kind))?;
+        sheet.write_string(row, 1, c.boq_code.as_deref().unwrap_or(""))?;
+        sheet.write_string(row, 2, &c.reason)?;
+        for (col, value) in [(3, c.expected), (4, c.found)] {
+            if let Some(v) = value {
+                sheet.write_number_with_format(row, col, v, &number)?;
+            }
+        }
+        sheet.write_string(row, 5, &c.unit)?;
+        sheet.write_string(row, 6, c.sheets.join(", "))?;
+        sheet.write_string(row, 7, status_name(c.status))?;
+        sheet.write_string(row, 8, &c.note)?;
+        sheet.write_string(row, 9, &c.id)?;
+    }
+
+    let sheet = book.add_worksheet().set_name("Summary")?;
+    sheet.set_column_width(0, 20)?;
+    sheet.write_row_with_format(0, 0, ["Kind", "Count"], &bold)?;
+    let mut row: RowNum = 1;
+    for kind in ConflictKind::ALL {
+        sheet.write_string(row, 0, kind_name(kind))?;
+        sheet.write_number(
+            row,
+            1,
+            conflicts.iter().filter(|c| c.kind == kind).count() as f64,
+        )?;
+        row += 1;
+    }
+    row += 1;
+    sheet.write_row_with_format(row, 0, ["Status", "Count"], &bold)?;
+    for status in ConflictStatus::ALL {
+        row += 1;
+        sheet.write_string(row, 0, status_name(status))?;
+        let count = conflicts.iter().filter(|c| c.status == status).count();
+        sheet.write_number(row, 1, count as f64)?;
+    }
+
+    book.save(path)?;
+    Ok(())
+}
+
+fn kind_name(kind: ConflictKind) -> &'static str {
+    match kind {
+        ConflictKind::QuantityMismatch => "Quantity mismatch",
+        ConflictKind::MissingFromBoq => "Missing from BOQ",
+        ConflictKind::NotInDrawings => "Not in drawings",
+        ConflictKind::ScheduleVsPlan => "Schedule vs plan",
+        ConflictKind::DrawingVsDrawing => "Drawing vs drawing",
+        ConflictKind::UnitDoubt => "Unit doubt",
+    }
+}
+
+fn status_name(status: ConflictStatus) -> &'static str {
+    match status {
+        ConflictStatus::Open => "Open",
+        ConflictStatus::Resolved => "Resolved",
+        ConflictStatus::Ignored => "Ignored",
+    }
+}

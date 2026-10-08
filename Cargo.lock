@@ -3151,6 +3151,7 @@ dependencies = [
  "qiyas-boq",
  "qiyas-core",
  "qiyas-render",
+ "qiyas-takeoff",
  "reqwest",
  "rust_xlsxwriter",
  "rustls",
@@ -3201,6 +3202,7 @@ dependencies = [
  "qiyas-ai",
  "qiyas-boq",
  "qiyas-core",
+ "qiyas-takeoff",
  "serde",
  "serde_json",
  "tauri",
@@ -3226,6 +3228,15 @@ dependencies = [
  "qiyas-core",
  "qiyas-geom",
  "rstar",
+]
+
+[[package]]
+name = "qiyas-takeoff"
+version = "0.1.0"
+dependencies = [
+ "qiyas-core",
+ "tempfile",
+ "time",
 ]
 
 [[package]]

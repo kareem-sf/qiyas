@@ -9,10 +9,14 @@ use qiyas_geom::{flatten, Xform};
 use qiyas_render::{build_batch, Batch, PickIndex, Visibility};
 use serde::Serialize;
 
+use crate::commands::Part;
 use crate::embed::{embed_measurements, read_embedded};
 use crate::project::{self, project_path, Project};
-use crate::undo::{History, Snapshot};
-use crate::{Boq, Command, CoreError, Drawing, LayerInfo, Outcome, Sheet, Source, Takeoff, Units};
+use crate::undo::{History, Parts, Snapshot};
+use crate::{
+    Boq, Command, Conflict, CoreError, Drawing, LayerInfo, Outcome, Schedule, Sheet, Source,
+    Takeoff, Units,
+};
 
 /// Flatten tolerance for drawing on screen, in drawing units.
 pub const BATCH_TOL: f64 = 0.05;
@@ -29,6 +33,10 @@ pub struct Session {
     pub takeoff: Takeoff,
     /// The imported BOQ; `None` until one is imported.
     pub boq: Option<Boq>,
+    /// The conflicts of the last comparison, with the user's statuses and notes.
+    pub conflicts: Vec<Conflict>,
+    /// The schedules read off every sheet at the last comparison.
+    pub schedules: Vec<Schedule>,
     history: History,
     /// Batch and pick index of the last sheet and visibility drawn; rebuilt when either changes.
     cache: RefCell<Option<Cached>>,
@@ -75,6 +83,8 @@ impl Session {
         let sheet = drawing.sheets()[0].block.clone();
         let mut takeoff = Takeoff::default();
         let mut boq = None;
+        let mut conflicts = Vec::new();
+        let mut schedules = Vec::new();
         let project_file = project_path(path);
         if project_file.exists() {
             match project::load(&project_file) {
@@ -89,6 +99,8 @@ impl Session {
                     }
                     takeoff = project.takeoff;
                     boq = project.boq;
+                    conflicts = project.conflicts;
+                    schedules = project.schedules;
                 }
                 // Keep a copy, since the next save replaces the unreadable file.
                 Err(e) => drawing
@@ -109,12 +121,15 @@ impl Session {
             visibility: Visibility::default(),
             takeoff,
             boq,
+            conflicts,
+            schedules,
             history: History::default(),
             cache: RefCell::new(None),
         })
     }
 
-    /// Saves the take-off and the BOQ to the drawing's project file and returns its path.
+    /// Saves the take-off, the BOQ, the conflicts and the schedules to the drawing's project file
+    /// and returns its path.
     pub fn save_project(&self) -> Result<PathBuf, CoreError> {
         let path = project_path(&self.drawing.path);
         let project = Project {
@@ -122,6 +137,8 @@ impl Session {
             drawing: project::file_name(&self.drawing.path),
             takeoff: self.takeoff.clone(),
             boq: self.boq.clone(),
+            conflicts: self.conflicts.clone(),
+            schedules: self.schedules.clone(),
         };
         project::save(&path, &project)?;
         Ok(path)
@@ -252,14 +269,15 @@ impl Session {
         self.run_as(cmd, Source::User)
     }
 
-    /// Runs `cmd` for `source` and, when it changes the take-off or the BOQ, records an undo step.
+    /// Runs `cmd` for `source` and, when it changes the take-off, the BOQ or the conflicts, records
+    /// an undo step.
     /// New measurements are marked as made by `source`.
     pub fn run_as(&mut self, cmd: Command, source: Source) -> Result<Outcome, CoreError> {
-        let before = match (cmd.is_undoable(), cmd.changes_boq()) {
-            (false, _) => None,
-            (true, true) => Some(Snapshot::Boq(self.boq.clone())),
-            (true, false) => Some(Snapshot::Takeoff(self.takeoff.clone())),
-        };
+        let before = cmd.changes().map(|part| match part {
+            Part::Takeoff => Snapshot::Takeoff(self.takeoff.clone()),
+            Part::Boq => Snapshot::Boq(self.boq.clone()),
+            Part::Conflicts => Snapshot::Conflicts(self.conflicts.clone(), self.schedules.clone()),
+        });
         let outcome = self.execute(cmd, source)?;
         if let Some(before) = before {
             if !matches!(outcome, Outcome::Nothing) {
@@ -269,9 +287,14 @@ impl Session {
         Ok(outcome)
     }
 
-    /// Undoes the last take-off or BOQ change. False when there is nothing to undo.
+    /// Undoes the last take-off, BOQ or conflicts change. False when there is nothing to undo.
     pub fn undo(&mut self) -> bool {
-        self.history.undo(&mut self.takeoff, &mut self.boq)
+        self.history.undo(Parts {
+            takeoff: &mut self.takeoff,
+            boq: &mut self.boq,
+            conflicts: &mut self.conflicts,
+            schedules: &mut self.schedules,
+        })
     }
 
     /// Undoes the last take-off or BOQ change only when `source` made it. False otherwise, with nothing
@@ -285,9 +308,15 @@ impl Session {
         self.history.top_source()
     }
 
-    /// Redoes the last undone take-off or BOQ change. False when there is nothing to redo.
+    /// Redoes the last undone take-off, BOQ or conflicts change. False when there is nothing to
+    /// redo.
     pub fn redo(&mut self) -> bool {
-        self.history.redo(&mut self.takeoff, &mut self.boq)
+        self.history.redo(Parts {
+            takeoff: &mut self.takeoff,
+            boq: &mut self.boq,
+            conflicts: &mut self.conflicts,
+            schedules: &mut self.schedules,
+        })
     }
 
     pub fn can_undo(&self) -> bool {
