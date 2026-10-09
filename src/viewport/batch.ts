@@ -187,6 +187,31 @@ export class Fills {
   }
 }
 
+/** The segments to draw before the wipeouts (`lines`) and the wipeouts' own frames drawn after
+ *  them (`frames`), as `[first, count]` spans of the segments in order. A wipeout's background
+ *  fill goes between the two, so it hides the line work under it. */
+export function wipeoutSpans(b: Batch): { lines: [number, number][]; frames: [number, number][] } {
+  const wipeouts = new Set<bigint>();
+  for (let r = 0; r < b.fillRanges.length; r++) {
+    if (b.fills.color(b.fillRanges.first(r)) & FILL_BACKGROUND) wipeouts.add(b.fillRanges.entity(r));
+  }
+  const total = b.segments.length / 4;
+  if (wipeouts.size === 0) return { lines: total > 0 ? [[0, total]] : [], frames: [] };
+  const frames: [number, number][] = [];
+  for (let r = 0; r < b.ranges.length; r++) {
+    if (wipeouts.has(b.ranges.entity(r))) frames.push([b.ranges.first(r), b.ranges.count(r)]);
+  }
+  frames.sort((x, y) => x[0] - y[0]);
+  const lines: [number, number][] = [];
+  let at = 0;
+  for (const [first, count] of frames) {
+    if (first > at) lines.push([at, first - at]);
+    at = Math.max(at, first + count);
+  }
+  if (at < total) lines.push([at, total - at]);
+  return { lines, frames };
+}
+
 /** The pixels image quads need: picture `id` as of `version`. */
 export type ImageEntry = { id: number; version: number };
 

@@ -23,6 +23,10 @@ import {
   PATTERN,
   TEXT_BOX,
   unpackImageFlags,
+  wipeoutSpans,
+  Fills,
+  Ranges,
+  type Batch,
 } from "./batch";
 
 /** A version 2 batch, laid out as `Batch::to_bytes` does: two segments, the first of a line at the
@@ -459,4 +463,55 @@ test("parseBatch rejects fill ranges that do not cover the triangles", () => {
   expect(v.getUint32(entry, true)).toBe(13);
   v.setUint32(v.getUint32(entry + 4, true) + 32 + 24, 2, true);
   expect(() => parseBatch(buf)).toThrow("section 13 too short");
+});
+
+/** Ranges of `[entity, first, count]` records. */
+function rangesOf(records: [number, number, number][]): Ranges {
+  const buf = new ArrayBuffer(32 * records.length);
+  const wide = new BigUint64Array(buf);
+  const narrow = new Uint32Array(buf);
+  records.forEach(([entity, first, count], i) => {
+    wide[4 * i] = BigInt(entity);
+    wide[4 * i + 1] = BigInt(entity);
+    narrow[8 * i + 4] = NO_CHAIN;
+    narrow[8 * i + 5] = first;
+    narrow[8 * i + 6] = count;
+  });
+  return new Ranges(wide, narrow);
+}
+
+/** Fill triangles with these colours. */
+function fillsOf(colors: number[]): Fills {
+  const buf = new ArrayBuffer(28 * colors.length);
+  const u32 = new Uint32Array(buf);
+  colors.forEach((c, i) => (u32[7 * i + 6] = c));
+  return new Fills(new Float32Array(buf), u32);
+}
+
+test("wipeout frames are drawn apart, after the lines the wipeouts hide", () => {
+  // Lines of 5 (0-2), the wipeout 6 (frame 3-6), lines of 7 (7-9); 6 fills with the background,
+  // 5 with a colour.
+  const b = {
+    segments: new Float32Array(4 * 10),
+    ranges: rangesOf([
+      [5, 0, 3],
+      [6, 3, 4],
+      [7, 7, 3],
+    ]),
+    fills: fillsOf([0xff0000, FILL_BACKGROUND, FILL_BACKGROUND]),
+    fillRanges: rangesOf([
+      [5, 0, 1],
+      [6, 1, 2],
+    ]),
+  } as unknown as Batch;
+  expect(wipeoutSpans(b)).toEqual({
+    lines: [
+      [0, 3],
+      [7, 3],
+    ],
+    frames: [[3, 4]],
+  });
+  // No wipeout: every line in one span.
+  const plain = { ...b, fills: fillsOf([0xff0000, 0xff0000, 0xff0000]) } as Batch;
+  expect(wipeoutSpans(plain)).toEqual({ lines: [[0, 10]], frames: [] });
 });

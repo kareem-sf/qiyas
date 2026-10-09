@@ -1,8 +1,10 @@
 /**
  * WebGL2 renderer for a `Batch`: its underlay pictures (one RGBA texture per picture id), then its
- * fill triangles (wipeouts in the background colour last), then its line segments, then its text as
- * glyph quads textured from the glyph atlas (one R8 texture per page; the texel is the glyph's
- * coverage, drawn as alpha).
+ * fill triangles, then its line segments (pattern lines among them), then the wipeouts in the
+ * background colour over all of those and the wipeouts' frames, then its text as glyph quads
+ * textured from the glyph atlas (one R8 texture per page; the texel is the glyph's coverage, drawn
+ * as alpha). Wipeouts hide whatever lines are under them, drawn before or after them (there is no
+ * draw order yet).
  *
  * Precision: drawings can sit far from (0, 0) (survey grids in metres or millimetres), where f32
  * keeps only a few useful digits. So no absolute coordinate ever reaches the GPU. The segments arrive
@@ -13,6 +15,7 @@
 import {
   FILL_BACKGROUND,
   imageUniforms,
+  wipeoutSpans,
   matchingRanges,
   TEXT_BOX,
   type AtlasPage,
@@ -387,7 +390,8 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
   const pictures = new Map<number, { texture: WebGLTexture; data: Uint8Array }>();
 
   let batch: Batch | null = null;
-  let vertexCount = 0;
+  // The segments drawn under the wipeouts and the wipeouts' frames drawn over them.
+  let spans: ReturnType<typeof wipeoutSpans> = { lines: [], frames: [] };
   let highlight: Target[] = [];
   let highlightCount = 0;
   let overlay: Float64Array | null = null;
@@ -413,7 +417,7 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
   function uploadLines(b: Batch | null) {
     const segmentColors = b?.colors ?? new Uint32Array();
     const n = segmentColors.length;
-    vertexCount = 2 * n;
+    spans = b ? wipeoutSpans(b) : { lines: [], frames: [] };
     // One RGBA byte quad per vertex; both ends of a segment share its colour. A text's box gets
     // alpha 0: it is drawn only when highlighted.
     const rgba = new Uint8Array(8 * n);
@@ -711,20 +715,22 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       gl.uniform3f(uInk, ...INK);
       gl.uniform3f(uPaper, ...PAPER);
       gl.uniform2f(uOffset, 0, 0);
-      // Fills under the lines; wipeouts over the other fills, in the background colour.
+      // Fills under the lines; wipeouts over both in the background colour, their frames last.
       gl.uniform4f(uColor, 0, 0, 0, 0);
       if (fillCount > 0) {
         gl.bindVertexArray(fillVao);
         gl.drawArrays(gl.TRIANGLES, 0, fillCount);
       }
+      gl.bindVertexArray(vao);
+      for (const [first, count] of spans.lines) gl.drawArrays(gl.LINES, 2 * first, 2 * count);
       if (backgroundCount > 0) {
         gl.bindVertexArray(backgroundVao);
         gl.uniform4f(uColor, ...(light ? PAPER : INK), 1);
         gl.drawArrays(gl.TRIANGLES, 0, backgroundCount);
         gl.uniform4f(uColor, 0, 0, 0, 0);
+        gl.bindVertexArray(vao);
       }
-      gl.bindVertexArray(vao);
-      gl.drawArrays(gl.LINES, 0, vertexCount);
+      for (const [first, count] of spans.frames) gl.drawArrays(gl.LINES, 2 * first, 2 * count);
 
       // The text over the lines, its coverage blended onto them.
       const text = (indices: PagedIndices, buffer: WebGLBuffer, color: number[] | null) => {
