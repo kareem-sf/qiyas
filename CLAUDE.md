@@ -185,7 +185,7 @@ their measurements are marked `mcp`).
 
 ## Where the plans live
 
-In the workspace repo, `docs/`:
+In this repo, `docs/` (write new specs, plans, checks and reports here, never in the workspace):
 
 - Spec: `docs/superpowers/specs/2026-10-08-qiyas-design.md`
 - Plan (Phase 1a): `docs/superpowers/plans/2026-10-08-qiyas-foundation.md`
