@@ -109,3 +109,25 @@ test("the Home tab has the Draw group", () => {
   fireEvent.click(line);
   expect(onTool).toHaveBeenLastCalledWith("select");
 });
+
+test("the Home tab has the Modify group", () => {
+  const onTool = vi.fn();
+  render(<Ribbon {...props} onTool={onTool} />);
+  const group = screen.getByRole("group", { name: "Modify" });
+  expect(group).toBeTruthy();
+  for (const [name, tool] of [
+    ["Move", "move"],
+    ["Copy", "copy"],
+    ["Rotate", "rotate"],
+    ["Scale", "scale"],
+    ["Mirror", "mirror"],
+    ["Stretch", "stretch"],
+    ["Align", "align"],
+    ["Array", "array"],
+    ["Explode", "explode"],
+    ["Erase", "erase"],
+  ]) {
+    fireEvent.click(screen.getByRole("button", { name }));
+    expect(onTool).toHaveBeenLastCalledWith(tool);
+  }
+});

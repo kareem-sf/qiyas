@@ -443,3 +443,82 @@ test("draw tools run each finished draw and end a polyline on a double click", (
   expect(hatch.draw?.seek).toEqual([1, 1]);
   expect(toolReducer(hatch, click([1, 1], 100)).draw?.seek).toEqual([1, 1]);
 });
+
+const targets = (handles: number[]) => handles.map((handle) => ({ handle, chain: [] }));
+
+test("the select tool's selection set: Shift adds a click, a box replaces or adds, Esc clears", () => {
+  const shift = (handle: number, time: number): ToolEvent => ({ ...click([handle, 0], time, handle), shift: true } as ToolEvent);
+  let s = run("select", [shift(5, 0), shift(6, 1000), shift(5, 2000)]);
+  expect(s.selection).toEqual([5, 6]);
+  // A Shift click measures nothing.
+  expect(s.selected).toBeNull();
+  expect(s.pendingCommand).toBeNull();
+  s = toolReducer(s, { type: "selected", handles: [7, 8], add: false });
+  expect(s.selection).toEqual([7, 8]);
+  s = toolReducer(s, { type: "selected", handles: [8, 9], add: true });
+  expect(s.selection).toEqual([7, 8, 9]);
+  // Another tool keeps it; Esc and resets clear it.
+  expect(toolReducer(s, { type: "tool", tool: "distance" }).selection).toEqual([7, 8, 9]);
+  expect(toolReducer(s, { type: "escape" }).selection).toEqual([]);
+  expect(toolReducer(s, { type: "cancel" }).selection).toEqual([]);
+  // A box with another tool picks nothing.
+  expect(toolReducer(run("distance", []), { type: "selected", handles: [1], add: false }).selection).toEqual([]);
+});
+
+test("a modify tool starts on the selection set, or on what the select tool picked (whole)", () => {
+  const set = toolReducer(run("select", []), { type: "selected", handles: [3], add: false });
+  const move = toolReducer(set, { type: "tool", tool: "move" });
+  expect(move.modify?.phase).toBe("points");
+  expect(move.modify?.handles).toEqual([3]);
+  expect(move.hint).toBe("modify.prompt.base");
+  // A line inside a block reference: the reference is moved.
+  const inside: Picked = { top: 40, entity: 41, chain: [40], xref: null };
+  const picked = run("select", [click([0, 0], 0, inside)]);
+  expect(toolReducer(picked, { type: "tool", tool: "rotate" }).modify?.handles).toEqual([40]);
+  // Erase with a selection erases at once.
+  expect(toolReducer(set, { type: "tool", tool: "erase" }).pendingCommand).toEqual({
+    type: "delete_entities",
+    targets: targets([3]),
+  });
+});
+
+test("a modify tool picks by clicks and boxes, then takes tracked points and options", () => {
+  let s = run("move", [click([0, 0], 0, 5), click([1, 0], 1000, 6), click([2, 0], 2000)]);
+  expect(s.modify?.handles).toEqual([5, 6]);
+  expect(s.hintArgs).toEqual({ n: "2" });
+  s = toolReducer(s, { type: "selected", handles: [7], add: false });
+  expect(s.modify?.handles).toEqual([5, 6, 7]);
+  s = toolReducer(s, { type: "finish" });
+  s = toolReducer(s, click([1, 1], 3000));
+  // Ortho squares the second point to the base.
+  s = toolReducer(s, { ...click([4, 2], 4000), track: { ortho: true, polar: false, polarStepDeg: 45 } } as ToolEvent);
+  expect(s.pendingCommand).toEqual({ type: "modify", kind: "move", targets: targets([5, 6, 7]), delta: [3, 0] });
+  expect(s.modify?.phase).toBe("select");
+  expect(s.modify?.handles).toEqual([]);
+
+  // Typed options and numbers reach the tool as they reach a draw tool.
+  const rotate = run("rotate", [click([0, 0], 0, 5), { type: "finish" }, click([1, 1], 1000)]);
+  const copied = toolReducer(toolReducer(rotate, { type: "draw", input: { type: "option", option: "C" } }), {
+    type: "draw",
+    input: { type: "number", value: 45 },
+  });
+  expect(copied.pendingCommand).toEqual({
+    type: "modify",
+    kind: "rotate",
+    targets: targets([5]),
+    base: [1, 1],
+    angle: 45,
+    copy: true,
+  });
+});
+
+test("stretch's window: two clicks, then what it touches comes back", () => {
+  const s = run("stretch", [click([4, 4], 0), click([0, 0], 1000)]);
+  expect(s.modify?.seek).toEqual([
+    [0, 0],
+    [4, 4],
+  ]);
+  const found = toolReducer(s, { type: "modify", input: { type: "picked", handles: [2] } });
+  expect(found.modify?.phase).toBe("points");
+  expect(found.modify?.handles).toEqual([2]);
+});

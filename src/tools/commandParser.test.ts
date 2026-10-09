@@ -175,6 +175,27 @@ test("the draw commands and their aliases start the draw tools", () => {
   for (const [line, tool] of tools) expect(parse(line, cmd)).toEqual({ type: "tool", tool });
 });
 
+test("the modify commands and their aliases start the modify tools", () => {
+  const tools: [string, string][] = [
+    ["M", "move"],
+    ["move", "move"],
+    ["CO", "copy"],
+    ["CP", "copy"],
+    ["RO", "rotate"],
+    ["SC", "scale"],
+    ["MI", "mirror"],
+    ["S", "stretch"],
+    ["AL", "align"],
+    ["AR", "array"],
+    ["X", "explode"],
+    ["E", "erase"],
+    ["erase", "erase"],
+  ];
+  for (const [line, tool] of tools) expect(parse(line, cmd)).toEqual({ type: "tool", tool });
+  // ZOOM E is still zoom extents.
+  expect(parse("Z E", cmd)).toEqual({ type: "zoom", how: "extents" });
+});
+
 test("a draw tool's options and typed distances", () => {
   const pline = { ...at("point", [0, 0]), options: ["A", "L", "C", "U"] };
   expect(parse("a", pline)).toEqual({ type: "option", option: "A" });

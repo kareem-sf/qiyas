@@ -319,6 +319,18 @@ export const imageDisplay = (handle: number) =>
 export const pick = (x: number, y: number, tol: number) =>
   invoke<Picked | null>("pick", { x, y, tol });
 
+/** What a selection box from `bounds[0]` to `bounds[1]` (drawing coordinates) picks: the entities
+ *  wholly inside it, or with `crossing` those touching it. Always whole entities at the top of the
+ *  sheet (`top === entity`, no chain), sorted by handle. */
+export const pickWindow = (bounds: [P, P], crossing: boolean) =>
+  invoke<Picked[]>("pick_window", {
+    minX: bounds[0][0],
+    minY: bounds[0][1],
+    maxX: bounds[1][0],
+    maxY: bounds[1][1],
+    crossing,
+  });
+
 /** What kind of point an object snap found (`qiyas_core::SnapKind`), best first. */
 export type SnapKind =
   | "end"
@@ -530,6 +542,28 @@ export type DrawSpec =
   | { kind: "mline"; points: P[]; style: string | null; scale: number | null }
   | { kind: "sketch"; points: P[] };
 
+/** An entity as picked: its handle and the block references it sits inside (empty on the sheet). */
+export type EntityTarget = { handle: number; chain: number[] };
+
+/** What a modify changes (`qiyas_core::ModifySpec`): entities at the top of the sheet, in drawing
+ *  coordinates; angles in degrees counter-clockwise. */
+export type ModifySpec =
+  | { kind: "move"; targets: EntityTarget[]; delta: P }
+  /** `count` copies, each `delta` further than the one before. */
+  | { kind: "copy"; targets: EntityTarget[]; delta: P; count: number }
+  | { kind: "rotate"; targets: EntityTarget[]; base: P; angle: number; copy: boolean }
+  | { kind: "scale"; targets: EntityTarget[]; base: P; factor: number; copy: boolean }
+  /** `keep`: mirror a copy and keep the originals. */
+  | { kind: "mirror"; targets: EntityTarget[]; p1: P; p2: P; keep: boolean }
+  /** `window`: [lower left, upper right]; the vertices inside it move. */
+  | { kind: "stretch"; targets: EntityTarget[]; window: [P, P]; delta: P }
+  /** One or two [source, destination] pairs. */
+  | { kind: "align"; targets: EntityTarget[]; pairs: [P, P][] }
+  | { kind: "array_rect"; targets: EntityTarget[]; rows: number; cols: number; dy: number; dx: number }
+  /** `count` items, the originals included, each turned `angle` from the one before. */
+  | { kind: "array_polar"; targets: EntityTarget[]; centre: P; count: number; angle: number }
+  | { kind: "explode"; targets: EntityTarget[] };
+
 /** What new entities are drawn with (`qiyas_core::Current`). */
 export type Current = {
   layer: string;
@@ -622,7 +656,12 @@ export type Command =
   /** Adds what the spec describes on the current layer: one undo step, an `added` outcome. */
   | ({ type: "draw" } & DrawSpec)
   /** What new entities are drawn with; not an undo step. */
-  | { type: "set_current"; current: Current };
+  | { type: "set_current"; current: Current }
+  /** Deletes entities at the top of the sheet: one undo step. */
+  | { type: "delete_entities"; targets: EntityTarget[] }
+  /** Moves, copies, turns… entities at the top of the sheet: one undo step (`changed`, or `added`
+   *  with the new handles). */
+  | ({ type: "modify" } & ModifySpec);
 
 export type Outcome =
   | { type: "measured"; measurement: Measurement }

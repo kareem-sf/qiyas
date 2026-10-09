@@ -21,12 +21,15 @@ import {
 } from "./camera";
 import { isClick } from "./click";
 import type { DrawKind } from "../tools/drawTools";
+import type { ModifyKind } from "../tools/modifyTools";
 import { createRenderer, type Renderer, type Theme } from "./gl";
 import { wheelFactor } from "./wheel";
 
 export type Tool =
   /** The draw tools (`DRAW_TOOLS`). */
   | DrawKind
+  /** The modify tools (`MODIFY_TOOLS`). */
+  | ModifyKind
   | "select"
   | "distance"
   | "area"
@@ -59,8 +62,14 @@ type Props = {
   overlay?: Float64Array | null;
   /** Drawing units between the grid's dots; null or left out for no grid. */
   grid?: number | null;
-  /** A left click; `worldPerPixel` is the zoom at that moment, for pick tolerances. */
-  onClick(world: Point, screen: Point, worldPerPixel: number): void;
+  /** A left click; `worldPerPixel` is the zoom at that moment, for pick tolerances; `shift` when
+   *  Shift was held. */
+  onClick(world: Point, screen: Point, worldPerPixel: number, shift: boolean): void;
+  /** A left drag draws a selection box (the select tool, a modify tool picking). */
+  boxes?: boolean;
+  /** A selection box was dragged: `crossing` when drawn right to left (it takes what it touches;
+   *  left to right only what lies wholly inside), `shift` when Shift was held at the press. */
+  onBox?(bounds: Bounds, crossing: boolean, shift: boolean): void;
   /** The cursor moved; `worldPerPixel` is the zoom at that moment, for snap tolerances. */
   onMove(world: Point, worldPerPixel: number): void;
   /** A zoom window was dragged and shown: a corner typed before it is dropped. */
@@ -86,7 +95,7 @@ const ZOOM_SETTLE_MS = 200;
 const NO_PAGES: AtlasPage[] = [];
 const NO_PICTURES = new Map<number, HeldPicture>();
 
-type Drag = { kind: "pan" | "zoomWindow"; start: Point; last: Point };
+type Drag = { kind: "pan" | "zoomWindow" | "select"; start: Point; last: Point };
 
 /** The drawing canvas: wheel zoom at the cursor, middle or space drag to pan, double middle click
  *  for extents, and a drag rectangle to zoom into when the tool is `zoomWindow`. */
@@ -99,6 +108,8 @@ export function Viewport({
   overlay = null,
   grid = null,
   onClick,
+  boxes = false,
+  onBox,
   onMove,
   onWindowZoomed,
   onZoomHint,
@@ -120,6 +131,9 @@ export function Viewport({
   const space = useRef(false);
   const lastMiddle = useRef(0);
   const [zoomBox, setZoomBox] = useState<[Point, Point] | null>(null);
+  const [selectBox, setSelectBox] = useState<[Point, Point] | null>(null);
+  /** Shift was held at the left press. */
+  const pressShift = useRef(false);
   const zoomTimer = useRef(0);
   const onZoomHintRef = useRef(onZoomHint);
   onZoomHintRef.current = onZoomHint;
@@ -344,13 +358,22 @@ export function Viewport({
       // The click is made on release, and only if the pointer stayed put.
       e.currentTarget.setPointerCapture(e.pointerId);
       press.current = p;
+      pressShift.current = e.shiftKey;
     }
   }
 
   function onPointerMove(e: PointerEvent<HTMLCanvasElement>) {
     const p = local(e);
+    const down = press.current;
+    // A left press that moves becomes a selection box where boxes are drawn.
+    if (down && !drag.current && boxes && Math.max(Math.abs(p[0] - down[0]), Math.abs(p[1] - down[1])) > DRAG_PX) {
+      press.current = null;
+      drag.current = { kind: "select", start: down, last: p };
+    }
     const d = drag.current;
-    if (d?.kind === "pan") {
+    if (d?.kind === "select") {
+      setSelectBox([d.start, p]);
+    } else if (d?.kind === "pan") {
       setCamera(pan(camera.current, p[0] - d.last[0], p[1] - d.last[1]));
     } else if (d?.kind === "zoomWindow") {
       setZoomBox([d.start, p]);
@@ -364,7 +387,7 @@ export function Viewport({
     if (down && e.button === 0) {
       press.current = null;
       const p = local(e);
-      if (isClick(down, p)) onClick(screenToWorld(camera.current, p), p, camera.current.scale);
+      if (isClick(down, p)) onClick(screenToWorld(camera.current, p), p, camera.current.scale, e.shiftKey);
     }
     const d = drag.current;
     if (!d) return;
@@ -372,6 +395,16 @@ export function Viewport({
     const [dx, dy] = [Math.abs(d.last[0] - d.start[0]), Math.abs(d.last[1] - d.start[1])];
     // A middle drag is a pan, not the first half of a double click.
     if (d.kind === "pan" && Math.max(dx, dy) > DRAG_PX) lastMiddle.current = 0;
+    if (d.kind === "select") {
+      setSelectBox(null);
+      const [ax, ay] = screenToWorld(camera.current, d.start);
+      const [bx, by] = screenToWorld(camera.current, d.last);
+      const bounds: [Point, Point] = [
+        [Math.min(ax, bx), Math.min(ay, by)],
+        [Math.max(ax, bx), Math.max(ay, by)],
+      ];
+      onBox?.(bounds, d.last[0] < d.start[0], pressShift.current);
+    }
     if (d.kind === "zoomWindow") {
       setZoomBox(null);
       if (dx > DRAG_PX && dy > DRAG_PX) {
@@ -401,8 +434,27 @@ export function Viewport({
           drag.current = null;
           press.current = null;
           setZoomBox(null);
+          setSelectBox(null);
         }}
       />
+      {selectBox && (
+        <div
+          data-testid="select-box"
+          data-crossing={selectBox[1][0] < selectBox[0][0]}
+          style={{
+            position: "absolute",
+            left: Math.min(selectBox[0][0], selectBox[1][0]),
+            top: Math.min(selectBox[0][1], selectBox[1][1]),
+            width: Math.abs(selectBox[1][0] - selectBox[0][0]),
+            height: Math.abs(selectBox[1][1] - selectBox[0][1]),
+            // A window (left to right) is solid, a crossing (right to left) dashed, as in AutoCAD.
+            border: `1px ${selectBox[1][0] < selectBox[0][0] ? "dashed" : "solid"} #6E4A9E`,
+            background:
+              selectBox[1][0] < selectBox[0][0] ? "rgba(201, 166, 224, 0.18)" : "rgba(110, 74, 158, 0.10)",
+            pointerEvents: "none",
+          }}
+        />
+      )}
       {zoomBox && (
         <div
           style={{

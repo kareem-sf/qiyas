@@ -38,6 +38,7 @@ import {
   importBoq,
   openDrawing,
   pick,
+  pickWindow,
   redo,
   reloadXrefs,
   atlasPages,
@@ -388,8 +389,9 @@ export default function App() {
       }
       changed = true;
       await refreshTakeoffAndBoq();
-      // Divide, measure along and the draws add to the drawing itself.
-      if (cmd.type === "divide_along" || cmd.type === "measure_along" || cmd.type === "draw") {
+      // Divide, measure along, the draws and the modifies change the drawing itself.
+      const drawingChanged = ["divide_along", "measure_along", "draw", "modify", "delete_entities"];
+      if (drawingChanged.includes(cmd.type)) {
         await redraw();
       }
       if (outcome.type === "measured") setSelectedId(outcome.measurement.id);
@@ -401,6 +403,7 @@ export default function App() {
     tool,
     {
       pick,
+      pickWindow,
       snap,
       entityInfo,
       run: apply,
@@ -1201,11 +1204,11 @@ export default function App() {
 
   /** A click in the drawing: the one a PDF or image insert point or a calibration waits for, else
    *  the tool's. */
-  function clickDrawing(world: Point, screen: Point, worldPerPixel: number) {
+  function clickDrawing(world: Point, screen: Point, worldPerPixel: number, shift: boolean) {
     // The drawing under the click may be about to go.
     if (switching.current > 0) return;
     lastPoint.current = world;
-    if (!pendingPoint(world)) measure.onClick(world, screen, worldPerPixel);
+    if (!pendingPoint(world)) measure.onClick(world, screen, worldPerPixel, shift);
   }
 
   // Hand the keyboard back to the drawing, so Space pans instead of pressing a button.
@@ -1579,8 +1582,9 @@ export default function App() {
       ...aiHighlight.map((handle) => ({ handle, chain: [] })),
     ];
     if (measure.highlighted !== null) targets.push(measure.highlighted);
+    for (const handle of measure.selection) targets.push({ handle, chain: [] });
     return targets;
-  }, [selected, boqLinked, conflictLinked, measure.highlighted, aiHighlight]);
+  }, [selected, boqLinked, conflictLinked, measure.highlighted, measure.selection, aiHighlight]);
 
   const selectedOverlay = useMemo(() => {
     const rows = selected ? [selected] : [...boqLinked, ...conflictLinked];
@@ -1660,7 +1664,7 @@ export default function App() {
   } else if (measure.asking) {
     expect = measure.asking === "divide" ? "count" : "step";
     promptKey = `cmd.prompt.${expect}`;
-  } else if (measure.draw) {
+  } else if (measure.draw || measure.modify) {
     expect = "point";
     promptKey = measure.hint;
   } else if (tool === "distance" || tool === "area") {
@@ -1917,6 +1921,10 @@ export default function App() {
               tool={tool}
               theme={theme}
               onClick={clickDrawing}
+              boxes={measure.boxes && !pending}
+              onBox={(bounds, crossing, shift) => {
+                if (switching.current === 0) measure.onBox(bounds, crossing, shift);
+              }}
               grid={drafting?.grid ? drafting.grid_spacing : null}
               onMove={measure.onMove}
               onWindowZoomed={measure.cancel}
@@ -2075,7 +2083,7 @@ export default function App() {
       {commandLineOn && (
         <CommandLine
           state={commandState}
-          prompt={t(promptKey)}
+          prompt={t(promptKey, promptKey === measure.hint ? (measure.hintArgs ?? undefined) : undefined)}
           onAction={onCommand}
           inputRef={commandInput}
         />

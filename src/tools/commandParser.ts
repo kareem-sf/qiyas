@@ -105,6 +105,16 @@ const TOOLS: Partial<Record<CommandName, Tool>> = {
   HATCH: "hatch",
   REVCLOUD: "revcloud",
   WIPEOUT: "wipeout",
+  MOVE: "move",
+  COPY: "copy",
+  ROTATE: "rotate",
+  SCALE: "scale",
+  MIRROR: "mirror",
+  STRETCH: "stretch",
+  ALIGN: "align",
+  ARRAY: "array",
+  EXPLODE: "explode",
+  ERASE: "erase",
 };
 
 /** The draws typed whole on one line. */
