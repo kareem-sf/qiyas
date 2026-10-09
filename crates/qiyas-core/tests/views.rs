@@ -1,4 +1,5 @@
-use opencadcodec::{CadDocument, EntityType, Line};
+use opencadcodec::tables::View;
+use opencadcodec::{CadDocument, EntityType, Line, Vector3};
 use qiyas_core::{Command, Outcome, Session, EMPTY_MODEL};
 
 #[test]
@@ -70,13 +71,44 @@ fn views_are_deleted_and_checked() {
 }
 
 #[test]
+fn only_plan_views_are_listed() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = qiyas_core::fixtures::write_sample(dir.path(), "dxf");
+    let mut session = Session::open(&path).unwrap();
+    let doc = &mut session.drawing.doc;
+    let mut iso = View::new("SE Iso");
+    iso.handle = doc.allocate_handle();
+    iso.direction = Vector3::new(1.0, -1.0, 1.0);
+    doc.views.add(iso).unwrap();
+    let mut plan = View::new("Plan");
+    plan.handle = doc.allocate_handle();
+    plan.width = 4.0;
+    plan.height = 2.0;
+    doc.views.add(plan).unwrap();
+    let names: Vec<String> = session.views().into_iter().map(|v| v.name).collect();
+    assert_eq!(names, ["Plan"]);
+}
+
+#[test]
 fn empty_drawing_warns() {
     let dir = tempfile::tempdir().unwrap();
     // Nothing in model space.
     let doc = CadDocument::new();
     let path = qiyas_core::fixtures::write_drawing(&doc, &dir.path().join("empty.dxf"));
-    let session = Session::open(&path).unwrap();
-    assert!(session.info().problems.contains(&EMPTY_MODEL.to_string()));
+    let mut session = Session::open(&path).unwrap();
+    let warns = |s: &Session| s.info().problems.contains(&EMPTY_MODEL.to_string());
+    assert!(warns(&session));
+    // Geometry added to model space clears it; undone, it is back.
+    let png = qiyas_core::fixtures::write_png(dir.path(), "pic.png");
+    let attach = Command::AttachImage {
+        path: png.display().to_string(),
+        insert_at: [0.0, 0.0],
+        width_units: 10.0,
+    };
+    session.run(attach).unwrap();
+    assert!(!warns(&session));
+    assert!(session.undo());
+    assert!(warns(&session));
 
     let mut doc = CadDocument::new();
     doc.add_entity(EntityType::Line(Line::from_coords(

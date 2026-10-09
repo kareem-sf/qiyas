@@ -11,6 +11,7 @@ use tauri::{AppHandle, Runtime, State};
 
 use crate::commands::new_conversation;
 use crate::pdf::pictures;
+use crate::settings::same_file;
 use crate::state::{AppState, ParkedTab};
 
 /// Refusal of `close_tab` for a drawing with unsaved changes, without `force`.
@@ -77,15 +78,6 @@ pub(crate) fn snapshot(state: &AppState) -> Tabs {
     }
 }
 
-/// Whether `a` and `b` name the same file (as written, or once resolved).
-fn same_file(a: &Path, b: &Path) -> bool {
-    a == b
-        || matches!(
-            (std::fs::canonicalize(a), std::fs::canonicalize(b)),
-            (Ok(x), Ok(y)) if x == y
-        )
-}
-
 /// The tab whose drawing is the file `path`, if one is open.
 pub(crate) fn find_path(state: &AppState, path: &Path) -> Option<u32> {
     let list = lock(&state.tabs);
@@ -116,10 +108,10 @@ pub(crate) fn add(state: &AppState, session: Session) -> u32 {
             session: old,
         });
     }
+    pictures(state).show(session.epoch());
     *active = Some(session);
     list.order.push(id);
     list.active = Some(id);
-    pictures(state).clear();
     id
 }
 
@@ -152,7 +144,7 @@ pub(crate) fn activate<R: Runtime>(
         });
     }
     list.active = Some(id);
-    pictures(state).clear();
+    pictures(state).show(session.as_ref().map_or(0, Session::epoch));
     Ok(())
 }
 
@@ -190,7 +182,7 @@ fn close<R: Runtime>(
                 list.active = Some(next);
             }
         }
-        pictures(state).clear();
+        pictures(state).show(session.as_ref().map_or(0, Session::epoch));
     } else {
         let at = parked.iter().position(|p| p.id == id);
         if !force && at.is_some_and(|at| parked[at].session.is_dirty()) {

@@ -225,4 +225,15 @@ fn recents_are_ordered_deduplicated_and_capped() {
     assert_eq!(s.recents.len(), settings::MAX_RECENTS);
     settings::save(dir.path(), &s).unwrap();
     assert_eq!(settings::load(dir.path()).recents, s.recents);
+
+    // Another spelling of the same file is the same recent drawing.
+    let plan = dir.path().join("plan.dwg");
+    fs::write(&plan, b"x").unwrap();
+    fs::create_dir(dir.path().join("sub")).unwrap();
+    let other = dir.path().join("sub").join("..").join("plan.dwg");
+    s.push_recent(&plan.display().to_string());
+    s.push_recent(&other.display().to_string());
+    assert_eq!(s.recents[0], other.display().to_string());
+    assert_ne!(s.recents[1], plan.display().to_string(), "listed once");
+    assert_eq!(s.recents.len(), settings::MAX_RECENTS);
 }

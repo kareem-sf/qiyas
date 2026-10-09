@@ -492,6 +492,29 @@ export function picturesToRelease(
   return [...held.keys()].filter((id) => !inView.has(id));
 }
 
+/** The pictures to hold once those `next` needs in view are fetched (`fetch` answers the bytes of
+ *  `underlay_image`) and those out of view let go: a new map, so the one held is never written
+ *  to. Null when `stale()` turns true after a fetch (another drawing came on screen): nothing
+ *  fetched for the old one may be kept. */
+export async function fetchPictures(
+  next: Batch | null,
+  held: Map<number, HeldPicture>,
+  pxPerUnit: number,
+  visible: WorldBounds,
+  fetch: (id: number) => Promise<ArrayBuffer>,
+  stale: () => boolean,
+): Promise<Map<number, HeldPicture> | null> {
+  const out = new Map(held);
+  for (const id of picturesToRelease(next, out, visible)) out.delete(id);
+  for (const id of picturesToFetch(next, out, pxPerUnit, visible)) {
+    const entry = next!.imageTable.find((e) => e.id === id)!;
+    const bytes = await fetch(id);
+    if (stale()) return null;
+    out.set(id, { ...parsePicture(bytes), version: entry.version, pxPerUnit });
+  }
+  return out;
+}
+
 /** The longest side the core draws an underlay picture at. */
 export const PICTURE_MAX_PX = 2048;
 

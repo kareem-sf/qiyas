@@ -71,9 +71,11 @@ pub struct Settings {
 }
 
 impl Settings {
-    /// Puts `path` first in the recent list, once, and keeps the newest `MAX_RECENTS`.
+    /// Puts `path` first in the recent list, once (another spelling of the same file goes), and
+    /// keeps the newest `MAX_RECENTS`.
     pub fn push_recent(&mut self, path: &str) {
-        self.recents.retain(|p| p != path);
+        self.recents
+            .retain(|p| !same_file(Path::new(p), Path::new(path)));
         self.recents.insert(0, path.to_string());
         self.recents.truncate(MAX_RECENTS);
     }
@@ -95,6 +97,16 @@ impl Default for Settings {
             recents: Vec::new(),
         }
     }
+}
+
+/// Whether `a` and `b` name the same file: as written, or once resolved (`..`, links, case on
+/// systems that ignore it).
+pub fn same_file(a: &Path, b: &Path) -> bool {
+    a == b
+        || matches!(
+            (fs::canonicalize(a), fs::canonicalize(b)),
+            (Ok(x), Ok(y)) if x == y
+        )
 }
 
 /// 16 random bytes as 32 lowercase hex characters.

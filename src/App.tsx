@@ -94,6 +94,7 @@ import { CommandLine } from "./shell/CommandLine";
 import { DraftingSettings } from "./shell/DraftingSettings";
 import { ExtractDialog } from "./shell/ExtractDialog";
 import { cycleTab, FileTabs } from "./shell/FileTabs";
+import { isStale, serial } from "./shell/switcher";
 import { AlongPrompt, InfoCard, type Info } from "./shell/InfoCard";
 import { LayersPanel } from "./shell/LayersPanel";
 import { PropertiesPanel } from "./shell/PropertiesPanel";
@@ -119,10 +120,8 @@ import { useTool } from "./tools/useTool";
 import {
   parseAtlas,
   parseBatch,
-  parsePicture,
+  fetchPictures,
   parseThumbnails,
-  picturesToFetch,
-  picturesToRelease,
   type AtlasPage,
   type Batch,
   type HeldPicture,
@@ -278,6 +277,17 @@ export default function App() {
   /** Set when autosave failed for this drawing, so the error shows once, not after every click. A new
    *  open or a successful save turns autosave back on. */
   const autosaveOff = useRef(false);
+  /** Bumped whenever another drawing comes on screen (open, tab switch, close): work started
+   *  before is stale (`isStale`) and drops its results. */
+  const switchGen = useRef(0);
+  /** Drawing changes waiting or running; while any is, clicks and tool input on the canvas are
+   *  ignored (they would land on a drawing about to go). */
+  const switching = useRef(0);
+  /** Opens, switches and closes reach the core one at a time, in the order asked. */
+  const inTurn = useRef(serial()).current;
+  /** The drawing on screen now, for checks inside queued work. */
+  const infoRef = useRef(info);
+  infoRef.current = info;
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -325,12 +335,14 @@ export default function App() {
 
   /** Re-reads the take-off, the BOQ and the conflicts, after anything that may have changed them. */
   async function refreshTakeoffAndBoq() {
+    const gen = switchGen.current;
     const [nextItems, nextTotals, nextBoq, nextConflicts] = await Promise.all([
       takeoff(),
       totals(),
       readBoq(),
       readConflicts(),
     ]);
+    if (isStale(gen, switchGen.current)) return;
     setItems(nextItems);
     setItemTotals(nextTotals);
     setBill(nextBoq);
@@ -428,7 +440,10 @@ export default function App() {
   /** Fetches the atlas pages `next` needs that the window doesn't hold yet. */
   async function syncAtlas(next: Batch) {
     if (next.atlasVersion === 0 || next.atlasVersion === atlasVersionRef.current) return;
+    const gen = switchGen.current;
     const update = parseAtlas(await atlasPages(atlasVersionRef.current ?? undefined));
+    // Another drawing's atlas: never mixed into this one's.
+    if (isStale(gen, switchGen.current)) return;
     for (const page of update.pages) atlasHeld.current.set(page.index, page);
     atlasVersionRef.current = update.version;
     setAtlas([...atlasHeld.current.values()]);
@@ -438,8 +453,10 @@ export default function App() {
    *  were at the last draw, the batch in hand stays and only the fit (if asked) happens. A fit draws
    *  the glyphs for the core's own guess at the zoom; otherwise for the zoom on screen. */
   async function redraw(fit = false) {
+    const gen = switchGen.current;
     // A drawing change, its undo or a save may have changed the tab's unsaved dot.
     const [version] = await Promise.all([batchVersion(), refreshTabs()]);
+    if (isStale(gen, switchGen.current)) return;
     if (version === batchVersionRef.current && batchHeld.current) {
       // Nothing to send; the effect below still fits the view once the window has rendered.
       if (fit) {
@@ -449,9 +466,10 @@ export default function App() {
       return;
     }
     const bytes = await renderBatch(undefined, fit ? undefined : viewport.current?.pxPerUnit());
-    if (!bytes) return;
+    if (!bytes || isStale(gen, switchGen.current)) return;
     const next = parseBatch(bytes);
     await syncAtlas(next);
+    if (isStale(gen, switchGen.current)) return;
     batchVersionRef.current = version;
     batchHeld.current = next;
     fitNext.current = fit;
@@ -465,15 +483,23 @@ export default function App() {
   async function syncPictures(next: Batch | null, pxPerUnit: number, visible: Bounds) {
     if (picturesBusy.current) return;
     picturesBusy.current = true;
+    const gen = switchGen.current;
+    const held = picturesHeld.current;
+    // A drawing change replaces the map held; nothing fetched before it is kept.
+    const stale = () => isStale(gen, switchGen.current) || picturesHeld.current !== held;
     try {
-      const held = picturesHeld.current;
-      for (const id of picturesToRelease(next, held, visible)) held.delete(id);
-      for (const id of picturesToFetch(next, held, pxPerUnit, visible)) {
-        const entry = next!.imageTable.find((e) => e.id === id)!;
-        const picture = parsePicture(await underlayImage(id, pxPerUnit));
-        held.set(id, { ...picture, version: entry.version, pxPerUnit });
+      const fetched = await fetchPictures(
+        next,
+        held,
+        pxPerUnit,
+        visible,
+        (id) => underlayImage(id, pxPerUnit),
+        stale,
+      );
+      if (fetched && !stale()) {
+        picturesHeld.current = fetched;
+        setPictures(new Map(fetched));
       }
-      setPictures(new Map(held));
     } finally {
       picturesBusy.current = false;
       setRenderProgress(null);
@@ -485,12 +511,14 @@ export default function App() {
   async function redrawGlyphs(pxPerUnit: number) {
     if (!batchHeld.current || glyphsBusy.current) return;
     glyphsBusy.current = true;
+    const gen = switchGen.current;
     await run(async () => {
       const version = await batchVersion();
       const bytes = await renderBatch(undefined, pxPerUnit);
-      if (!bytes) return;
+      if (!bytes || isStale(gen, switchGen.current)) return;
       let next = parseBatch(bytes);
       await syncAtlas(next);
+      if (isStale(gen, switchGen.current)) return;
       const held = batchHeld.current;
       if (held && version === batchVersionRef.current) {
         // The same lines: keep the arrays the viewport has uploaded already.
@@ -568,7 +596,10 @@ export default function App() {
   const onMcpUi = useRef<(ui: AiUi) => void>(() => {});
   onMcpUi.current = (ui) => {
     run(async () => {
-      setInfo(await drawingInfo());
+      const gen = switchGen.current;
+      const next = await drawingInfo();
+      if (isStale(gen, switchGen.current)) return;
+      setInfo(next);
       applyAiUi(ui);
     });
   };
@@ -703,21 +734,32 @@ export default function App() {
     lastPoint.current = null;
   }
 
+  /** Another drawing comes on screen: earlier work for the one there goes stale. */
+  function beginShow(): number {
+    switchGen.current += 1;
+    return switchGen.current;
+  }
+
   /** Shows the drawing the core has on screen now (just opened, or its tab chosen) as its session
-   *  keeps it: its sheet, hidden layers, take-off, BOQ and conflicts. */
-  async function showDrawing(next: DrawingInfo) {
+   *  keeps it: its sheet, hidden layers, take-off, BOQ and conflicts. `gen` is `beginShow`'s; a
+   *  later drawing change stops it at the next step. */
+  async function showDrawing(next: DrawingInfo, gen: number) {
     resetDrawingView();
     setArabicReversed(next.arabic_reversed);
-    setDraftingState(await getDrafting());
     setInfo(next);
     setSheetBlock(next.sheet);
     setHidden(new Set(next.hidden_layers));
+    const drafting = await getDrafting();
+    if (isStale(gen, switchGen.current)) return;
+    setDraftingState(drafting);
     await refreshTakeoffAndBoq();
+    if (isStale(gen, switchGen.current)) return;
     await redraw(true);
   }
 
   /** After the last tab closed: an empty window. */
   function showNoDrawing() {
+    beginShow();
     resetDrawingView();
     setBatch(null);
     setInfo(null);
@@ -730,12 +772,29 @@ export default function App() {
     setConflicts([]);
   }
 
-  /** Opens the drawing at `path` in a new tab (or shows its tab when it is open already). */
+  /** Runs a drawing change (open, tab switch, close) in turn after those asked before it; canvas
+   *  input is ignored until all are done. */
+  async function drawingChange<T>(job: () => Promise<T>): Promise<T> {
+    switching.current += 1;
+    try {
+      return await inTurn(job);
+    } finally {
+      switching.current -= 1;
+    }
+  }
+
+  /** Opens the drawing at `path` in a new tab, or shows its tab when it is open already; nothing
+   *  happens when it is the drawing on screen. */
   async function openPath(path: string) {
     setOpening(true);
-    await run(async () => {
-      await showDrawing(await openDrawing(path));
-    });
+    await drawingChange(() =>
+      run(async () => {
+        const next = await openDrawing(path);
+        // The drawing on screen asked for again: the core changed nothing.
+        if (infoRef.current && next.path === infoRef.current.path) return;
+        await showDrawing(next, beginShow());
+      }),
+    );
     setOpening(false);
   }
 
@@ -745,40 +804,62 @@ export default function App() {
     await openPath(path);
   }
 
-  /** Shows the drawing of tab `id`; false when that failed (the error shows). */
-  async function switchTab(id: number): Promise<boolean> {
+  /** Shows the drawing of tab `id` (call inside `drawingChange`); false when that failed (the
+   *  error shows). */
+  async function activate(id: number): Promise<boolean> {
     let ok = false;
     await run(async () => {
-      await showDrawing(await activateTab(id));
+      const gen = beginShow();
+      const next = await activateTab(id);
+      if (isStale(gen, switchGen.current)) return;
+      await showDrawing(next, gen);
       ok = true;
     });
     return ok;
   }
 
-  /** Closes tab `id`. A drawing with unsaved changes is shown first and asks "Save changes to the
-   *  drawing?"; Cancel keeps it open. */
-  async function closeFileTab(id: number) {
-    const tab = fileTabs.find((f) => f.id === id);
-    if (!tab) return;
-    try {
-      if (tab.dirty && (!(await switchTab(id)) || !(await leaveOpenDrawing()))) return;
-    } catch (e) {
-      setError(t("save.failed", { error: String(e) }));
-      return;
-    }
-    await run(async () => {
-      // Shown before the close when it had unsaved changes.
-      const shown = tab.dirty ? id : activeTab;
-      const left = await closeTab(id, tab.dirty);
-      setFileTabs(left.tabs);
-      setActiveTab(left.active);
-      if (left.active === null) showNoDrawing();
-      else if (left.active !== shown) await showDrawing(await drawingInfo());
+  /** Shows the drawing of tab `id`, after any drawing change already asked for. */
+  const switchTab = (id: number) => drawingChange(() => activate(id));
+
+  /** Shows the tab after (`step` 1) or before (-1) the one on screen, as the core has them. */
+  const cycleTabs = (step: 1 | -1) =>
+    drawingChange(async () => {
+      const now = await readTabs().catch(() => null);
+      const next = now && cycleTab(now.tabs, now.active, step);
+      if (now && next !== null && next !== now.active) await activate(next);
     });
-  }
+
+  /** Closes tab `id` (the one on screen when null). A drawing with unsaved changes is shown first
+   *  and asks "Save changes to the drawing?"; Cancel keeps it open. */
+  const closeFileTab = (id: number | null) =>
+    drawingChange(async () => {
+      const now = await readTabs().catch(() => null);
+      const tab = now?.tabs.find((f) => f.id === (id ?? now.active));
+      if (!now || !tab) return;
+      try {
+        if (tab.dirty && (!(await activate(tab.id)) || !(await leaveOpenDrawing()))) return;
+      } catch (e) {
+        setError(t("save.failed", { error: String(e) }));
+        return;
+      }
+      await run(async () => {
+        // On screen before the close: shown above when it had unsaved changes.
+        const shown = tab.dirty ? tab.id : now.active;
+        const left = await closeTab(tab.id, tab.dirty);
+        setFileTabs(left.tabs);
+        setActiveTab(left.active);
+        if (left.active === null) showNoDrawing();
+        else if (left.active !== shown) {
+          const gen = beginShow();
+          const next = await drawingInfo();
+          if (!isStale(gen, switchGen.current)) await showDrawing(next, gen);
+        }
+      });
+    });
 
   /** Writes the drawing with `write`, then shows its new layers and entities. */
   async function saveWith(write: () => Promise<void>) {
+    const gen = switchGen.current;
     await run(async () => {
       let next: DrawingInfo | null = null;
       try {
@@ -788,7 +869,7 @@ export default function App() {
       } finally {
         // Even a failed save may have written the drawing and moved to its new path.
         next = await drawingInfo().catch(() => null);
-        if (next) setInfo(next);
+        if (next && !isStale(gen, switchGen.current)) setInfo(next);
       }
       // The save wrote the project file too: autosave can try again.
       autosaveOff.current = false;
@@ -1064,6 +1145,8 @@ export default function App() {
   /** A click in the drawing: the one a PDF or image insert point or a calibration waits for, else
    *  the tool's. */
   function clickDrawing(world: Point, screen: Point, worldPerPixel: number) {
+    // The drawing under the click may be about to go.
+    if (switching.current > 0) return;
     lastPoint.current = world;
     if (!pendingPoint(world)) measure.onClick(world, screen, worldPerPixel);
   }
@@ -1135,6 +1218,7 @@ export default function App() {
         cancelAll();
         return;
       case "point":
+        if (switching.current > 0) return;
         lastPoint.current = a.p;
         if (!pendingPoint(a.p)) measure.typePoint(a.p);
         return;
@@ -1262,14 +1346,13 @@ export default function App() {
       if (action === "nextTab" || action === "prevTab" || action === "closeTab") {
         e.preventDefault();
         if (e.repeat) return;
-        if (action === "closeTab") {
-          if (activeTab !== null) closeFileTab(activeTab);
-          return;
-        }
-        const next = cycleTab(fileTabs, activeTab, action === "nextTab" ? 1 : -1);
-        if (next !== null && next !== activeTab) switchTab(next);
+        // From the core's tabs at the time the change runs, never from what this render saw.
+        if (action === "closeTab") closeFileTab(null);
+        else cycleTabs(action === "nextTab" ? 1 : -1);
         return;
       }
+      // A drawing change is under way: tools wait for the drawing it brings.
+      if (switching.current > 0) return;
       if (typing(e)) return;
       if (action === "osnap" || action === "grid" || action === "ortho" || action === "polar") {
         // F7 and F10 also mean something to the web view; not here.
@@ -1735,7 +1818,7 @@ export default function App() {
             tabs={fileTabs}
             active={activeTab}
             onSelect={(id) => id !== activeTab && switchTab(id)}
-            onClose={closeFileTab}
+            onClose={(id) => closeFileTab(id)}
           />
           <div className="viewport" ref={viewportBox} tabIndex={0}>
             <Viewport

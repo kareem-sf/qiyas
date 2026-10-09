@@ -23,38 +23,55 @@ const KEPT: usize = 4;
 /// Thumbnails asked for at once, at most.
 const MAX_THUMBNAILS: u32 = 40;
 
-/// The last `KEPT` underlay pictures used, by image id, version and resolution, so zooming back and
-/// forth does not draw a page again; the least recently used goes first.
+/// The last `KEPT` underlay pictures used, by drawing, image id, version and resolution, so
+/// zooming back and forth does not draw a page again; the least recently used goes first. Only
+/// pictures of the drawing on screen (`epoch`, its session's) are kept: image ids are per
+/// drawing, and a picture still being drawn when another tab came up must not land under them.
 #[derive(Default)]
-pub struct PictureCache(VecDeque<(PictureKey, Arc<Vec<u8>>)>);
+pub struct PictureCache {
+    entries: VecDeque<(PictureKey, Arc<Vec<u8>>)>,
+    epoch: u64,
+}
 
 impl PictureCache {
     /// The picture under `key`, now the most recently used.
     fn get(&mut self, key: PictureKey) -> Option<Arc<Vec<u8>>> {
-        let at = self.0.iter().position(|(k, _)| *k == key)?;
-        let entry = self.0.remove(at)?;
+        let at = self.entries.iter().position(|(k, _)| *k == key)?;
+        let entry = self.entries.remove(at)?;
         let bytes = entry.1.clone();
-        self.0.push_back(entry);
+        self.entries.push_back(entry);
         Some(bytes)
     }
 
-    /// Lets go of every picture: another drawing is on screen, and its image ids are its own.
-    pub fn clear(&mut self) {
-        self.0.clear();
+    /// The session with `epoch` is on screen now (none: 0); another one's pictures go.
+    pub fn show(&mut self, epoch: u64) {
+        if epoch != self.epoch {
+            self.entries.clear();
+            self.epoch = epoch;
+        }
     }
 
-    /// Keeps `bytes` under `key`, letting go of the least recently used beyond `KEPT`.
+    /// Keeps `bytes` under `key`, letting go of the least recently used beyond `KEPT`; a picture
+    /// of a drawing no longer on screen is dropped.
     fn put(&mut self, key: PictureKey, bytes: Arc<Vec<u8>>) {
-        self.0.retain(|(k, _)| *k != key);
-        while self.0.len() >= KEPT {
-            self.0.pop_front();
+        if key.0 != self.epoch {
+            return;
         }
-        self.0.push_back((key, bytes));
+        self.entries.retain(|(k, _)| *k != key);
+        while self.entries.len() >= KEPT {
+            self.entries.pop_front();
+        }
+        self.entries.push_back((key, bytes));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn epoch(&self) -> u64 {
+        self.epoch
     }
 }
 
-/// Image id, version, and the resolution (`UnderlayImage::resolution`).
-type PictureKey = (u32, u64, u64);
+/// Session epoch, image id, version, and the resolution (`UnderlayImage::resolution`).
+type PictureKey = (u64, u32, u64, u64);
 
 /// Where the bundled pdfium is: `resources/pdfium/` in the app's resources (next to the program
 /// on Windows), or the crate's own `resources/pdfium/` in a debug build.
@@ -192,8 +209,10 @@ pub async fn underlay_image<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> Result<Response, String> {
-    let picture = with_session(&state, |s| s.underlay_image(id, px_per_unit))?;
-    let key = (id, picture.version, picture.resolution());
+    let (picture, epoch) = with_session(&state, |s| {
+        Ok((s.underlay_image(id, px_per_unit)?, s.epoch()))
+    })?;
+    let key = (epoch, id, picture.version, picture.resolution());
     if let Some(bytes) = pictures(&state).get(key) {
         return Ok(Response::new(bytes.as_ref().clone()));
     }
@@ -257,7 +276,8 @@ mod tests {
     #[test]
     fn the_cache_keeps_the_four_most_recently_used_pictures() {
         let mut cache = PictureCache::default();
-        let key = |id| (id, 1, 0);
+        cache.show(7);
+        let key = |id| (7, id, 1, 0);
         for id in 0..4 {
             cache.put(key(id), Arc::new(vec![id as u8]));
         }
@@ -268,10 +288,31 @@ mod tests {
         for id in [0, 2, 3, 4] {
             assert!(cache.get(key(id)).is_some(), "{id}");
         }
-        assert_eq!(cache.0.len(), KEPT);
+        assert_eq!(cache.entries.len(), KEPT);
         // Putting a key again replaces it.
         cache.put(key(4), Arc::new(vec![9]));
         assert_eq!(cache.get(key(4)).as_deref(), Some(&vec![9]));
-        assert_eq!(cache.0.len(), KEPT);
+        assert_eq!(cache.entries.len(), KEPT);
+    }
+
+    #[test]
+    fn a_picture_of_a_drawing_no_longer_shown_is_not_kept() {
+        let mut cache = PictureCache::default();
+        cache.show(1);
+        cache.put((1, 0, 1, 0), Arc::new(vec![1]));
+        // Another tab comes up while drawing 1's next picture is still being drawn.
+        cache.show(2);
+        assert!(
+            cache.get((1, 0, 1, 0)).is_none(),
+            "drawing 1's pictures went"
+        );
+        cache.put((1, 0, 1, 64), Arc::new(vec![1]));
+        assert!(
+            cache.get((1, 0, 1, 64)).is_none(),
+            "a late picture of drawing 1 is dropped"
+        );
+        assert!(cache.entries.is_empty());
+        cache.put((2, 0, 1, 0), Arc::new(vec![2]));
+        assert_eq!(cache.get((2, 0, 1, 0)).as_deref(), Some(&vec![2]));
     }
 }

@@ -1056,3 +1056,127 @@ async fn view_image_stops_when_the_image_budget_is_used() {
     let body = &mock.requests()[3].body;
     assert!(body["messages"][2]["content"][0].get("is_error").is_none());
 }
+
+/// Answers its first request with one `measure_area` call, after taking the session's lock on a
+/// thread of its own: the call then waits for the lock, as one dispatched just before a tab
+/// switch. The thread puts the drawing it is handed in the session, then lets go. Later requests
+/// get a short text.
+struct HoldsTheLock {
+    session: Arc<Mutex<Option<Session>>>,
+    swap: Mutex<Option<std::sync::mpsc::Receiver<Session>>>,
+}
+
+impl Provider for HoldsTheLock {
+    fn stream_turn<'a>(
+        &'a self,
+        _: TurnRequest,
+        _: qiyas_ai::provider::Sink<'a>,
+    ) -> qiyas_ai::provider::BoxFuture<'a, Result<qiyas_ai::TurnResult, AiError>> {
+        let swap = self.swap.lock().unwrap().take();
+        let session = self.session.clone();
+        Box::pin(async move {
+            let Some(swap) = swap else {
+                return Ok(qiyas_ai::TurnResult {
+                    content: vec![qiyas_ai::ContentBlock::Text { text: "ok".into() }],
+                    stop_reason: qiyas_ai::StopReason::EndTurn,
+                    usage: Default::default(),
+                });
+            };
+            let (held, is_held) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let mut guard = session.lock().unwrap();
+                held.send(()).unwrap();
+                if let Ok(next) = swap.recv() {
+                    *guard = Some(next);
+                }
+            });
+            is_held.recv().unwrap();
+            Ok(qiyas_ai::TurnResult {
+                content: vec![qiyas_ai::ContentBlock::ToolUse {
+                    id: "toolu_1".into(),
+                    name: "measure_area".into(),
+                    input: serde_json::from_str(SLAB).unwrap(),
+                }],
+                stop_reason: qiyas_ai::StopReason::ToolUse,
+                usage: Default::default(),
+            })
+        })
+    }
+}
+
+/// Swaps another drawing in while a call waits for the session (cancelling the turn first when
+/// `cancel_too`, as a tab switch does) and returns the call's result and the measurements on the
+/// drawing now in the session.
+async fn swap_while_a_call_waits(cancel_too: bool) -> (String, usize) {
+    let (_dir, session) = sample();
+    let other_dir = tempfile::tempdir().unwrap();
+    let other =
+        Session::open(&qiyas_core::fixtures::write_sample(other_dir.path(), "dwg")).unwrap();
+    let (swap_tx, swap_rx) = std::sync::mpsc::channel();
+    let provider = HoldsTheLock {
+        session: session.clone(),
+        swap: Mutex::new(Some(swap_rx)),
+    };
+    let mut agent = Agent::new(
+        Box::new(provider),
+        session.clone(),
+        AgentSettings::default(),
+    );
+    let (tx, mut rx) = mpsc::channel(100);
+    let cancel = CancellationToken::new();
+    let trigger = cancel.clone();
+    let listen = async move {
+        let mut other = Some(other);
+        let mut events = Vec::new();
+        while let Some(e) = rx.recv().await {
+            if matches!(&e, AgentEvent::ToolCall { .. }) {
+                // The call is past the cancel check and waiting for the lock by now.
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                if cancel_too {
+                    trigger.cancel();
+                }
+                swap_tx.send(other.take().unwrap()).unwrap();
+            }
+            events.push(e);
+        }
+        events
+    };
+    let (result, events) = tokio::join!(agent.run_turn("Measure".into(), tx, cancel), listen);
+    result.unwrap();
+    let summary = events
+        .iter()
+        .find_map(|e| match e {
+            AgentEvent::ToolResult {
+                summary, is_error, ..
+            } => {
+                assert!(is_error, "{summary}");
+                Some(summary.clone())
+            }
+            _ => None,
+        })
+        .unwrap();
+    let items = session
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .takeoff
+        .items
+        .len();
+    (summary, items)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_call_waiting_through_a_tab_switch_is_not_run_on_the_new_drawing() {
+    let (summary, items) = swap_while_a_call_waits(true).await;
+    assert_eq!(summary, "Not run: cancelled");
+    assert_eq!(items, 0, "the new drawing has no AI measurement");
+
+    // Even without the cancel, the call sees the drawing is another one.
+    let (summary, items) = swap_while_a_call_waits(false).await;
+    assert!(
+        summary.starts_with("Not run: the drawing changed"),
+        "{summary}"
+    );
+    assert_eq!(items, 0);
+}

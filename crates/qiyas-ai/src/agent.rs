@@ -31,6 +31,8 @@ pub const MAX_DESTRUCTIVE: usize = 10;
 const NO_IMAGE_BUDGET: &str =
     "Image budget for this conversation is used up; start a new conversation to look again";
 const CANCELLED: &str = "Not run: cancelled";
+/// Why a call is not run when another drawing came on screen after the turn began.
+pub const DRAWING_CHANGED: &str = "Not run: the drawing changed. Another drawing is on screen now.";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentSettings {
@@ -196,7 +198,7 @@ impl Agent {
                 s
             }
         };
-        let state = self.state();
+        let (state, epoch) = self.state();
         self.push_user(vec![
             ContentBlock::Text { text: state },
             ContentBlock::Text { text: user_text },
@@ -236,7 +238,7 @@ impl Agent {
                 StopReason::ToolUse if has_calls(&turn.content) => {
                     let assistant = Message::assistant(turn.content);
                     let results = self
-                        .run_tools(&assistant, &tools, &mut counts, &events, &cancel)
+                        .run_tools(&assistant, &tools, &mut counts, &events, &cancel, epoch)
                         .await;
                     self.history.push(assistant);
                     self.history.push(Message::user(results));
@@ -307,7 +309,8 @@ impl Agent {
 
     /// Runs the tool calls of `assistant` in order and returns one result block for each, all
     /// for one user message. Once `cancel` fires, past `MAX_TOOL_CALLS`, and past
-    /// `MAX_DESTRUCTIVE` removals or resolutions, the calls are answered but not run.
+    /// `MAX_DESTRUCTIVE` removals or resolutions, the calls are answered but not run. `epoch` is
+    /// the session's at the start of the turn (see `run_tool`).
     async fn run_tools(
         &mut self,
         assistant: &Message,
@@ -315,6 +318,7 @@ impl Agent {
         counts: &mut TurnCounts,
         events: &mpsc::Sender<AgentEvent>,
         cancel: &CancellationToken,
+        epoch: Option<u64>,
     ) -> Vec<ContentBlock> {
         let mut results = Vec::new();
         for (id, name, input) in assistant.tool_uses() {
@@ -343,7 +347,7 @@ impl Agent {
                 (error_result(id, why), error_event(id, why))
             } else {
                 counts.calls += 1;
-                self.run_tool(id, name, input).await
+                self.run_tool(id, name, input, cancel, epoch).await
             };
             results.push(block);
             let _ = events.send(event).await;
@@ -353,11 +357,16 @@ impl Agent {
 
     /// Runs one tool off the async workers (a picture takes a while to draw), holding the
     /// session's lock only while it runs. A picture past the conversation's budget is refused.
+    /// Once it has the lock, the call is not run when the turn was cancelled meanwhile, or when
+    /// the session is no longer the one of the turn (`epoch`): a tab switch swaps the session and
+    /// cancels the turn while the call waits for the lock.
     async fn run_tool(
         &mut self,
         id: &str,
         name: &str,
         input: &Value,
+        cancel: &CancellationToken,
+        epoch: Option<u64>,
     ) -> (ContentBlock, AgentEvent) {
         if name == "view_image" && self.image_bytes >= self.image_budget {
             return (
@@ -367,19 +376,22 @@ impl Agent {
         }
         let session = self.session.clone();
         let (tool, args) = (name.to_string(), input.clone());
+        let cancel = cancel.clone();
         let ran = tokio::task::spawn_blocking(move || {
             let mut guard = session.lock().unwrap_or_else(PoisonError::into_inner);
-            guard
-                .as_mut()
-                .map(|session| execute(session, &tool, &args, Source::Ai))
+            if cancel.is_cancelled() {
+                return Err(CANCELLED);
+            }
+            match guard.as_mut() {
+                None => Err("No drawing is open. Ask the user to open one."),
+                Some(s) if epoch.is_some_and(|e| e != s.epoch()) => Err(DRAWING_CHANGED),
+                Some(s) => Ok(execute(s, &tool, &args, Source::Ai)),
+            }
         })
         .await;
         let output = match ran {
-            Ok(Some(output)) => output,
-            Ok(None) => {
-                let why = "No drawing is open. Ask the user to open one.";
-                return (error_result(id, why), error_event(id, why));
-            }
+            Ok(Ok(output)) => output,
+            Ok(Err(why)) => return (error_result(id, why), error_event(id, why)),
             Err(e) => {
                 let why = format!("The tool {name} crashed: {e}");
                 return (error_result(id, &why), error_event(id, &why));
@@ -442,13 +454,15 @@ impl Agent {
         system_prompt(self.settings.language, &facts)
     }
 
-    /// The `[state]` block for the next user message.
-    fn state(&self) -> String {
-        let state = {
+    /// The `[state]` block for the next user message, and the session's epoch (none without a
+    /// drawing).
+    fn state(&self) -> (String, Option<u64>) {
+        let (state, epoch) = {
             let guard = self.session.lock().unwrap_or_else(PoisonError::into_inner);
-            guard.as_ref().map_or_else(LiveState::none, LiveState::of)
+            let state = guard.as_ref().map_or_else(LiveState::none, LiveState::of);
+            (state, guard.as_ref().map(Session::epoch))
         };
-        state_block(self.settings.language, &state)
+        (state_block(self.settings.language, &state), epoch)
     }
 
     /// Adds user content. A user message already last (after a cancel, an error or a refusal,

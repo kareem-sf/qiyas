@@ -1320,6 +1320,12 @@ mod tests {
         assert_eq!(ipc.call("drawing_info", json!({})).unwrap()["path"], first);
         assert_eq!(count(&ipc), 0, "the first drawing has its own take-off");
         assert_eq!(ipc.call("tabs", json!({})).unwrap()["active"], id1);
+        {
+            // The picture cache keeps only the drawing on screen's pictures.
+            let state = ipc.webview.state::<AppState>();
+            let epoch = state.session.lock().unwrap().as_ref().unwrap().epoch();
+            assert_eq!(crate::pdf::pictures(&state).epoch(), epoch);
+        }
 
         ipc.call("activate_tab", json!({ "id": id2 })).unwrap();
         assert_eq!(count(&ipc), 1);

@@ -15,14 +15,19 @@ pub struct NamedView {
 }
 
 impl Session {
-    /// The drawing's named views of model space, in the table's order. A view's centre is taken
-    /// from its target (a plan view looks straight down, so the centre is on the drawing).
+    /// The drawing's named plan views of model space, in the table's order: a view looking
+    /// another way than straight down (direction (0, 0, 1)) is left out. A view's centre is
+    /// taken from its target.
     pub fn views(&self) -> Vec<NamedView> {
         self.drawing
             .doc
             .views
             .iter()
-            .filter(|v| !v.paper_space && v.width > 0.0 && v.height > 0.0)
+            .filter(|v| {
+                let d = &v.direction;
+                let plan = d.x.abs() < 1e-9 && d.y.abs() < 1e-9 && d.z > 0.0;
+                plan && !v.paper_space && v.width > 0.0 && v.height > 0.0
+            })
             .map(|v| {
                 let (cx, cy) = (v.center.x + v.target.x, v.center.y + v.target.y);
                 let (hw, hh) = (v.width / 2.0, v.height / 2.0);

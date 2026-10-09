@@ -13,6 +13,7 @@ import {
   parsePicture,
   parseThumbnails,
   pictureNeedsRedraw,
+  fetchPictures,
   picturesToFetch,
   picturesToRelease,
   rangeMatcher,
@@ -335,6 +336,27 @@ test("only pictures in view (with a quarter margin) are fetched, and those out o
   expect(picturesToRelease(b, held, [[0, 0], [20, 10]])).toEqual([]);
   expect(picturesToRelease(b, held, [[100, 100], [110, 110]])).toEqual([3]);
   expect(picturesToRelease(null, held, [[0, 0], [20, 10]])).toEqual([3]);
+});
+
+test("a picture that arrives after another drawing came on screen is dropped", async () => {
+  const b = parseBatch(fromHex(IMAGES_FROM_RUST));
+  const picture = new Uint8Array(8 + 4);
+  new DataView(picture.buffer).setUint32(0, 1, true);
+  new DataView(picture.buffer).setUint32(4, 1, true);
+  const held = new Map<number, HeldPicture>();
+  let gen = 1;
+  const fetch = async () => {
+    gen = 2; // a tab switch while the picture is drawn
+    return picture.buffer;
+  };
+  const view: [[number, number], [number, number]] = [[0, 0], [20, 10]];
+  expect(await fetchPictures(b, held, 10, view, fetch, () => gen !== 1)).toBeNull();
+  expect(held.size).toBe(0);
+
+  const fresh = await fetchPictures(b, held, 10, view, async () => picture.buffer, () => false);
+  expect([...fresh!.keys()]).toEqual([3]);
+  // The map held is never written to.
+  expect(held.size).toBe(0);
 });
 
 test("image flags pack and unpack brightness, contrast and fade", () => {

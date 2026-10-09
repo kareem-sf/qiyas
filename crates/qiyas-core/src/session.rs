@@ -71,6 +71,9 @@ pub struct Session {
     /// `document_revision` at the last save (or the open): the drawing has unsaved changes
     /// when they differ.
     saved_revision: u64,
+    /// Model space holds nothing (`EMPTY_MODEL` is then among the problems); looked at again on
+    /// every drawing change.
+    empty_model: bool,
     /// Batch and pick index of the last sheet and visibility drawn; rebuilt when either changes.
     cache: RefCell<Option<Cached>>,
     /// Fonts, glyph atlas and glyph cache, kept across batches so the atlas pages the window
@@ -348,9 +351,6 @@ impl Session {
     /// Measurements embedded inside xrefs are never read.
     pub fn open(path: &Path) -> Result<Session, CoreError> {
         let mut drawing = Drawing::open(path)?;
-        if drawing.entities_in("*Model_Space").next().is_none() {
-            drawing.problems.push(EMPTY_MODEL.to_string());
-        }
         let sheet = drawing.sheets()[0].block.clone();
         let mut takeoff = Takeoff::default();
         let mut boq = None;
@@ -393,6 +393,7 @@ impl Session {
             takeoff.items = read_embedded(&drawing.doc);
         }
         let xrefs = XrefSet::load(&drawing, &xref_overrides, MAX_XREF_DEPTH);
+        let empty_model = model_is_empty(&drawing);
         Ok(Session {
             drawing,
             sheet,
@@ -409,6 +410,7 @@ impl Session {
             epoch: NEXT_EPOCH.fetch_add(1, Ordering::Relaxed),
             document_revision: 0,
             saved_revision: 0,
+            empty_model,
             cache: RefCell::new(None),
             text: RefCell::new(TextEngine::new()),
             underlays: RefCell::new(Underlays::default()),
@@ -490,6 +492,9 @@ impl Session {
     /// current sheet (builds the sheet's batch when it is not cached yet).
     pub fn info(&self) -> DrawingInfo {
         let mut problems = self.drawing.problems.clone();
+        if self.empty_model {
+            problems.push(EMPTY_MODEL.to_string());
+        }
         problems.extend(self.xrefs.problems().cloned());
         if self.with_cache(None, |c| c.batch.truncated) {
             problems.push(TRUNCATED.to_string());
@@ -867,7 +872,14 @@ impl Session {
     /// The drawing itself changed: the batch is drawn again and its version moves on.
     pub(crate) fn drawing_changed(&mut self) {
         self.document_revision += 1;
+        self.empty_model = model_is_empty(&self.drawing);
         *self.cache.get_mut() = None;
+    }
+
+    /// Which opening of a drawing this session is: no two sessions in one run share it. What the
+    /// window or the assistant fetched for one session is never used for another.
+    pub fn epoch(&self) -> u64 {
+        self.epoch
     }
 
     /// Undoes the last take-off or BOQ change only when `source` made it. False otherwise, with nothing
@@ -987,6 +999,11 @@ impl Session {
         drop(text);
         f(cached)
     }
+}
+
+/// Model space holds no entity.
+fn model_is_empty(drawing: &Drawing) -> bool {
+    drawing.entities_in("*Model_Space").next().is_none()
 }
 
 /// 64-bit FNV-1a.
