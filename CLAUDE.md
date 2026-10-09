@@ -276,24 +276,30 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
   `Outcome::Edited`), `InsertBlock { name, at, scale, rotation, attribute_values, from_path }`
   (current layer; attributes from the block's ATTDEFs, constants excepted; `from_path` copies a
   missing block with its layers, linetypes, styles and nested blocks from another drawing, read
-  only), `WriteBlock { name, path }` (a .dwg in the drawing's folder; the Save dialog's path goes
-  through IPC `write_block`), `AttDef` (current layer; drawn on a sheet as its tag; inside a block
+  only), `WriteBlock { name, path }` (a new .dwg in the drawing's folder, never the drawing
+  itself; the Save dialog's path goes through IPC `write_block`), `AttDef` (current layer; drawn on a sheet as its tag; inside a block
   only constants draw), `EditAttributes`, `EditAttDef`, `SyncAttributes` (ATTSYNC, values kept),
-  `RedefineBlock { name, from_path }`. One undo step each; WBLOCK is none.
+  `RedefineBlock { name, from_path }`. One undo step each; WBLOCK is none. Constant ATTDEFs are
+  never prompted (`AttDefInfo::constant`).
 - Edit in place (`EditBlockInPlace { target }`, a sheet reference, not arrayed, even scale, no
   dimensions or tables inside): the block's entities are copied onto the sheet through the
-  reference (no step), the reference hidden, the rest faded (`blocks::fade`) and locked
-  (`sheet_targets`); new sheet entities join the block. Commands are steps as usual, but undo
-  stops at the edit's start (`History` floor); take-off, BOQ and conflict commands, Save, sheet
-  changes and other block definition commands wait for it to close. `SaveBlockEdits` undoes the
-  edit's steps, removes the copies and writes the changed ones back under their own handles in one
-  step (every reference changes; rows on them are measured again); `DiscardBlockEdits` undoes
-  them. `DrawingInfo::block_edit` names the block.
+  reference (no step), the reference hidden, the rest faded (`blocks::fade`), locked
+  (`sheet_targets`) and left out of `pick` and `pick_window`; new entities on that sheet join the
+  block. Commands are steps as usual, but undo stops at the edit's start (`History` floor, which
+  follows the 200-step cap); only CreateBlock, WriteBlock, another edit in place and inserting the
+  block into itself wait; Save waits too. Closing is by snapshot, never by undo:
+  `SaveBlockEdits` makes the sheet's new entities the block's contents (a changed copy replaces
+  its entity under the same handle, an unchanged one leaves it, gone ones go, a dimension's `*D`
+  block is taken back too), `DiscardBlockEdits` drops them; everything else done meanwhile stays.
+  Neither is an undo step: the edit's steps leave the history, with any earlier drawing step that
+  holds tables or the block's entities (`History::close_edit`); `Outcome::BlockEditClosed` says
+  how many, and how many take-off rows lost their link. `DrawingInfo::block_edit` names the block.
 - Insert tab, Block group: Create block (B: pick, base point, name dialog), Insert… and Write
   block… (`BlockPalette`: thumbnails from `block_thumbnail` through `render_png`), Edit in place
   (REFEDIT/BEDIT; the bar saves or discards; REFCLOSE saves), Define attribute (ATT), Edit
   attributes (ATTEDIT, or a double click on an attribute: `AttributesDialog`), Attribute manager
-  (BATTMAN), Design Center (another drawing's blocks: insert, or redefine one this drawing has),
+  (BATTMAN), Design Center (another drawing's blocks with their attribute definitions: insert,
+  prompting for them, or redefine one this drawing has),
   Tool palette (`tool_palette` in `settings.json`, blocks and command lines; kept apart from the
   Settings dialog like `recents`). Command line B, I, W, REFEDIT, BEDIT, REFCLOSE, ATT, ATTEDIT,
   BATTMAN.
