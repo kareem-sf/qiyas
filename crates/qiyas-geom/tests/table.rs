@@ -179,6 +179,7 @@ fn a_table_with_a_block_draws_its_block_where_the_table_is() {
     doc.add_entity(line).unwrap();
     let mut t = table([20.0, 5.0], &[&["A", "B"], &["C", "D"]], 2.0, 0.25);
     t.block_name = "*T1".to_string();
+    let mut by_handle = t.clone();
     let (h, t) = add(&mut doc, t);
     let out = flatten(&doc, &t, &Xform::identity(), 1e-3);
     assert_eq!(out.paths.len(), 1, "the block's line, nothing generated");
@@ -186,6 +187,15 @@ fn a_table_with_a_block_draws_its_block_where_the_table_is() {
     assert_eq!(p.entity, h);
     assert_eq!(p.color, Color::Index(3), "ByBlock takes the table's");
     assert_eq!(p.path.points, vec![[20.0, 5.0], [24.0, 5.0]]);
+
+    // A DWG reader names the block by its record only; a stale name falls back to the record.
+    for name in ["", "*T9"] {
+        by_handle.block_name = name.to_string();
+        by_handle.block_record_handle = Some(owner);
+        let (_, e) = add(&mut doc, by_handle.clone());
+        let out = flatten(&doc, &e, &Xform::identity(), 1e-3);
+        assert_eq!(out.paths.len(), 1, "{name:?}");
+    }
 }
 
 #[test]

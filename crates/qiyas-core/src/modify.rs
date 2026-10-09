@@ -595,7 +595,10 @@ impl Session {
                         }
                     }
                     EntityType::Table(t) => {
-                        let name = t.block_name.clone();
+                        // A DWG reader names the block by its record handle only.
+                        let name = qiyas_geom::table_block(&self.drawing.doc, t)
+                            .map(|b| b.name.clone())
+                            .unwrap_or_default();
                         if let Some((name, handle)) = self.copy_block(&name, "*T", None)? {
                             t.block_name = name;
                             t.block_record_handle = Some(handle);

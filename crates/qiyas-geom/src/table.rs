@@ -7,13 +7,25 @@
 
 use opencadcodec::entities::{AttachmentPoint, EntityType, MText, Table, TableCell};
 use opencadcodec::xdata::{ExtendedDataRecord, XDataValue};
-use opencadcodec::{Color, Line, Vector3};
+use opencadcodec::{BlockRecord, CadDocument, Color, Line, Vector3};
 
 use crate::flatten::{is_logical_text, LOGICAL_TEXT_APP};
 use crate::Xform;
 
 /// Text height when a cell gives none, in drawing units (AutoCAD's own default).
 const DEFAULT_TEXT_HEIGHT: f64 = 0.18;
+
+/// The block record a table refers to: by its name when the drawing has a block of that name,
+/// else by its record handle (a DWG reader sets only the handle).
+pub fn table_block<'a>(doc: &'a CadDocument, t: &Table) -> Option<&'a BlockRecord> {
+    let by_name = (!t.block_name.is_empty())
+        .then(|| doc.block_records.get(&t.block_name))
+        .flatten();
+    by_name.or_else(|| {
+        let h = t.block_record_handle?;
+        doc.block_records.iter().find(|b| b.handle == h)
+    })
+}
 
 /// Table coordinates (x along the columns from the insertion point, y up, so rows go to negative
 /// y) to world coordinates on plan.

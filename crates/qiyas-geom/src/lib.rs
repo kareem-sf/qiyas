@@ -23,5 +23,5 @@ pub use flatten::{
 pub use paint::{FlatFill, Paint};
 pub use path::Path;
 pub use shapes::{snap_shapes, SnapShape};
-pub use table::{merge_owners, table_cell_at, table_entities, table_xform};
+pub use table::{merge_owners, table_block, table_cell_at, table_entities, table_xform};
 pub use transform::Xform;

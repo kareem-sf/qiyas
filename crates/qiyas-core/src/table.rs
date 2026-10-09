@@ -237,17 +237,22 @@ impl Session {
     }
 
     /// The block record `t`'s picture goes in, emptied: its own `*T` block, or a new one under
-    /// the first free `*Tn` name (written into `t`).
+    /// the first free `*Tn` name (written into `t`) when it has none or shares it with another
+    /// table (as a copy of a DWG table made before copies resolved its block left them).
     fn table_block(&mut self, t: &mut Table) -> Result<Handle, CoreError> {
+        let doc = &self.drawing.doc;
+        let own = qiyas_geom::table_block(doc, t).map(|b| (b.name.clone(), b.handle));
+        let shared = own.as_ref().is_some_and(|(_, record)| {
+            doc.entities().any(|e| match e {
+                EntityType::Table(other) => {
+                    other.common.handle != t.common.handle
+                        && qiyas_geom::table_block(doc, other).is_some_and(|b| b.handle == *record)
+                }
+                _ => false,
+            })
+        });
         let doc = &mut self.drawing.doc;
-        let own = if t.block_name.is_empty() {
-            t.block_record_handle
-                .and_then(|h| doc.block_records.iter().find(|b| b.handle == h))
-                .map(|b| b.name.clone())
-        } else {
-            doc.block_records.get(&t.block_name).map(|b| b.name.clone())
-        };
-        if let Some(name) = own {
+        if let Some((name, _)) = own.filter(|_| !shared) {
             let record = doc.block_records.get(&name).expect("found above");
             let (handle, inside) = (record.handle, record.entity_handles.clone());
             for e in inside {
