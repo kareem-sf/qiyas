@@ -20,6 +20,9 @@ pub enum Paint {
     /// A ray (one way) or a construction line (both ways): the path holds a point on it and a
     /// second one along it. Drawn across the sheet, never measured.
     Infinite { both_ways: bool },
+    /// A POINT: the path holds its position. Drawn as a small cross, `size` across (drawing
+    /// units), or sized from the sheet when 0. Picked as the point, never measured.
+    Point { size: f64 },
 }
 
 /// A filled area: `rings` in drawing coordinates, filled even-odd (a ring inside another is a

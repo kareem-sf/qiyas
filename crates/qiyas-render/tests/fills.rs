@@ -5,8 +5,8 @@
 use std::collections::HashSet;
 
 use opencadcodec::entities::{
-    BoundaryEdge, BoundaryPath, Hatch, HatchPattern, HatchPatternLine, PolylineEdge, Ray, Solid,
-    Wipeout, XLine,
+    BoundaryEdge, BoundaryPath, Hatch, HatchPattern, HatchPatternLine, Point, PolylineEdge, Ray,
+    Solid, Wipeout, XLine,
 };
 use opencadcodec::{CadDocument, Color, EntityType, Line, Vector2, Vector3};
 use qiyas_render::{
@@ -47,6 +47,17 @@ fn hatch(pattern: Option<HatchPattern>) -> EntityType {
     h.add_path(ring(&[[4.0, 4.0], [6.0, 4.0], [6.0, 6.0], [4.0, 6.0]]));
     h.common.color = Color::Index(1);
     EntityType::Hatch(h)
+}
+
+/// Absolute `x0 y0 x1 y1` of segment `i`.
+fn segment(b: &Batch, i: usize) -> [f64; 4] {
+    let s = &b.segments[4 * i..4 * i + 4];
+    [
+        f64::from(s[0]) + b.origin[0],
+        f64::from(s[1]) + b.origin[1],
+        f64::from(s[2]) + b.origin[0],
+        f64::from(s[3]) + b.origin[1],
+    ]
 }
 
 /// Area of fill triangle `i`, in drawing units.
@@ -192,6 +203,29 @@ fn images_keep_the_origin_of_a_sheet_with_fills_only() {
         }],
     );
     assert_eq!(b.origin, [5.0, 5.0]);
+}
+
+#[test]
+fn a_point_is_a_cross_sized_from_the_sheet() {
+    let line = EntityType::Line(Line::from_coords(0.0, 0.0, 0.0, 100.0, 0.0, 0.0));
+    let point = EntityType::Point(Point::at(Vector3::new(30.0, 20.0, 0.0)));
+    let (b, handles) = batch_of(vec![line, point]);
+    let range = b.ranges.iter().find(|r| r.entity == handles[1]).unwrap();
+    assert_eq!(range.count, 2);
+    assert_eq!(range.flags, 0);
+    // One percent of the sheet's larger side (100) across, centred on the point.
+    let close = |a: [f64; 4], e: [f64; 4]| a.iter().zip(e).all(|(a, e)| (a - e).abs() < 1e-4);
+    let first = range.first as usize;
+    assert!(close(segment(&b, first), [29.5, 20.0, 30.5, 20.0]));
+    assert!(close(segment(&b, first + 1), [30.0, 19.5, 30.0, 20.5]));
+    // The point (not its cross) grows the sheet; picking near it finds it.
+    assert_eq!(b.bounds, [[0.0, 0.0], [100.0, 20.0]]);
+    let index = PickIndex::new(&b);
+    let picked = index.pick([30.1, 20.1], 0.5).unwrap();
+    assert_eq!(b.range_of(picked).unwrap().entity, handles[1]);
+    // A point alone still shows.
+    let (alone, _) = batch_of(vec![EntityType::Point(Point::at(Vector3::new(1.0, 1.0, 0.0)))]);
+    assert_eq!(alone.segments.len(), 8);
 }
 
 fn section_table(bytes: &[u8]) -> Vec<(u32, usize, usize)> {

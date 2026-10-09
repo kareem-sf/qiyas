@@ -8,6 +8,7 @@ use opencadcodec::entities::{
 use opencadcodec::tables::normalize_name;
 use opencadcodec::types::Matrix3;
 use opencadcodec::{CadDocument, Color, Layer, Vector3};
+use opencadkernel::geom2d::NurbsCurve;
 
 use crate::paint::{mline_paths, pattern_spans, solid_outline, wipeout_outline, FlatFill, Paint};
 use crate::path::same_point;
@@ -201,7 +202,8 @@ pub fn flatten_with(
 /// `flatten_with` for drawing a sheet: spends `budget` (block instances plus paths) and leaves
 /// what is left in it, so a caller flattening many entities stops at one budget for all; and
 /// paints besides the outlines (see `Paint`): hatch fills (solid hatches) and pattern lines,
-/// 2D solid and trace fills, wipeouts (filled with the background), rays and construction lines.
+/// 2D solid and trace fills, wipeouts (filled with the background), rays and construction lines,
+/// and points.
 pub fn flatten_within(
     doc: &CadDocument,
     xrefs: &XrefDocs,
@@ -407,12 +409,17 @@ impl Walk<'_> {
                 sweep(e.start_parameter, e.end_parameter) == TAU,
             ),
             EntityType::Spline(e) => {
-                let defining = if e.fit_points.len() >= 2 {
-                    &e.fit_points
-                } else {
-                    &e.control_points
-                };
-                (defining.iter().map(xy).collect(), e.flags.closed)
+                let control: Vec<[f64; 2]> = e.control_points.iter().map(xy).collect();
+                let weights = (e.weights.len() == control.len()).then(|| e.weights.clone());
+                let curve = usize::try_from(e.degree)
+                    .ok()
+                    .and_then(|d| nurbs_points(d, control, e.knots.clone(), weights, local_tol));
+                // Without control points, the curve through the fit points.
+                let fit: Vec<[f64; 2]> = e.fit_points.iter().map(xy).collect();
+                let points = curve
+                    .or_else(|| fit_curve_points(&fit, local_tol))
+                    .unwrap_or(fit);
+                (points, e.flags.closed)
             }
             EntityType::Hatch(e) => {
                 let mut rings = Vec::with_capacity(e.paths.len());
@@ -430,9 +437,20 @@ impl Walk<'_> {
                 if !self.paint {
                     return;
                 }
-                if e.is_solid && !e.gradient_color.is_enabled() {
+                if e.gradient_color.is_enabled() {
+                    // A gradient is filled with its first colour.
+                    let before = self.out.len();
                     self.push_fill(rings, false, xf, style, handle);
-                } else if !e.is_solid {
+                    let first = e.gradient_color.colors.first().map(|c| c.color);
+                    if let (Some(color), Some(fill)) = (first, self.out.get_mut(before)) {
+                        fill.color = match color {
+                            Color::ByLayer | Color::ByBlock => style.color,
+                            other => other,
+                        };
+                    }
+                } else if e.is_solid {
+                    self.push_fill(rings, false, xf, style, handle);
+                } else {
                     for [a, b] in pattern_spans(&e.pattern.lines, &rings) {
                         self.push_with(vec![a, b], false, xf, style, handle, None, Paint::Pattern);
                     }
@@ -455,8 +473,25 @@ impl Walk<'_> {
             }
             EntityType::MLine(e) => {
                 let (lines, closed) = mline_paths(self.doc, e);
+                if !self.paint {
+                    // Measured along its centre line: the points it was drawn through.
+                    let centre = e.vertices.iter().map(|v| xy(&v.position)).collect();
+                    self.push(centre, closed, xf, style, handle);
+                    return;
+                }
                 for line in lines {
                     self.push(line, closed, xf, style, handle);
+                }
+                return;
+            }
+            EntityType::Point(e) => {
+                if self.paint {
+                    let size = self.host.header.point_display_size;
+                    let paint = Paint::Point {
+                        size: if size > 0.0 { size } else { 0.0 },
+                    };
+                    let at = vec![xy(&e.location)];
+                    self.push_with(at, false, xf, style, handle, None, paint);
                 }
                 return;
             }
@@ -808,6 +843,80 @@ pub fn arc_points(center: [f64; 2], r: f64, a0: f64, a1: f64, tol: f64) -> Vec<[
         .collect()
 }
 
+/// Points along the NURBS curve of `degree` through `control` with `knots` (and `weights`, all
+/// ones when `None`), each piece within `tol` of the curve at its middle. `None` when there is
+/// no curve: too few control points for the degree, or points that are not finite.
+pub(crate) fn nurbs_points(
+    degree: usize,
+    control: Vec<[f64; 2]>,
+    knots: Vec<f64>,
+    weights: Option<Vec<f64>>,
+    tol: f64,
+) -> Option<Vec<[f64; 2]>> {
+    if degree > 10 || !control.iter().flatten().all(|v| v.is_finite()) {
+        return None;
+    }
+    let curve = NurbsCurve::new(degree, control, knots, weights)?;
+    let (start, end) = curve.domain();
+    if !(start.is_finite() && end.is_finite() && end > start) {
+        return None;
+    }
+    // Every knot span, halved until the curve's middle is within `tol` of the chord.
+    let mut spans: Vec<f64> = curve.knots()[degree..=curve.control_points().len()].to_vec();
+    spans.dedup_by(|a, b| (*a - *b).abs() < 1e-12);
+    let tol = tol.max(1e-9);
+    let mut out = vec![curve.point_at_knot(start)];
+    let mut stack: Vec<(f64, f64, usize)> = Vec::new();
+    for pair in spans.windows(2).rev() {
+        stack.push((pair[0], pair[1], 0));
+    }
+    while let Some((u0, u1, depth)) = stack.pop() {
+        let (a, b) = (curve.point_at_knot(u0), curve.point_at_knot(u1));
+        // Quarter points too, so an S-shaped piece crossing its chord at the middle is split.
+        let off = [0.25, 0.5, 0.75].iter().any(|f| {
+            let m = curve.point_at_knot(u0 + f * (u1 - u0));
+            chord_distance(a, b, m) > tol
+        });
+        if off && depth < 16 && out.len() + stack.len() < MAX_SEGMENTS {
+            let mid = (u0 + u1) / 2.0;
+            stack.push((mid, u1, depth + 1));
+            stack.push((u0, mid, depth + 1));
+        } else {
+            out.push(b);
+        }
+    }
+    Some(out)
+}
+
+/// Points along the cubic through the fit points `fit` (chord-length parameters, natural ends),
+/// as AutoCAD fits a spline without control points. `None` when there is no such curve.
+fn fit_curve_points(fit: &[[f64; 2]], tol: f64) -> Option<Vec<[f64; 2]>> {
+    use opencadkernel::geom2d::Parameterization;
+    if fit.len() < 2 || !fit.iter().flatten().all(|v| v.is_finite()) {
+        return None;
+    }
+    let curve = NurbsCurve::interpolate(fit, None, None, Parameterization::Chord)?;
+    nurbs_points(
+        curve.degree(),
+        curve.control_points().to_vec(),
+        curve.knots().to_vec(),
+        None,
+        tol,
+    )
+}
+
+/// Distance from `p` to the segment `a b`.
+fn chord_distance(a: [f64; 2], b: [f64; 2], p: [f64; 2]) -> f64 {
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    let len2 = dx * dx + dy * dy;
+    let t = if len2 > 0.0 {
+        (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    (p[0] - a[0] - t * dx).hypot(p[1] - a[1] - t * dy)
+}
+
 /// Counter-clockwise sweep from `a0` to `a1` in `(0, TAU]`; equal angles mean a full turn.
 pub(crate) fn sweep(a0: f64, a1: f64) -> f64 {
     let s = (a1 - a0).rem_euclid(TAU);
@@ -929,11 +1038,15 @@ fn edge_points(edge: &BoundaryEdge, tol: f64) -> Vec<[f64; 2]> {
             }
         }
         BoundaryEdge::Spline(s) => {
-            if s.fit_points.len() >= 2 {
-                s.fit_points.iter().map(|p| [p.x, p.y]).collect()
-            } else {
-                s.control_points.iter().map(xy).collect()
-            }
+            // Control points carry their weight in z.
+            let control: Vec<[f64; 2]> = s.control_points.iter().map(xy).collect();
+            let weights = s
+                .rational
+                .then(|| s.control_points.iter().map(|p| p.z).collect());
+            usize::try_from(s.degree)
+                .ok()
+                .and_then(|d| nurbs_points(d, control, s.knots.clone(), weights, tol))
+                .unwrap_or_else(|| s.fit_points.iter().map(|p| [p.x, p.y]).collect())
         }
         BoundaryEdge::Polyline(p) => {
             // Polyline edge vertices are (x, y, bulge).

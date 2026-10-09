@@ -328,6 +328,17 @@ struct Infinite {
     chain: u32,
 }
 
+/// A POINT met while building, drawn as a cross once the sheet's bounds are known.
+struct Mark {
+    at: [f64; 2],
+    /// Across, in drawing units; 0 sizes it from the sheet.
+    size: f64,
+    rgb: u32,
+    top: u64,
+    entity: u64,
+    chain: u32,
+}
+
 /// The index of `chain` in `chains`, adding it when new; `NO_CHAIN` for an empty one.
 fn chain_id(chains: &mut Vec<Vec<u64>>, index: &mut HashMap<Vec<u64>, u32>, chain: &[u64]) -> u32 {
     if chain.is_empty() {
@@ -385,6 +396,7 @@ fn build(
     let mut absolute: Vec<[f64; 4]> = Vec::new();
     let mut triangles: Vec<[f64; 6]> = Vec::new();
     let mut infinite: Vec<Infinite> = Vec::new();
+    let mut marks: Vec<Mark> = Vec::new();
     // One budget for the whole sheet, so a big block inserted many times stops too.
     let mut budget = MAX_SHEET_WORK;
     for entity in doc.entities_in_block(sheet_block) {
@@ -468,6 +480,17 @@ fn build(
                     });
                     continue;
                 }
+                Paint::Point { size } => {
+                    marks.push(Mark {
+                        at: flat.path.points[0],
+                        size: *size,
+                        rgb,
+                        top,
+                        entity: flat.entity,
+                        chain: chain_id(&mut batch.chains, &mut chain_index, &flat.chain),
+                    });
+                    continue;
+                }
                 Paint::Outline | Paint::Pattern => {}
             }
             // A laid-out text's box is the box of what it draws.
@@ -532,7 +555,7 @@ fn build(
             );
         }
     }
-    if absolute.is_empty() && triangles.is_empty() && infinite.is_empty() {
+    if absolute.is_empty() && triangles.is_empty() && infinite.is_empty() && marks.is_empty() {
         return batch;
     }
     let mut bounds = [[f64::INFINITY; 2], [f64::NEG_INFINITY; 2]];
@@ -550,6 +573,9 @@ fn build(
         grow(&mut bounds, t[2], t[3]);
         grow(&mut bounds, t[4], t[5]);
     }
+    for m in &marks {
+        grow(&mut bounds, m.at[0], m.at[1]);
+    }
     if !bounds[0][0].is_finite() {
         // Only rays and construction lines: the sheet is around their base points.
         for line in &infinite {
@@ -559,6 +585,7 @@ fn build(
     let [mut lo, mut hi] = bounds;
     let side = (hi[0] - lo[0]).max(hi[1] - lo[1]);
     let side = if side > 1e-9 { side } else { INFINITE_REACH };
+    add_marks(&mut batch, &mut absolute, &marks, side);
     if !infinite.is_empty() {
         add_infinite(&mut batch, &mut absolute, &infinite, [lo, hi], side);
         if absolute.len() == infinite.len() && triangles.is_empty() {
@@ -597,6 +624,34 @@ fn build(
     batch.bounds = [lo, hi];
     batch.origin = origin;
     batch
+}
+
+/// A point's cross spans this share of the sheet's larger side when the drawing gives it no size
+/// (PDSIZE 0): about as big as the snap marker with the whole sheet in view.
+const POINT_SHARE: f64 = 0.01;
+
+/// Draws each point as a cross of two segments (AutoCAD's PDMODE 0 drawn big enough to see),
+/// `size` across or `side * POINT_SHARE` without one, after the segments already there.
+fn add_marks(batch: &mut Batch, absolute: &mut Vec<[f64; 4]>, marks: &[Mark], side: f64) {
+    for m in marks {
+        let half = if m.size > 0.0 { m.size } else { side * POINT_SHARE } / 2.0;
+        let [x, y] = m.at;
+        let first = absolute.len() as u32;
+        absolute.push([x - half, y, x + half, y]);
+        absolute.push([x, y - half, x, y + half]);
+        batch.colors.extend([m.rgb, m.rgb]);
+        extend_ranges(
+            &mut batch.ranges,
+            Range {
+                top: m.top,
+                entity: m.entity,
+                chain: m.chain,
+                first,
+                count: 2,
+                flags: 0,
+            },
+        );
+    }
 }
 
 /// Most corners one fill is triangulated with; a bigger one is drawn as its outline only.

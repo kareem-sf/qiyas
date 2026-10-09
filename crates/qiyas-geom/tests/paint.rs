@@ -5,10 +5,10 @@
 use std::f64::consts::FRAC_PI_4;
 
 use opencadcodec::entities::{
-    BoundaryEdge, BoundaryPath, EntityType, Hatch, HatchPattern, HatchPatternLine, MLine,
-    PolylineEdge, Ray, Solid, Wipeout, XLine,
+    BoundaryEdge, BoundaryPath, EntityType, Hatch, HatchPattern, HatchPatternLine, MLine, Point,
+    PolylineEdge, Ray, Solid, Spline, Wipeout, XLine,
 };
-use opencadcodec::{CadDocument, Vector2, Vector3};
+use opencadcodec::{CadDocument, Color, Vector2, Vector3};
 use qiyas_geom::{flatten, flatten_within, FlatPath, Paint, Xform, XrefDocs, MAX_WORK};
 
 fn painted(doc: &CadDocument, entity: &EntityType) -> Vec<FlatPath> {
@@ -225,7 +225,12 @@ fn a_multiline_draws_one_line_per_style_element() {
         matches!(o, opencadcodec::objects::ObjectType::MLineStyle(_)).then_some(*h)
     });
     m.scale_factor = 2.0;
-    let paths = painted(&doc, &EntityType::MLine(m));
+    let entity = EntityType::MLine(m);
+    // Measured along its centre line, the points it was drawn through: 4 + 4.
+    let measured = flatten(&doc, &entity, &Xform::identity(), 1e-3).into_paths();
+    assert_eq!(measured.len(), 1);
+    assert!((measured[0].length() - 8.0).abs() < 1e-9);
+    let paths = painted(&doc, &entity);
     let lines: Vec<_> = paths.iter().filter(|p| p.paint == Paint::Outline).collect();
     assert_eq!(lines.len(), 2);
     // Offsets 1 and -1 at scale 2, mitred at the corner.
@@ -262,4 +267,99 @@ fn rays_and_construction_lines_are_painted_only() {
             .into_paths()
             .is_empty());
     }
+}
+
+#[test]
+fn a_point_is_painted_at_its_place_and_never_measured() {
+    let mut doc = CadDocument::new();
+    let point = EntityType::Point(Point::at(Vector3::new(3.0, 4.0, 0.0)));
+    let paths = painted(&doc, &point);
+    assert_eq!(paths.len(), 1);
+    assert_eq!(paths[0].paint, Paint::Point { size: 0.0 });
+    assert_eq!(paths[0].path.points, [[3.0, 4.0]]);
+    assert!(flatten(&doc, &point, &Xform::identity(), 1e-3)
+        .into_paths()
+        .is_empty());
+    // The drawing's PDSIZE, when positive, is its size.
+    doc.header.point_display_size = 0.5;
+    assert_eq!(painted(&doc, &point)[0].paint, Paint::Point { size: 0.5 });
+}
+
+/// The spline through four fit points, as the draw command stores it: the cubic's control
+/// points and knots besides the fit points.
+fn smooth_spline() -> (Spline, Vec<[f64; 2]>) {
+    use opencadkernel::geom2d::{NurbsCurve, Parameterization};
+    let fit = vec![[0.0, 0.0], [3.0, 2.0], [6.0, -2.0], [9.0, 0.0]];
+    let curve = NurbsCurve::interpolate(&fit, None, None, Parameterization::Chord).unwrap();
+    let v = |p: &[f64; 2]| Vector3::new(p[0], p[1], 0.0);
+    let mut s = Spline::from_fit_points(fit.iter().map(v).collect());
+    s.degree = curve.degree() as i32;
+    s.control_points = curve.control_points().iter().map(v).collect();
+    s.knots = curve.knots().to_vec();
+    (s, fit)
+}
+
+fn chord_length(points: &[[f64; 2]]) -> f64 {
+    points
+        .windows(2)
+        .map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]))
+        .sum()
+}
+
+#[test]
+fn a_spline_is_drawn_and_measured_along_its_curve_not_its_fit_points() {
+    let doc = CadDocument::new();
+    let (spline, fit) = smooth_spline();
+    let fit_length = chord_length(&fit);
+    for fit_only in [false, true] {
+        let mut spline = spline.clone();
+        if fit_only {
+            // Only fit points: the curve through them, still.
+            spline.control_points.clear();
+            spline.knots.clear();
+        }
+        let entity = EntityType::Spline(spline);
+        let measured = flatten(&doc, &entity, &Xform::identity(), 1e-4).into_paths();
+        assert_eq!(measured.len(), 1);
+        let points = &measured[0].points;
+        assert!(points.len() > 8, "{points:?}");
+        // Through the fit points, longer than the polyline between them.
+        for f in &fit {
+            assert!(points
+                .iter()
+                .any(|p| (p[0] - f[0]).hypot(p[1] - f[1]) < 1e-3));
+        }
+        assert!(measured[0].length() > fit_length + 0.1, "{}", measured[0].length());
+        // Half way between the first two fit points the curve is off their chord.
+        let mid = points
+            .iter()
+            .min_by(|a, b| (a[0] - 1.5).abs().total_cmp(&(b[0] - 1.5).abs()))
+            .unwrap();
+        assert!((mid[1] - 1.0).abs() > 0.05, "{mid:?}");
+        // Drawn along the same curve (coarser).
+        let drawn = painted(&doc, &entity);
+        assert!((drawn[0].path.length() - measured[0].length()).abs() < 1e-2);
+    }
+}
+
+#[test]
+fn a_gradient_hatch_is_filled_with_its_first_colour() {
+    let doc = CadDocument::new();
+    let EntityType::Hatch(mut h) = hatch(None) else {
+        unreachable!()
+    };
+    h.gradient_color.enabled = true;
+    h.gradient_color.add_color(0.0, Color::from_index(5));
+    h.gradient_color.add_color(1.0, Color::from_index(2));
+    let paths = painted(&doc, &EntityType::Hatch(h));
+    let fill = paths
+        .iter()
+        .find(|p| matches!(p.paint, Paint::Fill(_)))
+        .expect("a fill");
+    assert_eq!(fill.color, Color::from_index(5));
+    let Paint::Fill(f) = &fill.paint else {
+        unreachable!()
+    };
+    assert_eq!(f.rings.len(), 2);
+    assert!(!f.background);
 }
