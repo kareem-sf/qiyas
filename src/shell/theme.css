@@ -1941,3 +1941,52 @@ button.close {
 .command-input [role="option"] .target {
   color: var(--muted);
 }
+
+/* Text: TEXT's editor where the text starts, the MText and text edit dialog, and the find and
+   replace dialog, which stays open beside the drawing. */
+.text-in-place {
+  position: absolute;
+  z-index: 4;
+  display: flex;
+  gap: 4px;
+  transform: translateY(-100%);
+  padding: 4px;
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgb(14 15 18 / 0.15);
+}
+.text-in-place input,
+.text-in-place select {
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+.text-in-place .text-value {
+  width: 220px;
+}
+.text-in-place .text-height {
+  width: 64px;
+}
+.text-dialog textarea {
+  font: inherit;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  padding: 4px 8px;
+  resize: vertical;
+}
+.find-replace {
+  position: fixed;
+  inset-block-start: 120px;
+  inset-inline-end: 24px;
+  inset-inline-start: auto;
+  z-index: 6;
+  width: 340px;
+  margin: 0;
+  box-shadow: 0 4px 16px rgb(14 15 18 / 0.15);
+}

@@ -215,6 +215,23 @@ test("the edit commands and their aliases start the edit tools", () => {
   for (const [line, tool] of tools) expect(parse(line, cmd)).toEqual({ type: "tool", tool });
 });
 
+test("the text commands and their aliases start the text tools, FIND opens its dialog", () => {
+  const tools: [string, string][] = [
+    ["TEXT", "text"],
+    ["DT", "text"],
+    ["MTEXT", "mtext"],
+    ["MT", "mtext"],
+    ["T", "mtext"],
+    ["TEXTEDIT", "textEdit"],
+    ["ED", "textEdit"],
+    ["DDEDIT", "textEdit"],
+  ];
+  for (const [line, tool] of tools) expect(parse(line, cmd)).toEqual({ type: "tool", tool });
+  expect(parse("find", cmd)).toEqual({ type: "run", what: "find" });
+  // TEXT's R and H are options while it waits for a point.
+  expect(parse("r", { ...at("point"), options: ["H", "R"] })).toEqual({ type: "option", option: "R" });
+});
+
 test("a draw tool's options and typed distances", () => {
   const pline = { ...at("point", [0, 0]), options: ["A", "L", "C", "U"] };
   expect(parse("a", pline)).toEqual({ type: "option", option: "A" });

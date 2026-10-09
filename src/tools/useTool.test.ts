@@ -585,3 +585,40 @@ test("an edit tool picks with the click point, swaps trim for extend on Shift, a
   const overkill = toolReducer(picked, { type: "tool", tool: "overkill" });
   expect(overkill.pendingCommand).toEqual({ type: "edit", kind: "overkill", targets: targets([8, 9]), tol: 1e-6 });
 });
+
+test("the text tools place a text per click and take H and R from the command line", () => {
+  let s = run("text", [click([1, 2], 0)]);
+  expect(s.text?.request).toEqual({ kind: "text", at: [1, 2], rotation: 0, height: null });
+  expect(s.hint).toBe("text.prompt.start");
+  const events: ToolEvent[] = [
+    { type: "draw", input: { type: "option", option: "R" } },
+    { type: "draw", input: { type: "number", value: 45 } },
+    click([5, 5], 2000),
+  ];
+  s = events.reduce(toolReducer, s);
+  expect(s.text?.request).toEqual({ kind: "text", at: [5, 5], rotation: 45, height: null });
+  // The next event drops the request: it is handed on once.
+  expect(toolReducer(s, { type: "finish" }).text?.request).toBeNull();
+
+  const box = run("mtext", [click([0, 4], 0), click([6, 0], 2000)]);
+  expect(box.text?.request).toEqual({ kind: "mtext", at: [0, 4], width: 6, height: null });
+});
+
+test("a double click on a text edits it; the edit tool asks on each click", () => {
+  const label = { ...onSheet(7), kind: "Text" };
+  const twice = run("select", [click([0, 0], 0, label), click([0, 0], 100, label)]);
+  expect(twice.pendingEdit).toBe(7);
+  expect(twice.pendingCommand).toBeNull();
+  // A line is measured as before.
+  const line = { ...onSheet(8), kind: "Line" };
+  const measured = run("select", [click([0, 0], 0, line), click([0, 0], 100, line)]);
+  expect(measured.pendingEdit).toBeNull();
+  expect(measured.pendingCommand).toEqual({ type: "measure_entity", handle: 8, chain: [] });
+
+  // Inside a block, the block reference is what is edited (its attributes).
+  const inside: Picked = { top: 9, entity: 3, chain: [9], xref: null, kind: "Insert" };
+  const edit = run("textEdit", [click([0, 0], 0, inside)]);
+  expect(edit.hint).toBe("text.prompt.edit");
+  expect(edit.pendingEdit).toBe(9);
+  expect(toolReducer(edit, click([5, 5], 2000, null)).pendingEdit).toBeNull();
+});

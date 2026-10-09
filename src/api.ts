@@ -50,6 +50,10 @@ export type DrawingInfo = {
   hidden_layers: string[];
   /** What new entities are drawn with. */
   current: Current;
+  /** The drawing's own text styles, sorted. */
+  text_styles: string[];
+  /** The style new text takes: the drawing's current one, or "Standard". */
+  text_style: string;
 };
 
 /** In `problems` when the drawing opened with nothing in model space (`qiyas_core::EMPTY_MODEL`). */
@@ -68,6 +72,8 @@ export type EntityInfo = {
   /** For a block reference, its block (a dynamic block by its own name). */
   block_name: string | null;
   text: string | null;
+  /** `text` as read: an MText's without its formatting codes, its lines split by "\n". */
+  plain_text?: string | null;
   /** The block the entity sits in, when it is inside one. */
   inside_block: string | null;
   /** The block references it sits inside, outermost first; empty on the sheet. */
@@ -702,7 +708,31 @@ export type Command =
   | ({ type: "modify" } & ModifySpec)
   /** Trims, extends, breaks, joins… entities at the top of the sheet: one undo step (`edited`, or
    *  `added` for offset and blend). */
-  | ({ type: "edit" } & EditSpec);
+  | ({ type: "edit" } & EditSpec)
+  /** One line of text on the current layer; `rotation` in degrees; `style` null: the drawing's
+   *  current one. One undo step, an `added` outcome. */
+  | { type: "text"; at: P; height: number; rotation: number; value: string; style: string | null }
+  /** Plain text (lines split by "\n") in a box `width` wide (0: no wrapping), top left at `at`. */
+  | { type: "mtext"; at: P; width: number; height: number; value: string; style: string | null }
+  /** A text's or an MText's new value (plain text), or a block reference's attribute `tag`'s. */
+  | { type: "edit_text"; target: EntityTarget; value: string; tag: string | null }
+  /** One undo step (none when nothing matches): a `replaced` outcome. */
+  | {
+      type: "find_replace";
+      find: string;
+      replace: string;
+      scope: TextScope;
+      match_case: boolean;
+      whole_word: boolean;
+    }
+  /** The matches, without changing anything: a `found` outcome. */
+  | { type: "find_text"; find: string; scope: TextScope; match_case: boolean; whole_word: boolean };
+
+/** Where find and replace looks: the sheet on screen, or every sheet. */
+export type TextScope = "sheet" | "drawing";
+
+/** An entity holding a match (a block reference, for an attribute) and its sheet (block name). */
+export type TextMatch = { handle: number; sheet: string };
 
 export type Outcome =
   | { type: "measured"; measurement: Measurement }
@@ -723,6 +753,10 @@ export type Outcome =
       unlinked: number;
       joined_rows: number;
     }
+  /** A find and replace: how many replacements, and the entities changed. */
+  | { type: "replaced"; count: number; handles: number[] }
+  /** A find: how many matches, and each entity holding one with its sheet. */
+  | { type: "found"; count: number; matches: TextMatch[] }
   | { type: "nothing" }
   /** Facts to show: rows of a label key ("radius", "centre"…) and its value written out. */
   | { type: "info"; title: string; rows: [string, string][] }

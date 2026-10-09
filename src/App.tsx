@@ -70,6 +70,7 @@ import {
   type Measurement,
   type NamedView,
   type TabInfo,
+  type TextMatch,
   type Total,
 } from "./api";
 import { AssistantPanel } from "./ai/AssistantPanel";
@@ -96,6 +97,7 @@ import { blurAfterClick } from "./shell/blurAfterClick";
 import { CommandLine } from "./shell/CommandLine";
 import { DraftingSettings } from "./shell/DraftingSettings";
 import { ExtractDialog } from "./shell/ExtractDialog";
+import { FindReplaceDialog, type FindQuery } from "./shell/FindReplaceDialog";
 import { cycleTab, FileTabs } from "./shell/FileTabs";
 import { isStale, serial } from "./shell/switcher";
 import { AlongPrompt, InfoCard, type Info } from "./shell/InfoCard";
@@ -103,6 +105,7 @@ import { LayersPanel } from "./shell/LayersPanel";
 import { PropertiesPanel } from "./shell/PropertiesPanel";
 import { Ribbon, type Tool } from "./shell/Ribbon";
 import { SettingsDialog } from "./shell/SettingsDialog";
+import { InPlaceText, TextDialog, type TextDraft } from "./shell/TextEditor";
 import { SheetTabs } from "./shell/SheetTabs";
 import { StatusBar } from "./shell/StatusBar";
 import { TakeoffPanel } from "./shell/TakeoffPanel";
@@ -120,6 +123,7 @@ import {
 import { mergeAliases } from "./tools/aliases";
 import type { Action, Expect, ParseState } from "./tools/commandParser";
 import { shortcutFor, type DraftingToggle } from "./tools/shortcuts";
+import type { TextRequest } from "./tools/textTools";
 import { useTool } from "./tools/useTool";
 import {
   parseAtlas,
@@ -236,6 +240,23 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [xrefsOpen, setXrefsOpen] = useState(false);
   const [extractOpen, setExtractOpen] = useState(false);
+  const [findOpen, setFindOpen] = useState(false);
+  /** The text height and style new text takes: the last ones used; null until then (2.5 mm in
+   *  drawing units, and the drawing's current style). */
+  const [textHeight, setTextHeight] = useState<number | null>(null);
+  const [textStyle, setTextStyle] = useState<string | null>(null);
+  /** TEXT's in-place editor: where the text goes, and where that is on the canvas. */
+  const [textEditor, setTextEditor] = useState<{
+    request: Extract<TextRequest, { kind: "text" }>;
+    at: Point;
+    key: number;
+  } | null>(null);
+  /** The MText dialog (a new MText's box), or the text edit dialog (an entity's text). */
+  const [textDialog, setTextDialog] = useState<
+    | { kind: "mtext"; request: Extract<TextRequest, { kind: "mtext" }> }
+    | { kind: "edit"; handle: number; value: string; multiline: boolean; attributes?: [string, string][] }
+    | null
+  >(null);
   /** The command line shows (Ctrl+9), its input, and whether to focus it once shown. */
   const [commandLineOn, setCommandLineOn] = useState(true);
   const commandInput = useRef<HTMLInputElement>(null);
@@ -390,7 +411,18 @@ export default function App() {
       changed = true;
       await refreshTakeoffAndBoq();
       // Divide, measure along, the draws and the modifies change the drawing itself.
-      const drawingChanged = ["divide_along", "measure_along", "draw", "modify", "edit", "delete_entities"];
+      const drawingChanged = [
+        "divide_along",
+        "measure_along",
+        "draw",
+        "modify",
+        "edit",
+        "delete_entities",
+        "text",
+        "mtext",
+        "edit_text",
+        "find_replace",
+      ];
       if (drawingChanged.includes(cmd.type)) {
         await redraw();
       }
@@ -430,9 +462,95 @@ export default function App() {
       hatchScale: () => 0.025 / metresPerUnit(info?.units ?? "unknown"),
       undo: () => history(undo),
       onError: (e) => setError(String(e)),
+      placeText,
+      editText: (handle) => run(() => openTextEdit(handle)),
     },
     drafting,
   );
+
+  /** The height new text takes: the last one used, else 2.5 mm in drawing units. */
+  const currentTextHeight = textHeight ?? 0.0025 / metresPerUnit(info?.units ?? "unknown");
+  /** The style new text takes: the last one used when the drawing has it, else its current one. */
+  const currentTextStyle =
+    textStyle !== null && info?.text_styles.includes(textStyle) ? textStyle : (info?.text_style ?? "Standard");
+
+  /** A text tool placed a text: TEXT opens the in-place editor where it starts, MTEXT the MText
+   *  dialog. */
+  function placeText(request: TextRequest) {
+    if (request.kind === "mtext") {
+      setTextDialog({ kind: "mtext", request });
+      return;
+    }
+    const at = viewport.current?.toScreen(request.at) ?? [0, 0];
+    setTextEditor({ request, at, key: performance.now() });
+  }
+
+  /** Opens the text edit dialog on the text of the top-level entity `handle`. */
+  async function openTextEdit(handle: number) {
+    const e = await entityInfo(handle);
+    const value = e.plain_text ?? e.text;
+    if ((e.kind === "Text" || e.kind === "MText") && value !== null) {
+      setTextDialog({ kind: "edit", handle, value, multiline: e.kind === "MText" });
+    } else if (e.kind === "Insert" && e.attributes.length > 0) {
+      setTextDialog({ kind: "edit", handle, value: "", multiline: false, attributes: e.attributes });
+    } else {
+      setNotice(t("text.noText"));
+    }
+  }
+
+  /** Runs a text command from a dialog, then draws it; an error goes back to the dialog. */
+  async function runText(cmd: Command) {
+    await runCommand(cmd);
+    await redraw();
+    await autosave();
+  }
+
+  /** Places TEXT's text, remembering its height and style for the next one. */
+  function placeInPlace(request: Extract<TextRequest, { kind: "text" }>, draft: TextDraft) {
+    setTextEditor(null);
+    setTextHeight(draft.height);
+    setTextStyle(draft.style);
+    apply({
+      type: "text",
+      at: request.at,
+      height: draft.height,
+      rotation: request.rotation,
+      value: draft.value,
+      style: draft.style,
+    });
+    focusDrawing();
+  }
+
+  /** The find dialog's search: the matches, nothing changed. */
+  async function findTexts(q: FindQuery) {
+    const outcome = await runCommand({ type: "find_text", ...q });
+    return outcome.type === "found" ? outcome : { count: 0, matches: [] };
+  }
+
+  /** Replaces every match (one undo step), draws the change and highlights what changed. */
+  async function replaceTexts(q: FindQuery, replace: string) {
+    const outcome = await runCommand({ type: "find_replace", ...q, replace });
+    if (outcome.type !== "replaced" || outcome.count === 0) return 0;
+    await redraw();
+    setAiHighlight(outcome.handles);
+    await autosave();
+    return outcome.count;
+  }
+
+  /** Shows one entity the find found: its sheet, zoomed to it with room around, highlighted. */
+  async function showMatch(m: TextMatch) {
+    if (m.sheet.toLowerCase() !== sheet.toLowerCase()) await chooseSheet(m.sheet);
+    const box = handlesBounds([m.handle], batchHeld.current);
+    if (box) {
+      const [[x0, y0], [x1, y1]] = box;
+      const pad = Math.max(x1 - x0, y1 - y0) * 2;
+      viewport.current?.fitTo([
+        [x0 - pad, y0 - pad],
+        [x1 + pad, y1 + pad],
+      ]);
+    }
+    setAiHighlight([m.handle]);
+  }
 
   /** Makes `next` the drawing's drafting settings and saves them with the project. Throws when the
    *  core refuses them. */
@@ -1239,6 +1357,7 @@ export default function App() {
   function cancelAll(escKey = false) {
     preset.current = null;
     setPending(null);
+    setTextEditor(null);
     setInfoCard(null);
     if (escKey) measure.escape();
     else measure.cancel();
@@ -1405,6 +1524,8 @@ export default function App() {
         return setXrefsOpen(true);
       case "extract":
         return setExtractOpen(true);
+      case "find":
+        return setFindOpen(true);
       case "calibrate":
         if (!batch || batch.imageTable.length === 0) {
           setError(t("cmd.notNow", { name: "CALIBRATE" }));
@@ -1692,7 +1813,7 @@ export default function App() {
   } else if (measure.asking) {
     expect = measure.asking === "divide" ? "count" : "step";
     promptKey = `cmd.prompt.${expect}`;
-  } else if (measure.draw || measure.modify || measure.edit) {
+  } else if (measure.draw || measure.modify || measure.edit || measure.text) {
     expect = "point";
     promptKey = measure.hint;
   } else if (tool === "distance" || tool === "area") {
@@ -1704,7 +1825,13 @@ export default function App() {
   } else if (tool === "zoomWindow") {
     expect = "point";
     promptKey = measure.corner ? "cmd.prompt.otherCorner" : "cmd.prompt.firstCorner";
-  } else if (tool === "count" || tool === "geometry" || tool === "divide" || tool === "measureAlong") {
+  } else if (
+    tool === "count" ||
+    tool === "geometry" ||
+    tool === "divide" ||
+    tool === "measureAlong" ||
+    tool === "textEdit"
+  ) {
     promptKey = "cmd.prompt.select";
   }
   const commandState: ParseState = {
@@ -1770,6 +1897,7 @@ export default function App() {
               : undefined
           }
           onExtract={info ? () => setExtractOpen(true) : undefined}
+          onFind={info ? () => setFindOpen(true) : undefined}
           arabicReversed={arabicReversed}
           onArabicReversed={info ? chooseArabicReversed : undefined}
           {...(onModel && {
@@ -1893,6 +2021,58 @@ export default function App() {
           onClose={() => setExtractOpen(false)}
         />
       )}
+      {findOpen && info && (
+        <FindReplaceDialog
+          onFind={findTexts}
+          onReplaceAll={replaceTexts}
+          onShow={(m) => run(() => showMatch(m))}
+          onClose={() => setFindOpen(false)}
+        />
+      )}
+      {textDialog?.kind === "mtext" && info && (
+        <TextDialog
+          heading="text.newMtext"
+          value=""
+          multiline
+          styles={info.text_styles}
+          style={currentTextStyle}
+          height={textDialog.request.height ?? currentTextHeight}
+          onSubmit={async (d) => {
+            const r = textDialog.request;
+            const { height, value, style } = d;
+            await runText({ type: "mtext", at: r.at, width: r.width, height, value, style });
+            setTextHeight(d.height);
+            setTextStyle(d.style);
+          }}
+          onClose={() => {
+            setTextDialog(null);
+            focusDrawing();
+          }}
+        />
+      )}
+      {textDialog?.kind === "edit" && (
+        <TextDialog
+          heading="text.editTitle"
+          value={textDialog.value}
+          multiline={textDialog.multiline}
+          attributes={textDialog.attributes}
+          onSubmit={async (d) => {
+            const before = textDialog.attributes?.find(([k]) => k === d.tag)?.[1] ?? textDialog.value;
+            // Unchanged: nothing to do (an MText keeps its formatting).
+            if (d.value === before) return;
+            await runText({
+              type: "edit_text",
+              target: { handle: textDialog.handle, chain: [] },
+              value: d.value,
+              tag: d.tag,
+            });
+          }}
+          onClose={() => {
+            setTextDialog(null);
+            focusDrawing();
+          }}
+        />
+      )}
       {draftingOpen && drafting && (
         <DraftingSettings
           drafting={drafting}
@@ -1968,6 +2148,20 @@ export default function App() {
                 }}
                 onCancel={() => {
                   measure.cancel();
+                  focusDrawing();
+                }}
+              />
+            )}
+            {textEditor && info && (
+              <InPlaceText
+                key={textEditor.key}
+                at={textEditor.at}
+                styles={info.text_styles}
+                style={currentTextStyle}
+                height={textEditor.request.height ?? currentTextHeight}
+                onSubmit={(d) => placeInPlace(textEditor.request, d)}
+                onCancel={() => {
+                  setTextEditor(null);
                   focusDrawing();
                 }}
               />

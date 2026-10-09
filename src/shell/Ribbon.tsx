@@ -4,6 +4,7 @@ import { useT } from "../i18n";
 import { DRAW_TOOLS } from "../tools/drawTools";
 import { EDIT_TOOLS } from "../tools/editTools";
 import { MODIFY_TOOLS } from "../tools/modifyTools";
+import { TEXT_TOOLS } from "../tools/textTools";
 import type { Tool } from "../viewport/Viewport";
 import { RecentsMenu } from "./RecentsMenu";
 import { useRoving } from "./useRoving";
@@ -37,6 +38,8 @@ type Props = {
   onCalibrate?(): void;
   /** Opens the Extract data dialog. */
   onExtract?(): void;
+  /** Opens the Find and replace dialog. */
+  onFind?(): void;
   onUndo?(): void;
   onRedo?(): void;
   /** The drawing holds its Arabic text backwards; the checkbox is disabled without a handler. */
@@ -139,6 +142,11 @@ export function Ribbon(props: Props) {
             {/* The second row of Modify: trim, extend, fillet… */}
             <span className="ribbon-break" />
             {EDIT_TOOLS.map((name) => tool(name, `edit.${name}`))}
+          </span>,
+          <span key="sep-text" className="sep" />,
+          <span key="text" className="ribbon-group" role="group" aria-label={t("text.group")}>
+            {[...TEXT_TOOLS, "textEdit" as const].map((name) => tool(name, `text.${name}`))}
+            {action("text.find", props.onFind)}
           </span>,
         ]}
         {tab === "measure" && [

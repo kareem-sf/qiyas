@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { Ribbon } from "./Ribbon";
 
@@ -130,4 +130,21 @@ test("the Home tab has the Modify group", () => {
     fireEvent.click(screen.getByRole("button", { name }));
     expect(onTool).toHaveBeenLastCalledWith(tool);
   }
+});
+
+test("the Home tab has the Text group with Find and replace", () => {
+  const onTool = vi.fn();
+  const onFind = vi.fn();
+  render(<Ribbon {...props} onTool={onTool} onFind={onFind} />);
+  const group = screen.getByRole("group", { name: "Text" });
+  for (const [name, tool] of [
+    ["Text", "text"],
+    ["MText", "mtext"],
+    ["Edit text", "textEdit"],
+  ]) {
+    fireEvent.click(within(group).getByRole("button", { name }));
+    expect(onTool).toHaveBeenLastCalledWith(tool);
+  }
+  fireEvent.click(within(group).getByRole("button", { name: "Find and replace" }));
+  expect(onFind).toHaveBeenCalled();
 });

@@ -14,6 +14,7 @@ import {
   resized,
   screenToWorld,
   visibleBounds,
+  worldToScreen,
   zoomAt,
   type Bounds,
   type Camera,
@@ -23,6 +24,7 @@ import { isClick } from "./click";
 import type { DrawKind } from "../tools/drawTools";
 import type { EditKind } from "../tools/editTools";
 import type { ModifyKind } from "../tools/modifyTools";
+import type { TextKind } from "../tools/textTools";
 import { createRenderer, type Renderer, type Theme } from "./gl";
 import { wheelFactor } from "./wheel";
 
@@ -33,6 +35,10 @@ export type Tool =
   | ModifyKind
   /** The edit tools (`EDIT_TOOLS`): trim, extend, fillet… */
   | EditKind
+  /** The text tools (`TEXT_TOOLS`): TEXT and MTEXT. */
+  | TextKind
+  /** Click a text to edit it. */
+  | "textEdit"
   | "select"
   | "distance"
   | "area"
@@ -52,6 +58,8 @@ export type ViewportHandle = {
   pxPerUnit(): number;
   /** The drawing area in view. */
   visible(): Bounds;
+  /** Where the drawing point `p` is on the canvas, in CSS pixels from its top left corner. */
+  toScreen(p: Point): Point;
 };
 
 type Props = {
@@ -210,6 +218,7 @@ export function Viewport({
       },
       pxPerUnit,
       visible: () => visibleBounds(camera.current),
+      toScreen: (p) => worldToScreen(camera.current, p),
     }),
     [],
   );

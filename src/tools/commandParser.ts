@@ -41,7 +41,8 @@ export type Run =
   | "attachImage"
   | "xrefs"
   | "calibrate"
-  | "extract";
+  | "extract"
+  | "find";
 
 export type Action =
   /** An empty line where a command is expected: run the last command again. */
@@ -87,6 +88,7 @@ const RUNS: Partial<Record<CommandName, Run>> = {
   XREF: "xrefs",
   CALIBRATE: "calibrate",
   EXTRACT: "extract",
+  FIND: "find",
 };
 
 const TOOLS: Partial<Record<CommandName, Tool>> = {
@@ -128,6 +130,9 @@ const TOOLS: Partial<Record<CommandName, Tool>> = {
   PEDIT: "pedit",
   OVERKILL: "overkill",
   FLATTEN: "flatten",
+  TEXT: "text",
+  MTEXT: "mtext",
+  TEXTEDIT: "textEdit",
 };
 
 /** The draws typed whole on one line. */

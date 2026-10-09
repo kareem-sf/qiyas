@@ -42,6 +42,17 @@ import {
   type EditInput,
   type EditState,
 } from "./editTools";
+import {
+  initialTextState,
+  isTextTool,
+  takesTextNumber,
+  textOptions,
+  textPreview,
+  textReducer,
+  type TextInput,
+  type TextRequest,
+  type TextState,
+} from "./textTools";
 import { constrain, gridRound, NO_TRACK, type Track } from "./tracking";
 
 /** Two clicks this close in time and on screen are a double click. */
@@ -80,6 +91,11 @@ export type ToolState = {
   modify: ModifyState | null;
   /** An edit tool's own state (trim, extend, fillet…); null for the other tools. */
   edit: EditState | null;
+  /** A text tool's own state (TEXT, MTEXT); null for the other tools. */
+  text: TextState | null;
+  /** Set by the click that asks to edit a text (the text edit tool's, or the select tool's
+   *  double click on a text): the top-level handle; the hook hands it to the app. */
+  pendingEdit: number | null;
   /** The selection set: top-level handles the select tool picked (a click replaces it, Shift and
    *  boxes add). A modify tool takes it when it starts; Esc and resets clear it. */
   selection: number[];
@@ -134,6 +150,7 @@ const PROMPT: Partial<Record<Tool, string>> = {
   divide: "inquiry.clickDivide",
   measureAlong: "inquiry.clickAlong",
   idPoint: "inquiry.clickPoint",
+  textEdit: "text.prompt.edit",
 };
 
 /** The tools that act on the entity clicked. */
@@ -142,7 +159,8 @@ const picksEntity = (tool: Tool) =>
   tool === "count" ||
   tool === "geometry" ||
   tool === "divide" ||
-  tool === "measureAlong";
+  tool === "measureAlong" ||
+  tool === "textEdit";
 
 /** The first prompt of `tool`. */
 const promptOf = (tool: Tool): string =>
@@ -152,7 +170,9 @@ const promptOf = (tool: Tool): string =>
       ? initialModifyState(tool, []).hint
       : isEditTool(tool)
         ? initialEditState(tool).hint
-        : (PROMPT[tool] ?? "");
+        : isTextTool(tool)
+          ? initialTextState(tool).hint
+          : (PROMPT[tool] ?? "");
 
 /** The draw tools that take points until Enter, which a double click also ends. */
 const MANY_POINTS = new Set(["polyline", "spline", "revcloud", "wipeout"]);
@@ -167,12 +187,13 @@ export const initialToolState = (
   const modify = isModifyTool(tool) ? initialModifyState(tool, selection, kinds) : null;
   const edit = isEditTool(tool) ? initialEditState(tool, selection) : null;
   const own = modify ?? edit;
+  const text = isTextTool(tool) ? initialTextState(tool) : null;
   return {
     tool,
     points: [],
     pendingCommand: own?.command ?? null,
     hint: own ? own.hint : tool === "select" ? "" : promptOf(tool),
-    hintArgs: own ? own.hintArgs : null,
+    hintArgs: own ? own.hintArgs : (text?.hintArgs ?? null),
     selected: null,
     lastClick: null,
     asking: null,
@@ -181,6 +202,8 @@ export const initialToolState = (
     draw: isDrawTool(tool) ? initialDrawState(tool) : null,
     modify,
     edit,
+    text,
+    pendingEdit: null,
     selection: own ? [] : selection,
     kinds: own ? {} : kinds,
   };
@@ -212,6 +235,13 @@ function editStep(s: ToolState, input: EditInput): ToolState {
   if (!s.edit) return s;
   const edit = editReducer(s.edit, input);
   return { ...s, edit, hint: edit.hint, hintArgs: edit.hintArgs, pendingCommand: edit.command };
+}
+
+/** Hands `input` to the text tool. */
+function textStep(s: ToolState, input: TextInput): ToolState {
+  if (!s.text) return s;
+  const text = textReducer(s.text, input);
+  return { ...s, text, hint: text.hint, hintArgs: text.hintArgs };
 }
 
 /** Where an edit tool's last click was (the first break point, the entity offset). */
@@ -267,6 +297,7 @@ function measureSelected(s: ToolState): ToolState {
 function finish(s: ToolState): ToolState {
   if (s.modify) return modifyStep(s, { type: "finish" });
   if (s.edit) return editStep(s, { type: "finish" });
+  if (s.text) return textStep(s, { type: "finish" });
   if (s.tool === "select") return measureSelected(s);
   if (s.draw) return { ...drawStep(s, { type: "finish" }), lastClick: null };
   const need = s.tool === "area" ? 3 : 2;
@@ -278,7 +309,7 @@ function finish(s: ToolState): ToolState {
 
 export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
   // A command or a zoom is pending for one state only: the hook sees it once.
-  const s = { ...state, pendingCommand: null, pendingZoom: null };
+  const s = { ...state, pendingCommand: null, pendingZoom: null, pendingEdit: null };
   switch (event.type) {
     case "tool": {
       // The selection set goes along; with none, the entity the select tool picked (whole).
@@ -289,6 +320,7 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
     case "draw":
       if (s.modify && event.input.type !== "ring") return modifyStep(s, event.input);
       if (s.edit && event.input.type !== "ring") return editStep(s, event.input);
+      if (s.text && event.input.type !== "ring") return textStep(s, event.input);
       return drawStep(s, event.input);
     case "modify":
       return modifyStep(s, event.input);
@@ -362,6 +394,10 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
         const point = tracked ? constrain(lastModifyPoint(s), event.world, event.track ?? NO_TRACK) : event.world;
         return modifyStep(clicked, { type: "point", p: point });
       }
+      if (s.text) {
+        const point = event.snapped ? event.world : constrain(s.text.corner, event.world, event.track ?? NO_TRACK);
+        return textStep(clicked, { type: "point", p: point });
+      }
       if (s.draw) {
         if (double && MANY_POINTS.has(s.draw.kind)) return finish(s);
         // The second click of a double click places no second point or hatch.
@@ -396,6 +432,10 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
             // a double click (or Enter) measures. Elsewhere the second click measures.
             if (picked.chain.length > 0 && !double) {
               return selectHint(clicked, { ...current, whole: !current.whole, toggled: true });
+            }
+            // A double click on a text edits it.
+            if (double && picked.chain.length === 0 && (picked.kind === "Text" || picked.kind === "MText")) {
+              return { ...clicked, pendingEdit: picked.top };
             }
             // The first click of a double click swapped: measure what was shown before the pair.
             const whole = double && current.toggled ? !current.whole : current.whole;
@@ -445,6 +485,9 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
           ];
           return { ...clicked, corner: null, hint: promptOf("zoomWindow"), pendingZoom };
         }
+        case "textEdit":
+          if (double || event.picked === null) return clicked;
+          return { ...clicked, pendingEdit: event.picked.top };
         case "idPoint":
           return {
             ...clicked,
@@ -474,13 +517,17 @@ export type ToolApi = {
   hatchScale(): number;
   /** Takes back the last change (the line tool's U). */
   undo(): void;
+  /** A text tool placed a text: open its editor. */
+  placeText?(request: TextRequest): void;
+  /** Edit the text of the top-level entity `handle` (a text, an MText, a block's attributes). */
+  editText?(handle: number): void;
   onError(e: unknown): void;
 };
 
 /** The tools that place points, and so snap and track. A hatch's click is inside an area, never
  *  snapped onto its edge. */
 const placesPoints = (tool: Tool) =>
-  tool === "distance" || tool === "area" || (isDrawTool(tool) && tool !== "hatch");
+  tool === "distance" || tool === "area" || (isDrawTool(tool) && tool !== "hatch") || isTextTool(tool);
 /** The tools that snap: those that place points, and `idPoint`. */
 const snaps = (tool: Tool) => placesPoints(tool) || tool === "idPoint";
 
@@ -514,7 +561,9 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
   const track: Track = drafting
     ? { ortho: drafting.ortho, polar: drafting.polar, polarStepDeg: drafting.polar_step_deg }
     : NO_TRACK;
-  const prev = state.draw
+  const prev = state.text
+    ? state.text.corner
+    : state.draw
     ? lastDrawPoint(state)
     : state.modify
       ? lastModifyPoint(state)
@@ -545,6 +594,15 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
   useEffect(() => {
     if (state.draw?.undo) api.undo();
   }, [state.draw]);
+
+  useEffect(() => {
+    const request = state.text?.request;
+    if (request) api.placeText?.(request);
+  }, [state.text]);
+
+  useEffect(() => {
+    if (state.pendingEdit !== null) api.editText?.(state.pendingEdit);
+  }, [state.pendingEdit, state.lastClick]);
 
   // A hatch's click: find the ring around it, then hand it back.
   const seek = state.draw?.seek ?? null;
@@ -675,6 +733,7 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
   const draw = state.draw;
   const modify = state.modify;
   const edit = state.edit;
+  const text = state.text;
   return {
     points: state.points,
     /** A draw tool's state (null for the others), the option words and whether a typed distance
@@ -685,12 +744,37 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
     modify,
     /** An edit tool's state (trim, extend, fillet…); null for the other tools. */
     edit,
-    drawOptions: draw ? drawOptions(draw) : modify ? modifyOptions(modify) : edit ? editOptions(edit) : [],
-    takesNumber: draw ? takesNumber(draw) : modify ? takesModifyNumber(modify) : edit ? takesEditNumber(edit) : false,
-    lastDrawPoint: lastDrawPoint(state) ?? lastModifyPoint(state) ?? lastEditPoint(state),
+    /** A text tool's state (TEXT, MTEXT); null for the other tools. */
+    text,
+    drawOptions: draw
+      ? drawOptions(draw)
+      : modify
+        ? modifyOptions(modify)
+        : edit
+          ? editOptions(edit)
+          : text
+            ? textOptions(text)
+            : [],
+    takesNumber: draw
+      ? takesNumber(draw)
+      : modify
+        ? takesModifyNumber(modify)
+        : edit
+          ? takesEditNumber(edit)
+          : text
+            ? takesTextNumber(text)
+            : false,
+    lastDrawPoint: lastDrawPoint(state) ?? lastModifyPoint(state) ?? lastEditPoint(state) ?? text?.corner ?? null,
     preview: useMemo(
-      () => (draw ? drawPreview(draw, cursor) : modify ? modifyPreview(modify, cursor) : null),
-      [draw, modify, cursor],
+      () =>
+        draw
+          ? drawPreview(draw, cursor)
+          : modify
+            ? modifyPreview(modify, cursor)
+            : text
+              ? textPreview(text, cursor)
+              : null,
+      [draw, modify, text, cursor],
     ),
     /** The entities selected, to draw highlighted: the modify tool's, or the selection set (less
      *  the select tool's own pick, which is highlighted as picked, maybe inside a block). */
