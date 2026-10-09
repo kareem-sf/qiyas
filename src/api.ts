@@ -19,7 +19,7 @@ export type LayerInfo = {
 };
 
 /** A group of the drawing: its name and entities (`qiyas_core::GroupInfo`). */
-export type GroupInfo = { name: string; handles: number[]; selectable: boolean };
+export type GroupInfo = { name: string; handles: number[]; kinds: string[]; selectable: boolean };
 
 /** A paper-space viewport of the sheet on screen and the layers it freezes on its own. */
 export type ViewportInfo = { handle: number; frozen: string[] };

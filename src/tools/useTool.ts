@@ -140,9 +140,9 @@ export type ToolEvent =
       track?: Track;
       /** Shift was held: the select tool adds the entity to the selection set. */
       shift?: boolean;
-      /** The group the entity picked belongs to (its top-level handles): the select tool
-       *  selects all of them. Absent with Ctrl held or group selection off. */
-      group?: number[] | null;
+      /** The group the entity picked belongs to (its top-level handles and their kinds): the
+       *  select tool selects all of them. Absent with Ctrl held or group selection off. */
+      group?: { handles: number[]; kinds: string[] } | null;
     }
   /** What a selection box picked (top-level handles, and each one's kind when known); `add`
    *  (Shift) keeps what was selected. */
@@ -472,17 +472,19 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
         case "select": {
           const picked = event.picked;
           // A grouped entity brings its whole group (AutoCAD's PICKSTYLE).
-          const whole = picked ? (event.group && event.group.length > 0 ? event.group : [picked.top]) : [];
+          const group = event.group && event.group.handles.length > 0 ? event.group : null;
+          const whole = picked ? (group ? group.handles : [picked.top]) : [];
+          const known = (kinds: Record<number, string>) =>
+            withKinds(group ? withKinds(kinds, group.handles, group.kinds) : kinds, [picked!.top], [picked!.kind]);
           // Shift adds the whole top-level entity to the selection set, and measures nothing.
           if (event.shift) {
             if (!picked) return clicked;
-            const kinds = withKinds(s.kinds, [picked.top], [picked.kind]);
-            return { ...clicked, selection: union(s.selection, whole), kinds };
+            return { ...clicked, selection: union(s.selection, whole), kinds: known(s.kinds) };
           }
           // Otherwise the click replaces the selection set (AutoCAD's PICKADD), and measures as before.
           if (picked === null) return { ...clicked, selected: null, hint: "", hintArgs: null, selection: [], kinds: {} };
           clicked.selection = whole;
-          clicked.kinds = withKinds({}, [picked.top], [picked.kind]);
+          clicked.kinds = known({});
           const current = s.selected;
           if (current && samePick(current.picked, picked)) {
             // Inside a block, a slow second click swaps the entity for the whole block and back;
@@ -595,9 +597,9 @@ export type ToolApi = {
   editText?(handle: number, at: Point | null): void;
   /** An annotate tool needs typed text: a leader's, a tolerance's frame, a dimension's. */
   dimText?(request: DimRequest): void;
-  /** The group the top-level entity `handle` is in, its handles; null when none (or when group
-   *  selection is off). */
-  groupOf?(handle: number): number[] | null;
+  /** The group the top-level entity `handle` is in, its handles and their kinds; null when none
+   *  (or when group selection is off). */
+  groupOf?(handle: number): { handles: number[]; kinds: string[] } | null;
   onError(e: unknown): void;
 };
 

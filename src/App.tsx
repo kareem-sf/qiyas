@@ -80,6 +80,7 @@ import {
   type Field,
   type ImageDisplay,
   type LayerProp,
+  type ViewportInfo,
   type TableInfo,
   type Measurement,
   type NamedView,
@@ -227,6 +228,9 @@ function initialTheme(): Theme {
   }
   return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
+
+/** No viewports: the layers panel's VP freeze column hides (one array, so the memo holds). */
+const NO_VIEWPORTS: ViewportInfo[] = [];
 
 export default function App() {
   const t = useT();
@@ -755,7 +759,7 @@ export default function App() {
   /** The group the top-level entity `handle` is in, while group selection is on. */
   function groupOf(handle: number) {
     if (!groupSelect) return null;
-    return info?.groups?.find((g) => g.selectable && g.handles.includes(handle))?.handles ?? null;
+    return info?.groups?.find((g) => g.selectable && g.handles.includes(handle)) ?? null;
   }
 
   /** Asks for a drawing and reads its layers, for the layer translator's standard. */
@@ -1648,6 +1652,17 @@ export default function App() {
       runLayerCommand({ type: "set_layer", name, prop, value }),
     [info],
   );
+
+  // The layers panel's handlers, stable between pointer moves so the memoised panel doesn't
+  // render again with the cursor.
+  const renameLayer = useCallback(
+    (from: string, to: string) => runLayerCommand({ type: "rename_layer", from, to }),
+    [info],
+  );
+  const deleteLayer = useCallback((name: string) => runLayerCommand({ type: "delete_layer", name }), [info]);
+  const newLayer = useCallback((name: string) => runLayerCommand({ type: "new_layer", name }), [info]);
+  const openLayerStates = useCallback(() => setLayerStatesOpen(true), []);
+  const openTranslator = useCallback(() => setTranslatorOpen(true), []);
 
   /** The viewport `viewport` freezes `layer` inside it, or thaws it. */
   const setViewportFrozen = useCallback(
@@ -2814,12 +2829,12 @@ export default function App() {
             onMakeCurrent={info ? makeCurrent : undefined}
             linetypes={info?.linetypes}
             onSetLayer={info ? setLayerProp : undefined}
-            onRenameLayer={info ? (from, to) => runLayerCommand({ type: "rename_layer", from, to }) : undefined}
-            onDeleteLayer={info ? (name) => runLayerCommand({ type: "delete_layer", name }) : undefined}
-            onNewLayer={info ? (name) => runLayerCommand({ type: "new_layer", name }) : undefined}
-            onLayerStates={info ? () => setLayerStatesOpen(true) : undefined}
-            onTranslate={info ? () => setTranslatorOpen(true) : undefined}
-            viewports={sheetShown?.is_model ? [] : info?.viewports}
+            onRenameLayer={info ? renameLayer : undefined}
+            onDeleteLayer={info ? deleteLayer : undefined}
+            onNewLayer={info ? newLayer : undefined}
+            onLayerStates={info ? openLayerStates : undefined}
+            onTranslate={info ? openTranslator : undefined}
+            viewports={sheetShown?.is_model ? NO_VIEWPORTS : info?.viewports}
             onViewportFrozen={info ? setViewportFrozen : undefined}
           />
           <PropertiesPanel
