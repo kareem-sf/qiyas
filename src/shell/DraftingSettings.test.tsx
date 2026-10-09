@@ -95,5 +95,5 @@ test("the status bar shows the switches pressed, the snap and the cursor at the 
   fireEvent.click(screen.getByRole("button", { name: "GRID" }));
   expect(onToggle).toHaveBeenCalledWith("grid");
   expect(screen.getByText("Midpoint")).toBeTruthy();
-  expect(screen.getByText("1.23, 2.00")).toBeTruthy();
+  expect(screen.getByText("1.23, 2.00 m")).toBeTruthy();
 });
