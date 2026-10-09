@@ -36,6 +36,7 @@ const door: EntityInfo = {
   handle: 42,
   kind: "Insert",
   layer: "A-DOOR",
+  layer_short: "A-DOOR",
   length: null,
   area: null,
   block_name: "DOOR",

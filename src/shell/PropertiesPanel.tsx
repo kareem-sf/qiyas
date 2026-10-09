@@ -46,7 +46,7 @@ export const PropertiesPanel = memo(function PropertiesPanel({
   if (entity) {
     row("props.handle", entity.handle.toString(16).toUpperCase());
     row("props.kind", entity.kind);
-    row("props.layer", entity.layer, true);
+    row("props.layer", <span title={entity.layer}>{entity.layer_short}</span>, true);
     row(
       "props.color",
       <>

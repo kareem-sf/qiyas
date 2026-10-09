@@ -10,6 +10,7 @@ const door: EntityInfo = {
   handle: 0x2a,
   kind: "Insert",
   layer: "A-DOOR",
+  layer_short: "A-DOOR",
   length: null,
   area: null,
   block_name: "DOOR",
@@ -99,4 +100,11 @@ test("nothing picked says how to pick, and the panel collapses", () => {
   fireEvent.click(toggle);
   expect(toggle.getAttribute("aria-expanded")).toBe("false");
   expect(screen.queryByText("Pick one entity with Select to see its properties.")).toBeNull();
+});
+
+test("a bound xref's layer shows by its own name, the full name in its tooltip", () => {
+  const wall: EntityInfo = { ...door, layer: "01-IVORY$0$A-WALL", layer_short: "A-WALL" };
+  render(<PropertiesPanel entity={wall} units="metres" precision={3} sheet="Model" />);
+  expect(Object.fromEntries(rows()).Layer).toBe("A-WALL");
+  expect(screen.getByText("A-WALL").getAttribute("title")).toBe("01-IVORY$0$A-WALL");
 });

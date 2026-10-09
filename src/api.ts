@@ -58,6 +58,8 @@ export type EntityInfo = {
   kind: string;
   /** The layer it is drawn on (layer "0" inside a block takes its insert's). */
   layer: string;
+  /** `layer` as shown to the QS: a bound xref's layer without its `XREF$0$` (A-WALL). */
+  layer_short: string;
   /** In drawing units, where its block references place it. */
   length: number | null;
   area: number | null;
