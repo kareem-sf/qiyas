@@ -451,7 +451,7 @@ impl Session {
             units: units_name(self.drawing.units).to_string(),
             problems,
             arabic_reversed: self.arabic_reversed,
-            xrefs: self.xrefs.info(),
+            xrefs: self.xrefs.info(&self.xref_overrides),
         }
     }
 
@@ -535,8 +535,8 @@ impl Session {
     /// setting, the drawing itself or its xrefs change, and not for take-off, BOQ or conflict
     /// changes, undo or redo. Not for the zoom the glyphs are drawn for either: the window asks
     /// for that. A 64-bit FNV-1a hash of the session, sheet, hidden layers (sorted, case-folded),
-    /// Arabic setting, document revision and xrefs (name, file found and when it was last
-    /// changed, each), cut to 53 bits so it survives a trip through a JavaScript number.
+    /// Arabic setting, document revision and xrefs (name, file found, when it was last changed
+    /// and its size, each), cut to 53 bits so it survives a trip through a JavaScript number.
     pub fn batch_version(&self) -> u64 {
         let mut hash = Fnv::new();
         hash.write(&self.epoch.to_le_bytes());
@@ -567,6 +567,7 @@ impl Session {
                 .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
                 .map_or(0, |d| d.as_nanos());
             hash.write(&modified.to_le_bytes());
+            hash.write(&x.size.unwrap_or(u64::MAX).to_le_bytes());
         }
         hash.0 & ((1 << 53) - 1)
     }

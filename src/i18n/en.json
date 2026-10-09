@@ -24,6 +24,8 @@
   "xref.found": "Found",
   "xref.missing": "Missing",
   "xref.unloaded": "Unloaded",
+  "xref.unreadable": "Unreadable",
+  "xref.clear": "Clear chosen file",
   "xref.overlay": "Overlay",
   "xref.locate": "Locate…",
   "xref.reload": "Reload",

@@ -8,7 +8,10 @@ use opencadcodec::entities::mtext_format::parse_mtext;
 use opencadcodec::entities::{Dimension, Insert};
 use opencadcodec::tables::normalize_name;
 use opencadcodec::{CadDocument, EntityType};
-use qiyas_geom::{flatten_with, insert_instances, is_xref_block, Xform, XrefDocs, MAX_XREF_DEPTH};
+use qiyas_geom::{
+    flatten_with, insert_instances, is_overlay_block, is_xref_block, Xform, XrefDocs,
+    MAX_XREF_DEPTH,
+};
 use qiyas_render::{layer_on_in_file_with, layer_shown_with};
 use serde::{Deserialize, Serialize};
 
@@ -513,6 +516,10 @@ impl TextWalk<'_, '_> {
                             };
                             let cycle = xref_stack.iter().any(|n| normalize_name(n) == key);
                             if cycle || xref_stack.len() >= MAX_XREF_DEPTH {
+                                continue;
+                            }
+                            // An overlay inside an xref is not shown (as AutoCAD).
+                            if !xref_stack.is_empty() && is_overlay_block(doc, &insert.block_name) {
                                 continue;
                             }
                             (xdoc, "*Model_Space", None)

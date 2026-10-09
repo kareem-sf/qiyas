@@ -24,6 +24,8 @@
   "xref.found": "موجود",
   "xref.missing": "مفقود",
   "xref.unloaded": "غير محمّل",
+  "xref.unreadable": "غير مقروء",
+  "xref.clear": "إلغاء الملف المحدد",
   "xref.overlay": "تراكب",
   "xref.locate": "تحديد الملف…",
   "xref.reload": "إعادة التحميل",

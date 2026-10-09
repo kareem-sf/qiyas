@@ -6,14 +6,17 @@ type Props = {
   xrefs: XrefInfo[];
   /** Looks for every xref again and reopens it; a rejection is shown in the dialog. */
   onReload(): Promise<void>;
-  /** Asks for the file of the missing xref `name` and loads it from there. */
+  /** Asks for the file of the xref `name` and loads it from there. */
   onLocate(name: string): Promise<void>;
+  /** Forgets the file chosen for the xref `name` and looks for it again. */
+  onClear(name: string): Promise<void>;
   onClose(): void;
 };
 
-/** The drawing's external references: each one's name, whether it was found, missing or is
- *  unloaded, its file and whether it is an overlay; Reload, and "Locate…" for a missing one. */
-export function XrefManager({ xrefs, onReload, onLocate, onClose }: Props) {
+/** The drawing's external references: each one's name, whether it was found, missing,
+ *  unreadable or is unloaded (with what went wrong), its file and whether it is an overlay;
+ *  Reload, "Locate…" for one not loaded, and "Clear chosen file" for one the user located. */
+export function XrefManager({ xrefs, onReload, onLocate, onClear, onClose }: Props) {
   const t = useT();
   const dialog = useRef<HTMLDialogElement>(null);
   const [error, setError] = useState<string | null>(null);
@@ -39,7 +42,13 @@ export function XrefManager({ xrefs, onReload, onLocate, onClose }: Props) {
   }
 
   const status = (x: XrefInfo) =>
-    x.unloaded ? t("xref.unloaded") : x.found ? t("xref.found") : t("xref.missing");
+    x.unloaded
+      ? t("xref.unloaded")
+      : x.loaded
+        ? t("xref.found")
+        : x.found
+          ? t("xref.unreadable")
+          : t("xref.missing");
 
   return (
     <dialog
@@ -70,7 +79,7 @@ export function XrefManager({ xrefs, onReload, onLocate, onClose }: Props) {
             </thead>
             <tbody>
               {xrefs.map((x) => (
-                <tr key={x.name} className={x.found && !x.unloaded ? undefined : "dim"}>
+                <tr key={x.name} className={x.loaded ? undefined : "dim"}>
                   <td dir="ltr">
                     {x.name}
                     {x.overlay && <span className="badge">{t("xref.overlay")}</span>}
@@ -78,9 +87,12 @@ export function XrefManager({ xrefs, onReload, onLocate, onClose }: Props) {
                   <td title={x.problems.join("\n") || undefined}>{status(x)}</td>
                   <td className="path" dir="ltr" title={x.path}>
                     {x.path}
+                    {x.found && !x.loaded && x.problems.length > 0 && (
+                      <small className="problem">{x.problems.join(" ")}</small>
+                    )}
                   </td>
-                  <td>
-                    {!x.found && !x.unloaded && (
+                  <td className="actions">
+                    {!x.loaded && !x.unloaded && (
                       <button
                         type="button"
                         disabled={busy}
@@ -88,6 +100,16 @@ export function XrefManager({ xrefs, onReload, onLocate, onClose }: Props) {
                         onClick={() => act(() => onLocate(x.name))}
                       >
                         {t("xref.locate")}
+                      </button>
+                    )}
+                    {x.chosen && (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        aria-label={`${t("xref.clear")}: ${x.name}`}
+                        onClick={() => act(() => onClear(x.name))}
+                      >
+                        {t("xref.clear")}
                       </button>
                     )}
                   </td>

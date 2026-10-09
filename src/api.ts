@@ -18,6 +18,10 @@ export type XrefInfo = {
   name: string;
   /** The file was found. */
   found: boolean;
+  /** The file was found and read (false when unreadable or it is the drawing itself). */
+  loaded: boolean;
+  /** The user chose its file ("Locate…"); "Clear chosen file" forgets it. */
+  chosen: boolean;
   /** The file opened, or the path the drawing stores when none was found. */
   path: string;
   overlay: boolean;

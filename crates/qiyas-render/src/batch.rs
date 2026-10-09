@@ -215,6 +215,10 @@ fn build(
             if !chain_shown {
                 continue;
             }
+            // Inside an xref: a block or nested xref reference on a hidden layer hides its content.
+            if !flat.xref_insert_layers.iter().all(|l| shown(l)) {
+                continue;
+            }
             let [r, g, b] = resolve_color(&flat.color, &Color::ByLayer);
             let rgb = u32::from_be_bytes([0, r, g, b]);
             // A laid-out text's box is the box of what it draws.

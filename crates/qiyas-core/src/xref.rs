@@ -7,7 +7,8 @@
 //! folder of the drawing that references it, then the same file name in that folder and in its
 //! `xrefs/` and `x-refs/` subfolders. Xrefs inside xrefs are opened too, `MAX_XREF_DEPTH` levels
 //! down; an unloaded xref is listed and not opened, an overlay inside an xref is left out (as
-//! AutoCAD does), and a name already loaded is not loaded twice (the first one found wins).
+//! AutoCAD does), and a name already found is not loaded twice (the first one found wins). A name
+//! not found from one drawing's folder is looked for again when another drawing references it.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
@@ -36,8 +37,9 @@ pub struct Xref {
     pub drawing: Option<Drawing>,
     /// What went wrong finding or reading it, worded for the host's problem list.
     pub problems: Vec<String>,
-    /// When `found` was last changed, read as it was opened.
+    /// When `found` was last changed, and its size in bytes, read as it was opened.
     pub modified: Option<SystemTime>,
+    pub size: Option<u64>,
     /// 1 for an xref of the host drawing, 2 for one inside that, and so on.
     pub depth: usize,
 }
@@ -54,6 +56,10 @@ pub struct XrefInfo {
     pub name: String,
     /// The file was found.
     pub found: bool,
+    /// The file was found and read (false for one that is unreadable or is the drawing itself).
+    pub loaded: bool,
+    /// The user chose its file (`Session::xref_overrides`).
+    pub chosen: bool,
     /// The file opened, or the path stored in the drawing when none was found.
     pub path: String,
     pub overlay: bool,
@@ -80,25 +86,22 @@ impl XrefSet {
     pub fn load(host: &Drawing, overrides: &HashMap<String, String>, depth: usize) -> XrefSet {
         let depth = depth.min(MAX_XREF_DEPTH);
         let host_file = std::fs::canonicalize(&host.path).ok();
-        let mut seen = HashSet::new();
         let mut set = XrefSet::default();
         if depth == 0 {
             return set;
         }
-        for (name, path, overlay, unloaded) in references(host, false, &mut seen) {
-            let folder = folder_of(&host.path);
-            set.entries.push(resolve(
-                name,
-                path,
-                overlay,
-                unloaded,
-                &folder,
-                overrides,
-                1,
-                host_file.as_deref(),
-            ));
-        }
+        // Entries before `next` have had their own xrefs looked at.
         let mut next = 0;
+        let folder = folder_of(&host.path);
+        for (name, path, overlay, unloaded) in references(host, false) {
+            let at = Where {
+                folder: &folder,
+                overrides,
+                depth: 1,
+                host_file: host_file.as_deref(),
+            };
+            set.consider(name, path, overlay, unloaded, at, &mut next);
+        }
         while next < set.entries.len() {
             let i = next;
             next += 1;
@@ -110,22 +113,53 @@ impl XrefSet {
                 continue;
             };
             let folder = folder_of(&drawing.path);
-            let inner = references(drawing, true, &mut seen);
-            for (name, path, overlay, unloaded) in inner {
-                let xref = resolve(
-                    name,
-                    path,
-                    overlay,
-                    unloaded,
-                    &folder,
+            for (name, path, overlay, unloaded) in references(drawing, true) {
+                let at = Where {
+                    folder: &folder,
                     overrides,
-                    level + 1,
-                    host_file.as_deref(),
-                );
-                set.entries.push(xref);
+                    depth: level + 1,
+                    host_file: host_file.as_deref(),
+                };
+                set.consider(name, path, overlay, unloaded, at, &mut next);
             }
         }
         set
+    }
+
+    /// Adds the xref `name` referenced from `at`, unless that name is already found (or
+    /// unloaded). A name looked for before and not found is looked for again from here, and
+    /// replaces the earlier entry when found; otherwise the earlier entry stays.
+    fn consider(
+        &mut self,
+        name: String,
+        path: String,
+        overlay: bool,
+        unloaded: bool,
+        at: Where,
+        next: &mut usize,
+    ) {
+        let key = normalize_name(&name);
+        let earlier = self
+            .entries
+            .iter()
+            .position(|x| normalize_name(&x.name) == key);
+        if let Some(i) = earlier {
+            let x = &self.entries[i];
+            if x.found.is_some() || x.unloaded {
+                return;
+            }
+        }
+        let xref = resolve(name, path, overlay, unloaded, at);
+        if let Some(i) = earlier {
+            if xref.found.is_none() {
+                return;
+            }
+            self.entries.remove(i);
+            if i < *next {
+                *next -= 1;
+            }
+        }
+        self.entries.push(xref);
     }
 
     /// The xref named `name` (any case).
@@ -142,13 +176,17 @@ impl XrefSet {
             .collect()
     }
 
-    /// What the window lists, in load order.
-    pub fn info(&self) -> Vec<XrefInfo> {
+    /// What the window lists, in load order; `overrides` are the files the user chose.
+    pub fn info(&self, overrides: &HashMap<String, String>) -> Vec<XrefInfo> {
         self.entries
             .iter()
             .map(|x| XrefInfo {
                 name: x.name.clone(),
                 found: x.found.is_some(),
+                loaded: x.drawing.is_some(),
+                chosen: overrides
+                    .keys()
+                    .any(|n| normalize_name(n) == normalize_name(&x.name)),
                 path: x
                     .found
                     .as_ref()
@@ -188,20 +226,15 @@ impl XrefSet {
     }
 }
 
-/// The xref block records of `drawing` not seen yet: name, stored path, overlay, unloaded.
-/// `nested` leaves overlays out.
-fn references(
-    drawing: &Drawing,
-    nested: bool,
-    seen: &mut HashSet<String>,
-) -> Vec<(String, String, bool, bool)> {
+/// The xref block records of `drawing`: name, stored path, overlay, unloaded. `nested` leaves
+/// overlays out.
+fn references(drawing: &Drawing, nested: bool) -> Vec<(String, String, bool, bool)> {
     drawing
         .doc
         .block_records
         .iter()
         .filter(|b| b.flags.is_xref || b.flags.is_xref_overlay)
         .filter(|b| !(nested && b.flags.is_xref_overlay))
-        .filter(|b| seen.insert(normalize_name(&b.name)))
         .map(|b| {
             (
                 b.name.clone(),
@@ -213,18 +246,23 @@ fn references(
         .collect()
 }
 
-/// Looks for one xref and opens it.
-#[allow(clippy::too_many_arguments)]
-fn resolve(
-    name: String,
-    path_in_file: String,
-    overlay: bool,
-    unloaded: bool,
-    folder: &Path,
-    overrides: &HashMap<String, String>,
+/// Where an xref is referenced from: the referencing drawing's folder, the user's chosen files,
+/// the xref's depth, and the host file (an xref that is the host is not drawn again).
+struct Where<'a> {
+    folder: &'a Path,
+    overrides: &'a HashMap<String, String>,
     depth: usize,
-    host_file: Option<&Path>,
-) -> Xref {
+    host_file: Option<&'a Path>,
+}
+
+/// Looks for one xref and opens it.
+fn resolve(name: String, path_in_file: String, overlay: bool, unloaded: bool, at: Where) -> Xref {
+    let Where {
+        folder,
+        overrides,
+        depth,
+        host_file,
+    } = at;
     let mut xref = Xref {
         name,
         path_in_file,
@@ -235,6 +273,7 @@ fn resolve(
         drawing: None,
         problems: Vec::new(),
         modified: None,
+        size: None,
         depth,
     };
     if unloaded {
@@ -271,7 +310,10 @@ fn resolve(
         ));
         return xref;
     }
-    xref.modified = std::fs::metadata(&found).and_then(|m| m.modified()).ok();
+    if let Ok(meta) = std::fs::metadata(&found) {
+        xref.modified = meta.modified().ok();
+        xref.size = Some(meta.len());
+    }
     match Drawing::open(&found) {
         Ok(drawing) => {
             xref.problems.extend(

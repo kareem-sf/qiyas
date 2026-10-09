@@ -7,7 +7,7 @@ use qiyas_geom::{object_to_world, Path};
 use qiyas_render::layer_shown_with;
 use serde::{Deserialize, Serialize};
 
-use crate::session::{effective_block_name, locate, variant_name};
+use crate::session::{effective_block_name, locate, variant_name, Located};
 use crate::takeoff::in_metres;
 use crate::{
     Boq, Conflict, ConflictStatus, CoreError, Drafting, Kind, Measurement, Schedule, Session,
@@ -447,6 +447,10 @@ impl Session {
             m.block_path = first.block_path.clone();
             m.xref = first.xref.clone();
         }
+        if kind == Kind::Count && m.xref.is_some() {
+            // An xref's handles are never embedded: keep where each reference sits instead.
+            m.points = entities.iter().filter_map(insert_point).collect();
+        }
         m.chain = chain;
         Ok(m)
     }
@@ -485,6 +489,10 @@ impl Session {
                 (None, None) => return Err(invalid("This entity has no length or area")),
             }
         };
+        if m.kind == Kind::Count && located.xref.is_some() {
+            // An xref's handles are never embedded: keep where the reference sits instead.
+            m.points = insert_point(&located).into_iter().collect();
+        }
         m.handles = vec![handle];
         m.block_path = located.block_path;
         m.xref = located.xref;
@@ -550,6 +558,17 @@ impl Session {
         m.block_name = Some(block_name);
         m
     }
+}
+
+/// Where a located block reference sits in the world: its insertion point (in its own object
+/// coordinates) placed by the chain. `None` for anything else.
+fn insert_point(located: &Located) -> Option<[f64; 2]> {
+    let EntityType::Insert(insert) = located.entity else {
+        return None;
+    };
+    let p = insert.insert_point;
+    let on_plan = object_to_world(&insert.normal, p.z).apply([p.x, p.y]);
+    Some(located.xf.apply(on_plan))
 }
 
 /// A height must be a number above 0.

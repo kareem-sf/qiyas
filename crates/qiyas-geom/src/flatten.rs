@@ -50,6 +50,14 @@ pub fn find_layer<'a>(
     })
 }
 
+/// True when `block_name` is an overlaid xref in `doc`: not shown by a drawing that references
+/// `doc` itself as an xref.
+pub fn is_overlay_block(doc: &CadDocument, block_name: &str) -> bool {
+    doc.block_records
+        .get(block_name)
+        .is_some_and(|b| b.flags.is_xref_overlay)
+}
+
 /// True when `block_name` is an xref (attached or overlaid) in `doc`.
 pub fn is_xref_block(doc: &CadDocument, block_name: &str) -> bool {
     doc.block_records
@@ -74,6 +82,10 @@ pub struct FlatPath {
     /// then ends with that xref's reference, and `entity` is the entity at the top of the xref's
     /// model space (a block reference inside the xref is picked whole).
     pub xref: Option<String>,
+    /// Inside an xref, the layers of the block references (and nested xref references) the path
+    /// sits inside there, outermost first, as drawn (`XREF|LAYER`, or the outer one's for "0").
+    /// `chain` stops at the xref, so whoever hides layers checks these too.
+    pub xref_insert_layers: Vec<String>,
     /// For a text's box (picked, not drawn): what the text draws.
     pub text: Option<Box<FlatText>>,
 }
@@ -186,6 +198,7 @@ pub fn flatten_with(
         layer_colors: HashMap::new(),
         xref_stack: Vec::new(),
         xref_entity: None,
+        xref_insert_layers: Vec::new(),
     };
     let style = walk.style(entity.common(), None);
     walk.entity(entity, xf, &style, 0);
@@ -221,6 +234,8 @@ struct Walk<'a> {
     /// Inside an xref: the entity at the top of the outermost xref's model space, which every
     /// path inside it is reported as.
     xref_entity: Option<u64>,
+    /// Inside an xref: the layers of the references entered there (see `FlatPath`).
+    xref_insert_layers: Vec<String>,
 }
 
 impl Walk<'_> {
@@ -376,10 +391,13 @@ impl Walk<'_> {
             self.truncated = true;
             return;
         }
-        // Inside an xref the chain stays at the xref's reference.
+        // Inside an xref the chain stays at the xref's reference; the reference's layer is kept
+        // instead, so hiding it hides what it shows.
         let tracked = self.xref_stack.is_empty();
         if tracked {
             self.chain.push(handle);
+        } else {
+            self.xref_insert_layers.push(style.layer.clone());
         }
         let doc = self.doc;
         // Styles depend only on the block's entities, not on where each instance is.
@@ -400,24 +418,31 @@ impl Walk<'_> {
         }
         if tracked {
             self.chain.pop();
+        } else {
+            self.xref_insert_layers.pop();
         }
     }
 
     /// An xref reference: the loaded xref's model space under the reference's transform. A
-    /// missing or unloaded xref, one nested too deep, or one already being drawn (a cycle)
-    /// draws nothing.
+    /// missing or unloaded xref, one nested too deep, one already being drawn (a cycle) and an
+    /// overlay inside an xref (as AutoCAD) draw nothing.
     fn xref(&mut self, e: &Insert, xf: &Xform, style: &Style, depth: usize) {
         let key = normalize_name(&e.block_name);
         let Some(&xdoc) = self.xrefs.get(&key) else {
             return;
         };
+        let outermost = self.xref_stack.is_empty();
         let cycle = self.xref_stack.iter().any(|n| normalize_name(n) == key);
         if cycle || self.xref_stack.len() >= MAX_XREF_DEPTH {
             return;
         }
-        let outermost = self.xref_stack.is_empty();
+        if !outermost && is_overlay_block(self.doc, &e.block_name) {
+            return;
+        }
         if outermost {
             self.chain.push(e.common.handle.value());
+        } else {
+            self.xref_insert_layers.push(style.layer.clone());
         }
         let host_side = self.doc;
         self.xref_stack.push(e.block_name.clone());
@@ -445,6 +470,8 @@ impl Walk<'_> {
         if outermost {
             self.xref_entity = None;
             self.chain.pop();
+        } else {
+            self.xref_insert_layers.pop();
         }
     }
 
@@ -506,6 +533,7 @@ impl Walk<'_> {
             chain: self.chain.clone(),
             entity: self.xref_entity.unwrap_or(entity),
             xref: self.xref_stack.first().cloned(),
+            xref_insert_layers: self.xref_insert_layers.clone(),
             text,
         });
     }

@@ -533,7 +533,7 @@ export default function App() {
     await autosave();
   }
 
-  /** Asks for the file of the missing xref `name` and loads it from there. */
+  /** Asks for the file of the xref `name` and loads it from there. */
   async function locateXref(name: string) {
     const path = await open({ filters: [{ name: "Drawings", extensions: ["dwg", "dxf"] }] });
     if (typeof path !== "string") return;
@@ -935,6 +935,7 @@ export default function App() {
           xrefs={info.xrefs}
           onReload={async () => xrefsChanged(await reloadXrefs())}
           onLocate={locateXref}
+          onClear={async (name) => xrefsChanged(await setXrefPath(name, null))}
           onClose={() => setXrefsOpen(false)}
         />
       )}

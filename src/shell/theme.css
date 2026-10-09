@@ -1031,12 +1031,22 @@ button.link {
   width: 90px;
 }
 .xref-manager th:nth-child(4) {
-  width: 120px;
+  width: 140px;
 }
 .xref-manager td.path {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.xref-manager td.path .problem {
+  display: block;
+  white-space: normal;
+  color: var(--muted);
+}
+.xref-manager td.actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 .xref-manager tr.dim td:not(:last-child) {
   color: var(--muted);

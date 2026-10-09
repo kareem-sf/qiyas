@@ -4,7 +4,8 @@
 use std::f64::consts::PI;
 use std::path::Path;
 
-use opencadcodec::{CadDocument, EntityType, Layer, Line};
+use opencadcodec::entities::Insert;
+use opencadcodec::{BlockRecord, CadDocument, EntityType, Layer, Line, Text, Vector3};
 use qiyas_core::fixtures::{add_xref, sample_doc, write_drawing, write_xref_pair};
 use qiyas_core::{
     embed_measurements, project_path, Command, Drawing, EntityFilter, Kind, Measurement, Outcome,
@@ -366,6 +367,7 @@ fn a_chosen_file_loads_the_xref_and_is_remembered() {
     assert!(session.set_xref_path("nope", Some(&moved)).is_err());
     session.set_xref_path("Plan-Arch", Some(&moved)).unwrap();
     assert!(session.info().xrefs[0].found);
+    assert!(session.info().xrefs[0].chosen);
     assert_eq!(session.xrefs.entries[0].path_tried[0], moved);
     assert_ne!(session.batch_version(), before);
     assert!(segments(&session) > lone);
@@ -474,6 +476,11 @@ fn xrefs_referencing_each_other_stop() {
         .problems
         .iter()
         .any(|p| p.contains("Xref host is the drawing itself")));
+    let back = info.xrefs.iter().find(|x| x.name == "host").unwrap();
+    assert!(
+        back.found && !back.loaded,
+        "found but not drawn: shown as Unreadable"
+    );
     assert_eq!(segments(&session), 1 + sample_segments(dir.path(), &[]));
 }
 
@@ -556,4 +563,210 @@ fn a_layer_frozen_in_the_xref_stays_hidden() {
         },
     );
     assert_eq!(count.value, 0.0);
+}
+
+/// Adds the layers `names` to `doc`; those in `frozen` are frozen.
+fn add_layers(doc: &mut CadDocument, names: &[&str], frozen: &[&str]) {
+    for name in names {
+        let mut layer = Layer::new(*name);
+        layer.handle = doc.allocate_handle();
+        layer.flags.frozen = frozen.contains(name);
+        doc.layers.add(layer).unwrap();
+    }
+}
+
+/// A line from `a` to `b` on `layer`.
+fn line_on(layer: &str, a: [f64; 2], b: [f64; 2]) -> EntityType {
+    let mut line = EntityType::Line(Line::from_coords(a[0], a[1], 0.0, b[0], b[1], 0.0));
+    line.common_mut().layer = layer.to_string();
+    line
+}
+
+/// An xref with a wall on A-WALL, a block DOORX (its leaf on A-DOOR-LEAF, not "0") referenced
+/// at (1, 1) on A-DOOR, and the xref `grid` (one line on G-GRID) referenced at (50, 0) on G-REF.
+/// Layers in `frozen` are frozen in it. Writes it, and grid.dxf, beside the host.
+fn write_door_xref(dir: &Path, frozen: &[&str]) {
+    let mut grid = CadDocument::new();
+    add_layers(&mut grid, &["G-GRID"], &[]);
+    grid.add_entity(line_on("G-GRID", [0.0, 0.0], [1.0, 0.0]))
+        .unwrap();
+    write_drawing(&grid, &dir.join("grid.dxf"));
+
+    let mut arch = CadDocument::new();
+    add_layers(
+        &mut arch,
+        &["A-WALL", "A-DOOR", "A-DOOR-LEAF", "G-REF"],
+        frozen,
+    );
+    arch.add_entity(line_on("A-WALL", [0.0, 0.0], [10.0, 0.0]))
+        .unwrap();
+    let mut block = BlockRecord::new("DOORX");
+    block.handle = arch.allocate_handle();
+    let owner = block.handle;
+    arch.block_records.add(block).unwrap();
+    let mut leaf = line_on("A-DOOR-LEAF", [0.0, 0.0], [0.9, 0.0]);
+    leaf.common_mut().owner_handle = owner;
+    arch.add_entity(leaf).unwrap();
+    let mut door = EntityType::Insert(Insert::new("DOORX", Vector3::new(1.0, 1.0, 0.0)));
+    door.common_mut().layer = "A-DOOR".to_string();
+    arch.add_entity(door).unwrap();
+    let grid_ref = add_xref(&mut arch, "grid", "grid.dxf", [50.0, 0.0], 0.0);
+    for e in arch.entities_mut() {
+        if e.common().handle.value() == grid_ref {
+            e.common_mut().layer = "G-REF".to_string();
+        }
+    }
+    write_drawing(&arch, &dir.join("plan-arch.dxf"));
+}
+
+#[test]
+fn block_content_inside_an_xref_hides_with_its_reference_layer() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_xref_pair(dir.path());
+    write_door_xref(dir.path(), &[]);
+    let mut session = Session::open(&path).unwrap();
+    // Host line, wall, door leaf, grid line. The leaf (1,1)-(1.9,1) lands on (99,1)-(99,1.9),
+    // the grid line (50,0)-(51,0) on (100,50)-(100,51).
+    assert_eq!(segments(&session), 4);
+    assert!(session.pick([99.0, 1.5], 0.05).is_some());
+    assert!(session.pick([100.0, 50.5], 0.05).is_some());
+
+    session.set_layer_hidden("plan-arch|A-DOOR", true);
+    assert_eq!(segments(&session), 3);
+    assert!(session.pick([99.0, 1.5], 0.05).is_none());
+    session.set_layer_hidden("plan-arch|A-DOOR", false);
+    session.set_layer_hidden("plan-arch|G-REF", true);
+    assert_eq!(segments(&session), 3);
+    assert!(session.pick([100.0, 50.5], 0.05).is_none());
+
+    // Frozen inside the xref: the door's leaf and the grid xref are not drawn.
+    write_door_xref(dir.path(), &["A-DOOR", "G-REF"]);
+    let session = Session::open(&path).unwrap();
+    assert_eq!(segments(&session), 2);
+    assert!(session.pick([99.0, 1.5], 0.05).is_none());
+    assert!(session.pick([100.0, 50.5], 0.05).is_none());
+}
+
+#[test]
+fn an_overlay_inside_an_xref_is_not_drawn_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut site = CadDocument::new();
+    add_layers(&mut site, &["S"], &[]);
+    site.add_entity(line_on("S", [0.0, 0.0], [1.0, 0.0]))
+        .unwrap();
+    let mut label = EntityType::Text(
+        Text::with_value("SITE PLAN", Vector3::new(0.0, 2.0, 0.0)).with_height(0.5),
+    );
+    label.common_mut().layer = "S".to_string();
+    site.add_entity(label).unwrap();
+    write_drawing(&site, &dir.path().join("site.dxf"));
+    let site_alone = segments(&Session::open(&dir.path().join("site.dxf")).unwrap());
+    assert_eq!(site_alone, 5);
+
+    let mut arch = sample_doc();
+    add_xref(&mut arch, "site", "site.dxf", [0.0, 0.0], 0.0);
+    arch.block_records
+        .get_mut("site")
+        .unwrap()
+        .flags
+        .is_xref_overlay = true;
+    write_drawing(&arch, &dir.path().join("plan-arch.dxf"));
+    let mut host = CadDocument::new();
+    host.add_entity(line_on("A-WALL", [0.0, -10.0], [5.0, -10.0]))
+        .unwrap();
+    add_xref(
+        &mut host,
+        "plan-arch",
+        "plan-arch.dxf",
+        [100.0, 0.0],
+        PI / 2.0,
+    );
+    add_xref(&mut host, "site", "site.dxf", [0.0, 50.0], 0.0);
+    let path = write_drawing(&host, &dir.path().join("host.dxf"));
+
+    let session = Session::open(&path).unwrap();
+    assert_eq!(session.info().xrefs.len(), 2);
+    assert_eq!(
+        segments(&session),
+        1 + sample_segments(dir.path(), &[]) + site_alone
+    );
+    let texts = session.read_text(None, None);
+    assert_eq!(texts.iter().filter(|t| t.text == "SITE PLAN").count(), 1);
+}
+
+#[test]
+fn a_nested_xref_missing_beside_the_host_loads_from_its_own_drawings_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    let (sheets, arch_dir) = (dir.path().join("sheets"), dir.path().join("arch"));
+    std::fs::create_dir_all(&sheets).unwrap();
+    std::fs::create_dir_all(&arch_dir).unwrap();
+    let mut grid = CadDocument::new();
+    add_layers(&mut grid, &["G-GRID"], &[]);
+    grid.add_entity(line_on("G-GRID", [0.0, 0.0], [1.0, 0.0]))
+        .unwrap();
+    write_drawing(&grid, &arch_dir.join("grid.dxf"));
+    let mut arch = sample_doc();
+    add_xref(&mut arch, "grid", "grid.dxf", [50.0, 0.0], 0.0);
+    write_drawing(&arch, &arch_dir.join("plan-arch.dxf"));
+
+    let mut host = CadDocument::new();
+    host.add_entity(line_on("A-WALL", [0.0, -10.0], [5.0, -10.0]))
+        .unwrap();
+    // The host's block table also carries the nested xref, as saved drawings do.
+    let mut record = BlockRecord::new("grid");
+    record.handle = host.allocate_handle();
+    record.flags.is_xref = true;
+    record.xref_path = "grid.dxf".to_string();
+    host.block_records.add(record).unwrap();
+    add_xref(
+        &mut host,
+        "plan-arch",
+        "../arch/plan-arch.dxf",
+        [100.0, 0.0],
+        PI / 2.0,
+    );
+    let path = write_drawing(&host, &sheets.join("host.dxf"));
+
+    let session = Session::open(&path).unwrap();
+    let info = session.info();
+    assert_eq!(info.xrefs.len(), 2, "{:?}", info.xrefs);
+    let grid = info.xrefs.iter().find(|x| x.name == "grid").unwrap();
+    assert!(grid.found && grid.loaded, "{grid:?}");
+    assert!(grid.path.ends_with("grid.dxf") && grid.path.contains("arch"));
+    assert!(info.problems.is_empty(), "{:?}", info.problems);
+    assert_eq!(segments(&session), 1 + sample_segments(dir.path(), &[]) + 1);
+    assert!(session.pick([100.0, 50.5], 0.05).is_some());
+}
+
+#[test]
+fn a_counted_xref_reference_keeps_its_point_through_a_save() {
+    let (_dir, mut session) = host();
+    let insert = xref_insert(&session);
+    let door = session
+        .find_entities(&EntityFilter {
+            block_name: Some("DOOR".to_string()),
+            ..EntityFilter::default()
+        })
+        .rows[0]
+        .handle;
+    let m = measure(
+        &mut session,
+        Command::MeasureEntity {
+            handle: door,
+            chain: vec![insert],
+        },
+    );
+    assert_eq!(m.kind, Kind::Count);
+    assert_eq!(m.points.len(), 1);
+    assert!((m.points[0][0] - 99.0).abs() < 1e-9 && (m.points[0][1] - 1.0).abs() < 1e-9);
+    let mut doc = session.drawing.doc.clone();
+    embed_measurements(&mut doc, &session.takeoff.items);
+    let read = qiyas_core::read_embedded(&doc);
+    assert_eq!(read.len(), 1);
+    assert_eq!(read[0].points, m.points);
+
+    // The info says what the window needs: loaded, not chosen; the file's size is kept.
+    let x = &session.info().xrefs[0];
+    assert!(x.loaded && !x.chosen);
+    assert!(session.xrefs.entries[0].size.is_some_and(|n| n > 0));
 }
