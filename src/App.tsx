@@ -571,7 +571,7 @@ export default function App() {
     run(async () => {
       if (ui.action === "show_sheet" && ui.sheet) {
         setSheetBlock(ui.sheet);
-        measure.escape();
+        measure.cancel();
         await redraw(true);
       } else if (ui.action === "redraw") {
         if (ui.hidden) {
@@ -754,7 +754,7 @@ export default function App() {
     setXrefsOpen(false);
     setExtractOpen(false);
     preset.current = null;
-    measure.escape();
+    measure.cancel();
     lastPoint.current = null;
   }
 
@@ -1071,7 +1071,7 @@ export default function App() {
     run(async () => {
       await setSheet(block);
       setSheetBlock(block);
-      measure.escape();
+      measure.cancel();
       fitIds.current = fit ?? null;
       await redraw(true);
     });
@@ -1217,12 +1217,14 @@ export default function App() {
     focusDrawing();
   }
 
-  /** Escape: drops what is waiting (an insert point, a measure, a prompt) and every highlight. */
-  function cancelAll() {
+  /** Escape: drops what is waiting (an insert point, a measure, a prompt) and every highlight.
+   *  `escKey` for the Esc key itself (or ESC typed), which keeps a polyline drawn so far. */
+  function cancelAll(escKey = false) {
     preset.current = null;
     setPending(null);
     setInfoCard(null);
-    measure.escape();
+    if (escKey) measure.escape();
+    else measure.cancel();
     setSelectedId(null);
     setBoqCode(null);
     setAiHighlight([]);
@@ -1272,7 +1274,7 @@ export default function App() {
         measure.finish();
         return;
       case "cancel":
-        cancelAll();
+        cancelAll(true);
         return;
       case "point":
         if (switching.current > 0) return;
@@ -1391,7 +1393,7 @@ export default function App() {
           setError(t("cmd.notNow", { name: "CALIBRATE" }));
           return;
         }
-        measure.escape();
+        measure.cancel();
         setPending({ kind: "calibrate", first: null });
     }
   }
@@ -1430,7 +1432,7 @@ export default function App() {
         else saveFile();
         e.preventDefault();
       } else if (action === "escape") {
-        cancelAll();
+        cancelAll(true);
       } else if (action === "finish") {
         // Enter on a focused button presses it; don't also finish the measure.
         if (e.target instanceof HTMLButtonElement) return;
@@ -1729,7 +1731,7 @@ export default function App() {
           onCalibrate={
             batch && batch.imageTable.length > 0
               ? () => {
-                  measure.escape();
+                  measure.cancel();
                   setPending({ kind: "calibrate", first: null });
                   focusDrawing();
                 }
@@ -1917,7 +1919,7 @@ export default function App() {
               onClick={clickDrawing}
               grid={drafting?.grid ? drafting.grid_spacing : null}
               onMove={measure.onMove}
-              onWindowZoomed={measure.escape}
+              onWindowZoomed={measure.cancel}
             />
             {measure.asking && info && (
               <AlongPrompt
@@ -1929,7 +1931,7 @@ export default function App() {
                   focusDrawing();
                 }}
                 onCancel={() => {
-                  measure.escape();
+                  measure.cancel();
                   focusDrawing();
                 }}
               />

@@ -52,15 +52,22 @@ impl PickIndex {
             .collect()
     }
 
-    /// Indices of up to `max` segments with a part inside the box `lo` to `hi` (drawing
-    /// coordinates), in no particular order.
-    pub fn within(&self, lo: [f64; 2], hi: [f64; 2], max: usize) -> Vec<usize> {
+    /// Up to `max` segments (indices into the batch) reaching into the box `lo hi` (drawing
+    /// coordinates) that `keep` accepts, in no particular order; the walk stops at `max`.
+    pub fn within(
+        &self,
+        lo: [f64; 2],
+        hi: [f64; 2],
+        max: usize,
+        keep: impl Fn(usize) -> bool,
+    ) -> Vec<usize> {
         let [ox, oy] = self.origin;
         let envelope = AABB::from_corners([lo[0] - ox, lo[1] - oy], [hi[0] - ox, hi[1] - oy]);
         self.tree
             .locate_in_envelope_intersecting(&envelope)
-            .take(max)
             .map(|s| s.data)
+            .filter(|&i| keep(i))
+            .take(max)
             .collect()
     }
 }

@@ -423,6 +423,12 @@ test("draw tools run each finished draw and end a polyline on a double click", (
   });
   expect(kept.pendingCommand).toMatchObject({ type: "draw", kind: "polyline", closed: false });
   expect(kept.draw?.points).toEqual([]);
+  // A reset (another drawing or sheet) draws nothing, even with a polyline under way.
+  const reset = toolReducer(run("polyline", [click([0, 0], 0), click([3, 0], 1000)]), {
+    type: "cancel",
+  });
+  expect(reset.pendingCommand).toBeNull();
+  expect(reset.draw?.points).toEqual([]);
   const dropped = toolReducer(run("polyline", [click([0, 0], 0)]), { type: "escape" });
   expect(dropped.draw?.points).toEqual([]);
   expect(dropped.pendingCommand).toBeNull();

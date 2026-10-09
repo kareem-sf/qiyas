@@ -745,7 +745,13 @@ impl Session {
             let [ox, oy] = batch.origin;
             let lo = [p[0] - radius, p[1] - radius];
             let hi = [p[0] + radius, p[1] + radius];
-            let found = cached.index.within(lo, hi, max + 1);
+            // Counted after text boxes and pattern lines go: a densely hatched room nearby
+            // must not refuse a plain one. The tree walk stops at the cap all the same.
+            let found = cached.index.within(lo, hi, max + 1, |i| {
+                batch
+                    .range_of(i)
+                    .is_some_and(|r| r.flags & (TEXT_BOX | PATTERN) == 0)
+            });
             if found.len() > max {
                 return None;
             }
@@ -753,11 +759,6 @@ impl Session {
             let whole_sheet = lo[0] <= b0[0] && lo[1] <= b0[1] && hi[0] >= b1[0] && hi[1] >= b1[1];
             let segments = found
                 .into_iter()
-                .filter(|&i| {
-                    batch
-                        .range_of(i)
-                        .is_some_and(|r| r.flags & (TEXT_BOX | PATTERN) == 0)
-                })
                 .map(|i| {
                     let s = &batch.segments[4 * i..4 * i + 4];
                     [

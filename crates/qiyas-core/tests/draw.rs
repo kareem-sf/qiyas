@@ -1256,3 +1256,37 @@ fn the_current_lineweight_is_a_standard_one_and_the_linetype_takes_the_drawing_s
     .unwrap();
     assert_eq!(s.current.linetype, "ByLayer");
 }
+
+#[test]
+fn pattern_lines_near_the_click_do_not_count_toward_too_dense() {
+    let (_dir, mut s) = sample_session();
+    // Two finely hatched rooms beside a plain one: their pattern lines are left out first.
+    // Away from the sample's own drawing.
+    for x in [110.0, 120.0] {
+        draw(
+            &mut s,
+            DrawSpec::Hatch {
+                boundary_handles: Vec::new(),
+                points: vec![[x, 0.0], [x + 5.0, 0.0], [x + 5.0, 5.0], [x, 5.0]],
+                holes: Vec::new(),
+                pattern: HatchPattern::Custom {
+                    name: "ANSI31".into(),
+                    angle: 0.0,
+                    scale: 0.05,
+                },
+            },
+        );
+    }
+    square(&mut s, [116.0, 0.0], [119.0, 5.0]);
+    let batch = s.batch();
+    let pattern = batch
+        .ranges
+        .iter()
+        .filter(|r| r.flags & qiyas_render::PATTERN != 0)
+        .map(|r| r.count as usize)
+        .sum::<usize>();
+    assert!(pattern > 40, "{pattern}");
+    // A cap below the pattern lines' count, above the outlines' count.
+    let ring = ring_of(s.boundary_at_most([117.5, 2.5], 20.0, 40));
+    assert!(close(signed_area(&ring).abs(), 15.0), "{ring:?}");
+}

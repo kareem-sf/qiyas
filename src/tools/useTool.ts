@@ -72,7 +72,10 @@ export type ToolEvent =
       track?: Track;
     }
   | { type: "finish" }
+  /** The Esc key: drops what is waiting, but keeps a polyline drawn so far. */
   | { type: "escape" }
+  /** A reset (another drawing or sheet, another mode): drops everything, draws nothing. */
+  | { type: "cancel" }
   | { type: "tool"; tool: Tool }
   /** The number of parts (`divide`) or the step in drawing units (`measureAlong`) was typed. */
   | { type: "answer"; value: number }
@@ -179,6 +182,8 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
       return { ...initialToolState(event.tool), hint: promptOf(event.tool) };
     case "draw":
       return drawStep(s, event.input);
+    case "cancel":
+      return initialToolState(s.tool);
     case "escape":
       // Esc keeps a polyline drawn so far, as AutoCAD does.
       if (s.draw?.kind === "polyline" && s.draw.points.length >= 2) {
@@ -497,6 +502,9 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
         snapKind: null,
       }),
     finish: () => dispatch({ type: "finish" }),
+    /** The Esc key: keeps a polyline drawn so far. */
     escape: () => dispatch({ type: "escape" }),
+    /** Drops the tool's state without drawing anything: for resets, not the Esc key. */
+    cancel: () => dispatch({ type: "cancel" }),
   };
 }
