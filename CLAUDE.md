@@ -140,18 +140,29 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
   MIRRTEXT 0), stretch (line and polyline vertices in the window move; other entities move whole
   when wholly inside or when their centre or insertion point is), align (one or two pairs, no
   scaling), rectangular and polar arrays (polar `angle` is between items), explode (block
-  references one level, layer 0 and ByBlock taking the reference's; polylines and multilines;
-  anything else is left as it is). One undo step. Wire form `{"type":"modify","kind":"move",
-  "targets":[...],...}`, angles in degrees. Erase is `DeleteEntities`. Not an AI tool yet.
+  references one level, as drawn: base point and turned array cells; layer 0 and ByBlock take
+  the reference's; visible attributes become texts holding their values; polylines and
+  multilines; anything else is left as it is, `Outcome::Exploded { left_alone }` says how many).
+  One undo step. Wire form `{"type":"modify","kind":"move","targets":[...],...}`, angles in
+  degrees. Erase is `DeleteEntities`. Not an AI tool yet.
 - Targets as for delete: the drawing's own entities at the top of the sheet, all or nothing.
-  Changes in place keep handles; copies get new ones (attributes too) and drop reactors,
-  extension dictionaries and hatch associativity. Dimensions and tables are refused until their
-  blocks are drawn again; images and PDF underlays move but are not copied.
+  Changes in place keep handles; copies get new ones (attributes too; vertex, face and sequence
+  end handles are nulled for the writers to give) and drop reactors, extension dictionaries and
+  hatch associativity. Dimensions and tables only move and copy: a dimension's `*D` block is in
+  world coordinates and moves with it (its own insertion point stays); a table refers to its
+  `*T` block, which stays; a copy gets its own block under a new anonymous name. The other tools
+  refuse them; the window leaves them out of a selection for those tools and says how many.
+  Images and PDF underlays move but are not copied.
+- The take-off follows edits in the same undo step (`Session::follow_takeoff`): rows measuring
+  a moved, turned, scaled, mirrored, stretched or aligned entity are measured again; erase and
+  explode keep the row's value but drop its link. Erasing an image or underlay cleans its
+  definition's link.
 - `Session::pick_window(bounds, crossing)` (IPC `pick_window`): a window takes entities drawn
   wholly inside, a crossing those with a segment touching it (clipped exactly); always the entity
-  at the top of the sheet (a block or xref reference whole). The select tool keeps a selection
-  set: Shift+click adds, a left drag draws a box (left to right a window, solid; right to left a
-  crossing, dashed), Shift+drag adds, Esc clears. A modify tool starts on it (or on the select
+  at the top of the sheet (a block or xref reference whole), with its kind. The select tool
+  keeps a selection set: a click replaces it (PICKADD), Shift+click adds, a left drag draws a box
+  (left to right a window, solid; right to left a crossing, dashed), Shift+drag adds, Esc clears;
+  after an undo or redo it keeps only what is still drawn. A modify tool starts on it (or on the select
   tool's pick, whole), else asks for one (clicks or a box, then Enter); stretch always asks for
   its crossing window. Home tab, Modify group; command line M, CO/CP, RO, SC, MI, S, AL, AR (R or
   P), X, E. Grips come later.
