@@ -95,7 +95,8 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
   ME, ID, Z E/W/IN/OUT, LAYOFF, U…), typed points `x,y`, `@dx,dy`, `@d<angle` in drawing units,
   Arabic digits accepted. Extra aliases: `aliases` in `settings.json` (no screen for them yet).
 - Properties palette under Layers: what the Select tool picked (colour as drawn, linetype,
-  weight, attributes, values in metres).
+  weight, attributes, values in metres); a drawing's own entity is edited there (see Layers,
+  groups and properties).
 - The batch also carries fill triangles (section 12, `u32` colour each, bit 24 =
   `FILL_BACKGROUND`) and their ranges (13), only when there are fills; GL draws fills under the
   lines, then wipeouts in the background colour over all lines (they hide line work under them,
@@ -304,6 +305,48 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
   Tool palette (`tool_palette` in `settings.json`, blocks and command lines; kept apart from the
   Settings dialog like `recents`). Command line B, I, W, REFEDIT, BEDIT, REFCLOSE, ATT, ATTEDIT,
   BATTMAN.
+
+## Layers, groups and properties
+
+- `qiyas-core/src/layers.rs`: `SetLayer { name, prop: on | frozen | locked | color | linetype |
+  lineweight | plot, value }` (JSON value; a layer colour is "ACI n" or "#rrggbb"; the current
+  layer can't be frozen), `NewLayer`, `DeleteLayer` (never 0, Defpoints, the current layer or one
+  with entities, inside blocks too), `RenameLayer` (codec `rename_layer`: entities, layer states;
+  take-off rows' `layer`, the current and hidden layers follow; a name another layer has is
+  refused). Off and frozen layers are left out of the batch, counts and measures as before
+  (`layer_shown`). Layer states are AutoCAD's own (`ACAD_LAYERSTATES` XRecords, codec
+  `capture_layer_state`): `SaveLayerState` (Qiyas's current layer as the state's; the layer
+  table's extension dictionary is made outside the step so an undo never leaves a dangling
+  pointer), `RestoreLayerState` (the header's current layer is put back), `RenameLayerState`,
+  `DeleteLayerState`; the hidden layers at save time live in the project file (`qiyas_hidden`)
+  and come back on restore (not an undo step, like hiding). `TranslateLayers { from_path,
+  mappings: [{ from, to, color }] }`: renames, or merges into an existing `to` (entities move,
+  viewports' freezes follow, the old layer goes), then the standard's layer properties (another
+  drawing, read-only; IPC `drawing_layers`) and the mapping's colour. `SetViewportFrozen {
+  viewport, layer, frozen }` edits a paper-space `Viewport.frozen_layers`; paper space draws no
+  viewport contents yet, so it shows in the Layers panel's VP freeze column only (the
+  per-viewport render is Task 10's). `DrawingInfo` has `linetypes`, `layer_states`, `groups`,
+  `viewports` (the sheet on screen's, not number 1).
+- `qiyas-core/src/groups.rs`: `CreateGroup { name, targets }`, `AddToGroup`, `RemoveFromGroup`,
+  `DeleteGroup` (AutoCAD's explode of a group: the entities stay), `Ungroup { targets }` (every
+  group holding one): `GROUP` objects in `ACAD_GROUP`, members carry the group as a reactor; sheet
+  entities only. Select: a click on a grouped entity selects the group (Home, Layers, "Group
+  selection" is PICKSTYLE; Ctrl picks one alone); boxes pick entities.
+- `qiyas-core/src/props.rs`: `SetProperty { target, prop, value }` (layer, color, linetype,
+  lineweight, text, text_height, text_rotation and insert_rotation in degrees, text_style, radius,
+  closed, global_width, insert_scale, dim_style; sheet entities only) and `MatchProperties {
+  source, targets, props }` (the source may be inside a block or an xref). A dimension's text
+  height is a `DSTYLE` DIMTXT override (`qiyas_geom::set_dimtxt`, before DIMSCALE) and its block
+  is drawn again; a table's sets every cell; a change of shape runs `follow_edit`; rows on an
+  entity take its new layer. `EntityInfo` has `rotation`, `closed`, `global_width`, `scale`, and
+  a dimension's text `height`.
+- Window: the Layers panel opens a layer's properties under its row (on, frozen, locked, plot,
+  colour, linetype, lineweight, rename, delete), adds layers, and opens Layer states… (LAYSTATE,
+  LAS) and Translate layers… (LAYTRANS, `LayerTranslator`); the properties palette edits the
+  picked host entity in place (xref and block content stay read-only) and, with nothing picked,
+  what new entities are drawn with. Home tab, Layers group; command line LAYER (LA: the panel),
+  LAYSTATE (LAS), LAYTRANS, VPLAYER (the VP freeze column), GROUP (G: pick, Enter, name),
+  UNGROUP, MATCHPROP (MA: source, then targets, Enter), PROPERTIES (PR, CH: the palette).
 
 ## PDF
 
