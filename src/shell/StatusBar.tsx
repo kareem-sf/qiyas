@@ -13,6 +13,8 @@ type Props = {
   message: string;
   /** Decimals of the cursor position. */
   precision?: number;
+  /** Metres per drawing unit: the cursor is shown in metres. */
+  metresPerUnit?: number;
   /** The name of the object snap under the cursor, or null. */
   snapLabel?: string | null;
   /** The drawing's drafting settings; null (no drawing) leaves the switches off. */
@@ -30,7 +32,7 @@ const TOGGLES: { toggle: DraftingToggle; key: string; on: (d: Drafting) => boole
 ];
 
 /** Bottom line: what is happening, the snap under the cursor, the drafting switches, cursor
- *  position in drawing units, units and file warnings. */
+ *  position in metres, units and file warnings. */
 export function StatusBar({
   cursor,
   units,
@@ -38,12 +40,14 @@ export function StatusBar({
   problems,
   message,
   precision = 3,
+  metresPerUnit = 1,
   snapLabel = null,
   drafting = null,
   onToggle,
   onDraftingSettings,
 }: Props) {
   const t = useT();
+  const metres = (v: number) => (v * metresPerUnit).toFixed(precision);
   const { open, setOpen, ref } = useMenu<HTMLSpanElement>();
   const button = useRef<HTMLButtonElement>(null);
   const list = useRef<HTMLUListElement>(null);
@@ -124,7 +128,7 @@ export function StatusBar({
       </span>
       {/* Coordinates read left to right in both languages. */}
       <span className="cursor" dir="ltr">
-        {cursor ? `${cursor[0].toFixed(precision)}, ${cursor[1].toFixed(precision)}` : ""}
+        {cursor ? `${metres(cursor[0])}, ${metres(cursor[1])} ${t("qty.m")}` : ""}
       </span>
     </footer>
   );

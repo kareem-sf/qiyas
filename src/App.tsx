@@ -2016,6 +2016,7 @@ export default function App() {
       <StatusBar
         cursor={measure.cursor}
         precision={drafting?.precision ?? 3}
+        metresPerUnit={info ? metresPerUnit(info.units) : 1}
         snapLabel={measure.snap ? t(`snap.${measure.snap.kind}`) : null}
         drafting={info ? drafting : null}
         onToggle={toggleDrafting}

@@ -29,3 +29,10 @@ test("the Problems button lists them; Escape closes the list and the focus comes
   expect(screen.queryByRole("list", { name: "Problems" })).toBeNull();
   expect(document.activeElement).toBe(button);
 });
+
+test("the cursor shows in metres with an m suffix", () => {
+  const { container } = render(
+    <StatusBar {...props} cursor={[12500, -3000]} metresPerUnit={0.001} precision={2} problems={[]} />,
+  );
+  expect(container.querySelector(".cursor")?.textContent).toBe("12.50, -3.00 m");
+});
