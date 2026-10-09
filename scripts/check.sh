@@ -6,6 +6,16 @@ cd "$(dirname "$0")/.."
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+# Where scripts/pdfium.sh installed pdfium, its tests must run, never be ignored.
+lib=crates/qiyas-desktop/resources/pdfium
+if [ -e "$lib/libpdfium.so" ] || [ -e "$lib/libpdfium.dylib" ] || [ -e "$lib/pdfium.dll" ]; then
+  pdf=$(cargo test -p qiyas-pdf --test pdf 2>&1) || { echo "$pdf"; exit 1; }
+  echo "$pdf" | grep 'test result'
+  if echo "$pdf" | grep -Eq 'test result: .* [1-9][0-9]* ignored'; then
+    echo "pdfium is installed in $lib but its tests were ignored" >&2
+    exit 1
+  fi
+fi
 # Release-only speed guard for the pick index (codegen-units = 1 in Cargo.toml).
 cargo test -p qiyas-render --release pick_index_one_million
 # Release-only speed guard for fills inside blocks (triangulated once per fill entity).
