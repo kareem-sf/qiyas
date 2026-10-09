@@ -21,7 +21,7 @@ use opencadcodec::tables::DimStyle;
 use opencadcodec::{BlockRecord, EntityType, Handle, MText, Vector3};
 use opencadkernel::geom2d::Curve;
 use qiyas_geom::{
-    dimension_entities, flatten, set_dimscale, snap_shapes, style_named, DimLook, Xform,
+    dimension_entities, flatten, is_logical_text, set_dimscale, snap_shapes, DimLook, Xform,
 };
 use serde::{Deserialize, Serialize};
 
@@ -345,12 +345,14 @@ impl Session {
                 .map_err(|e| invalid(e.to_string()))?;
         }
         let style = doc.dim_styles.get_mut(name).expect("added above");
+        let before = style.clone();
         fields.apply(style);
+        let changed = *style != before;
         let (name, handle) = (style.name.clone(), style.handle);
         let is_current = current || doc.header.current_dimstyle_name.eq_ignore_ascii_case(&name);
         if is_current {
             let h = &mut doc.header;
-            h.current_dimstyle_name = name;
+            h.current_dimstyle_name = name.clone();
             h.current_dimstyle_handle = handle;
             h.dim_arrow_size = fields.arrow_size;
             h.dim_text_height = fields.text_height;
@@ -360,23 +362,41 @@ impl Session {
             h.dim_line_gap = fields.gap;
             h.dim_scale = fields.scale;
         }
+        if changed {
+            for h in self.generated_dimensions(&name) {
+                self.rebuild_dimension(h)?;
+            }
+        }
         Ok(())
     }
 
-    /// The DIMSCALE a new annotation in `style` keeps as its own: the style's times the
-    /// annotation scale; `None` at 1:1 (it then follows its style).
-    fn annotation_dimscale(&self, style: &str) -> Option<f64> {
+    /// The dimensions at the top of every sheet in the style `name` whose block Qiyas generated
+    /// (its parts carry `LOGICAL_TEXT_APP`); a block AutoCAD made is never rebuilt.
+    fn generated_dimensions(&self, name: &str) -> Vec<Handle> {
+        let doc = &self.drawing.doc;
+        self.drawing
+            .sheets()
+            .into_iter()
+            .flat_map(|sheet| self.drawing.entities_in(&sheet.block).collect::<Vec<_>>())
+            .filter_map(|e| match e {
+                EntityType::Dimension(d) if d.base().style_name.eq_ignore_ascii_case(name) => {
+                    let block = &d.base().block_name;
+                    let ours = !block.is_empty()
+                        && doc
+                            .entities_in_block(block)
+                            .any(|part| is_logical_text(part.common()));
+                    ours.then_some(d.base().common.handle)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The DIMSCALE a new annotation keeps as its own: the annotation scale's factor, which
+    /// replaces its style's DIMSCALE; `None` at 1:1 (it then follows its style).
+    fn annotation_dimscale(&self) -> Option<f64> {
         let (_, factor) = self.annotation_scale();
-        if (factor - 1.0).abs() < 1e-12 {
-            return None;
-        }
-        let style = style_named(&self.drawing.doc, style);
-        let own = if style.dimscale > 0.0 && style.dimscale.is_finite() {
-            style.dimscale
-        } else {
-            1.0
-        };
-        Some(own * factor)
+        ((factor - 1.0).abs() >= 1e-12).then_some(factor)
     }
 
     /// The circle or arc `target` (at the top of the sheet) in the world: centre, radius, and
@@ -554,10 +574,11 @@ impl Session {
         let mut out = Vec::with_capacity(points.len());
         let mut last = p2;
         for (i, &p) in points.iter().enumerate() {
-            let (a, line_offset) = if continued {
-                (last, offset)
+            // On the base's own line, or a step further out from it for each baseline.
+            let (a, further) = if continued {
+                (last, 0.0)
             } else {
-                (p1, offset + side * step * (i + 1) as f64)
+                (p1, side * step * (i + 1) as f64)
             };
             let along = dot(sub(p, a), axis);
             if along.abs() < 1e-12 {
@@ -565,7 +586,7 @@ impl Session {
                     "Each point must be away from the last along the dimension",
                 ));
             }
-            let line_point = [a[0] + n[0] * line_offset, a[1] + n[1] * line_offset];
+            let line_point = [d[0] + n[0] * further, d[1] + n[1] * further];
             let mut dim = linear_dimension(a, p, line_point, angle);
             if aligned {
                 // An aligned base gives aligned dimensions along the same direction.
@@ -632,7 +653,13 @@ impl Session {
         let mut dims = self.dimensions_of(spec)?;
         for d in &mut dims {
             let m = d.measurement();
-            if !(m.is_finite() && m > 1e-12) {
+            // An ordinate at the datum reads 0.
+            let least = if matches!(d, Dimension::Ordinate(_)) {
+                -1.0
+            } else {
+                1e-12
+            };
+            if !(m.is_finite() && m > least) {
                 return Err(invalid("There is nothing to measure between those points"));
             }
             let base = d.base_mut();
@@ -640,7 +667,7 @@ impl Session {
                 base.style_name = style.clone();
             }
             base.actual_measurement = m;
-            if let Some(scale) = self.annotation_dimscale(&base.style_name) {
+            if let Some(scale) = self.annotation_dimscale() {
                 set_dimscale(&mut base.common, scale);
             }
         }
@@ -673,17 +700,10 @@ impl Session {
             d.base_mut().actual_measurement = m;
         }
         let owner = self.dimension_block(&mut d)?;
-        if geometry
-            .entities
-            .iter()
-            .any(|e| matches!(e, EntityType::Text(_)))
-        {
-            self.register_text_app();
-        }
+        self.register_text_app();
         for mut e in geometry.entities {
-            if let EntityType::Text(t) = &mut e {
-                mark_logical(&mut t.common);
-            }
+            // Its text is in reading order; every part marks the block as Qiyas's own.
+            mark_logical(e.common_mut());
             e.common_mut().owner_handle = owner;
             self.drawing
                 .doc
@@ -979,7 +999,7 @@ impl Session {
             return Err(invalid("A leader needs two or more different points"));
         }
         let style = self.dim_style();
-        let own_scale = self.annotation_dimscale(&style);
+        let own_scale = self.annotation_dimscale();
         let mut leader = Leader::new();
         leader.dimension_style = style.clone();
         if let Some(scale) = own_scale {
@@ -1043,7 +1063,7 @@ impl Session {
         let style = self.dim_style();
         let mut tol = Tolerance::with_text(v3(at), frame);
         tol.dimension_style_name = style.clone();
-        if let Some(scale) = self.annotation_dimscale(&style) {
+        if let Some(scale) = self.annotation_dimscale() {
             set_dimscale(&mut tol.common, scale);
         }
         let look = DimLook::named(&self.drawing.doc, &style, &tol.common);

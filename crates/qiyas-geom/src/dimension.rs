@@ -49,8 +49,11 @@ pub struct DimLook {
     pub angle_zeros: i16,
     /// DIMPOST: `<>` stands for the number; text without it is a suffix.
     pub post: String,
-    /// The text sits above the dimension line (DIMTAD not 0); otherwise in a gap in it.
+    /// The text sits above the dimension line (DIMTAD 1, 2, 3); otherwise below it (4) or in a
+    /// gap in it (0).
     pub text_above: bool,
+    /// DIMTAD 4: the text sits below the dimension line.
+    pub text_below: bool,
     pub text_style: String,
 }
 
@@ -85,7 +88,8 @@ impl DimLook {
             zeros: style.dimzin,
             angle_zeros: style.dimazin,
             post: style.dimpost.clone(),
-            text_above: style.dimtad != 0,
+            text_above: !matches!(style.dimtad, 0 | 4),
+            text_below: style.dimtad == 4,
             text_style: if style.dimtxsty.is_empty() {
                 "Standard".to_string()
             } else {
@@ -536,12 +540,14 @@ fn linear(
     let at = match placed {
         Some(p) => p,
         None if look.text_above => add(mid, mul(left(polar(r)), look.gap + h / 2.0)),
+        None if look.text_below => sub(mid, mul(left(polar(r)), look.gap + h / 2.0)),
         None => mid,
     };
     // Text in the line (DIMTAD 0) breaks it.
     let half = w / 2.0 + look.gap;
     let span = len(sub(a2, a1));
-    if placed.is_none() && !look.text_above && !text.is_empty() && 2.0 * half < span {
+    let in_line = !look.text_above && !look.text_below;
+    if placed.is_none() && in_line && !text.is_empty() && 2.0 * half < span {
         parts.line(a1, sub(mid, mul(along, half)));
         parts.line(add(mid, mul(along, half)), a2);
     } else {

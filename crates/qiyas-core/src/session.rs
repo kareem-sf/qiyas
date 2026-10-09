@@ -14,8 +14,8 @@ use qiyas_geom::{
     is_xref_block, snap_shapes, DimLook, Xform, XrefDocs, MAX_XREF_DEPTH,
 };
 use qiyas_render::{
-    add_images, add_pick_outlines, build_batch_with_xrefs, layer_shown, place_text, resolve_color,
-    Batch, PickIndex, TextEngine, TextOptions, Visibility, PATTERN, TEXT_BOX,
+    add_images, add_pick_outlines, build_batch_with_xrefs, decode_codes, layer_shown, place_text,
+    resolve_color, Batch, PickIndex, TextEngine, TextOptions, Visibility, PATTERN, TEXT_BOX,
 };
 use serde::{Deserialize, Serialize};
 
@@ -885,8 +885,10 @@ impl Session {
             EntityType::Insert(insert) => (Some(effective_block_name(located.doc, insert)), None),
             EntityType::Text(t) => (None, Some(t.value.clone())),
             EntityType::MText(t) => (None, Some(t.value.clone())),
+            // As drawn: %%c, %%d and the like as their signs.
             EntityType::Dimension(d) => {
-                (None, Some(dimension_text(d, &DimLook::of(located.doc, d))))
+                let text = dimension_text(d, &DimLook::of(located.doc, d));
+                (None, Some(decode_codes(&text).into_owned()))
             }
             _ => (None, None),
         };

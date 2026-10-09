@@ -216,7 +216,8 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
 - `Command::Dimension(DimSpec)` (`qiyas-core/src/dimension.rs`, wire `{"type":"dimension",
   "kind":"linear",...}`): linear (no rotation: horizontal or vertical by where the line point is),
   aligned, angular (3 points + arc point), radius, diameter, arc length, ordinate, baseline,
-  continue, quick (lines, arcs, circles). Each is a real Dimension on the current layer in the
+  continue (on the base's own line; baseline a DIMDLI step further out each), quick (lines, arcs,
+  circles); an ordinate may read 0. Each is a real Dimension on the current layer in the
   current style (DIMSTYLE) with a `*Dn` block: Lines, Solid arrowheads, one Text (marked
   `QIYAS_TEXT`), sized DIMASZ/DIMTXT/DIMEXO/DIMEXE/DIMGAP x DIMSCALE, numbers by DIMDEC, DIMZIN,
   DIMLFAC, DIMRND, DIMDSEP, DIMPOST (decimal only).
@@ -226,10 +227,13 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
   Dimensions are not re-measured by `follow_edit`; a moved dimension's take-off row follows.
 - `Leader`/`MLeader` (a Leader + MText; Qiyas writes no MULTILEADER), `Tolerance` (frame in
   AutoCAD codes). `SetDimStyle` (create from current, common fields, make current; header DIM vars
-  follow). `AnnotationScale` sets CANNOSCALE ("1:50", header and the variable dictionary); new
-  dimensions, leaders and tolerances keep style DIMSCALE x scale as their own `DSTYLE` override,
-  new text 2.5 mm x scale. No annotative scale lists. All undoable (header bits are in
-  `TablesSnapshot`).
+  follow; an edit rebuilds, in the same step, the sheets' dimensions of that style whose block
+  Qiyas generated: every part of such a block carries `QIYAS_TEXT`; AutoCAD's blocks stay as they
+  are). `AnnotationScale` sets CANNOSCALE ("1:50", header and the variable dictionary); new
+  dimensions, leaders and tolerances keep the scale's factor as their own DIMSCALE (`DSTYLE`
+  override; it replaces the style's, which applies at 1:1), new text 2.5 mm x scale. No
+  annotative scale lists. All undoable (header bits are in `TablesSnapshot`). DIMTAD 4 puts the
+  text below the line; `entity_info` shows `%%c`/`%%d` as their signs.
 - Annotate tab (Dimensions, Leaders, Dimension style…); command line DLI, DAL, DAN, DRA, DDI, DAR,
   DOR, DBA, DCO, QDIM, DED (T text, F flip, M move), DIMBREAK, DIMSPACE, DIMJOGLINE, LE, MLD, TOL,
   D (DIMSTYLE). Not AI tools yet.

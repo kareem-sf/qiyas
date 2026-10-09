@@ -523,12 +523,15 @@ export default function App() {
   }
 
   /** Runs a dimension style or annotation scale change from the style panel, then shows the
-   *  drawing's styles again; an error goes back to the panel. */
+   *  drawing's styles again and draws the dimensions the style rebuilt; an error goes back to
+   *  the panel. */
   async function runDimStyle(cmd: Command) {
     const gen = switchGen.current;
     await runCommand(cmd);
     const next = await drawingInfo();
-    if (!isStale(gen, switchGen.current)) setInfo(next);
+    if (isStale(gen, switchGen.current)) return;
+    setInfo(next);
+    await redraw();
     await autosave();
   }
 

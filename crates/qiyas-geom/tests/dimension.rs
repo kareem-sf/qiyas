@@ -261,3 +261,16 @@ fn leaders_draw_their_line_and_arrow_and_tolerances_their_frame() {
         .count();
     assert_eq!(frames, 3, "a box per field");
 }
+
+#[test]
+fn dimtad_4_puts_the_text_below_the_line() {
+    let mut doc = doc();
+    doc.dim_styles.get_mut("Standard").unwrap().dimtad = 4;
+    let (_, dim) = linear(&mut doc, None);
+    let EntityType::Dimension(dim) = dim else {
+        unreachable!()
+    };
+    let at = dimension_entities(&doc, &dim).text_at.unwrap();
+    // The line is at y 2: the text's middle is a gap and half a height below it.
+    assert!((at[1] - (2.0 - 0.05 - 0.1)).abs() < 1e-9, "{at:?}");
+}

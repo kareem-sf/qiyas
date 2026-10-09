@@ -10,6 +10,7 @@ use qiyas_core::{
     Command, CoreError, DimEditOp, DimSpec, DimStyleFields, Kind, ModifySpec, Outcome, Session,
     Target, TextScope,
 };
+use qiyas_geom::DimLook;
 
 const MODEL: &str = "*Model_Space";
 
@@ -813,4 +814,186 @@ fn dimension_commands_read_from_the_wire() {
     }))
     .unwrap();
     assert!(matches!(cmd, Command::MLeader { .. }));
+}
+
+#[test]
+fn continued_dimensions_stay_on_the_base_line_and_baselines_step_out_from_it() {
+    let (_dir, mut s) = open(&sample(), "chain.dxf");
+    let base = one(s
+        .run(Command::Dimension(DimSpec::Linear {
+            p1: [0.0, 0.0],
+            p2: [10.0, 3.0],
+            line_point: [5.0, 5.0],
+            rotation: Some(0.0),
+        }))
+        .unwrap());
+    let line_y = |s: &Session, h: u64| match dim(s, h) {
+        Dimension::Linear(d) => d.definition_point.y,
+        other => panic!("{other:?}"),
+    };
+    let next = added(
+        s.run(Command::Dimension(DimSpec::Continue {
+            from: t(base),
+            points: vec![[14.0, 1.0], [20.0, -2.0]],
+        }))
+        .unwrap(),
+    );
+    for &h in &next {
+        assert!((line_y(&s, h) - 5.0).abs() < 1e-9, "on the base's line");
+    }
+    assert!((dim(&s, next[0]).measurement() - 4.0).abs() < 1e-9);
+    let step = DimLook::of(&s.drawing.doc, &dim(&s, base)).increment;
+    let out = added(
+        s.run(Command::Dimension(DimSpec::Baseline {
+            from: t(base),
+            points: vec![[14.0, 1.0], [20.0, -2.0]],
+        }))
+        .unwrap(),
+    );
+    assert!((line_y(&s, out[0]) - (5.0 + step)).abs() < 1e-9);
+    assert!((line_y(&s, out[1]) - (5.0 + 2.0 * step)).abs() < 1e-9);
+}
+
+#[test]
+fn the_annotation_scale_replaces_the_style_scale() {
+    let (_dir, mut s) = open(&sample(), "replace.dxf");
+    s.run(Command::SetDimStyle {
+        name: "Standard".to_string(),
+        fields: DimStyleFields {
+            scale: 100.0,
+            ..fields(3)
+        },
+        current: true,
+    })
+    .unwrap();
+    // At 1:1 the style's DIMSCALE applies.
+    let plain = one(s.run(linear_cmd()).unwrap());
+    assert!((text_height(&block_of(&s, plain)) - 0.3 * 100.0).abs() < 1e-9);
+    assert_eq!(qiyas_geom::dimscale(&dim(&s, plain).base().common), None);
+    s.run(Command::AnnotationScale {
+        name: "1:100".to_string(),
+    })
+    .unwrap();
+    let h = one(s.run(linear_cmd()).unwrap());
+    assert_eq!(qiyas_geom::dimscale(&dim(&s, h).base().common), Some(100.0));
+    assert!(
+        (text_height(&block_of(&s, h)) - 0.3 * 100.0).abs() < 1e-9,
+        "100, not 10,000"
+    );
+    let note = added(
+        s.run(Command::Leader {
+            points: vec![[0.0, 0.0], [2.0, 2.0]],
+            text: "A".to_string(),
+        })
+        .unwrap(),
+    );
+    let EntityType::MText(m) = s.drawing.doc.get_entity(Handle::new(note[1])).unwrap() else {
+        panic!()
+    };
+    assert!((m.height - 30.0).abs() < 1e-9);
+    let tol = one(s
+        .run(Command::Tolerance {
+            at: [0.0, 20.0],
+            frame: "%%v0.1".to_string(),
+        })
+        .unwrap());
+    let EntityType::Tolerance(tol) = s.drawing.doc.get_entity(Handle::new(tol)).unwrap() else {
+        panic!()
+    };
+    assert!((tol.text_height - 30.0).abs() < 1e-9);
+}
+
+#[test]
+fn editing_a_style_rebuilds_qiyas_dimensions_of_that_style_only() {
+    // The existing drawing's dimension has AutoCAD's own block (one line); a Qiyas one is added.
+    let mut doc = sample();
+    let mut record = BlockRecord::new("*D7");
+    record.handle = doc.allocate_handle();
+    record.block_entity_handle = doc.allocate_handle();
+    record.block_end_handle = doc.allocate_handle();
+    record.flags.anonymous = true;
+    let owner = record.handle;
+    doc.block_records.add(record).unwrap();
+    let mut inside = EntityType::Line(Line::from_coords(0.0, 30.0, 0.0, 4.0, 30.0, 0.0));
+    inside.common_mut().owner_handle = owner;
+    doc.add_entity(inside).unwrap();
+    let mut d = DimensionLinear::new(Vector3::new(0.0, 28.0, 0.0), Vector3::new(4.0, 28.0, 0.0));
+    d.definition_point = Vector3::new(4.0, 30.0, 0.0);
+    d.base.block_name = "*D7".to_string();
+    let imported = doc
+        .add_entity(EntityType::Dimension(Dimension::Linear(d)))
+        .unwrap()
+        .value();
+    let (_dir, mut s) = open(&doc, "restyle.dxf");
+    let ours = one(s.run(linear_cmd()).unwrap());
+    let arrow_len = |s: &Session, h: u64| {
+        block_of(s, h)
+            .iter()
+            .find_map(|e| match e {
+                EntityType::Solid(solid) => {
+                    let (a, b) = (solid.first_corner, solid.second_corner);
+                    Some((a.x - b.x).hypot(a.y - b.y))
+                }
+                _ => None,
+            })
+            .unwrap()
+    };
+    let before = arrow_len(&s, ours);
+    let theirs = block_of(&s, imported);
+    let mut bigger = s
+        .info()
+        .dim_styles
+        .into_iter()
+        .find(|d| d.name == "Standard")
+        .unwrap()
+        .fields;
+    bigger.arrow_size *= 3.0;
+    s.run(Command::SetDimStyle {
+        name: "Standard".to_string(),
+        fields: bigger,
+        current: false,
+    })
+    .unwrap();
+    assert!(
+        arrow_len(&s, ours) > 2.5 * before,
+        "rebuilt with the new arrow size"
+    );
+    assert_eq!(
+        block_of(&s, imported),
+        theirs,
+        "AutoCAD's block is left alone"
+    );
+    assert!(s.undo());
+    assert!((arrow_len(&s, ours) - before).abs() < 1e-12, "one step");
+}
+
+#[test]
+fn an_ordinate_at_the_datum_reads_0_and_entity_info_shows_symbols() {
+    let (_dir, mut s) = open(&sample(), "zero.dxf");
+    let h = one(s
+        .run(Command::Dimension(DimSpec::Ordinate {
+            feature: [0.0, 3.0],
+            leader_end: [0.0, 6.0],
+        }))
+        .unwrap());
+    assert_eq!(dim(&s, h).measurement(), 0.0);
+    let arc = s
+        .drawing
+        .doc
+        .entities_in_block(MODEL)
+        .find(|e| matches!(e, EntityType::Arc(_)))
+        .unwrap()
+        .common()
+        .handle
+        .value();
+    let d = one(s
+        .run(Command::Dimension(DimSpec::Diameter {
+            target: t(arc),
+            point: [21.0, 1.0],
+        }))
+        .unwrap());
+    assert_eq!(
+        s.entity_info(d, &[]).unwrap().text.as_deref(),
+        Some("Ø4.00")
+    );
 }
