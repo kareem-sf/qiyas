@@ -1,4 +1,5 @@
 mod ai;
+mod blocks;
 mod commands;
 mod mcp;
 #[cfg(debug_assertions)]
@@ -89,6 +90,11 @@ pub fn run() {
             pdf::image_size,
             pdf::attach_image,
             pdf::image_display,
+            blocks::blocks,
+            blocks::block_thumbnail,
+            blocks::drawing_blocks,
+            blocks::write_block,
+            blocks::set_tool_palette,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Qiyas");

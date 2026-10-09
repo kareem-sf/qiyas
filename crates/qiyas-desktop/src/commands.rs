@@ -455,8 +455,8 @@ pub async fn aliases(state: State<'_, AppState>) -> Result<BTreeMap<String, Stri
 
 /// Checks and keeps new settings: written to disk first, then cached. Another provider, address
 /// or model starts a new assistant conversation; MCP turned on or off, or another port or token,
-/// restarts the MCP server. The recent list stays as the app has it: the dialog's copy may be
-/// older.
+/// restarts the MCP server. The recent list and the tool palette stay as the app has them: the
+/// dialog's copy may be older.
 #[tauri::command]
 pub async fn set_settings<R: Runtime>(
     mut settings: Settings,
@@ -470,6 +470,7 @@ pub async fn set_settings<R: Runtime>(
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         settings.recents = cached.recents.clone();
+        settings.tool_palette = cached.tool_palette.clone();
         settings::save(&state.config_dir, &settings)
             .map_err(|e| format!("The settings could not be saved: {e}"))?;
         let changed = ai::answerer_changed(&cached, &settings);
@@ -866,7 +867,12 @@ mod tests {
                     crate::pdf::underlay_image,
                     crate::pdf::image_size,
                     crate::pdf::attach_image,
-                    crate::pdf::image_display
+                    crate::pdf::image_display,
+                    crate::blocks::blocks,
+                    crate::blocks::block_thumbnail,
+                    crate::blocks::drawing_blocks,
+                    crate::blocks::write_block,
+                    crate::blocks::set_tool_palette
                 ])
                 .build(mock_context(noop_assets()))
                 .unwrap();
@@ -954,6 +960,53 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn blocks_their_thumbnails_other_drawings_and_the_tool_palette() {
+        let ipc = Ipc::open();
+        let blocks = ipc.call("blocks", json!({})).unwrap();
+        assert_eq!(blocks, json!([{ "name": "DOOR", "attdefs": [] }]));
+        let png = ipc.bytes("block_thumbnail", json!({ "name": "DOOR", "px": 64 }));
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+        assert!(ipc
+            .call("block_thumbnail", json!({ "name": "NOPE", "px": 64 }))
+            .is_err());
+
+        // The Design Center lists another drawing's blocks.
+        let sample = ipc._dir.path().join("sample.dxf");
+        let names = ipc
+            .call("drawing_blocks", json!({ "path": sample }))
+            .unwrap();
+        assert_eq!(names, json!(["DOOR"]));
+
+        // A block written where the Save dialog chose, even outside the drawing's folder.
+        let elsewhere = tempfile::tempdir().unwrap();
+        let out = elsewhere.path().join("door.dwg");
+        ipc.call("write_block", json!({ "name": "DOOR", "path": out }))
+            .unwrap();
+        assert!(out.exists());
+
+        // The tool palette is kept in the settings; the Settings dialog's copy never drops it.
+        let items = json!([
+            { "kind": "block", "label": "Door", "value": "DOOR" },
+            { "kind": "command", "label": "Line", "value": "LINE" }
+        ]);
+        ipc.call("set_tool_palette", json!({ "items": items }))
+            .unwrap();
+        let mut settings = ipc.call("get_settings", json!({})).unwrap();
+        assert_eq!(settings["tool_palette"], items);
+        settings["tool_palette"] = json!([]);
+        ipc.call("set_settings", json!({ "settings": settings }))
+            .unwrap();
+        assert_eq!(
+            ipc.call("get_settings", json!({})).unwrap()["tool_palette"],
+            items
+        );
+        let bad = json!([{ "kind": "block", "label": " ", "value": "DOOR" }]);
+        assert!(ipc
+            .call("set_tool_palette", json!({ "items": bad }))
+            .is_err());
     }
 
     #[test]

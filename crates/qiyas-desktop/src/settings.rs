@@ -17,6 +17,25 @@ pub const MAX_RECENTS: usize = 10;
 
 pub const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 
+/// Buttons the tool palette keeps at most.
+pub const MAX_PALETTE: usize = 100;
+
+/// What a tool palette button does: insert a block of the drawing, or run a command line.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PaletteKind {
+    Block,
+    Command,
+}
+
+/// One button of the user's tool palette: its label, and the block name or command line.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct PaletteItem {
+    pub kind: PaletteKind,
+    pub label: String,
+    pub value: String,
+}
+
 /// Who answers the in-app assistant.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -68,6 +87,9 @@ pub struct Settings {
     /// Drawings opened or saved lately, most recent first, at most `MAX_RECENTS`. Kept by the app
     /// itself: the Settings dialog never changes it.
     pub recents: Vec<String>,
+    /// The user's tool palette, in order. Changed only by the palette itself
+    /// (`set_tool_palette`), never by the Settings dialog.
+    pub tool_palette: Vec<PaletteItem>,
 }
 
 impl Settings {
@@ -95,6 +117,7 @@ impl Default for Settings {
             theme: "system".into(),
             aliases: BTreeMap::new(),
             recents: Vec::new(),
+            tool_palette: Vec::new(),
         }
     }
 }
@@ -153,6 +176,23 @@ pub fn validate(s: &Settings) -> Result<(), String> {
                 "The alias \"{alias}\" needs one word and a command"
             ));
         }
+    }
+    Ok(())
+}
+
+/// Checks a tool palette before it is kept: at most `MAX_PALETTE` buttons, each with a label
+/// and a block name or command.
+pub fn validate_palette(items: &[PaletteItem]) -> Result<(), String> {
+    if items.len() > MAX_PALETTE {
+        return Err(format!(
+            "A tool palette holds at most {MAX_PALETTE} buttons"
+        ));
+    }
+    if items
+        .iter()
+        .any(|i| i.label.trim().is_empty() || i.value.trim().is_empty())
+    {
+        return Err("Each palette button needs a label and a block or command".into());
     }
     Ok(())
 }
