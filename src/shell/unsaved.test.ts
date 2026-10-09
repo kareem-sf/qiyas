@@ -17,6 +17,7 @@ test("a drawing is left freely when saved, after saving, without saving, or not 
   const steps = (dirty: boolean, choice: "save" | "discard" | "cancel") => ({
     isDirty: vi.fn(async () => dirty),
     ask: vi.fn(async () => choice),
+    confirmSave: vi.fn(async () => true),
     save: vi.fn(async () => {}),
   });
   const clean = steps(false, "cancel");
@@ -34,6 +35,14 @@ test("a drawing is left freely when saved, after saving, without saving, or not 
   const cancel = steps(true, "cancel");
   expect(await leaveDrawing(cancel)).toBe(false);
   expect(cancel.save).not.toHaveBeenCalled();
+
+  // Yes, then No at the save's own warning (a recovered drawing): nothing saved, the drawing stays.
+  const declined = { ...steps(true, "save"), confirmSave: vi.fn(async () => false) };
+  expect(await leaveDrawing(declined)).toBe(false);
+  expect(declined.confirmSave).toHaveBeenCalled();
+  expect(declined.save).not.toHaveBeenCalled();
+  expect(save.confirmSave).toHaveBeenCalled();
+  expect(discard.confirmSave).not.toHaveBeenCalled();
 
   const failing = { ...steps(true, "save"), save: vi.fn(async () => Promise.reject("disk full")) };
   await expect(leaveDrawing(failing)).rejects.toBe("disk full");

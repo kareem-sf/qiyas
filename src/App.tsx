@@ -680,6 +680,8 @@ export default function App() {
           }),
           labels,
         ),
+      // The drawing on screen now: closing the window shows each drawing before asking.
+      confirmSave: async () => confirmRecoveredSave(await drawingInfo()),
       save: saveDrawing,
     });
   }
@@ -890,18 +892,20 @@ export default function App() {
     });
   }
 
-  /** Saves over the drawing's own file. A drawing that opened with problems is rewritten with only
-   *  what Qiyas could read, so ask first; the core keeps the original as a `.bak` either way. */
+  /** A drawing that opened with problems is rewritten with only what Qiyas could read, so a save
+   *  over its own file asks first; the core keeps the original as a `.bak` either way. True to
+   *  save. */
+  async function confirmRecoveredSave(of: DrawingInfo): Promise<boolean> {
+    // An xref's problems are not the drawing's own: saving never touches the xref. Nor is an
+    // empty model something the reader lost.
+    if (readProblems(of).length <= of.xrefs.reduce((n, x) => n + x.problems.length, 0)) return true;
+    return ask(t("save.confirmRecovered"), { title: t("appName"), kind: "warning" });
+  }
+
+  /** Saves over the drawing's own file, after `confirmRecoveredSave`. */
   async function saveFile() {
     if (!info) return;
-    if (
-      // An xref's problems are not the drawing's own: saving never touches the xref. Nor is an
-      // empty model something the reader lost.
-      readProblems(info).length > info.xrefs.reduce((n, x) => n + x.problems.length, 0) &&
-      !(await ask(t("save.confirmRecovered"), { title: t("appName"), kind: "warning" }))
-    ) {
-      return;
-    }
+    if (!(await confirmRecoveredSave(info))) return;
     await saveWith(saveDrawing);
   }
 
