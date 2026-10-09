@@ -1,7 +1,7 @@
 //! Any OpenAI-compatible chat service (OpenAI, OpenRouter, a local server, ...): Chat Completions
 //! with streaming and function calling.
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 
 use serde_json::{json, Value};
 
@@ -107,9 +107,12 @@ fn push_messages(out: &mut Vec<Value>, m: &Message) {
             let calls: Vec<Value> = m
                 .tool_uses()
                 .map(|(id, name, input)| {
-                    let arguments = match input {
-                        Value::String(raw) => raw.clone(),
-                        v => v.to_string(),
+                    // An input that was not valid JSON goes back as an empty object (its tool
+                    // result says so): services refuse the whole request over bad arguments.
+                    let arguments = if input.is_object() {
+                        input.to_string()
+                    } else {
+                        "{}".to_string()
                     };
                     json!({
                         "id": id,
@@ -181,7 +184,10 @@ struct Call {
 #[derive(Default)]
 struct Turn {
     text: String,
-    calls: BTreeMap<u64, Call>,
+    /// In the order they began.
+    calls: Vec<Call>,
+    /// The stream's `index` of each call to the newest call in `calls` with it.
+    by_index: HashMap<u64, usize>,
     finish_reason: Option<String>,
     usage: Usage,
 }
@@ -209,15 +215,17 @@ impl Turn {
             sink(StreamEvent::TextDelta(text.to_string()));
         }
         for c in delta["tool_calls"].as_array().into_iter().flatten() {
-            let index = c["index"].as_u64().unwrap_or(0);
-            let call = self.calls.entry(index).or_default();
-            if let Some(id) = c["id"].as_str().filter(|s| !s.is_empty()) {
+            let id = c["id"].as_str().filter(|s| !s.is_empty());
+            let name = c["function"]["name"].as_str().filter(|s| !s.is_empty());
+            let at = self.slot(c["index"].as_u64(), id, name);
+            let call = &mut self.calls[at];
+            if let Some(id) = id {
                 call.id = id.to_string();
             }
-            if let Some(name) = c["function"]["name"].as_str().filter(|s| !s.is_empty()) {
+            if let Some(name) = name {
                 call.name.push_str(name);
                 if call.id.is_empty() {
-                    call.id = format!("call_{index}");
+                    call.id = format!("call_{at}");
                 }
                 sink(StreamEvent::ToolUseStart {
                     id: call.id.clone(),
@@ -238,6 +246,37 @@ impl Turn {
         Ok(false)
     }
 
+    /// Where a streamed call fragment goes in `calls`. OpenAI gives each call its own `index` and
+    /// sends its id and name once, in its first fragment. Gemini sends parallel calls whole, all
+    /// at index 0 or with none, so another id, or a name for a call that has one, starts a call.
+    fn slot(&mut self, index: Option<u64>, id: Option<&str>, name: Option<&str>) -> usize {
+        let current = match index {
+            Some(i) => self.by_index.get(&i).copied(),
+            None => self.calls.len().checked_sub(1),
+        };
+        let at = match current {
+            Some(at) => {
+                let call = &self.calls[at];
+                let other_id = id.is_some_and(|id| !call.id.is_empty() && call.id != id);
+                let second_name = id.is_none() && name.is_some() && !call.name.is_empty();
+                if other_id || second_name {
+                    None
+                } else {
+                    Some(at)
+                }
+            }
+            None => None,
+        };
+        at.unwrap_or_else(|| {
+            self.calls.push(Call::default());
+            let at = self.calls.len() - 1;
+            if let Some(i) = index {
+                self.by_index.insert(i, at);
+            }
+            at
+        })
+    }
+
     fn finish(self, sink: Sink<'_>) -> TurnResult {
         let mut content = Vec::new();
         if !self.text.is_empty() {
@@ -246,9 +285,9 @@ impl Turn {
             });
         }
         let has_calls = !self.calls.is_empty();
-        for (index, call) in self.calls {
+        for (at, call) in self.calls.into_iter().enumerate() {
             let id = if call.id.is_empty() {
-                format!("call_{index}")
+                format!("call_{at}")
             } else {
                 call.id
             };
@@ -297,6 +336,80 @@ impl Turn {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The calls a stream of `data:` payloads ends with, as (id, name, input).
+    fn calls_of(events: &[Value]) -> Vec<(String, String, Value)> {
+        let mut turn = Turn::default();
+        let mut sink = |_: StreamEvent| {};
+        for e in events {
+            turn.on_event(&e.to_string(), &mut sink).unwrap();
+        }
+        turn.finish(&mut sink)
+            .content
+            .into_iter()
+            .filter_map(|b| match b {
+                ContentBlock::ToolUse { id, name, input } => Some((id, name, input)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn call(id: Option<&str>, index: Option<u64>, name: &str, args: &str) -> Value {
+        let mut c = json!({"type":"function","function":{"name":name,"arguments":args}});
+        if let Some(id) = id {
+            c["id"] = json!(id);
+        }
+        if let Some(i) = index {
+            c["index"] = json!(i);
+        }
+        json!({"choices":[{"index":0,"delta":{"tool_calls":[c]}}]})
+    }
+
+    #[test]
+    fn parallel_calls_without_their_own_index_stay_apart() {
+        // Gemini (also behind Runware) streams each parallel call whole, all at index 0 or
+        // with no index at all.
+        for index in [Some(0), None] {
+            let calls = calls_of(&[
+                call(Some("f1"), index, "block_summary", "{}"),
+                call(Some("f2"), index, "list_layers", "{}"),
+                call(Some("f3"), index, "read_text", r#"{"layer":"A-TEXT"}"#),
+            ]);
+            let names: Vec<&str> = calls.iter().map(|c| c.1.as_str()).collect();
+            assert_eq!(
+                names,
+                ["block_summary", "list_layers", "read_text"],
+                "{index:?}"
+            );
+            assert_eq!(calls[1].0, "f2");
+            assert_eq!(calls[2].2, json!({"layer": "A-TEXT"}));
+        }
+    }
+
+    #[test]
+    fn parallel_calls_with_no_id_are_told_apart_by_their_name() {
+        let calls = calls_of(&[
+            call(None, None, "list_layers", "{}"),
+            call(None, None, "list_takeoff", "{}"),
+        ]);
+        let names: Vec<&str> = calls.iter().map(|c| c.1.as_str()).collect();
+        assert_eq!(names, ["list_layers", "list_takeoff"]);
+        assert_ne!(calls[0].0, calls[1].0, "each call gets its own id");
+    }
+
+    #[test]
+    fn input_that_was_not_json_goes_back_as_an_empty_object() {
+        let mut out = Vec::new();
+        push_messages(
+            &mut out,
+            &Message::assistant(vec![ContentBlock::ToolUse {
+                id: "c1".into(),
+                name: "list_layers".into(),
+                input: Value::String("{}{}".into()),
+            }]),
+        );
+        assert_eq!(out[0]["tool_calls"][0]["function"]["arguments"], "{}");
+    }
 
     #[test]
     fn tool_results_become_tool_messages_and_images_follow_as_user() {
