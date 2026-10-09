@@ -962,8 +962,19 @@ export default function App() {
       await refreshTakeoffAndBoq();
       // The step may have been a PDF import, an underlay or a calibration.
       await redraw();
+      // Or a layer change: the panel shows the layers and hidden ones as they are now.
+      await syncInfo();
     });
     if (changed) await autosave();
+  }
+
+  /** Reads the drawing's info again (layers, groups, current state) and the hidden layers. */
+  async function syncInfo() {
+    const gen = switchGen.current;
+    const next = await drawingInfo();
+    if (isStale(gen, switchGen.current)) return;
+    setInfo(next);
+    setHidden(new Set(next.hidden_layers));
   }
 
   /** Reads the file tabs again (titles, unsaved dots, the active one). */
@@ -1178,6 +1189,7 @@ export default function App() {
         if (undone) {
           await refreshTakeoffAndBoq();
           await redraw();
+          await syncInfo();
         }
       });
       if (undone) {

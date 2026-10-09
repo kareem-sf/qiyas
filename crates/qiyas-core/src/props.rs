@@ -345,7 +345,9 @@ impl Session {
                 let EntityType::Insert(i) = &*e else {
                     return Err(no_such(e, "rotation"));
                 };
-                let turn = a - i.rotation;
+                // Its angle is in its own (OCS) plane: seen from below (a -Z normal) a turn of
+                // its angle is the opposite turn on the plan.
+                let turn = (a - i.rotation) * if i.normal.z < 0.0 { -1.0 } else { 1.0 };
                 let (x, y, z) = (i.x_scale(), i.y_scale(), i.z_scale());
                 place(e, &Placing::plain(rotation(insert_at(i), turn)));
                 // A turn keeps the scales; exactly as typed when the turn landed there.

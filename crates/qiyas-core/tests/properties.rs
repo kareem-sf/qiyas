@@ -309,6 +309,47 @@ fn a_block_references_attributes_follow_its_scale_and_turn() {
 }
 
 #[test]
+fn a_reference_seen_from_below_turns_to_the_angle_typed() {
+    // A TAG reference with a -Z normal (as mirrored drawings store them): its OCS x runs along
+    // world -x, so a turn in its own angle is the opposite turn on the plan.
+    let mut doc = schedule_doc();
+    let tag = doc
+        .entities_in_block(MODEL)
+        .find(|e| matches!(e, EntityType::Insert(_)))
+        .unwrap()
+        .common()
+        .handle;
+    if let Some(EntityType::Insert(i)) = doc.get_entity_mut(tag) {
+        let down = opencadcodec::Vector3::new(0.0, 0.0, -1.0);
+        i.normal = down;
+        i.insert_point = opencadcodec::Vector3::new(-30.0, 10.0, 0.0);
+        // MARK 0.5 along the reference's x, on the plan (its own normal up).
+        i.attributes[0].insertion_point = opencadcodec::Vector3::new(29.5, 10.0, 0.0);
+    }
+    let (_dir, mut s) = open(&doc);
+    let tag = tag.value();
+    set(&mut s, tag, EntityProp::InsertRotation, json!(90));
+    match entity(&s, tag) {
+        EntityType::Insert(i) => {
+            assert!(
+                (i.rotation - std::f64::consts::FRAC_PI_2).abs() < 1e-9,
+                "{}",
+                i.rotation
+            );
+            // The reference stays where it was; MARK turns with it: 0.5 along its y now.
+            assert_eq!([i.insert_point.x, i.insert_point.y], [-30.0, 10.0]);
+            let p = i.attributes[0].insertion_point;
+            assert!(
+                (p.x - 30.0).abs() < 1e-9 && (p.y - 10.5).abs() < 1e-9,
+                "{p:?}"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!((s.entity_info(tag, &[]).unwrap().rotation.unwrap() - 90.0).abs() < 1e-9);
+}
+
+#[test]
 fn an_xrefs_layer_is_never_given_to_an_entity() {
     let mut doc = sample_doc();
     let mut theirs = opencadcodec::Layer::new("PLAN|A-WALL");
