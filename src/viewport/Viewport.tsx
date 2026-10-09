@@ -19,7 +19,9 @@ import {
   type Camera,
   type Point,
 } from "./camera";
+import { isClick } from "./click";
 import { createRenderer, type Renderer, type Theme } from "./gl";
+import { wheelFactor } from "./wheel";
 
 export type Tool =
   | "select"
@@ -70,10 +72,9 @@ type Props = {
   ref?: Ref<ViewportHandle>;
 };
 
-const WHEEL_FACTOR = 1.1;
 const FIT_MARGIN_PX = 20;
 const DOUBLE_CLICK_MS = 400;
-/** Movement below this many pixels is still a click, not a drag. */
+/** A zoom window or middle drag smaller than this many pixels is no drag. */
 const DRAG_PX = 4;
 /** How long the zoom must rest before glyphs are asked for at the new size. */
 const ZOOM_SETTLE_MS = 200;
@@ -108,6 +109,8 @@ export function Viewport({
   const batchRef = useRef(batch);
   const frame = useRef(0);
   const drag = useRef<Drag | null>(null);
+  /** Where a left press began; it is a click only if the release is within a few pixels. */
+  const press = useRef<Point | null>(null);
   const space = useRef(false);
   const lastMiddle = useRef(0);
   const [zoomBox, setZoomBox] = useState<[Point, Point] | null>(null);
@@ -209,6 +212,18 @@ export function Viewport({
     resize();
     const observer = new ResizeObserver(resize);
     observer.observe(canvas);
+    // Moving the window to another screen, or zooming the page, changes the pixel ratio without
+    // resizing the canvas: measure again. A query fires once per change, so arm a new one each time.
+    let ratio: MediaQueryList | undefined;
+    const onRatio = () => {
+      resize();
+      watchRatio();
+    };
+    const watchRatio = () => {
+      ratio = window.matchMedia?.(`(resolution: ${window.devicePixelRatio}dppx)`);
+      ratio?.addEventListener("change", onRatio, { once: true });
+    };
+    watchRatio();
 
     const local = (e: MouseEvent): Point => {
       const r = canvas.getBoundingClientRect();
@@ -217,7 +232,7 @@ export function Viewport({
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       if (e.deltaY === 0) return;
-      setCamera(zoomAt(camera.current, local(e), e.deltaY > 0 ? WHEEL_FACTOR : 1 / WHEEL_FACTOR));
+      setCamera(zoomAt(camera.current, local(e), wheelFactor(e.deltaY, e.deltaMode)));
     };
     // React's wheel listener is passive, so it can't stop the page from scrolling.
     canvas.addEventListener("wheel", onWheel, { passive: false });
@@ -238,6 +253,7 @@ export function Viewport({
 
     return () => {
       observer.disconnect();
+      ratio?.removeEventListener("change", onRatio);
       canvas.removeEventListener("wheel", onWheel);
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
@@ -319,7 +335,9 @@ export function Viewport({
       startDrag(e, "zoomWindow", p);
       setZoomBox([p, p]);
     } else if (e.button === 0) {
-      onClick(screenToWorld(camera.current, p), p, camera.current.scale);
+      // The click is made on release, and only if the pointer stayed put.
+      e.currentTarget.setPointerCapture(e.pointerId);
+      press.current = p;
     }
   }
 
@@ -335,7 +353,13 @@ export function Viewport({
     onMove(screenToWorld(camera.current, p), camera.current.scale);
   }
 
-  function onPointerUp() {
+  function onPointerUp(e: PointerEvent<HTMLCanvasElement>) {
+    const down = press.current;
+    if (down && e.button === 0) {
+      press.current = null;
+      const p = local(e);
+      if (isClick(down, p)) onClick(screenToWorld(camera.current, p), p, camera.current.scale);
+    }
     const d = drag.current;
     if (!d) return;
     drag.current = null;
@@ -368,6 +392,7 @@ export function Viewport({
         onPointerUp={onPointerUp}
         onPointerCancel={() => {
           drag.current = null;
+          press.current = null;
           setZoomBox(null);
         }}
       />

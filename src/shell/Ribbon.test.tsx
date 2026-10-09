@@ -70,3 +70,15 @@ test("without a drawing on the Model sheet, Views is disabled", () => {
   fireEvent.click(screen.getByRole("tab", { name: "View" }));
   expect((screen.getByRole("button", { name: "Views" }) as HTMLButtonElement).disabled).toBe(true);
 });
+
+test("the ribbon tabs have a roving tab stop and Space presses a tab", () => {
+  render(<Ribbon {...props} />);
+  const tab = (name: string) => screen.getByRole("tab", { name });
+  expect(["Home", "Measure", "View"].map((n) => tab(n).tabIndex)).toEqual([0, -1, -1]);
+  tab("Home").focus();
+  fireEvent.keyDown(tab("Home"), { key: "ArrowRight" });
+  expect(document.activeElement).toBe(tab("Measure"));
+  fireEvent.keyDown(tab("Measure"), { key: " " });
+  expect(tab("Measure").getAttribute("aria-selected")).toBe("true");
+  expect(["Home", "Measure", "View"].map((n) => tab(n).tabIndex)).toEqual([-1, 0, -1]);
+});

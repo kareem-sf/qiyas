@@ -1,14 +1,15 @@
+import { useEffect, useRef } from "react";
 import type { Drafting } from "../api";
 import { useT } from "../i18n";
 import type { DraftingToggle } from "../tools/shortcuts";
+import { useMenu } from "./useMenu";
 
 type Props = {
   cursor: [number, number] | null;
   units: string;
   unitsWarning: boolean;
-  problems: number;
-  /** The problems themselves, one per line; shown on hover over the count. */
-  problemsText: string;
+  /** The drawing's reading problems, one line each; a button with their count opens the list. */
+  problems: string[];
   message: string;
   /** Decimals of the cursor position. */
   precision?: number;
@@ -35,7 +36,6 @@ export function StatusBar({
   units,
   unitsWarning,
   problems,
-  problemsText,
   message,
   precision = 3,
   snapLabel = null,
@@ -44,15 +44,51 @@ export function StatusBar({
   onDraftingSettings,
 }: Props) {
   const t = useT();
+  const { open, setOpen, ref } = useMenu<HTMLSpanElement>();
+  const button = useRef<HTMLButtonElement>(null);
+  const list = useRef<HTMLUListElement>(null);
+  // The list takes the focus when it opens, so the keyboard can scroll it.
+  useEffect(() => {
+    if (open) list.current?.focus();
+  }, [open]);
+  // Nothing to list any more (another drawing): close it.
+  useEffect(() => {
+    if (problems.length === 0) setOpen(false);
+  }, [problems.length, setOpen]);
   return (
     <footer className="status">
       <span className="message" role="status" aria-live="polite">
         {message}
       </span>
       {snapLabel && <span className="snap-kind">{snapLabel}</span>}
-      {problems > 0 && (
-        <span className="warn" title={problemsText}>
-          {t("recovered", { n: problems })}
+      {problems.length > 0 && (
+        <span
+          className="problems"
+          ref={ref}
+          onKeyDown={(e) => {
+            if (e.key !== "Escape" || !open) return;
+            e.stopPropagation();
+            setOpen(false);
+            button.current?.focus();
+          }}
+        >
+          <button
+            type="button"
+            className="warn"
+            ref={button}
+            aria-haspopup="true"
+            aria-expanded={open}
+            onClick={() => setOpen(!open)}
+          >
+            {t("recovered", { n: problems.length })}
+          </button>
+          {open && (
+            <ul className="problem-list" ref={list} tabIndex={-1} aria-label={t("problems")}>
+              {problems.map((p, i) => (
+                <li key={i}>{p}</li>
+              ))}
+            </ul>
+          )}
         </span>
       )}
       {unitsWarning && <span className="warn">{t("unitsUnknown")}</span>}

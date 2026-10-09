@@ -52,3 +52,13 @@ test("Ctrl+Tab goes round the tabs both ways", () => {
   expect(cycleTab(three, 1, -1)).toBe(7);
   expect(cycleTab([], null, 1)).toBeNull();
 });
+
+test("one tab is in the Tab order and the arrows move between tabs", () => {
+  render(<FileTabs tabs={tabs} active={4} onSelect={() => {}} onClose={() => {}} />);
+  const villa = screen.getByRole("tab", { name: "villa.dwg" });
+  const tower = screen.getByRole("tab", { name: /tower\.dxf/ });
+  expect([villa.tabIndex, tower.tabIndex]).toEqual([-1, 0]);
+  tower.focus();
+  fireEvent.keyDown(tower, { key: "ArrowLeft" });
+  expect(document.activeElement).toBe(villa);
+});

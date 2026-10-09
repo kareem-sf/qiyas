@@ -3,6 +3,7 @@ import type { NamedView, Recent } from "../api";
 import { useT } from "../i18n";
 import type { Tool } from "../viewport/Viewport";
 import { RecentsMenu } from "./RecentsMenu";
+import { useRoving } from "./useRoving";
 import { ViewsMenu } from "./ViewsMenu";
 
 export type { Tool };
@@ -56,6 +57,7 @@ const ignoreSpace = (e: KeyboardEvent) => {
 export function Ribbon(props: Props) {
   const t = useT();
   const [tab, setTab] = useState<Tab>("home");
+  const roving = useRoving(TABS.length, TABS.indexOf(tab));
 
   const action = (label: string, onClick?: () => void) => (
     <button
@@ -86,17 +88,16 @@ export function Ribbon(props: Props) {
 
   return (
     <div className="ribbon">
-      <div className="ribbon-tabs" role="tablist">
+      <div className="ribbon-tabs" role="tablist" {...roving.props}>
         <span className="app-name heading">{t("appName")}</span>
-        {TABS.map((name) => (
+        {TABS.map((name, i) => (
           <button
             key={name}
             type="button"
             role="tab"
             aria-selected={tab === name}
+            tabIndex={roving.tabIndex(i)}
             onClick={() => setTab(name)}
-            onKeyDown={ignoreSpace}
-            onKeyUp={ignoreSpace}
           >
             {t(name)}
           </button>

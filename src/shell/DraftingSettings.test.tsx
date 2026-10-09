@@ -79,8 +79,7 @@ test("the status bar shows the switches pressed, the snap and the cursor at the 
       cursor={[1.23456, 2]}
       units="metres"
       unitsWarning={false}
-      problems={0}
-      problemsText=""
+      problems={[]}
       message=""
       precision={2}
       snapLabel="Midpoint"

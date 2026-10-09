@@ -1,6 +1,7 @@
 import type { MouseEvent } from "react";
 import type { TabInfo } from "../api";
 import { useT } from "../i18n";
+import { useRoving } from "./useRoving";
 
 type Props = {
   tabs: TabInfo[];
@@ -20,6 +21,10 @@ export function cycleTab(tabs: TabInfo[], active: number | null, step: 1 | -1): 
  *  and × to close it (a middle click closes too). */
 export function FileTabs({ tabs, active, onSelect, onClose }: Props) {
   const t = useT();
+  const roving = useRoving(
+    tabs.length,
+    tabs.findIndex((tab) => tab.id === active),
+  );
   if (tabs.length === 0) return null;
   // The middle button closes, as in a browser; it must not start the web view's autoscroll.
   const middle = (id: number) => (e: MouseEvent) => {
@@ -28,8 +33,8 @@ export function FileTabs({ tabs, active, onSelect, onClose }: Props) {
     onClose(id);
   };
   return (
-    <div className="file-tabs" role="tablist" aria-label={t("fileTabs")}>
-      {tabs.map((tab) => (
+    <div className="file-tabs" role="tablist" aria-label={t("fileTabs")} {...roving.props}>
+      {tabs.map((tab, i) => (
         <div
           key={tab.id}
           className="file-tab"
@@ -42,6 +47,7 @@ export function FileTabs({ tabs, active, onSelect, onClose }: Props) {
             type="button"
             role="tab"
             aria-selected={tab.id === active}
+            tabIndex={roving.tabIndex(i)}
             onClick={() => onSelect(tab.id)}
           >
             {tab.title}

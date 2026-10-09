@@ -91,6 +91,7 @@
   "opening": "Opening…",
   "unitsUnknown": "Units unknown, assuming mm",
   "recovered": "Recovered with {n} problems",
+  "problems": "Problems",
   "unit.inches": "inches",
   "unit.feet": "feet",
   "unit.millimetres": "millimetres",

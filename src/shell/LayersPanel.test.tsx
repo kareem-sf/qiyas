@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from "@testing-library/react";
-import { expect, test, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, expect, test, vi } from "vitest";
 import type { LayerInfo } from "../api";
 import { LayersPanel } from "./LayersPanel";
+
+afterEach(cleanup);
 
 const layer = (name: string, frozen = false): LayerInfo => ({
   name,
@@ -38,4 +40,37 @@ test("layers panel toggles and isolates", () => {
   // A frozen layer stays hidden whatever the user does: no eye, no isolate into a blank view.
   expect(button("Visible: X-OLD").disabled).toBe(true);
   expect(button("Isolate: X-OLD").disabled).toBe(true);
+});
+
+test("while a layer change runs the buttons wait: aria-disabled, clicks ignored", () => {
+  const onToggle = vi.fn();
+  const onIsolate = vi.fn();
+  render(
+    <LayersPanel
+      layers={[layer("A-WALL")]}
+      hidden={new Set()}
+      busy
+      onToggle={onToggle}
+      onIsolate={onIsolate}
+      onShowAll={() => {}}
+    />,
+  );
+  const eye = screen.getByRole("button", { name: "Visible: A-WALL" });
+  const isolate = screen.getByRole("button", { name: "Isolate: A-WALL" });
+  expect(eye.getAttribute("aria-disabled")).toBe("true");
+  expect(isolate.getAttribute("aria-disabled")).toBe("true");
+  fireEvent.click(eye);
+  fireEvent.click(isolate);
+  expect(onToggle).not.toHaveBeenCalled();
+  expect(onIsolate).not.toHaveBeenCalled();
+});
+
+test("a white layer's swatch is Ink on the light theme and white on the dark one", () => {
+  const white: LayerInfo = { ...layer("A-TEXT"), color: [255, 255, 255] };
+  const props = { layers: [white], hidden: new Set<string>(), onToggle() {}, onIsolate() {}, onShowAll() {} };
+  const { container, rerender } = render(<LayersPanel {...props} theme="light" />);
+  const swatch = () => container.querySelector<HTMLElement>(".swatch")!;
+  expect(swatch().style.background).toBe("rgb(14, 15, 18)");
+  rerender(<LayersPanel {...props} theme="dark" />);
+  expect(swatch().style.background).toBe("rgb(255, 255, 255)");
 });

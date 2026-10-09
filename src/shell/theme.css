@@ -91,6 +91,11 @@ button:disabled {
   opacity: 0.4;
   cursor: default;
 }
+/* Waiting on the core (layer changes): looks inactive, says so with the cursor, but keeps its focus. */
+button[aria-disabled="true"] {
+  opacity: 0.4;
+  cursor: progress;
+}
 button[aria-pressed="true"] {
   background: var(--accent-soft);
   border-color: var(--accent);
@@ -205,6 +210,21 @@ button[aria-pressed="true"] {
 .prefs button {
   color: var(--fg);
   padding: 2px 8px;
+}
+/* Narrow windows: the prefs sit over the ribbon tabs' row, so drop their words (the groups keep
+   their aria-labels), and under 700px give them a row of their own. */
+@media (max-width: 1100px) {
+  .prefs [role="group"] span {
+    display: none;
+  }
+}
+@media (max-width: 700px) {
+  .prefs {
+    position: static;
+    justify-content: flex-end;
+    padding-top: 0;
+    border-bottom: 1px solid var(--rule);
+  }
 }
 
 /* Left column: the layers, then the properties of the picked entity. */
@@ -436,6 +456,42 @@ button.close {
   min-width: 18ch;
   text-align: end;
   font-variant-numeric: tabular-nums;
+}
+.status .problems {
+  position: relative;
+}
+.status .problems > button {
+  padding: 0 4px;
+  font-size: inherit;
+  line-height: inherit;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+.status .problem-list {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  inset-inline-end: 0;
+  z-index: 20;
+  box-sizing: border-box;
+  width: max-content;
+  max-width: min(480px, 90vw);
+  max-height: 40vh;
+  overflow-y: auto;
+  margin: 0;
+  padding: 6px 10px 6px 24px;
+  list-style: disc;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  box-shadow: 0 -6px 20px rgb(14 15 18 / 0.18);
+}
+:root[dir="rtl"] .status .problem-list {
+  padding: 6px 24px 6px 10px;
+}
+.status .problem-list li {
+  padding: 1px 0;
+  overflow-wrap: anywhere;
 }
 .status .snap-kind {
   color: var(--accent);

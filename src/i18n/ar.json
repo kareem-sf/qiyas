@@ -91,6 +91,7 @@
   "opening": "جارٍ الفتح…",
   "unitsUnknown": "الوحدات غير معروفة، يُفترض المليمتر",
   "recovered": "تمت الاستعادة مع مشكلات: {n}",
+  "problems": "المشكلات",
   "unit.inches": "بوصة",
   "unit.feet": "قدم",
   "unit.millimetres": "مليمتر",

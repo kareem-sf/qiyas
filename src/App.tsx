@@ -90,6 +90,7 @@ import {
   metresPerUnit,
   type AttachRequest,
 } from "./shell/AttachPdfDialog";
+import { blurAfterClick } from "./shell/blurAfterClick";
 import { CommandLine } from "./shell/CommandLine";
 import { DraftingSettings } from "./shell/DraftingSettings";
 import { ExtractDialog } from "./shell/ExtractDialog";
@@ -105,6 +106,7 @@ import { StatusBar } from "./shell/StatusBar";
 import { TakeoffPanel } from "./shell/TakeoffPanel";
 import { XrefManager } from "./shell/XrefManager";
 import { leaveDrawing, readChoice } from "./shell/unsaved";
+import { useAutoClear } from "./shell/useAutoClear";
 import {
   handlesBounds,
   markSize,
@@ -272,8 +274,11 @@ export default function App() {
   const fitNext = useRef(false);
   /** Measurements to fit instead of the whole sheet, when a conflict's Show changed the sheet. */
   const fitIds = useRef<string[] | null>(null);
-  /** True while a layer change talks to the core; clicks meanwhile are dropped, so they can't interleave. */
+  /** True while a layer change talks to the core; clicks meanwhile are dropped (the panel shows its
+   *  buttons waiting, `layersBusy`), so they can't interleave. */
   const layerBusy = useRef(false);
+  /** The same, for the layers panel to show: its buttons wait and the cursor says so. */
+  const [layersBusy, setLayersBusy] = useState(false);
   /** Set when autosave failed for this drawing, so the error shows once, not after every click. A new
    *  open or a successful save turns autosave back on. */
   const autosaveOff = useRef(false);
@@ -292,6 +297,11 @@ export default function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
+
+  // Space pans the drawing; a button the mouse just clicked must not take it as a press.
+  useEffect(blurAfterClick, []);
+  // A notice goes with the next command (`run`), or on its own after a few seconds.
+  useAutoClear(notice, () => setNotice(null));
 
   /** Reads the user's command line aliases (at start and after the settings close). */
   const loadAliases = () =>
@@ -1053,6 +1063,7 @@ export default function App() {
   async function applyHidden(target: Set<string>) {
     if (layerBusy.current) return;
     layerBusy.current = true;
+    setLayersBusy(true);
     const done = new Set(hidden);
     let failure: string | null = null;
     try {
@@ -1074,6 +1085,7 @@ export default function App() {
     }
     setError(failure);
     layerBusy.current = false;
+    setLayersBusy(false);
   }
 
   // Stable between pointer moves, so the memoised layers panel doesn't re-render with the cursor.
@@ -1802,6 +1814,8 @@ export default function App() {
           <LayersPanel
             layers={info?.layers ?? []}
             hidden={hidden}
+            theme={theme}
+            busy={layersBusy}
             onToggle={toggleLayer}
             onIsolate={isolateLayer}
             onShowAll={showAll}
@@ -2004,8 +2018,7 @@ export default function App() {
         onDraftingSettings={() => setDraftingOpen(true)}
         units={units}
         unitsWarning={info?.units === "unknown"}
-        problems={problems.length}
-        problemsText={problems.join("\n")}
+        problems={problems}
         message={message}
       />
     </div>
