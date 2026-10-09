@@ -522,3 +522,38 @@ test("stretch's window: two clicks, then what it touches comes back", () => {
   expect(found.modify?.phase).toBe("points");
   expect(found.modify?.handles).toEqual([2]);
 });
+
+test("a plain click replaces the selection set, Shift adds (PICKADD); nothing clears it", () => {
+  const shift = (handle: number, time: number): ToolEvent => ({ ...click([handle, 0], time, handle), shift: true } as ToolEvent);
+  const s = run("select", [shift(5, 0), shift(6, 1000), click([7, 0], 2000, 7)]);
+  expect(s.selection).toEqual([7]);
+  expect(toolReducer(s, click([0, 9], 3000)).selection).toEqual([]);
+  // What is highlighted as the selection leaves out the select tool's own pick.
+  const inside: Picked = { top: 40, entity: 41, chain: [40], xref: null };
+  expect(run("select", [click([0, 0], 0, inside)]).selection).toEqual([40]);
+});
+
+test("the selection set keeps only what is still drawn (after an undo or a redo)", () => {
+  const set = toolReducer(run("select", []), { type: "selected", handles: [7, 8, 9], add: false });
+  const kept = toolReducer(set, { type: "prune", present: (h) => h !== 8 });
+  expect(kept.selection).toEqual([7, 9]);
+  const move = toolReducer(set, { type: "tool", tool: "move" });
+  expect(toolReducer(move, { type: "prune", present: (h) => h === 9 }).modify?.handles).toEqual([9]);
+});
+
+test("the kinds picked go with the selection set, so a rotate leaves dimensions out", () => {
+  const set = toolReducer(run("select", []), {
+    type: "selected",
+    handles: [1, 2],
+    add: false,
+    kinds: ["Line", "Dimension"],
+  });
+  const rotate = toolReducer(set, { type: "tool", tool: "rotate" });
+  expect(rotate.modify?.handles).toEqual([1]);
+  expect(rotate.modify?.skipped).toBe(1);
+  // A click in a modify tool's selection gives its kind too.
+  const picked: Picked = { top: 3, entity: 3, chain: [], xref: null, kind: "Table" };
+  const scale = run("scale", [click([0, 0], 0, picked)]);
+  expect(scale.modify?.handles).toEqual([]);
+  expect(scale.modify?.skipped).toBe(1);
+});

@@ -395,6 +395,9 @@ export default function App() {
         await redraw();
       }
       if (outcome.type === "measured") setSelectedId(outcome.measurement.id);
+      if (outcome.type === "exploded" && outcome.left_alone > 0) {
+        setNotice(t("modify.leftAlone", { n: outcome.left_alone }));
+      }
     });
     if (changed) await autosave();
   }
@@ -1448,6 +1451,19 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   });
 
+  // A modify tool left dimensions or tables out of what was picked: say so.
+  useEffect(() => {
+    if (measure.skipped > 0) setNotice(t("modify.skipped", { n: measure.skipped }));
+  }, [measure.skipped]);
+
+  // An undo or a redo may take selected entities away: keep only those still drawn.
+  useEffect(() => {
+    if (!batch || measure.selection.length === 0) return;
+    const drawn = new Set<number>();
+    for (let i = 0; i < batch.ranges.length; i++) drawn.add(Number(batch.ranges.top(i)));
+    measure.prune((h) => drawn.has(h));
+  }, [batch]);
+
   /** The selected row, when it was measured on the sheet in view. */
   const selected = items.find(
     (m) => m.id === selectedId && m.sheet.toLowerCase() === sheet.toLowerCase(),
@@ -1643,7 +1659,8 @@ export default function App() {
       : renderProgress !== null && !attachOpen
         ? t("pdf.drawing", { n: renderProgress })
         : measure.hint
-      ? t(measure.hint, measure.hintArgs ?? undefined)
+      ? // A notice (what a modify left out) goes beside the tool's prompt.
+        t(measure.hint, measure.hintArgs ?? undefined) + (notice ? ` — ${notice}` : "")
       : (notice ??
         (info
           ? emptyModel

@@ -66,9 +66,11 @@ export type ToolState = {
   draw: DrawState | null;
   /** A modify tool's own state, with the entities it works on; null for the other tools. */
   modify: ModifyState | null;
-  /** The selection set: top-level handles a Shift click or a box picked with the select tool. A
-   *  modify tool takes it when it starts; Esc and resets clear it. */
+  /** The selection set: top-level handles the select tool picked (a click replaces it, Shift and
+   *  boxes add). A modify tool takes it when it starts; Esc and resets clear it. */
   selection: number[];
+  /** The entity kind of each handle in the selection set, when known ("Line", "Dimension"…). */
+  kinds: Record<number, string>;
 };
 
 export type ToolEvent =
@@ -90,8 +92,11 @@ export type ToolEvent =
       /** Shift was held: the select tool adds the entity to the selection set. */
       shift?: boolean;
     }
-  /** What a selection box picked (top-level handles); `add` (Shift) keeps what was selected. */
-  | { type: "selected"; handles: number[]; add: boolean }
+  /** What a selection box picked (top-level handles, and each one's kind when known); `add`
+   *  (Shift) keeps what was selected. */
+  | { type: "selected"; handles: number[]; add: boolean; kinds?: (string | null | undefined)[] }
+  /** The drawing changed under the selection (an undo, a redo): keep the handles `present`. */
+  | { type: "prune"; present: (handle: number) => boolean }
   /** For a modify tool: what its stretch window touches, or a box as that window. */
   | { type: "modify"; input: ModifyInput }
   | { type: "finish" }
@@ -138,8 +143,12 @@ const MANY_POINTS = new Set(["polyline", "spline", "revcloud", "wipeout"]);
 
 /** `select` starts quiet, so the status bar shows the file name. A modify tool starts on
  *  `selection` (and may finish at once: erase and explode); the other tools keep it. */
-export const initialToolState = (tool: Tool, selection: number[] = []): ToolState => {
-  const modify = isModifyTool(tool) ? initialModifyState(tool, selection) : null;
+export const initialToolState = (
+  tool: Tool,
+  selection: number[] = [],
+  kinds: Record<number, string> = {},
+): ToolState => {
+  const modify = isModifyTool(tool) ? initialModifyState(tool, selection, kinds) : null;
   return {
     tool,
     points: [],
@@ -154,8 +163,23 @@ export const initialToolState = (tool: Tool, selection: number[] = []): ToolStat
     draw: isDrawTool(tool) ? initialDrawState(tool) : null,
     modify,
     selection: modify ? [] : selection,
+    kinds: modify ? {} : kinds,
   };
 };
+
+/** `kinds` with each of `handles` given the kind at the same place in `found`, when known. */
+function withKinds(
+  kinds: Record<number, string>,
+  handles: number[],
+  found: (string | null | undefined)[] | undefined,
+): Record<number, string> {
+  const out = { ...kinds };
+  handles.forEach((h, i) => {
+    const kind = found?.[i];
+    if (kind) out[h] = kind;
+  });
+  return out;
+}
 
 /** Hands `input` to the modify tool; a change it finishes becomes the pending command. */
 function modifyStep(s: ToolState, input: ModifyInput): ToolState {
@@ -229,7 +253,7 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
     case "tool": {
       // The selection set goes along; with none, the entity the select tool picked (whole).
       const carried = s.selection.length > 0 ? s.selection : s.selected ? [s.selected.picked.top] : [];
-      const next = initialToolState(event.tool, carried);
+      const next = initialToolState(event.tool, carried, s.kinds);
       return next.modify ? next : { ...next, hint: promptOf(event.tool) };
     }
     case "draw":
@@ -237,10 +261,17 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
       return drawStep(s, event.input);
     case "modify":
       return modifyStep(s, event.input);
-    case "selected":
-      if (s.modify) return modifyStep(s, { type: "picked", handles: event.handles });
+    case "selected": {
+      if (s.modify) return modifyStep(s, { type: "picked", handles: event.handles, kinds: event.kinds });
       if (s.tool !== "select") return s;
-      return { ...s, selection: event.add ? union(s.selection, event.handles) : event.handles };
+      const kinds = withKinds(event.add ? s.kinds : {}, event.handles, event.kinds);
+      return { ...s, selection: event.add ? union(s.selection, event.handles) : event.handles, kinds };
+    }
+    case "prune": {
+      const selection = s.selection.filter(event.present);
+      const modify = s.modify && { ...s.modify, handles: s.modify.handles.filter(event.present) };
+      return { ...s, selection, modify };
+    }
     case "cancel":
       return initialToolState(s.tool);
     case "escape":
@@ -271,7 +302,8 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
       const clicked = { ...s, lastClick: { screen: event.screen, time: event.time } };
       if (s.modify) {
         if (s.modify.phase === "select") {
-          return event.picked ? modifyStep(clicked, { type: "picked", handles: [event.picked.top] }) : clicked;
+          const picked = event.picked;
+          return picked ? modifyStep(clicked, { type: "picked", handles: [picked.top], kinds: [picked.kind] }) : clicked;
         }
         // Ortho and polar square a point to the one before; never a window's corner.
         const tracked = s.modify.phase === "points" && !event.snapped;
@@ -297,8 +329,15 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
         case "select": {
           const picked = event.picked;
           // Shift adds the whole top-level entity to the selection set, and measures nothing.
-          if (event.shift) return picked ? { ...clicked, selection: union(s.selection, [picked.top]) } : clicked;
-          if (picked === null) return { ...clicked, selected: null, hint: "", hintArgs: null };
+          if (event.shift) {
+            if (!picked) return clicked;
+            const kinds = withKinds(s.kinds, [picked.top], [picked.kind]);
+            return { ...clicked, selection: union(s.selection, [picked.top]), kinds };
+          }
+          // Otherwise the click replaces the selection set (AutoCAD's PICKADD), and measures as before.
+          if (picked === null) return { ...clicked, selected: null, hint: "", hintArgs: null, selection: [], kinds: {} };
+          clicked.selection = [picked.top];
+          clicked.kinds = withKinds({}, [picked.top], [picked.kind]);
           const current = s.selected;
           if (current && samePick(current.picked, picked)) {
             // Inside a block, a slow second click swaps the entity for the whole block and back;
@@ -477,9 +516,13 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
   useEffect(() => {
     if (!windowSeek) return;
     let gone = false;
-    const found = (handles: number[]) => dispatch({ type: "modify", input: { type: "picked", handles } });
+    const found = (picked: Picked[]) =>
+      dispatch({
+        type: "modify",
+        input: { type: "picked", handles: picked.map((p) => p.top), kinds: picked.map((p) => p.kind) },
+      });
     api.pickWindow(windowSeek, true).then(
-      (picked) => !gone && found(picked.map((p) => p.top)),
+      (picked) => !gone && found(picked),
       (e) => {
         if (gone) return;
         api.onError(e);
@@ -490,6 +533,9 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
       gone = true;
     };
   }, [windowSeek]);
+
+  // Said once: dimensions and tables the modify tool left out.
+  const skipped = state.modify?.skipped ?? 0;
 
   /** Where an unsnapped point goes: to the grid when grid snap is on. */
   const onGrid = (p: Point): Point =>
@@ -552,7 +598,7 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
     if (tool !== "select" && modifyPhase !== "select") return;
     try {
       const picked = await api.pickWindow(bounds, crossing);
-      dispatch({ type: "selected", handles: picked.map((p) => p.top), add: shift });
+      dispatch({ type: "selected", handles: picked.map((p) => p.top), add: shift, kinds: picked.map((p) => p.kind) });
     } catch (e) {
       api.onError(e);
     }
@@ -587,8 +633,15 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
       () => (draw ? drawPreview(draw, cursor) : modify ? modifyPreview(modify, cursor) : null),
       [draw, modify, cursor],
     ),
-    /** The entities selected, to draw highlighted: the modify tool's, or the selection set. */
-    selection: modify ? modify.handles : state.selection,
+    /** The entities selected, to draw highlighted: the modify tool's, or the selection set (less
+     *  the select tool's own pick, which is highlighted as picked, maybe inside a block). */
+    selection: modify
+      ? modify.handles
+      : state.selection.filter((h) => !state.selected || h !== state.selected.picked.top),
+    /** Dimensions and tables the modify tool just left out: say how many. */
+    skipped,
+    /** The drawing changed: keep only the selected handles `present`. */
+    prune: (present: (handle: number) => boolean) => dispatch({ type: "prune", present }),
     /** A left drag in the viewport draws a selection box now. */
     boxes: tool === "select" || modifyPhase === "select" || modifyPhase === "window",
     onBox,

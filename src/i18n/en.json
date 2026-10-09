@@ -514,6 +514,8 @@
   "modify.prompt.centre": "Centre of the polar array",
   "modify.prompt.items": "Number of items, the originals included",
   "modify.prompt.between": "Angle between items in degrees (Enter: fill the circle)",
+  "modify.skipped": "{n} dimensions or tables left out: this tool can't change them yet (move and copy can)",
+  "modify.leftAlone": "{n} picked had nothing to explode and were left as they are",
   "cmd.badDistance": "Type a distance above 0",
   "cmd.drawUsage": "{name} goes: POLYGON sides x,y radius [I|C] · DONUT inner outer x,y · RAY or XLINE x,y x,y · SOLID 3 or 4 points · TRACE width points · MLINE or SKETCH points"
 }

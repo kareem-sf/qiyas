@@ -235,3 +235,36 @@ describe("previews", () => {
     expect(modifyPreview(initialModifyState("move", []), [1, 1]).length).toBe(0);
   });
 });
+
+describe("dimensions and tables", () => {
+  it("tools that can't turn them drop them from what is picked and say how many", () => {
+    const s = initialModifyState("rotate", [1, 2, 3], { 2: "Dimension", 3: "Table" });
+    expect(s.handles).toEqual([1]);
+    expect(s.skipped).toBe(2);
+    const picked = modifyReducer(initialModifyState("mirror", []), {
+      type: "picked",
+      handles: [4, 5],
+      kinds: ["Line", "Dimension"],
+    });
+    expect(picked.handles).toEqual([4]);
+    expect(picked.skipped).toBe(1);
+    // The count is said once, by the step that dropped them.
+    expect(modifyReducer(picked, { type: "picked", handles: [6], kinds: ["Line"] }).skipped).toBe(0);
+  });
+
+  it("move, copy, erase and explode keep them", () => {
+    for (const kind of ["move", "copy", "erase", "explode"] as ModifyKind[]) {
+      const s = initialModifyState(kind, [1, 2], { 2: "Dimension" });
+      expect(s.skipped).toBe(0);
+    }
+    expect(initialModifyState("move", [1, 2], { 2: "Dimension" }).handles).toEqual([1, 2]);
+  });
+
+  it("a stretch window drops them too", () => {
+    let s = initialModifyState("stretch", []);
+    s = modifyReducer(s, { type: "box", bounds: [[0, 0], [1, 1]] });
+    s = modifyReducer(s, { type: "picked", handles: [1, 2], kinds: ["Table", "Line"] });
+    expect(s.handles).toEqual([2]);
+    expect(s.skipped).toBe(1);
+  });
+});

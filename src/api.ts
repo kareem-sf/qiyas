@@ -96,7 +96,8 @@ export type EntityInfo = {
 /** What is under the cursor (`qiyas_core::Picked`): the entity, the block references it sits inside
  *  (outermost first, empty on the sheet) and the top-level entity on the sheet. Inside an xref,
  *  `chain` ends with the xref's reference and `xref` names it. */
-export type Picked = { top: number; entity: number; chain: number[]; xref: string | null };
+/** `kind`: the kind of the entity at the top ("Line", "Insert", "Dimension"…). */
+export type Picked = { top: number; entity: number; chain: number[]; xref: string | null; kind?: string | null };
 
 /** Filter for the session's `find_entities` query and `extract_data`. Names match case-insensitively. */
 export type EntityFilter = {
@@ -669,6 +670,8 @@ export type Outcome =
   | { type: "changed" }
   /** Entities added to the drawing (PDF import or underlay). */
   | { type: "added"; handles: number[] }
+  /** An explode's parts, and how many entities picked had none and were left as they are. */
+  | { type: "exploded"; handles: number[]; left_alone: number }
   | { type: "nothing" }
   /** Facts to show: rows of a label key ("radius", "centre"…) and its value written out. */
   | { type: "info"; title: string; rows: [string, string][] }

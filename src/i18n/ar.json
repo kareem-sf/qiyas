@@ -514,6 +514,8 @@
   "modify.prompt.centre": "مركز المصفوفة الدائرية",
   "modify.prompt.items": "عدد العناصر، مع الأصل",
   "modify.prompt.between": "الزاوية بين العناصر بالدرجات (Enter: لملء الدائرة)",
+  "modify.skipped": "تُرك {n} من الأبعاد أو الجداول: لا تغيّرها هذه الأداة بعد (النقل والنسخ يغيّرانها)",
+  "modify.leftAlone": "{n} من العناصر المختارة لا تتفكك، فتُركت كما هي",
   "cmd.badDistance": "اكتب مسافة أكبر من 0",
   "cmd.drawUsage": "صيغة {name}: POLYGON عدد الأضلاع x,y نصف القطر [I|C] · DONUT القطر الداخلي الخارجي x,y · RAY أو XLINE x,y x,y · SOLID ثلاث أو أربع نقاط · TRACE العرض ثم النقاط · MLINE أو SKETCH نقاط"
 }

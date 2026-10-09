@@ -54,6 +54,9 @@ export type ModifyState = {
   seek: Bounds | null;
   /** Set by the input that finished a change; the hook runs it. */
   command: Command | null;
+  /** Dimensions and tables the last input left out (this tool can't change them yet), to say so
+   *  once. */
+  skipped: number;
   hint: string;
   hintArgs: Record<string, string> | null;
 };
@@ -64,10 +67,27 @@ export type ModifyInput =
   | { type: "option"; option: string }
   /** Enter, or a double click. */
   | { type: "finish" }
-  /** Entities picked by a click or a box (top-level handles), or what a stretch window touches. */
-  | { type: "picked"; handles: number[] }
+  /** Entities picked by a click or a box (top-level handles), or what a stretch window touches;
+   *  `kinds` gives each one's entity kind ("Line", "Dimension"…) when known. */
+  | { type: "picked"; handles: number[]; kinds?: (string | null | undefined)[] }
   /** A box dragged in the viewport, for stretch's window. */
   | { type: "box"; bounds: Bounds };
+
+/** Kinds drawn from a block of their own, which isn't made again yet: only move and copy change
+ *  them (erase and explode take them as they are). */
+const BLOCK_DRAWN = new Set(["Dimension", "Table"]);
+const TAKES_BLOCK_DRAWN = new Set<ModifyKind>(["move", "copy", "erase", "explode"]);
+
+/** `handles` less the dimensions and tables `kind` can't change, and how many those were. */
+function admit(
+  kind: ModifyKind,
+  handles: number[],
+  kindOf: (h: number, i: number) => string | null | undefined,
+): { handles: number[]; skipped: number } {
+  if (TAKES_BLOCK_DRAWN.has(kind)) return { handles, skipped: 0 };
+  const kept = handles.filter((h, i) => !BLOCK_DRAWN.has(kindOf(h, i) ?? ""));
+  return { handles: kept, skipped: handles.length - kept.length };
+}
 
 const NO_ARRAY = { kind: "R" as const, rows: 1, cols: 1, dy: 0, items: 0 };
 
@@ -77,8 +97,13 @@ const selectHint = (s: ModifyState): ModifyState => ({
   hintArgs: { n: String(s.handles.length) },
 });
 
-/** A fresh tool: with `selection` (entities picked before), straight to the points. */
-export function initialModifyState(kind: ModifyKind, selection: number[]): ModifyState {
+/** A fresh tool: with `selection` (entities picked before, their kinds in `kinds`), straight to
+ *  the points. */
+export function initialModifyState(
+  kind: ModifyKind,
+  selection: number[],
+  kinds: Record<number, string> = {},
+): ModifyState {
   const s: ModifyState = {
     kind,
     phase: kind === "stretch" ? "window" : "select",
@@ -91,11 +116,14 @@ export function initialModifyState(kind: ModifyKind, selection: number[]): Modif
     window: null,
     seek: null,
     command: null,
+    skipped: 0,
     hint: kind === "stretch" ? "modify.prompt.stretchWindow" : "modify.prompt.select",
     hintArgs: kind === "stretch" ? null : { n: "0" },
   };
   if (kind === "stretch" || selection.length === 0) return s;
-  return startPoints({ ...s, handles: [...new Set(selection)] });
+  const { handles, skipped } = admit(kind, [...new Set(selection)], (h) => kinds[h]);
+  if (handles.length === 0) return { ...s, skipped };
+  return { ...startPoints({ ...s, handles }), skipped };
 }
 
 const targets = (s: ModifyState) => s.handles.map((handle) => ({ handle, chain: [] }));
@@ -321,8 +349,8 @@ function finishStep(s: ModifyState): ModifyState {
 }
 
 export function modifyReducer(state: ModifyState, input: ModifyInput): ModifyState {
-  // A finished change is pending for one state only: the hook sees it once.
-  const s = { ...state, command: null };
+  // A finished change, and what was left out, is pending for one state only: the hook sees it once.
+  const s = { ...state, command: null, skipped: 0 };
   switch (input.type) {
     case "point":
       return addPoint(s, input.p);
@@ -335,16 +363,17 @@ export function modifyReducer(state: ModifyState, input: ModifyInput): ModifySta
     case "box":
       return s.phase === "window" && !s.seek ? seekWindow(s, input.bounds) : s;
     case "picked": {
+      const { handles: admitted, skipped } = admit(s.kind, input.handles, (_, i) => input.kinds?.[i]);
       if (s.phase === "window") {
         if (!s.seek) return s;
-        if (input.handles.length === 0) {
-          return { ...s, seek: null, window: null, points: [], hint: "modify.prompt.nothing", hintArgs: null };
+        if (admitted.length === 0) {
+          return { ...s, seek: null, window: null, points: [], skipped, hint: "modify.prompt.nothing", hintArgs: null };
         }
-        return { ...s, seek: null, handles: input.handles, phase: "points", points: [], hint: "modify.prompt.base" };
+        return { ...s, seek: null, handles: admitted, phase: "points", points: [], skipped, hint: "modify.prompt.base" };
       }
       if (s.phase !== "select") return s;
-      const handles = [...new Set([...s.handles, ...input.handles])];
-      return selectHint({ ...s, handles });
+      const handles = [...new Set([...s.handles, ...admitted])];
+      return selectHint({ ...s, handles, skipped });
     }
   }
 }
