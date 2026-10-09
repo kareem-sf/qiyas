@@ -740,7 +740,25 @@ fn area_and_length_fields_read_in_metres() {
     // The sample in millimetres: its 10-unit line is 0.010 m long.
     let mut doc = sample_doc();
     doc.header.insertion_units = 4;
+    let mut square = opencadcodec::LwPolyline::new();
+    for (x, y) in [(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0), (0.0, 1000.0)] {
+        square.add_point(opencadcodec::Vector2::new(x, y));
+    }
+    square.is_closed = true;
+    let square = doc
+        .add_entity(EntityType::LwPolyline(square))
+        .unwrap()
+        .value();
     let (_dir, mut s) = open(&doc, "plan.dxf");
+    // A 1000 x 1000 mm square is 1 m2.
+    let area = one(s
+        .run(Command::Field {
+            at: [0.0, 4.0],
+            height: 2.5,
+            field: FieldKind::Area { target: t(square) },
+        })
+        .unwrap());
+    assert_eq!(text_of(&s, area), "1.000");
     let line = wall_line(&s);
     let h = one(s
         .run(Command::Field {

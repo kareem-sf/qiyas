@@ -92,6 +92,22 @@ test("text typed into the next cell while the table reloads is kept", async () =
   );
 });
 
+test("a cell written as a field code shows its value once the table reloads", async () => {
+  const onRun = vi.fn(async (_cmd: Command) => {});
+  const view = (table: TableInfo) => (
+    <LanguageProvider>
+      <TableEditor handle={42} table={table} cell={[0, 0]} onRun={onRun} onField={() => {}} onClose={() => {}} />
+    </LanguageProvider>
+  );
+  const { rerender } = render(view(plain));
+  const code = '%<\\AcVar Date \\f "yyyy-MM-dd">%';
+  fireEvent.change(cellInput(1, 0), { target: { value: code } });
+  fireEvent.keyDown(cellInput(1, 0), { key: "Enter" });
+  await waitFor(() => expect(onRun).toHaveBeenCalledTimes(1));
+  rerender(view({ ...plain, cells: [["Room", "Area"], ["2026-10-09", "12.000"]], fields: [[1, 0], [1, 1]] }));
+  expect(cellInput(1, 0).value).toBe("2026-10-09");
+});
+
 test("rows and columns go in beside the chosen cell and come out with it", async () => {
   const { onRun } = editor(plain, [1, 0]);
   const click = (name: string) => fireEvent.click(screen.getByRole("button", { name }));

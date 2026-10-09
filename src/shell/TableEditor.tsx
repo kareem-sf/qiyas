@@ -74,9 +74,9 @@ export function TableEditor(props: EditorProps) {
     }
   }, [picking]);
 
-  // The table as it is now. A cell written and now showing what was typed drops its draft; text
-  // typed meanwhile into another cell is kept. When rows or columns came or went, cells moved:
-  // every draft goes.
+  // The table as it is now, after the writes sent before it: a draft that was sent goes (the cell
+  // may show something else than was typed, such as a field's value); text typed meanwhile into
+  // another cell is kept. When rows or columns came or went, cells moved: every draft goes.
   const shape = `${rows}x${cols}`;
   const lastShape = useRef(shape);
   useEffect(() => {
@@ -85,9 +85,7 @@ export function TableEditor(props: EditorProps) {
     const kept: Record<string, string> = {};
     if (!reshaped) {
       for (const [k, v] of Object.entries(drafts)) {
-        const [r, c] = k.split(",").map(Number);
-        const written = sent.current[k] === v && table.cells[r]?.[c] === v;
-        if (!written) kept[k] = v;
+        if (sent.current[k] !== v) kept[k] = v;
       }
     }
     setDrafts(kept);
