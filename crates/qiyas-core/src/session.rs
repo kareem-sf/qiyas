@@ -234,6 +234,14 @@ pub struct EntityInfo {
     pub style: Option<String>,
     /// A table's cells (`crate::table::TableInfo`).
     pub table: Option<TableInfo>,
+    /// A text's, an MText's or a block reference's own rotation, in degrees.
+    pub rotation: Option<f64>,
+    /// A lightweight polyline is closed.
+    pub closed: Option<bool>,
+    /// A lightweight polyline's constant width, in drawing units.
+    pub global_width: Option<f64>,
+    /// A block reference's scale along its x axis.
+    pub scale: Option<f64>,
 }
 
 /// An entity found by handle and chain, with what places it in the world.
@@ -986,6 +994,20 @@ impl Session {
             }
             _ => None,
         };
+        let rotation = match entity {
+            EntityType::Text(t) => Some(t.rotation.to_degrees()),
+            EntityType::MText(t) => Some(t.rotation.to_degrees()),
+            EntityType::Insert(i) => Some(i.rotation.to_degrees()),
+            _ => None,
+        };
+        let (closed, global_width) = match entity {
+            EntityType::LwPolyline(p) => (Some(p.is_closed), Some(p.constant_width)),
+            _ => (None, None),
+        };
+        let scale = match entity {
+            EntityType::Insert(i) => Some(i.x_scale()),
+            _ => None,
+        };
         let common = entity.common();
         let linetype = if common.linetype.is_empty() {
             "ByLayer".to_string()
@@ -1019,6 +1041,10 @@ impl Session {
             },
             block_path: located.block_path,
             xref: located.xref,
+            rotation,
+            closed,
+            global_width,
+            scale,
         })
     }
 

@@ -207,6 +207,9 @@ fn texts_polylines_and_block_references() {
         }
         other => panic!("{other:?}"),
     }
+    // The palette shows what it edits, in degrees.
+    let info = s.entity_info(text, &[]).unwrap();
+    assert!((info.rotation.unwrap() - 90.0).abs() < 1e-9);
 
     // Opening the rectangle: its area row can't be measured any more and keeps its value.
     let rect = first(&s, "LwPolyline");
@@ -224,6 +227,8 @@ fn texts_polylines_and_block_references() {
         }
         other => panic!("{other:?}"),
     }
+    let info = s.entity_info(rect, &[]).unwrap();
+    assert_eq!((info.closed, info.global_width), (Some(false), Some(0.2)));
     assert!(s.takeoff.items[0].handles.is_empty(), "unlinked");
     assert_eq!(s.takeoff.items[0].value, 12.0);
 
@@ -238,6 +243,9 @@ fn texts_polylines_and_block_references() {
         }
         other => panic!("{other:?}"),
     }
+    let info = s.entity_info(door, &[]).unwrap();
+    assert_eq!(info.scale, Some(3.0));
+    assert!((info.rotation.unwrap() - 45.0).abs() < 1e-9);
     refused(
         &mut s,
         Command::SetProperty {
