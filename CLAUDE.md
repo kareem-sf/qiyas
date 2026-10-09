@@ -27,6 +27,11 @@ qiyas/
 
 All the crates above exist; `qiyas-pdf` reads PDFs (import, underlays), PDF plot comes later.
 
+Pinned libraries (git revs in the workspace `Cargo.toml`): opencadcodec `a35f43e` (DWG/DXF) and
+opencadkernel `99b6b48` (`geom2d` only, for snaps). Both MPL-2.0. Licence texts of code we ship
+live in `LICENSES/` (opencadcodec, opencadkernel, pdfium); add one there for every new non-MIT
+library. Font licences sit beside the fonts in `crates/qiyas-render/fonts/`.
+
 Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example write_test_plan`) and `samples/test-boq.xlsx` (written by `cargo run -p qiyas-boq --example write_test_boq`); the exact quantities and the two conflicts the BOQ must give are in `samples/test-plan.md`. `cargo run -p qiyas-ai --example phase2_walkthrough` measures, imports, links and compares them through the AI tools, no model needed.
 
 ## Global constraints
@@ -49,6 +54,25 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
 - Run the app: `pnpm tauri dev --config crates/qiyas-desktop/tauri.conf.json`.
 - The `.qiyas` project file is saved next to the drawing after every command.
 - Save keeps a `.bak` of the original drawing (e.g. `villa.dwg.bak`) before writing over it.
+
+## Drawing on screen
+
+- Picking reaches inside blocks: the first click picks the line inside the block, a slow second
+  click the whole block, a double click or Enter measures it. Measurements keep the block chain.
+- Drawing text is drawn as real glyphs (TEXT, MTEXT, attributes) with Noto Sans and Noto Sans
+  Arabic, or the drawing's own TrueType font when the computer has it; SHX falls back to Noto.
+  Arabic is shaped and joined. View tab, "Arabic text is reversed" fixes drawings whose Arabic
+  was stored backwards (saved in the project file).
+- Snaps (end, mid, centre, node, intersection, nearest, perpendicular), ortho, polar and the dot
+  grid: status bar toggles, F3 / F8 / F10 / F7, settings under the gear. Saved per drawing in the
+  project file.
+- Xrefs are read-only: loaded from the stored path, beside the drawing, `xrefs/` or `x-refs/`
+  (depth 4); View tab, External references to reload or locate one (kept in the project file).
+- Command line (Ctrl+9 shows or hides it): AutoCAD-style words and aliases (DI, AA, COUNT, DIV,
+  ME, ID, Z E/W/IN/OUT, LAYOFF, U…), typed points `x,y`, `@dx,dy`, `@d<angle` in drawing units,
+  Arabic digits accepted. Extra aliases: `aliases` in `settings.json` (no screen for them yet).
+- Properties palette under Layers: what the Select tool picked (colour as drawn, linetype,
+  weight, attributes, values in metres).
 
 ## PDF
 
@@ -160,4 +184,6 @@ In the workspace repo, `docs/`:
 - Spec: `docs/superpowers/specs/2026-10-08-qiyas-design.md`
 - Plan (Phase 1a): `docs/superpowers/plans/2026-10-08-qiyas-foundation.md`
 - Plan (Phase 2, AI and BOQ): `docs/superpowers/plans/2026-10-08-qiyas-phase2-ai-boq.md`
-- Checks: `docs/2026-10-08-qiyas-foundation-check.md`, `docs/2026-10-09-qiyas-phase2-check.md`
+- Plan (Phase 1b, drawing I/O): `docs/superpowers/plans/2026-10-08-qiyas-phase1b-drawing-io.md`
+- Checks: `docs/2026-10-08-qiyas-foundation-check.md`, `docs/2026-10-09-qiyas-phase2-check.md`,
+  `docs/2026-10-09-qiyas-phase1b-check.md`
