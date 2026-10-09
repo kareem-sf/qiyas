@@ -923,5 +923,6 @@
   "cmd.vportsOption": "VPORTS: اكتب 1 أو 2",
   "autosave.failed": "تعذّر الحفظ التلقائي: {error}",
   "props.viewportScale": "مقياس نافذة العرض",
-  "props.viewportCentre": "مركز العرض (x، y)"
+  "props.viewportCentre": "مركز العرض (x، y)",
+  "settings.autosave": "حفظ تلقائي كل (دقائق، 0 لإيقافه)"
 }

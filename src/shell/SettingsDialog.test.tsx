@@ -133,3 +133,12 @@ test("the MCP status line says whether the server listens", async () => {
     "The MCP server could not start on 127.0.0.1:48123: Address in use",
   );
 });
+
+test("autosave runs every 5 minutes unless set otherwise; 0 turns it off", async () => {
+  setup();
+  const minutes = (await screen.findByLabelText("Autosave every (minutes, 0 off)")) as HTMLInputElement;
+  expect(minutes.value).toBe("5");
+  fireEvent.change(minutes, { target: { value: "10" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await vi.waitFor(() => expect(api.setSettings).toHaveBeenCalledWith({ ...settings, autosave_minutes: 10 }));
+});

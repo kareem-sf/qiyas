@@ -181,6 +181,17 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                 ))}
               </select>
             </label>
+            <label>
+              <span>{t("settings.autosave")}</span>
+              <input
+                dir="ltr"
+                type="number"
+                min={0}
+                max={120}
+                value={draft.autosave_minutes ?? 5}
+                onChange={(e) => change({ autosave_minutes: Number(e.target.value) })}
+              />
+            </label>
             <div className="field">
               <span>
                 <label htmlFor="settings-key">{t("settings.apiKey")}</label>

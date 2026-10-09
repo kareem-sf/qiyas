@@ -923,5 +923,6 @@
   "cmd.vportsOption": "VPORTS: type 1 or 2",
   "autosave.failed": "Autosave failed: {error}",
   "props.viewportScale": "Viewport scale",
-  "props.viewportCentre": "View centre (x, y)"
+  "props.viewportCentre": "View centre (x, y)",
+  "settings.autosave": "Autosave every (minutes, 0 off)"
 }
