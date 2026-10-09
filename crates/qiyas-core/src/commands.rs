@@ -12,8 +12,8 @@ use crate::inquiry::{Field, Spacing};
 use crate::session::{effective_block_name, locate, variant_name, xref_of_chain, Located};
 use crate::takeoff::in_metres;
 use crate::{
-    AttachMode, Boq, Conflict, ConflictStatus, CoreError, Drafting, EntityFilter, Kind,
-    Measurement, PreparedPdf, Schedule, Session, SnapKind, Source,
+    AttachMode, Boq, Conflict, ConflictStatus, CoreError, Current, Drafting, DrawSpec,
+    EntityFilter, Kind, Measurement, PreparedPdf, Schedule, Session, SnapKind, Source,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -222,6 +222,14 @@ pub enum Command {
     DeleteEntities {
         targets: Vec<Target>,
     },
+    /// Adds what the spec describes to the sheet on screen, on the current layer with the current
+    /// colour, linetype and lineweight (`Session::current`): one undo step. `Outcome::Added` lists
+    /// the new entities.
+    Draw(DrawSpec),
+    /// Sets the drawing state new entities take (`Session::current`). Not an undo step.
+    SetCurrent {
+        current: Current,
+    },
 }
 
 /// An entity as picked (see `Picked`): its handle and the block references it sits inside,
@@ -260,7 +268,8 @@ impl Command {
             | Command::SetDrafting { .. }
             | Command::MeasureGeometry { .. }
             | Command::IdPoint { .. }
-            | Command::ExtractData { .. } => None,
+            | Command::ExtractData { .. }
+            | Command::SetCurrent { .. } => None,
             Command::SetBoq { .. } | Command::SetBoqTolerance { .. } => Some(Part::Boq),
             Command::SetConflicts { .. } | Command::ResolveConflict { .. } => Some(Part::Conflicts),
             // Entities only.
@@ -268,6 +277,11 @@ impl Command {
             | Command::SetImageDisplay { .. }
             | Command::DeleteEntities { .. } => Some(Part::Document {
                 tables: false,
+                takeoff: false,
+            }),
+            // A wipeout registers its class with the drawing.
+            Command::Draw(spec) => Some(Part::Document {
+                tables: matches!(spec, DrawSpec::Wipeout { .. }),
                 takeoff: false,
             }),
             // New layers, views, or underlay and image definitions too.
@@ -573,6 +587,14 @@ impl Session {
             }
             Command::DeleteEntities { targets } => {
                 self.delete_entities(&targets)?;
+                return Ok(Outcome::Changed);
+            }
+            Command::Draw(spec) => {
+                let handles = self.draw(spec)?;
+                return Ok(Outcome::Added { handles });
+            }
+            Command::SetCurrent { current } => {
+                self.set_current(current)?;
                 return Ok(Outcome::Changed);
             }
         };

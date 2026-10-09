@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Boq, Conflict, CoreError, Drafting, Schedule, Takeoff};
+use crate::{Boq, Conflict, CoreError, Current, Drafting, Schedule, Takeoff};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Project {
@@ -36,6 +36,9 @@ pub struct Project {
     /// The file the user chose for an xref, by xref name (`Session::xref_overrides`).
     #[serde(default)]
     pub xref_overrides: HashMap<String, String>,
+    /// The layer, colour, linetype and lineweight new entities take (`Session::current`).
+    #[serde(default)]
+    pub current: Current,
 }
 
 /// The project file of `drawing`: same folder, same stem, extension `qiyas`.
@@ -137,6 +140,7 @@ mod tests {
             arabic_reversed: false,
             drafting: Drafting::default(),
             xref_overrides: HashMap::new(),
+            current: Current::default(),
         };
         assert!(save(&path, &project).is_err());
         assert!(!dir.path().join("villa.qiyas.tmp").exists());

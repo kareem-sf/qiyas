@@ -15,7 +15,7 @@ use qiyas_geom::{
 };
 use qiyas_render::{
     add_images, add_pick_outlines, build_batch_with_xrefs, layer_shown, place_text, resolve_color,
-    Batch, PickIndex, TextEngine, TextOptions, Visibility, TEXT_BOX,
+    Batch, PickIndex, TextEngine, TextOptions, Visibility, PATTERN, TEXT_BOX,
 };
 use serde::{Deserialize, Serialize};
 
@@ -27,8 +27,8 @@ use crate::underlay::{rebase_links, Underlays};
 use crate::undo::{DocChange, History, Parts, Step, TablesSnapshot};
 use crate::xref::{XrefInfo, XrefSet};
 use crate::{
-    Boq, Command, Conflict, CoreError, Drafting, Drawing, LayerInfo, Outcome, Schedule, Sheet,
-    Source, Takeoff, Units,
+    Boq, Command, Conflict, CoreError, Current, Drafting, Drawing, LayerInfo, Outcome, Schedule,
+    Sheet, Source, Takeoff, Units,
 };
 
 /// Flatten tolerance for drawing on screen, in drawing units.
@@ -64,6 +64,9 @@ pub struct Session {
     /// The file the user chose for an xref, by xref name; looked at first. Saved in the project
     /// file.
     pub xref_overrides: HashMap<String, String>,
+    /// The layer, colour, linetype and lineweight new entities take. Saved in the project file;
+    /// not an undo step.
+    pub current: Current,
     history: History,
     /// Which session this is; see `NEXT_EPOCH`.
     epoch: u64,
@@ -111,6 +114,8 @@ pub struct DrawingInfo {
     pub sheet: String,
     /// The layers the user has hidden, sorted.
     pub hidden_layers: Vec<String>,
+    /// What new entities are drawn with (`Session::current`).
+    pub current: Current,
 }
 
 /// An entity by its handle and the block references it sits inside (outermost first).
@@ -363,6 +368,7 @@ impl Session {
         let mut arabic_reversed = false;
         let mut drafting = Drafting::default();
         let mut xref_overrides = HashMap::new();
+        let mut current = Current::default();
         let project_file = project_path(path);
         if project_file.exists() {
             match project::load(&project_file) {
@@ -382,6 +388,15 @@ impl Session {
                     arabic_reversed = project.arabic_reversed;
                     drafting = project.drafting.clamped();
                     xref_overrides = project.xref_overrides;
+                    // A layer gone from the drawing since: back to layer "0".
+                    if drawing.doc.layers.contains(&project.current.layer) {
+                        current = project.current;
+                    } else {
+                        current = Current {
+                            layer: "0".to_string(),
+                            ..project.current
+                        };
+                    }
                 }
                 // Keep a copy, since the next save replaces the unreadable file.
                 Err(e) => drawing
@@ -410,6 +425,7 @@ impl Session {
             drafting,
             xrefs,
             xref_overrides,
+            current,
             history: History::default(),
             epoch: NEXT_EPOCH.fetch_add(1, Ordering::Relaxed),
             document_revision: 0,
@@ -435,6 +451,7 @@ impl Session {
             arabic_reversed: self.arabic_reversed,
             drafting: self.drafting.clone(),
             xref_overrides: self.xref_overrides.clone(),
+            current: self.current.clone(),
         };
         project::save(&path, &project)?;
         Ok(path)
@@ -514,6 +531,7 @@ impl Session {
             xrefs: self.xrefs.info(&self.xref_overrides),
             sheet: self.sheet.clone(),
             hidden_layers: self.hidden_layers(),
+            current: self.current.clone(),
         }
     }
 
@@ -708,6 +726,36 @@ impl Session {
                 .copied()
                 .collect();
             (entities, points)
+        })
+    }
+
+    /// Up to `max` drawn segments (drawing coordinates, `x0 y0 x1 y1`) with a part within the
+    /// square `radius` around `p`, leaving out text boxes and hatch pattern lines.
+    pub(crate) fn segments_near(&self, p: [f64; 2], radius: f64, max: usize) -> Vec<[f64; 4]> {
+        self.with_cache(None, |cached| {
+            let batch = &cached.batch;
+            let [ox, oy] = batch.origin;
+            let lo = [p[0] - radius, p[1] - radius];
+            let hi = [p[0] + radius, p[1] + radius];
+            cached
+                .index
+                .within(lo, hi, max)
+                .into_iter()
+                .filter(|&i| {
+                    batch
+                        .range_of(i)
+                        .is_some_and(|r| r.flags & (TEXT_BOX | PATTERN) == 0)
+                })
+                .map(|i| {
+                    let s = &batch.segments[4 * i..4 * i + 4];
+                    [
+                        f64::from(s[0]) + ox,
+                        f64::from(s[1]) + oy,
+                        f64::from(s[2]) + ox,
+                        f64::from(s[3]) + oy,
+                    ]
+                })
+                .collect()
         })
     }
 

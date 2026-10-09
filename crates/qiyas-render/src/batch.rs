@@ -81,6 +81,9 @@ pub struct ImageEntry {
 /// `Range::flags` bit: the segments are a text's box, picked and highlighted but not drawn (the
 /// text's glyph quads are).
 pub const TEXT_BOX: u32 = 1;
+/// `Range::flags` bit: the segments are a hatch's pattern lines, drawn and picked as the hatch
+/// but never part of a boundary.
+pub const PATTERN: u32 = 2;
 
 /// The segments (or, in `Batch::text_ranges`, the glyph quads) of one drawn entity:
 /// `first..first + count`. For an entity inside blocks, `top` is the outermost block reference on

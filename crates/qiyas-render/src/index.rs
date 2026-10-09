@@ -1,5 +1,5 @@
 use rstar::primitives::{GeomWithData, Line};
-use rstar::{PointDistance, RTree};
+use rstar::{PointDistance, RTree, AABB};
 
 use crate::Batch;
 
@@ -49,6 +49,18 @@ impl PickIndex {
             .take_while(|(_, d2)| *d2 <= tol * tol)
             .take(max)
             .map(|(s, _)| s.data)
+            .collect()
+    }
+
+    /// Indices of up to `max` segments with a part inside the box `lo` to `hi` (drawing
+    /// coordinates), in no particular order.
+    pub fn within(&self, lo: [f64; 2], hi: [f64; 2], max: usize) -> Vec<usize> {
+        let [ox, oy] = self.origin;
+        let envelope = AABB::from_corners([lo[0] - ox, lo[1] - oy], [hi[0] - ox, hi[1] - oy]);
+        self.tree
+            .locate_in_envelope_intersecting(&envelope)
+            .take(max)
+            .map(|s| s.data)
             .collect()
     }
 }
