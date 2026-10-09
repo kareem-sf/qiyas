@@ -40,8 +40,10 @@ pub const IMAGE_EXTENSIONS: [&str; 7] = ["png", "jpg", "jpeg", "tif", "tiff", "b
 const IMAGE_DICTIONARY: &str = "ACAD_IMAGE_DICT";
 /// The longest side a decoded image is kept at, in pixels.
 const MAX_DECODED_PX: u32 = 4096;
-/// The most memory one decode may take (a 20,000 x 14,000 pixel colour scan is about 840 MB).
-const MAX_DECODE_BYTES: u64 = 2 << 30;
+/// The widest and tallest image read, in pixels; a larger one is refused before decoding.
+const MAX_IMAGE_PX: u32 = 20_000;
+/// The most memory one decode may take (an A0 colour scan at 300 dpi is about 420 MB).
+const MAX_DECODE_BYTES: u64 = 512 << 20;
 /// Decoded images kept.
 const DECODED_KEPT: usize = 3;
 
@@ -77,6 +79,19 @@ fn unreadable(path: &Path, e: impl std::fmt::Display) -> CoreError {
     CoreError::Image(format!("This image can't be read: {}: {e}", path.display()))
 }
 
+/// `unreadable`, but an image past the limits says it is too large.
+fn decode_error(path: &Path, e: ::image::ImageError) -> CoreError {
+    match e {
+        ::image::ImageError::Limits(_) => CoreError::Image(format!(
+            "This image is too large: {} (over {MAX_IMAGE_PX} pixels a side, or over {} MB \
+             decoded)",
+            path.display(),
+            MAX_DECODE_BYTES >> 20
+        )),
+        e => unreadable(path, e),
+    }
+}
+
 /// A reader for the image at `path`, its type guessed from its first bytes.
 fn reader(path: &Path) -> Result<ImageReader<BufReader<File>>, CoreError> {
     let mut reader = ImageReader::open(path)
@@ -84,6 +99,8 @@ fn reader(path: &Path) -> Result<ImageReader<BufReader<File>>, CoreError> {
         .with_guessed_format()
         .map_err(|e| unreadable(path, e))?;
     let mut limits = Limits::default();
+    limits.max_image_width = Some(MAX_IMAGE_PX);
+    limits.max_image_height = Some(MAX_IMAGE_PX);
     limits.max_alloc = Some(MAX_DECODE_BYTES);
     reader.limits(limits);
     Ok(reader)
@@ -105,7 +122,7 @@ fn turns(o: Orientation) -> bool {
 pub fn image_size(path: &Path) -> Result<(u32, u32), CoreError> {
     let mut decoder = reader(path)?
         .into_decoder()
-        .map_err(|e| unreadable(path, e))?;
+        .map_err(|e| decode_error(path, e))?;
     let (w, h) = decoder.dimensions();
     let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
     Ok(if turns(orientation) { (h, w) } else { (w, h) })
@@ -116,9 +133,9 @@ pub fn image_size(path: &Path) -> Result<(u32, u32), CoreError> {
 fn decode(path: &Path) -> Result<RgbaImage, CoreError> {
     let mut decoder = reader(path)?
         .into_decoder()
-        .map_err(|e| unreadable(path, e))?;
+        .map_err(|e| decode_error(path, e))?;
     let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
-    let mut image = DynamicImage::from_decoder(decoder).map_err(|e| unreadable(path, e))?;
+    let mut image = DynamicImage::from_decoder(decoder).map_err(|e| decode_error(path, e))?;
     let (w, h) = (image.width(), image.height());
     let long = w.max(h);
     if long > MAX_DECODED_PX {
@@ -478,6 +495,52 @@ mod tests {
         let mut inverted = with_clip([(49.5, 9.5), (-0.5, 59.5)]);
         inverted.clip_boundary.clip_mode = ClipMode::Inside;
         assert_eq!(rect_crop(&inverted), None);
+    }
+
+    /// A PNG of `w` x `h` RGB pixels with a header only: an empty IDAT, then IEND.
+    fn header_only_png(w: u32, h: u32) -> Vec<u8> {
+        fn crc32(bytes: &[u8]) -> u32 {
+            let mut crc = !0u32;
+            for &b in bytes {
+                crc ^= u32::from(b);
+                for _ in 0..8 {
+                    crc = (crc >> 1) ^ (0xEDB8_8320 & (crc & 1).wrapping_neg());
+                }
+            }
+            !crc
+        }
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        let mut ihdr = Vec::new();
+        ihdr.extend(w.to_be_bytes());
+        ihdr.extend(h.to_be_bytes());
+        ihdr.extend([8, 2, 0, 0, 0]); // 8 bits, RGB, deflate, no filter, not interlaced
+        for (kind, data) in [(b"IHDR", ihdr), (b"IDAT", vec![]), (b"IEND", vec![])] {
+            png.extend((data.len() as u32).to_be_bytes());
+            let start = png.len();
+            png.extend(kind);
+            png.extend(&data);
+            let crc = crc32(&png[start..]);
+            png.extend(crc.to_be_bytes());
+        }
+        png
+    }
+
+    #[test]
+    fn an_image_past_the_limits_is_refused_before_decoding() {
+        let dir = tempfile::tempdir().unwrap();
+        // 100,000 x 100,000 would need 30 GB; 25,000 x 100 is small but too wide.
+        for (w, h) in [(100_000, 100_000), (25_000, 100)] {
+            let path = dir.path().join(format!("{w}x{h}.png"));
+            std::fs::write(&path, header_only_png(w, h)).unwrap();
+            for e in [image_size(&path).unwrap_err(), decode(&path).unwrap_err()] {
+                assert!(e.to_string().contains("too large"), "{w}x{h}: {e}");
+            }
+        }
+        // Within the limits the same header is read (and only the missing pixels fail).
+        let path = dir.path().join("small.png");
+        std::fs::write(&path, header_only_png(300, 200)).unwrap();
+        assert_eq!(image_size(&path).unwrap(), (300, 200));
+        assert!(!decode(&path).unwrap_err().to_string().contains("too large"));
     }
 
     #[test]
