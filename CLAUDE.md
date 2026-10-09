@@ -169,7 +169,10 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
   P), X, E. Grips come later.
 - `Command::Edit(EditSpec)` (`qiyas-core/src/modify2.rs`, wire `{"type":"edit","kind":"trim",...}`):
   trim, extend, break, join, lengthen, reverse, offset, fillet, chamfer, blend, pedit, overkill,
-  flatten; same targets, one undo step, the take-off follows. Lines, arcs, circles and flat
+  flatten; same targets, one undo step. The take-off follows (`follow_edit`): rows on a cut
+  entity measure every piece, rows on joined ones the joined polyline (the outcome says how many
+  rows measure it), and a row that can't be measured any more is unlinked and counted (`unlinked`),
+  keeping its value. Lines, arcs, circles and flat
   polylines are reshaped; anything drawn can cut or bound. Trim and break keep the handle on the
   longest piece; join keeps the first's. Offset keeps exact arcs (kernel `offset_polyline`, sharp
   straight corners). Fillet and chamfer: two lines or two straight sides of one polyline.

@@ -399,11 +399,15 @@ export default function App() {
         setNotice(t("modify.leftAlone", { n: outcome.left_alone }));
       }
       if (outcome.type === "edited") {
+        const notes: string[] = [];
         if (cmd.type === "edit" && cmd.kind === "overkill") {
-          setNotice(t("edit.removed", { n: outcome.removed.length }));
+          notes.push(t("edit.removed", { n: outcome.removed.length }));
         } else if (outcome.left_alone > 0) {
-          setNotice(t("edit.leftAlone", { n: outcome.left_alone }));
+          notes.push(t("edit.leftAlone", { n: outcome.left_alone }));
         }
+        if (outcome.unlinked > 0) notes.push(t("edit.unlinked", { n: outcome.unlinked }));
+        if (outcome.joined_rows > 1) notes.push(t("edit.joinedRows", { n: outcome.joined_rows }));
+        if (notes.length > 0) setNotice(notes.join(" · "));
       }
     });
     if (changed) await autosave();

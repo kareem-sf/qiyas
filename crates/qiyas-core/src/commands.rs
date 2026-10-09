@@ -334,11 +334,15 @@ pub enum Outcome {
         left_alone: usize,
     },
     /// An edit made in place: the entities it added (pieces of a trim or a break, a fillet's
-    /// arc...) and removed (joined or duplicates), and how many picked it left as they were.
+    /// arc...) and removed (joined or duplicates), how many picked it left as they were, how
+    /// many take-off rows lost their link because their entities could no longer be measured,
+    /// and for a join how many rows now measure the joined polyline (0 otherwise).
     Edited {
         added: Vec<u64>,
         removed: Vec<u64>,
         left_alone: usize,
+        unlinked: usize,
+        joined_rows: usize,
     },
     /// The command named a measurement or BOQ item that does not exist.
     Nothing,

@@ -560,6 +560,8 @@
   "edit.prompt.notPolyline": "That is not a polyline, a line or an arc: click another",
   "edit.removed": "{n} duplicates removed",
   "edit.leftAlone": "{n} picked were left as they are",
+  "edit.unlinked": "{n} take-off rows unlinked: their entities can't be measured that way any more (their values stay)",
+  "edit.joinedRows": "{n} take-off rows now measure the joined polyline: check for double counting",
   "cmd.badDistance": "Type a distance above 0",
   "cmd.drawUsage": "{name} goes: POLYGON sides x,y radius [I|C] · DONUT inner outer x,y · RAY or XLINE x,y x,y · SOLID 3 or 4 points · TRACE width points · MLINE or SKETCH points"
 }

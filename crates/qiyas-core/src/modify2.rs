@@ -5,7 +5,9 @@
 //!
 //! An entity reshaped in place keeps its handle. When a trim or a break leaves several pieces,
 //! the longest keeps the handle and the others are new entities; a join keeps the first
-//! entity's. The take-off follows in the same step (`Session::follow_takeoff`).
+//! entity's. The take-off follows in the same step (`Session::follow_edit`): rows on a cut
+//! entity measure all its pieces, rows on joined entities the joined polyline, and a row that
+//! can't be measured any more loses its link (the outcome counts them).
 //!
 //! The geometry is opencadkernel's `geom2d`, in world coordinates on plan: lines, arcs, circles
 //! and polylines lying flat (their normal up) are reshaped; anything drawn (block references,
@@ -835,12 +837,13 @@ impl Session {
     }
 
     /// Puts `pieces` (parts of the entity `h`, with their lengths) in its place: the longest
-    /// keeps its handle, the others are new. The new handles.
+    /// keeps its handle, the others are new. The new handles, and how many take-off rows lost
+    /// their link (see `Session::follow_edit`).
     fn place_pieces(
         &mut self,
         h: Handle,
         mut pieces: Vec<(f64, EntityType)>,
-    ) -> Result<Vec<u64>, CoreError> {
+    ) -> Result<(Vec<u64>, usize), CoreError> {
         pieces.sort_by(|a, b| b.0.total_cmp(&a.0));
         let mut pieces = pieces.into_iter();
         let (_, longest) = pieces.next().expect("a piece");
@@ -849,8 +852,9 @@ impl Session {
         let added = pieces
             .map(|(_, e)| self.add_fresh(e, owner))
             .collect::<Result<Vec<_>, _>>()?;
-        self.follow_takeoff(&[h], &[]);
-        Ok(added)
+        // Rows measuring the entity measure every piece of it.
+        let unlinked = self.follow_edit(&[], &[], &[(h, added.clone())], &[]);
+        Ok((added, unlinked))
     }
 
     /// `EditSpec::Trim` against the curves of `edges`.
@@ -907,8 +911,8 @@ impl Session {
             .iter()
             .map(|&s| (span_length(&curve, s), piece(&e, &curve, s)))
             .collect();
-        let added = self.place_pieces(h, pieces)?;
-        Ok(edited(added, Vec::new(), 0))
+        let (added, unlinked) = self.place_pieces(h, pieces)?;
+        Ok(edited(added, Vec::new(), 0, unlinked))
     }
 
     /// `EditSpec::Extend` to the curves of `edges`.
@@ -961,8 +965,8 @@ impl Session {
             .ok_or_else(|| invalid(format!("{} doesn't reach a boundary that way", named(&e))))?;
         move_end(&mut e, &end, reach);
         self.replace(h, e);
-        self.follow_takeoff(&[h], &[]);
-        Ok(edited(Vec::new(), Vec::new(), 0))
+        let unlinked = self.follow_takeoff(&[h], &[]);
+        Ok(edited(Vec::new(), Vec::new(), 0, unlinked))
     }
 
     /// `EditSpec::Break`.
@@ -988,8 +992,8 @@ impl Session {
             .iter()
             .map(|&s| (span_length(&curve, s), piece(&e, &curve, s)))
             .collect();
-        let added = self.place_pieces(h, pieces)?;
-        Ok(edited(added, Vec::new(), 0))
+        let (added, unlinked) = self.place_pieces(h, pieces)?;
+        Ok(edited(added, Vec::new(), 0, unlinked))
     }
 
     /// `EditSpec::Join`.
@@ -1079,12 +1083,16 @@ impl Session {
         for &r in &removed {
             self.drawing.doc.remove_entity_arc(r);
         }
-        self.follow_takeoff(&[h], &removed);
-        Ok(edited(
-            Vec::new(),
-            removed.iter().map(|h| h.value()).collect(),
-            handles.len() - joined,
-        ))
+        // Rows on the entities joined in measure the joined polyline instead.
+        let merged: Vec<(Handle, Handle)> = removed.iter().map(|&r| (r, h)).collect();
+        let unlinked = self.follow_edit(&[h], &[], &[], &merged);
+        Ok(Outcome::Edited {
+            added: Vec::new(),
+            removed: removed.iter().map(|h| h.value()).collect(),
+            left_alone: handles.len() - joined,
+            unlinked,
+            joined_rows: self.rows_measuring(h),
+        })
     }
 
     /// `EditSpec::Lengthen`.
@@ -1122,8 +1130,8 @@ impl Session {
         };
         move_end(&mut e, &end, d);
         self.replace(h, e);
-        self.follow_takeoff(&[h], &[]);
-        Ok(edited(Vec::new(), Vec::new(), 0))
+        let unlinked = self.follow_takeoff(&[h], &[]);
+        Ok(edited(Vec::new(), Vec::new(), 0, unlinked))
     }
 
     /// `EditSpec::Reverse`.
@@ -1155,11 +1163,12 @@ impl Session {
                 "Nothing picked can be reversed: lines and polylines can",
             ));
         }
-        self.follow_takeoff(&changed, &[]);
+        let unlinked = self.follow_takeoff(&changed, &[]);
         Ok(edited(
             Vec::new(),
             Vec::new(),
             handles.len() - changed.len(),
+            unlinked,
         ))
     }
 
@@ -1327,8 +1336,8 @@ impl Session {
             across.end = Vector3::new(tb[0], tb[1], la.start.z);
             added.push(self.add_fresh(EntityType::Line(across), owner)?);
         }
-        self.follow_takeoff(&[a, b], &[]);
-        Ok(edited(added, Vec::new(), 0))
+        let unlinked = self.follow_takeoff(&[a, b], &[]);
+        Ok(edited(added, Vec::new(), 0, unlinked))
     }
 
     /// A fillet or chamfer on the corner between two straight sides of one polyline.
@@ -1351,10 +1360,15 @@ impl Session {
         let side_at =
             |p: [f64; 2]| ((curve.parameter_at(p) * count as f64).floor() as usize).min(count - 1);
         let (i, j) = (side_at(at_a), side_at(at_b));
-        let (first, corner) = if (i + 1) % n == j && (i + 1 < n || pl.is_closed) {
-            (i, (i + 1) % n)
+        let (first, corner, how) = if (i + 1) % n == j && (i + 1 < n || pl.is_closed) {
+            (i, (i + 1) % n, how)
         } else if (j + 1) % n == i && (j + 1 < n || pl.is_closed) {
-            (j, (j + 1) % n)
+            // The side picked first comes after the corner: its distance goes there.
+            let how = match how {
+                Corner::Bevel(d1, d2) => Corner::Bevel(d2, d1),
+                round => round,
+            };
+            (j, (j + 1) % n, how)
         } else {
             return Err(invalid("Pick two sides that meet at a corner"));
         };
@@ -1395,8 +1409,8 @@ impl Session {
         v.bulge = bulge;
         pl.vertices.insert(corner + 1, second);
         self.replace(h, e);
-        self.follow_takeoff(&[h], &[]);
-        Ok(edited(Vec::new(), Vec::new(), 0))
+        let unlinked = self.follow_takeoff(&[h], &[]);
+        Ok(edited(Vec::new(), Vec::new(), 0, unlinked))
     }
 
     /// `EditSpec::Blend`.
@@ -1469,8 +1483,8 @@ impl Session {
                 .map(|(p, bulge)| LwVertex::with_bulge(Vector2::new(p[0], p[1]), bulge))
                 .collect();
             self.replace(h, EntityType::LwPolyline(pl));
-            self.follow_takeoff(&[h], &[]);
-            return Ok(edited(Vec::new(), Vec::new(), 0));
+            let unlinked = self.follow_takeoff(&[h], &[]);
+            return Ok(edited(Vec::new(), Vec::new(), 0, unlinked));
         }
         let curve = match &e {
             EntityType::LwPolyline(_) => curve_of(&e)?,
@@ -1566,8 +1580,8 @@ impl Session {
             PEditOp::ConvertToPolyline => unreachable!("handled above"),
         }
         self.replace(h, e);
-        self.follow_takeoff(&[h], &[]);
-        Ok(edited(Vec::new(), Vec::new(), 0))
+        let unlinked = self.follow_takeoff(&[h], &[]);
+        Ok(edited(Vec::new(), Vec::new(), 0, unlinked))
     }
 
     /// `EditSpec::Overkill`.
@@ -1678,11 +1692,12 @@ impl Session {
             .into_iter()
             .filter(|h| !removed.contains(h))
             .collect();
-        self.follow_takeoff(&changed, &removed);
+        let unlinked = self.follow_takeoff(&changed, &removed);
         Ok(edited(
             Vec::new(),
             removed.iter().map(|h| h.value()).collect(),
             0,
+            unlinked,
         ))
     }
 
@@ -1710,16 +1725,18 @@ impl Session {
                 changed.push(h);
             }
         }
-        self.follow_takeoff(&changed, &[]);
-        Ok(edited(Vec::new(), Vec::new(), left_alone))
+        let unlinked = self.follow_takeoff(&changed, &[]);
+        Ok(edited(Vec::new(), Vec::new(), left_alone, unlinked))
     }
 }
 
-fn edited(added: Vec<u64>, removed: Vec<u64>, left_alone: usize) -> Outcome {
+fn edited(added: Vec<u64>, removed: Vec<u64>, left_alone: usize, unlinked: usize) -> Outcome {
     Outcome::Edited {
         added,
         removed,
         left_alone,
+        unlinked,
+        joined_rows: 0,
     }
 }
 

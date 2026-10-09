@@ -712,8 +712,17 @@ export type Outcome =
   | { type: "added"; handles: number[] }
   /** An explode's parts, and how many entities picked had none and were left as they are. */
   | { type: "exploded"; handles: number[]; left_alone: number }
-  /** An edit in place: entities it added and removed, and how many picked it left as they were. */
-  | { type: "edited"; added: number[]; removed: number[]; left_alone: number }
+  /** An edit in place: entities it added and removed, how many picked it left as they were, how
+   *  many take-off rows lost their link (their entities could no longer be measured), and for a
+   *  join how many rows now measure the joined polyline. */
+  | {
+      type: "edited";
+      added: number[];
+      removed: number[];
+      left_alone: number;
+      unlinked: number;
+      joined_rows: number;
+    }
   | { type: "nothing" }
   /** Facts to show: rows of a label key ("radius", "centre"…) and its value written out. */
   | { type: "info"; title: string; rows: [string, string][] }

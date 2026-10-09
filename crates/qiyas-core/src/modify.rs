@@ -1010,6 +1010,14 @@ fn by_block_linetype(c: &mut opencadcodec::entities::EntityCommon, insert: &Inse
     }
 }
 
+/// `m` no longer measures any entity: it keeps its value and points.
+fn unlink(m: &mut Measurement) {
+    m.handles.clear();
+    m.chain.clear();
+    m.block_path.clear();
+    m.xref = None;
+}
+
 /// The take-off row `m` measures the entity `h` at the top of the sheet: one of its handles, or
 /// the block (or xref) reference its chain starts with.
 fn measures(m: &Measurement, h: u64) -> bool {
@@ -1053,8 +1061,48 @@ impl Session {
     }
 
     /// The take-off follows a drawing edit: rows measuring an entity `removed` keep their value
-    /// and points but lose the link; rows measuring an entity `changed` are measured again.
-    pub(crate) fn follow_takeoff(&mut self, changed: &[Handle], removed: &[Handle]) {
+    /// and points but lose the link; rows measuring an entity `changed` are measured again. How
+    /// many rows lost their link because they could no longer be measured (see `follow_edit`).
+    pub(crate) fn follow_takeoff(&mut self, changed: &[Handle], removed: &[Handle]) -> usize {
+        self.follow_edit(changed, removed, &[], &[])
+    }
+
+    /// `follow_takeoff`, for edits that cut entities into pieces or join them: a row measuring
+    /// an entity of `pieces` (one cut into pieces, with the new pieces' handles) measures every
+    /// piece too; a row measuring a `(gone, into)` of `merged` (joined into another) measures
+    /// `into` instead. Every row measuring a changed, cut or joined entity is then measured
+    /// again, as the sum of its entities; one that can't be any more (an area whose outline was
+    /// opened) loses its link like a row on an erased entity, keeping its value and points. How
+    /// many rows lost their link that way.
+    pub(crate) fn follow_edit(
+        &mut self,
+        changed: &[Handle],
+        removed: &[Handle],
+        pieces: &[(Handle, Vec<u64>)],
+        merged: &[(Handle, Handle)],
+    ) -> usize {
+        for m in &mut self.takeoff.items {
+            if !m.chain.is_empty() {
+                continue;
+            }
+            for (cut, new) in pieces {
+                if m.handles.contains(&cut.value()) {
+                    for &n in new {
+                        if !m.handles.contains(&n) {
+                            m.handles.push(n);
+                        }
+                    }
+                }
+            }
+            for &(gone, into) in merged {
+                if m.handles.contains(&gone.value()) {
+                    m.handles.retain(|&h| h != gone.value());
+                    if !m.handles.contains(&into.value()) {
+                        m.handles.push(into.value());
+                    }
+                }
+            }
+        }
         let removed: HashSet<u64> = removed.iter().map(|h| h.value()).collect();
         for m in &mut self.takeoff.items {
             if !removed.iter().any(|&h| measures(m, h)) {
@@ -1063,23 +1111,43 @@ impl Session {
             if m.chain.is_empty() {
                 m.handles.retain(|h| !removed.contains(h));
             } else {
-                m.handles.clear();
-                m.chain.clear();
-                m.block_path.clear();
-                m.xref = None;
+                unlink(m);
             }
         }
+        let touched: HashSet<u64> = changed
+            .iter()
+            .chain(pieces.iter().map(|(cut, _)| cut))
+            .chain(merged.iter().map(|(_, into)| into))
+            .map(|h| h.value())
+            .collect();
         let again: Vec<usize> = (0..self.takeoff.items.len())
             .filter(|&i| {
                 let m = &self.takeoff.items[i];
-                changed.iter().any(|h| measures(m, h.value()))
+                touched.iter().any(|&h| measures(m, h))
             })
             .collect();
+        let mut unlinked = 0;
         for i in again {
-            if let Some(m) = self.remeasured(&self.takeoff.items[i]) {
-                self.takeoff.items[i] = m;
+            match self.remeasured(&self.takeoff.items[i]) {
+                Some(m) => self.takeoff.items[i] = m,
+                // An item's row is not measured from its entities: it stays as it is.
+                None if self.takeoff.items[i].kind == Kind::Item => {}
+                None => {
+                    unlink(&mut self.takeoff.items[i]);
+                    unlinked += 1;
+                }
             }
         }
+        unlinked
+    }
+
+    /// How many take-off rows measure the entity `h`.
+    pub(crate) fn rows_measuring(&self, h: Handle) -> usize {
+        self.takeoff
+            .items
+            .iter()
+            .filter(|m| measures(m, h.value()))
+            .count()
     }
 
     /// `m` measured again from its entities as they are now, as a new measurement of them would

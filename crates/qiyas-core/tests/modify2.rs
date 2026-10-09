@@ -76,6 +76,7 @@ fn edited(s: &mut Session, spec: EditSpec) -> (Vec<u64>, Vec<u64>, usize) {
             added,
             removed,
             left_alone,
+            ..
         } => (added, removed, left_alone),
         other => panic!("expected an edit, got {other:?}"),
     }
@@ -937,7 +938,7 @@ fn the_take_off_follows_a_trim_in_the_same_step() {
     let (_dir, mut s, h) = session(vec![line([0.0, 0.0], [12.0, 0.0]), circle([5.0, 0.0], 2.0)]);
     let m = measure(&mut s, h[0]);
     assert!((m.value - 12.0).abs() < 1e-9);
-    edited(
+    let (added, _, _) = edited(
         &mut s,
         EditSpec::Trim {
             cutters: ts(&[h[1]]),
@@ -945,17 +946,16 @@ fn the_take_off_follows_a_trim_in_the_same_step() {
             at_point: [5.0, 0.0],
         },
     );
-    let row = |s: &Session| {
-        s.takeoff
-            .items
-            .iter()
-            .find(|r| r.id == m.id)
-            .cloned()
-            .unwrap()
-    };
-    assert!((row(&s).value - 5.0).abs() < 1e-9, "the kept piece");
+    // Both pieces left are measured: 12 less the 4 cut away.
+    assert_eq!(row(&s, &m.id).handles, vec![h[0], added[0]]);
+    assert!(
+        (row(&s, &m.id).value - 8.0).abs() < 1e-9,
+        "{}",
+        row(&s, &m.id).value
+    );
     assert!(s.undo());
-    assert!((row(&s).value - 12.0).abs() < 1e-9);
+    assert!((row(&s, &m.id).value - 12.0).abs() < 1e-9);
+    assert_eq!(row(&s, &m.id).handles, vec![h[0]]);
 }
 
 #[test]
@@ -993,4 +993,116 @@ fn the_wire_form_names_the_kind() {
             ..
         })
     ));
+}
+
+fn row(s: &Session, id: &str) -> Measurement {
+    s.takeoff
+        .items
+        .iter()
+        .find(|r| r.id == id)
+        .cloned()
+        .unwrap()
+}
+
+/// Runs an edit; how many take-off rows it unlinked and, for a join, how many measure the result.
+fn rows_after(s: &mut Session, spec: EditSpec) -> (usize, usize) {
+    match run(s, spec) {
+        Outcome::Edited {
+            unlinked,
+            joined_rows,
+            ..
+        } => (unlinked, joined_rows),
+        other => panic!("expected an edit, got {other:?}"),
+    }
+}
+
+#[test]
+fn an_area_row_on_a_circle_trimmed_open_is_unlinked_keeping_its_value() {
+    let (_dir, mut s, h) = session(vec![circle([0.0, 0.0], 2.0), line([-3.0, 1.0], [3.0, 1.0])]);
+    let m = measure(&mut s, h[0]);
+    assert_eq!(m.kind, Kind::Area);
+    let (unlinked, _) = rows_after(
+        &mut s,
+        EditSpec::Trim {
+            cutters: ts(&[h[1]]),
+            target: t(h[0]),
+            at_point: [0.0, 2.0],
+        },
+    );
+    assert_eq!(unlinked, 1);
+    let r = row(&s, &m.id);
+    assert!(r.handles.is_empty(), "no longer linked: {:?}", r.handles);
+    assert!((r.value - 4.0 * PI).abs() < 1e-9, "the value stays");
+    // Undo links it again.
+    assert!(s.undo());
+    assert_eq!(row(&s, &m.id).handles, vec![h[0]]);
+}
+
+#[test]
+fn breaking_a_measured_line_at_a_point_keeps_its_length_on_both_pieces() {
+    let (_dir, mut s, h) = session(vec![line([0.0, 0.0], [10.0, 0.0])]);
+    let m = measure(&mut s, h[0]);
+    let (added, _, _) = edited(
+        &mut s,
+        EditSpec::Break {
+            target: t(h[0]),
+            p1: [4.0, 0.0],
+            p2: [4.0, 0.0],
+        },
+    );
+    let r = row(&s, &m.id);
+    assert_eq!(r.handles, vec![h[0], added[0]]);
+    assert!((r.value - 10.0).abs() < 1e-9, "{}", r.value);
+}
+
+#[test]
+fn joining_measured_lines_points_their_rows_at_the_joined_polyline() {
+    let (_dir, mut s, h) = session(vec![
+        line([0.0, 0.0], [4.0, 0.0]),
+        line([4.0, 0.0], [4.0, 3.0]),
+    ]);
+    let first = measure(&mut s, h[0]);
+    let second = measure(&mut s, h[1]);
+    let (unlinked, joined_rows) = rows_after(&mut s, EditSpec::Join { targets: ts(&h) });
+    assert_eq!(unlinked, 0);
+    assert_eq!(joined_rows, 2, "two rows now measure it: the user decides");
+    for id in [&first.id, &second.id] {
+        let r = row(&s, id);
+        assert_eq!(r.handles, vec![h[0]]);
+        assert!((r.value - 7.0).abs() < 1e-9, "{}", r.value);
+    }
+    assert!(s.undo());
+    assert_eq!(row(&s, &second.id).handles, vec![h[1]]);
+    assert!((row(&s, &second.id).value - 3.0).abs() < 1e-9);
+}
+
+#[test]
+fn chamfer_distances_follow_the_sides_as_picked() {
+    let (_dir, mut s, h) = session(vec![polyline(
+        &[
+            ([0.0, 0.0], 0.0),
+            ([4.0, 0.0], 0.0),
+            ([4.0, 3.0], 0.0),
+            ([0.0, 3.0], 0.0),
+        ],
+        true,
+    )]);
+    // The right side first: d1 runs up it, d2 along the bottom.
+    edited(
+        &mut s,
+        EditSpec::Chamfer {
+            a: t(h[0]),
+            b: t(h[0]),
+            at_a: [4.0, 1.5],
+            at_b: [2.0, 0.0],
+            d1: 0.5,
+            d2: 0.25,
+        },
+    );
+    let (v, _) = vertices(&s, h[0]);
+    let points: Vec<_> = v.iter().map(|(p, _)| *p).collect();
+    assert!(
+        near(points[1], [3.75, 0.0]) && near(points[2], [4.0, 0.5]),
+        "{points:?}"
+    );
 }
