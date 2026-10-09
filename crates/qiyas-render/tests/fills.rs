@@ -5,10 +5,11 @@
 use std::collections::HashSet;
 
 use opencadcodec::entities::{
-    BoundaryEdge, BoundaryPath, Hatch, HatchPattern, HatchPatternLine, Point, PolylineEdge, Ray,
-    Solid, Wipeout, XLine,
+    BoundaryEdge, BoundaryPath, Hatch, HatchPattern, HatchPatternLine, Insert, Point, PolylineEdge,
+    Ray, Solid, Wipeout, XLine,
 };
-use opencadcodec::{CadDocument, Color, EntityType, Line, Vector2, Vector3};
+use opencadcodec::{BlockRecord, CadDocument, Color, EntityType, Line, Vector2, Vector3};
+use opencadkernel::geom2d::triangulate_rings;
 use qiyas_render::{
     add_images, build_batch, section, Batch, ImagePlacement, PickIndex, Range, Visibility,
     FILL_BACKGROUND, NO_CHAIN, PATTERN,
@@ -309,3 +310,101 @@ const FILLS_FIXTURE: &str = concat!(
     "ffffffff00000000010000000000000007000000000000000700000000000000ffffffff01000000",
     "0100000000000000",
 );
+
+/// A star with `n` corners (radii 10 and 6 in turn) around `at`, as a one-ring solid hatch.
+fn star_hatch(n: usize, at: [f64; 2]) -> EntityType {
+    let corners: Vec<[f64; 2]> = (0..n)
+        .map(|i| {
+            let a = i as f64 * std::f64::consts::TAU / n as f64;
+            let r = if i % 2 == 0 { 10.0 } else { 6.0 };
+            [at[0] + r * a.cos(), at[1] + r * a.sin()]
+        })
+        .collect();
+    let mut h = Hatch::solid();
+    h.add_path(ring(&corners));
+    EntityType::Hatch(h)
+}
+
+/// A drawing whose block STAR holds a `corners`-corner solid hatch, inserted `count` times
+/// 30 units apart.
+fn starred(corners: usize, count: usize) -> CadDocument {
+    let mut doc = CadDocument::new();
+    let mut block = BlockRecord::new("STAR");
+    block.handle = doc.allocate_handle();
+    let owner = block.handle;
+    doc.block_records.add(block).unwrap();
+    let mut star = star_hatch(corners, [0.0, 0.0]);
+    star.common_mut().owner_handle = owner;
+    doc.add_entity(star).unwrap();
+    for i in 0..count {
+        let at = Vector3::new(30.0 * i as f64, 0.0, 0.0);
+        doc.add_entity(EntityType::Insert(Insert::new("STAR", at)))
+            .unwrap();
+    }
+    doc
+}
+
+#[test]
+fn a_fill_inside_a_block_is_triangulated_as_each_reference_draws_it() {
+    let doc = starred(128, 3);
+    let b = build_batch(&doc, MODEL, &Visibility::default(), 1e-3);
+    assert_eq!(b.fill_ranges.len(), 3);
+    let area = |t: &[f64]| ((t[2] - t[0]) * (t[5] - t[1]) - (t[4] - t[0]) * (t[3] - t[1])) / 2.0;
+    for (i, range) in b.fill_ranges.iter().enumerate() {
+        // What triangulating this reference's own world ring gives (the ear clipper may pick
+        // other ears for a moved copy, so: the same count, corners and area; the first exactly).
+        let ring = star_ring(128, [30.0 * i as f64, 0.0]);
+        let (points, tris) = triangulate_rings(std::slice::from_ref(&ring));
+        assert_eq!(range.count as usize, tris.len(), "reference {i}");
+        let got: Vec<f64> = (range.first as usize * 6..(range.first + range.count) as usize * 6)
+            .map(|k| f64::from(b.fills[k]) + b.origin[k % 2])
+            .collect();
+        let want: Vec<f64> = tris
+            .iter()
+            .flat_map(|t| t.iter().flat_map(|&k| points[k]))
+            .collect();
+        let sum = |v: &[f64]| v.chunks(6).map(area).sum::<f64>();
+        assert!((sum(&got) - sum(&want)).abs() < 1e-3, "reference {i}");
+        for p in got.chunks(2) {
+            let near = |q: &[f64; 2]| (q[0] - p[0]).abs() < 1e-3 && (q[1] - p[1]).abs() < 1e-3;
+            assert!(ring.iter().any(near), "reference {i}: {p:?} is a corner");
+        }
+        if i == 0 {
+            for (g, w) in got.iter().zip(&want) {
+                assert!((g - w).abs() < 1e-3, "{g} vs {w}");
+            }
+        }
+    }
+}
+
+fn star_ring(n: usize, at: [f64; 2]) -> Vec<[f64; 2]> {
+    let EntityType::Hatch(h) = star_hatch(n, at) else {
+        unreachable!()
+    };
+    match &h.paths[0].edges[0] {
+        BoundaryEdge::Polyline(p) => p.vertices.iter().map(|v| [v.x, v.y]).collect(),
+        _ => unreachable!(),
+    }
+}
+
+/// Release only (`scripts/check.sh`): 500 references to one 128-corner fill build in well under
+/// what triangulating it 500 times costs.
+#[cfg(not(debug_assertions))]
+#[test]
+fn fill_in_a_block_inserted_500_times_is_triangulated_once() {
+    let doc = starred(128, 500);
+    let ring = star_ring(128, [0.0, 0.0]);
+    let t = std::time::Instant::now();
+    for _ in 0..500 {
+        std::hint::black_box(triangulate_rings(std::hint::black_box(&[ring.clone()])));
+    }
+    let per_instance = t.elapsed().as_secs_f64();
+    let t = std::time::Instant::now();
+    let b = build_batch(&doc, MODEL, &Visibility::default(), 1e-3);
+    let build = t.elapsed().as_secs_f64();
+    assert_eq!(b.fill_ranges.len(), 500);
+    assert!(
+        build < per_instance / 4.0,
+        "build {build:.4} s, 500 triangulations {per_instance:.4} s"
+    );
+}

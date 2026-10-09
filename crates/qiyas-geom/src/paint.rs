@@ -6,6 +6,8 @@ use opencadcodec::entities::{HatchPatternLine, MLine, MLineJustification, Solid,
 use opencadcodec::objects::ObjectType;
 use opencadcodec::{CadDocument, Handle};
 
+use crate::transform::Xform;
+
 /// What a flattened path draws.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub enum Paint {
@@ -25,13 +27,27 @@ pub enum Paint {
     Point { size: f64 },
 }
 
-/// A filled area: `rings` in drawing coordinates, filled even-odd (a ring inside another is a
-/// hole, one inside that an island again). `background` fills with the background colour
-/// instead of the path's (a wipeout).
+/// A filled area: `rings` in the filled entity's own coordinates, mapped to drawing coordinates
+/// by `xf`, filled even-odd (a ring inside another is a hole, one inside that an island again).
+/// `background` fills with the background colour instead of the path's (a wipeout). `source` is
+/// the filled entity's own handle (the path's `entity` may be its dimension's): a block inserted
+/// many times gives the same `rings` under each reference's `xf`, so they are triangulated once.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FlatFill {
     pub rings: Vec<Vec<[f64; 2]>>,
+    pub xf: Xform,
+    pub source: u64,
     pub background: bool,
+}
+
+impl FlatFill {
+    /// `rings` in drawing coordinates.
+    pub fn world_rings(&self) -> Vec<Vec<[f64; 2]>> {
+        self.rings
+            .iter()
+            .map(|r| r.iter().map(|p| self.xf.apply(*p)).collect())
+            .collect()
+    }
 }
 
 /// Most pattern lines one hatch draws; a pattern denser than that is left out (too fine to see).

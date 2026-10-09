@@ -397,6 +397,9 @@ fn build(
     let mut triangles: Vec<[f64; 6]> = Vec::new();
     let mut infinite: Vec<Infinite> = Vec::new();
     let mut marks: Vec<Mark> = Vec::new();
+    // Each fill entity's rings (own coordinates) and their triangulation, by xref and handle.
+    type Tessellated = (Vec<Vec<[f64; 2]>>, Vec<[f64; 2]>, Vec<[usize; 3]>);
+    let mut tessellated: HashMap<(Option<String>, u64), Tessellated> = HashMap::new();
     // One budget for the whole sheet, so a big block inserted many times stops too.
     let mut budget = MAX_SHEET_WORK;
     for entity in doc.entities_in_block(sheet_block) {
@@ -436,12 +439,20 @@ fn build(
                     if fill.rings.iter().map(Vec::len).sum::<usize>() > MAX_FILL_CORNERS {
                         continue;
                     }
-                    let (points, tris) = triangulate_rings(&fill.rings);
+                    // Once per fill entity in its own coordinates: a block inserted many times
+                    // maps the same triangles through each reference (an affine map keeps them).
+                    let key = (flat.xref.clone(), fill.source);
+                    if tessellated.get(&key).is_none_or(|t| t.0 != fill.rings) {
+                        let (points, tris) = triangulate_rings(&fill.rings);
+                        tessellated.insert(key.clone(), (fill.rings.clone(), points, tris));
+                    }
+                    let (_, points, tris) = &tessellated[&key];
                     if tris.is_empty() {
                         continue;
                     }
+                    let points: Vec<[f64; 2]> = points.iter().map(|p| fill.xf.apply(*p)).collect();
                     let first = triangles.len() as u32;
-                    for [i, j, k] in &tris {
+                    for [i, j, k] in tris {
                         let (a, b, c) = (points[*i], points[*j], points[*k]);
                         triangles.push([a[0], a[1], b[0], b[1], c[0], c[1]]);
                     }
@@ -658,8 +669,9 @@ fn add_marks(batch: &mut Batch, absolute: &mut Vec<[f64; 4]>, marks: &[Mark], si
     }
 }
 
-/// Most corners one fill is triangulated with; a bigger one is drawn as its outline only.
-const MAX_FILL_CORNERS: usize = 20_000;
+/// Most corners one fill is triangulated with; a bigger one is drawn as its outline only. The
+/// kernel's ear clipping slows down with the square of the corners or worse.
+const MAX_FILL_CORNERS: usize = 2_000;
 
 /// How far rays and construction lines reach past an empty sheet, in drawing units.
 const INFINITE_REACH: f64 = 100.0;

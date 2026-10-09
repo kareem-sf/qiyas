@@ -819,7 +819,8 @@ impl Walk<'_> {
         self.push_with(points, closed, xf, style, entity, None, Paint::Outline);
     }
 
-    /// Appends a fill of `rings` (even-odd) mapped through `xf`, spending one unit of the budget.
+    /// Appends a fill of `rings` (even-odd, kept in the entity's own coordinates with `xf`),
+    /// spending one unit of the budget.
     fn push_fill(
         &mut self,
         rings: Vec<Vec<[f64; 2]>>,
@@ -828,11 +829,7 @@ impl Walk<'_> {
         style: &Style,
         entity: u64,
     ) {
-        let rings: Vec<Vec<[f64; 2]>> = rings
-            .into_iter()
-            .filter(|r| r.len() >= 3)
-            .map(|r| r.into_iter().map(|p| xf.apply(p)).collect())
-            .collect();
+        let rings: Vec<Vec<[f64; 2]>> = rings.into_iter().filter(|r| r.len() >= 3).collect();
         if rings.is_empty() {
             return;
         }
@@ -853,7 +850,12 @@ impl Walk<'_> {
             xref: self.xref_stack.first().cloned(),
             xref_insert_layers: self.xref_insert_layers.clone(),
             text: None,
-            paint: Paint::Fill(Box::new(FlatFill { rings, background })),
+            paint: Paint::Fill(Box::new(FlatFill {
+                rings,
+                xf: *xf,
+                source: entity,
+                background,
+            })),
         });
     }
 
