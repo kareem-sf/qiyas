@@ -418,7 +418,8 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
         gl.uniform1i(tAtlas, 0);
         gl.activeTexture(gl.TEXTURE0);
         gl.enable(gl.BLEND);
-        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+        // The canvas keeps opaque alpha where text is drawn over it.
+        gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
         drawText(indices, buffer);
         gl.disable(gl.BLEND);
         gl.bindVertexArray(null);

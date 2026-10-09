@@ -18,7 +18,7 @@ pub use color::resolve_color;
 pub use fonts::{DEFAULT_CHAIN, NOTO_ARABIC, NOTO_SANS};
 pub use index::PickIndex;
 pub use text::{
-    decode_codes, fix_reversed_arabic, size_bucket, LaidText, Quad, ShapedGlyph, ShapedLine,
-    TextEngine, QUAD_IN_BLOCK, SIZE_BUCKETS,
+    arabic_stored_visually, decode_codes, size_bucket, visual_pieces, LaidText, Quad, ShapedGlyph,
+    ShapedLine, TextEngine, VisualPiece, QUAD_IN_BLOCK, SIZE_BUCKETS,
 };
 pub use visibility::{layer_on_in_file, layer_shown};

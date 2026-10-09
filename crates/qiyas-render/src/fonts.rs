@@ -139,8 +139,11 @@ fn font_dirs() -> Vec<PathBuf> {
         PathBuf::from("/usr/share/fonts"),
         PathBuf::from("/usr/local/share/fonts"),
         PathBuf::from("/Library/Fonts"),
-        PathBuf::from("C:\\Windows\\Fonts"),
+        PathBuf::from("/System/Library/Fonts"),
+        PathBuf::from("/System/Library/Fonts/Supplemental"),
     ];
+    let windows = std::env::var_os("WINDIR").map_or(PathBuf::from("C:\\Windows"), PathBuf::from);
+    dirs.push(windows.join("Fonts"));
     if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
         dirs.push(home.join(".local/share/fonts"));
         dirs.push(home.join(".fonts"));

@@ -275,7 +275,7 @@ fn another_zoom_draws_from_another_size_and_keeps_the_atlas_pages() {
 
 /// Arabic stored backwards, as old CAD fonts needed it, and the same word stored right.
 #[test]
-fn the_drawing_toggle_reverses_backwards_arabic_only() {
+fn the_drawing_toggle_reads_all_base_letter_arabic_as_stored_backwards() {
     let mut doc = CadDocument::new();
     let backwards: String = "مطبخ".chars().rev().collect();
     let stored = add(
@@ -317,4 +317,28 @@ fn the_drawing_toggle_reverses_backwards_arabic_only() {
     // now draws the word, the others draw it backwards.
     assert_eq!(uvs(&fixed, stored), uvs(&plain, right));
     assert_eq!(uvs(&fixed, right), uvs(&plain, stored));
+}
+
+#[test]
+fn a_wide_text_draws_from_a_size_that_fits_its_width() {
+    let mut doc = CadDocument::new();
+    let narrow = add(
+        &mut doc,
+        EntityType::Text(Text::with_value("H", Vector3::new(0.0, 0.0, 0.0))),
+    );
+    let mut text = Text::with_value("H", Vector3::new(0.0, 5.0, 0.0));
+    text.width_factor = 4.0;
+    let wide = add(&mut doc, EntityType::Text(text));
+    // 1 unit tall at 10 px per unit: 12 px glyphs; four times as wide wants 48 px.
+    let (batch, _) = text_batch(&doc, at_zoom(10.0));
+    let rows = |entity| {
+        let q = quads_of(&batch, entity)[0];
+        q.uv[3] - q.uv[1]
+    };
+    assert!(
+        rows(wide) > rows(narrow) * 3,
+        "{} {}",
+        rows(wide),
+        rows(narrow)
+    );
 }

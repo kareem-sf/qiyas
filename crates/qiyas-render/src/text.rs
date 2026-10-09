@@ -56,8 +56,9 @@ pub struct LaidText {
     pub color: u32,
     /// Text units (x along the baseline, y up, 1 = the text height) to drawing coordinates.
     pub xf: Xform,
-    /// How long one text height is in drawing units, for the glyph size.
-    pub world_height: f64,
+    /// How long one text unit is in drawing units along the more stretched of the text's x and
+    /// y axes (a wide width factor or fit stretches x), for the glyph size.
+    pub world_size: f64,
     pub glyphs: Vec<ShapedGlyph>,
 }
 
@@ -163,8 +164,10 @@ impl TextEngine {
         self.fonts.chain(file)
     }
 
-    /// Shapes one line with the fonts of `chain`, in visual order. With `arabic_reversed`, Arabic
-    /// stored in visual order (see `fix_reversed_arabic`) is put back in reading order first.
+    /// Shapes one line with the fonts of `chain`, in visual order. Text in reading order goes
+    /// through bidi; Arabic stored in visual order (`arabic_stored_visually`, which
+    /// `arabic_reversed` forces when its letters can't tell) is drawn as stored, each Arabic word
+    /// joined in place (`visual_pieces`).
     pub fn shape_line(&mut self, chain: &[u16], text: &str, arabic_reversed: bool) -> ShapedLine {
         let key = (chain.to_vec(), text.to_string(), arabic_reversed);
         if let Some(line) = self.shaped.get(&key) {
@@ -176,24 +179,37 @@ impl TextEngine {
     }
 
     fn shape_uncached(&mut self, chain: &[u16], text: &str, arabic_reversed: bool) -> ShapedLine {
-        let text = fix_reversed_arabic(text, arabic_reversed);
         let mut line = ShapedLine::default();
         if text.is_empty() {
             return line;
         }
         let mut pen = 0.0;
-        if !text.chars().any(is_rtl_char) {
-            for (font, range) in self.itemize(chain, &text) {
+        if arabic_stored_visually(text, arabic_reversed) {
+            // Left to right as stored; each Arabic word joined and drawn right to left in place.
+            for piece in visual_pieces(text) {
+                let before = line.glyphs.last().map(|g| g.font);
+                let mut fonts = self.itemize(chain, &piece.text, before);
+                if piece.rtl {
+                    fonts.reverse();
+                }
+                for (font, range) in fonts {
+                    let at = piece.at + range.start;
+                    let part = &piece.text[range];
+                    pen = self.shape_piece(font, part, at, piece.rtl, pen, &mut line.glyphs);
+                }
+            }
+        } else if !text.chars().any(is_rtl_char) {
+            for (font, range) in self.itemize(chain, text, None) {
                 let at = range.start;
                 pen = self.shape_piece(font, &text[range], at, false, pen, &mut line.glyphs);
             }
         } else {
-            let bidi = unicode_bidi::ParagraphBidiInfo::new(&text, None);
+            let bidi = unicode_bidi::ParagraphBidiInfo::new(text, None);
             let (levels, runs) = bidi.visual_runs(0..text.len());
             for run in runs {
                 let rtl = levels[run.start].is_rtl();
                 let part = &text[run.clone()];
-                let mut pieces = self.itemize(chain, part);
+                let mut pieces = self.itemize(chain, part, None);
                 // Right to left, the piece read last is drawn first.
                 if rtl {
                     pieces.reverse();
@@ -211,10 +227,15 @@ impl TextEngine {
     /// Splits `text` into pieces drawn by one font each: a letter takes the first font of
     /// `chain` that has it; a space, digit or sign stays with the font before it when that font
     /// has it. A character no font has takes the first font (its missing-glyph box).
-    fn itemize(&self, chain: &[u16], text: &str) -> Vec<(u16, std::ops::Range<usize>)> {
+    fn itemize(
+        &self,
+        chain: &[u16],
+        text: &str,
+        before: Option<u16>,
+    ) -> Vec<(u16, std::ops::Range<usize>)> {
         let mut pieces: Vec<(u16, std::ops::Range<usize>)> = Vec::new();
         for (i, c) in text.char_indices() {
-            let current = pieces.last().map(|p| p.0);
+            let current = pieces.last().map(|p| p.0).or(before);
             let keep = current.filter(|&f| !is_letter(c) && self.fonts.get(f).has(c));
             let font = keep
                 .or_else(|| chain.iter().copied().find(|&f| self.fonts.get(f).has(c)))
@@ -464,7 +485,7 @@ impl TextEngine {
         let mut ranges: Vec<crate::Range> = Vec::new();
         for text in texts {
             let first = quads.len();
-            let bucket = size_bucket(text.world_height * px_per_unit);
+            let bucket = size_bucket(text.world_size * px_per_unit);
             let px = f32::from(SIZE_BUCKETS[usize::from(bucket)]);
             let flags = if text.chain == crate::NO_CHAIN {
                 0
@@ -640,10 +661,6 @@ fn is_rtl_char(c: char) -> bool {
     matches!(c as u32, 0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF | 0x200F | 0x202B | 0x202E | 0x2067)
 }
 
-fn is_presentation_form(c: char) -> bool {
-    matches!(c as u32, 0xFB50..=0xFDFF | 0xFE70..=0xFEFF)
-}
-
 /// Combining marks: Latin diacritics and Arabic vowel signs.
 fn is_mark(c: char) -> bool {
     matches!(c as u32, 0x0300..=0x036F | 0x0610..=0x061A | 0x064B..=0x065F | 0x0670 | 0x06D6..=0x06ED)
@@ -721,98 +738,104 @@ fn presentation_form(c: char) -> Option<Form> {
     (at < forms).then(|| [Form::Isolated, Form::Final, Form::Initial, Form::Medial][at as usize])
 }
 
-/// Puts Arabic stored in visual order back in reading order, so shaping and bidi draw it as its
-/// author saw it. Old CAD fonts could not join or order Arabic, so drawings often hold it
-/// typed backwards, letter by letter, sometimes as presentation forms.
+/// Whether `text` holds its Arabic in visual order: typed left to right as it looks on the
+/// page, as old CAD fonts that could not join or order Arabic needed it.
 ///
-/// Works per Arabic run: words (split at spaces) with Arabic letters and no other letters, with
-/// the words of digits and signs between or around them; a word with a Latin letter ends a run.
-/// A run of presentation forms is reversed when they are all isolated forms or its first letter
-/// is a final form (the end of a word written first). With `force` (the drawing's "Arabic text
-/// is reversed"), every run without presentation forms is reversed too. Numbers inside a
-/// reversed run keep their own order.
-pub fn fix_reversed_arabic(text: &str, force: bool) -> Cow<'_, str> {
-    if !text.chars().any(is_arabic) {
-        return Cow::Borrowed(text);
+/// Presentation forms (ready-joined letters) decide by their joining: read in order, a letter
+/// that joins forward (initial, medial) must be followed by one that joins back (medial, final),
+/// a word starts with an isolated or initial form and ends with an isolated or final one. The
+/// reading (as stored, or reversed) with fewer breaks of that wins. Text the forms can't decide
+/// (no presentation forms, or both readings fit, as with words of non-joining letters only) is
+/// visual only when the drawing says so (`force`, "Arabic text is reversed").
+pub fn arabic_stored_visually(text: &str, force: bool) -> bool {
+    if !text.chars().any(|c| is_arabic(c) && is_letter(c)) {
+        return false;
     }
-    let mut chars: Vec<char> = text.chars().collect();
-    // Words as char ranges, with whether each has an Arabic letter and a non-Arabic letter.
-    let mut words: Vec<(usize, usize, bool, bool)> = Vec::new();
-    let mut i = 0;
-    while i < chars.len() {
-        if chars[i].is_whitespace() {
-            i += 1;
-            continue;
-        }
-        let start = i;
-        while i < chars.len() && !chars[i].is_whitespace() {
-            i += 1;
-        }
-        let word = &chars[start..i];
-        let arabic = word.iter().any(|&c| is_arabic(c) && is_letter(c));
-        let other = word.iter().any(|&c| is_letter(c) && !is_arabic(c));
-        words.push((start, i, arabic, other));
-    }
-    let mut changed = false;
-    let mut w = 0;
-    while w < words.len() {
-        if words[w].3 {
-            w += 1;
-            continue;
-        }
-        let first = w;
-        while w < words.len() && !words[w].3 {
-            w += 1;
-        }
-        let group = &words[first..w];
-        if !group.iter().any(|g| g.2) {
-            continue;
-        }
-        let run = group[0].0..group[group.len() - 1].1;
-        let presentation = chars[run.clone()].iter().any(|&c| is_presentation_form(c));
-        let reverse = if presentation {
-            let forms: Vec<Option<Form>> = chars[run.clone()]
-                .iter()
-                .filter(|&&c| is_letter(c))
-                .map(|&c| presentation_form(c))
-                .collect();
-            forms.iter().all(|f| *f == Some(Form::Isolated))
-                || forms.first() == Some(&Some(Form::Final))
-        } else {
-            force
-        };
-        if reverse {
-            chars[run.clone()].reverse();
-            keep_numbers_forward(&mut chars[run]);
-            changed = true;
-        }
-    }
-    if changed {
-        Cow::Owned(chars.into_iter().collect())
-    } else {
-        Cow::Borrowed(text)
-    }
+    presentation_order(text).unwrap_or(force)
 }
 
-/// Reverses back each number (digits, with any `.` or `,` between them) in `chars`.
-fn keep_numbers_forward(chars: &mut [char]) {
-    let mut i = 0;
-    while i < chars.len() {
-        if !is_digit(chars[i]) {
-            i += 1;
+/// `Some(true)` when the presentation forms of `text` fit a visual reading better than the
+/// stored order, `Some(false)` when the stored order fits better, `None` when undecided.
+fn presentation_order(text: &str) -> Option<bool> {
+    let chars: Vec<char> = text.chars().collect();
+    let (mut stored, mut reversed, mut any) = (0, 0, false);
+    for word in chars.split(|&c| !is_arabic(c)) {
+        let forms: Vec<Option<Form>> = word
+            .iter()
+            .filter(|&&c| is_letter(c))
+            .map(|&c| presentation_form(c))
+            .collect();
+        if forms.iter().all(Option::is_none) {
             continue;
         }
-        let mut end = i + 1;
-        let mut j = i + 1;
-        while j < chars.len() && (is_digit(chars[j]) || matches!(chars[j], '.' | ',')) {
-            if is_digit(chars[j]) {
-                end = j + 1;
-            }
-            j += 1;
-        }
-        chars[i..end].reverse();
-        i = end;
+        any = true;
+        stored += join_breaks(forms.iter().copied());
+        reversed += join_breaks(forms.iter().rev().copied());
     }
+    (any && stored != reversed).then_some(reversed < stored)
+}
+
+/// How many times the joining forms of one word, in the order given, break the joining rules.
+/// Letters of unknown form (not presentation forms) are not judged.
+fn join_breaks(forms: impl Iterator<Item = Option<Form>>) -> usize {
+    let forward = |f: Form| matches!(f, Form::Initial | Form::Medial);
+    let back = |f: Form| matches!(f, Form::Medial | Form::Final);
+    let forms: Vec<Option<Form>> = forms.collect();
+    let mut breaks = 0;
+    if let Some(Some(f)) = forms.first() {
+        breaks += usize::from(back(*f));
+    }
+    if let Some(Some(f)) = forms.last() {
+        breaks += usize::from(forward(*f));
+    }
+    for pair in forms.windows(2) {
+        if let [Some(a), Some(b)] = pair {
+            breaks += usize::from(forward(*a) != back(*b));
+        }
+    }
+    breaks
+}
+
+/// One piece of a text stored in visual order: where it starts in the text (bytes), its
+/// characters, and whether it is an Arabic word (then in reading order, to shape right to left).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VisualPiece {
+    pub at: usize,
+    pub text: String,
+    pub rtl: bool,
+}
+
+/// `text`, stored in visual order, as pieces left to right on the page: each Arabic word
+/// (letters, marks, signs; not digits) put back in reading order with every mark kept on its
+/// letter, everything else as stored. Drawing the pieces in this order shows the text where its
+/// author saw it.
+pub fn visual_pieces(text: &str) -> Vec<VisualPiece> {
+    let arabic_word = |c: char| is_arabic(c) && !is_digit(c);
+    let mut pieces: Vec<VisualPiece> = Vec::new();
+    for (at, c) in text.char_indices() {
+        let rtl = arabic_word(c);
+        match pieces.last_mut() {
+            Some(p) if p.rtl == rtl => p.text.push(c),
+            _ => pieces.push(VisualPiece {
+                at,
+                text: c.to_string(),
+                rtl,
+            }),
+        }
+    }
+    for piece in pieces.iter_mut().filter(|p| p.rtl) {
+        // Letters with their marks (as typed, marks follow their letter), in reverse.
+        let mut clusters: Vec<String> = Vec::new();
+        for c in piece.text.chars() {
+            match clusters.last_mut() {
+                Some(cluster) if is_mark(c) => cluster.push(c),
+                _ => clusters.push(c.to_string()),
+            }
+        }
+        clusters.reverse();
+        piece.text = clusters.concat();
+    }
+    pieces
 }
 
 #[cfg(test)]
@@ -866,6 +889,13 @@ mod tests {
         assert!(word.width > 0.0);
     }
 
+    /// Visual order: every glyph starts at or right of the one before.
+    fn left_to_right(line: &ShapedLine) -> bool {
+        let pens: Vec<f32> = line.glyphs.iter().map(|g| g.x).collect();
+        // Marks sit over their letter, so allow them back a little.
+        pens.windows(2).all(|w| w[1] >= w[0] - 0.6)
+    }
+
     #[test]
     fn reversed_arabic_draws_the_same_glyphs_once_the_drawing_says_so() {
         let mut engine = TextEngine::bundled_only();
@@ -875,44 +905,102 @@ mod tests {
         assert_ne!(ids(&as_is), ids(&right));
         let fixed = engine.shape_line(&DEFAULT_CHAIN, &stored_backwards, true);
         assert_eq!(ids(&fixed), ids(&right));
-        // Text already in reading order is left alone without the toggle.
-        assert_eq!(fix_reversed_arabic("قياس", false), "قياس");
+        let xs = |l: &ShapedLine| l.glyphs.iter().map(|g| g.x).collect::<Vec<_>>();
+        assert_eq!(xs(&fixed), xs(&right));
+        // Text in reading order is left alone without the toggle.
+        assert!(!arabic_stored_visually("قياس", false));
+    }
+
+    /// `(font, glyph)` of the glyphs that draw something (spaces left out: which font a space
+    /// comes from doesn't show).
+    fn ink(engine: &TextEngine, lines: &[ShapedLine]) -> Vec<(u16, u16)> {
+        let space = |f: u16| engine.fonts.get(f).face.glyph_index(' ').map(|g| g.0);
+        lines
+            .iter()
+            .flat_map(|l| l.glyphs.iter())
+            .filter(|g| space(g.font) != Some(g.glyph))
+            .map(|g| (g.font, g.glyph))
+            .collect()
     }
 
     #[test]
-    fn presentation_forms_in_visual_order_are_put_back_without_the_toggle() {
-        // "قياس" as old CAD stores it: left to right on the page, ready-joined forms.
-        // seen isolated, alef final, yeh medial, qaf initial.
-        let visual = "\u{FEB1}\u{FE8E}\u{FEF4}\u{FED7}";
+    fn reversed_mixed_text_keeps_every_run_where_its_author_saw_it() {
+        let mut engine = TextEngine::bundled_only();
+        let mut check = |stored: &str, as_seen: &[&str]| {
+            let line = engine.shape_line(&DEFAULT_CHAIN, stored, true);
+            let parts: Vec<ShapedLine> = as_seen
+                .iter()
+                .map(|t| engine.shape_line(&DEFAULT_CHAIN, t, false))
+                .collect();
+            assert_eq!(
+                ink(&engine, std::slice::from_ref(&line)),
+                ink(&engine, &parts),
+                "{stored}"
+            );
+            assert!(left_to_right(&line), "{stored}");
+            line
+        };
+        // "غرفة D1" seen left to right as ةفرغ D1: the room word on the left, D1 on the right.
+        let line = check("ةفرغ D1", &["غرفة", "D1"]);
+        let last = line.glyphs.last().unwrap();
+        assert_eq!(last.font, NOTO_SANS);
+        assert!(line
+            .glyphs
+            .iter()
+            .filter(|g| g.font == NOTO_ARABIC)
+            .all(|g| g.x < last.x));
+        // Two Arabic words around a Latin one keep their places.
+        check("ريبك D1 ةفرغ", &["كبير", "D1", "غرفة"]);
+        // A number on the left stays on the left; digits read as typed.
+        check("12 ةفرغ", &["12", "غرفة"]);
+        check("12.5 ةفرغ", &["12.5", "غرفة"]);
+        // Two Arabic words, stored visually, draw as the phrase in reading order does.
+        check("ةشيعملا ةفرغ", &["غرفة المعيشة"]);
+    }
+
+    #[test]
+    fn marks_stay_on_their_letter_when_a_word_is_put_back() {
+        // "مَطبخ" with a fatha on meem, stored visually: خ ب ط م + fatha (typed after its letter).
+        let pieces = visual_pieces("خبطمَ");
+        assert_eq!(pieces.len(), 1);
+        assert_eq!(pieces[0].text, "مَطبخ");
+        assert!(pieces[0].rtl);
+        let mut engine = TextEngine::bundled_only();
+        let fixed = engine.shape_line(&DEFAULT_CHAIN, "خبطمَ", true);
+        let right = engine.shape_line(&DEFAULT_CHAIN, "مَطبخ", false);
+        assert_eq!(ids(&fixed), ids(&right));
+    }
+
+    #[test]
+    fn presentation_forms_tell_their_order_by_how_they_join() {
+        // "قياس" in reading order as presentation forms: qaf initial, yeh medial, alef final,
+        // seen isolated.
+        let reading = "\u{FED7}\u{FEF4}\u{FE8E}\u{FEB1}";
+        let visual: String = reading.chars().rev().collect();
         assert_eq!(presentation_form('\u{FEB1}'), Some(Form::Isolated));
         assert_eq!(presentation_form('\u{FE8E}'), Some(Form::Final));
         assert_eq!(presentation_form('\u{FED7}'), Some(Form::Initial));
         assert_eq!(presentation_form('\u{FEF4}'), Some(Form::Medial));
-        // Its first letter is isolated, not final, and not all are isolated: left as is.
-        assert_eq!(fix_reversed_arabic(visual, false), visual);
-        // "باب" stored visually: beh final first.
-        let door = "\u{FE90}\u{FE8E}\u{FE91}";
-        let fixed = fix_reversed_arabic(door, false);
-        assert_eq!(fixed, "\u{FE91}\u{FE8E}\u{FE90}");
-        // Isolated forms only are reversed too.
-        assert_eq!(
-            fix_reversed_arabic("\u{FE8D}\u{FEAD}", false),
-            "\u{FEAD}\u{FE8D}"
-        );
-        // The toggle leaves presentation forms to the rule above.
-        assert_eq!(fix_reversed_arabic(visual, true), visual);
-    }
-
-    #[test]
-    fn numbers_in_a_reversed_run_keep_their_order() {
-        // "غرفة 12" as seen left to right on the page, stored in that order: number first, the
-        // word's letters from its end.
-        let stored = "12 ةفرغ";
-        assert_eq!(fix_reversed_arabic(stored, true), "غرفة 12");
-        assert_eq!(fix_reversed_arabic("12.5 ةفرغ", true), "غرفة 12.5");
-        // A Latin word ends the run; the Latin text stays where it is.
-        assert_eq!(fix_reversed_arabic("D1 باب", true), "D1 باب");
-        assert_eq!(fix_reversed_arabic("D1 ةفرغ ريبك", true), "D1 كبير غرفة");
+        assert!(arabic_stored_visually(&visual, false));
+        assert!(!arabic_stored_visually(reading, false));
+        // Even with the toggle, joining that reads right stays as stored.
+        assert!(!arabic_stored_visually(reading, true));
+        let mut engine = TextEngine::bundled_only();
+        let fixed = engine.shape_line(&DEFAULT_CHAIN, &visual, false);
+        let right = engine.shape_line(&DEFAULT_CHAIN, reading, false);
+        assert_eq!(ids(&fixed), ids(&right));
+        assert!(fixed.glyphs.iter().all(|g| g.font == NOTO_ARABIC));
+        // Drawn joined: not the isolated forms of its letters.
+        let isolated = engine.shape_line(&DEFAULT_CHAIN, "\u{FED5}\u{FEEF}\u{FE8D}\u{FEB1}", false);
+        assert_ne!(ids(&fixed), ids(&isolated));
+        // "دور" (dal, waw, reh never join): every form isolated, both readings fit; as stored.
+        let dor = "\u{FEA9}\u{FEED}\u{FEAD}";
+        assert!(!arabic_stored_visually(dor, false));
+        // The drawing's toggle decides what the forms can't.
+        assert!(arabic_stored_visually(dor, true));
+        // A word in base letters is reversed only by the toggle.
+        assert!(!arabic_stored_visually("سايق", false));
+        assert!(arabic_stored_visually("سايق", true));
     }
 
     #[test]

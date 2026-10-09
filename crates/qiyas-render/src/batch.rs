@@ -231,13 +231,14 @@ fn build(
                 i
             };
             if let Some((xf, glyphs, _)) = laid {
-                let up = [xf.m[0][1], xf.m[1][1]];
+                let along = xf.m[0][0].hypot(xf.m[1][0]);
+                let up = xf.m[0][1].hypot(xf.m[1][1]);
                 batch.texts.push(LaidText {
                     top,
                     entity: flat.entity,
                     chain,
                     color: rgb,
-                    world_height: up[0].hypot(up[1]),
+                    world_size: along.max(up),
                     xf,
                     glyphs,
                 });

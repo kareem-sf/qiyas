@@ -176,7 +176,7 @@ button[aria-pressed="true"] {
   cursor: pointer;
 }
 .ribbon-check input {
-  accent-color: #6e4a9e;
+  accent-color: var(--accent);
   margin: 0;
 }
 .sep {
