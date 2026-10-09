@@ -60,6 +60,8 @@ type Props = {
   onClick(world: Point, screen: Point, worldPerPixel: number): void;
   /** The cursor moved; `worldPerPixel` is the zoom at that moment, for snap tolerances. */
   onMove(world: Point, worldPerPixel: number): void;
+  /** A zoom window was dragged and shown: a corner typed before it is dropped. */
+  onWindowZoomed?(): void;
   /** The zoom has more than doubled or halved since the batch's glyphs were drawn: draw them
    *  again for `pxPerUnit` screen pixels per drawing unit. Called once the zoom settles. */
   onZoomHint?(pxPerUnit: number): void;
@@ -95,6 +97,7 @@ export function Viewport({
   grid = null,
   onClick,
   onMove,
+  onWindowZoomed,
   onZoomHint,
   pictures = NO_PICTURES,
   onPictureHint,
@@ -376,6 +379,7 @@ export function Viewport({
           [Math.max(ax, bx), Math.max(ay, by)],
         ];
         setCamera(fitBounds(camera.current, bounds, 0));
+        onWindowZoomed?.();
       }
     }
   }

@@ -359,3 +359,23 @@ test("Z W takes two typed corners and zooms to the window between them", () => {
   // The zoom is handed over once.
   expect(toolReducer(both, { type: "escape" }).pendingZoom).toBeNull();
 });
+
+test("a drag zoom after one typed corner drops that corner", () => {
+  const typed = (world: Point, time: number): ToolEvent => ({
+    type: "click",
+    world,
+    screen: [Number.NaN, Number.NaN],
+    time,
+    picked: null,
+    info: null,
+    snapped: true,
+  });
+  // Z W, then "0,0"; the viewport's drag zoom sends escape (`onWindowZoomed`).
+  const dragged = run("zoomWindow", [typed([0, 0], 0), { type: "escape" }]);
+  expect(dragged.corner).toBeNull();
+  expect(dragged.hint).toBe("zoom.firstCorner");
+  // The next point is a new first corner, not the second of a window from 0,0.
+  const next = toolReducer(dragged, typed([12, 9], 10));
+  expect(next.pendingZoom).toBeNull();
+  expect(next.corner).toEqual([12, 9]);
+});

@@ -156,3 +156,21 @@ test("a row measured inside a block names the block path in its tooltip", () => 
   expect(row("Line on A-DOOR").getAttribute("title")).toBe("Line on A-DOOR\nIn block PLAN / DOOR");
   expect(row("Wall run").getAttribute("title")).toBe("Wall run");
 });
+
+test("the layer column shows a bound xref's layer by its own name, the full name as its tooltip", () => {
+  render(
+    <TakeoffPanel
+      items={[item("a", "Wall run", 10, { layer: "01-IVORY$0$A-WALL" })]}
+      totals={[]}
+      selectedId={null}
+      onSelect={() => {}}
+      onRemove={() => {}}
+      onRename={() => {}}
+      boq={null}
+      onLink={() => {}}
+    />,
+  );
+  const shown = screen.getByText("A-WALL");
+  expect(shown.tagName).toBe("BDI");
+  expect(shown.closest("td")!.getAttribute("title")).toBe("01-IVORY$0$A-WALL");
+});

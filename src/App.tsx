@@ -1871,6 +1871,7 @@ export default function App() {
               onClick={clickDrawing}
               grid={drafting?.grid ? drafting.grid_spacing : null}
               onMove={measure.onMove}
+              onWindowZoomed={measure.escape}
             />
             {measure.asking && info && (
               <AlongPrompt

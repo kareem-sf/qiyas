@@ -2,6 +2,7 @@ import { memo, useCallback, useRef, useState } from "react";
 import type { Boq, Kind, Measurement, Total } from "../api";
 import { LinkPicker } from "../boq/LinkPicker";
 import { useT } from "../i18n";
+import { shortLayerName } from "./layerName";
 
 type Props = {
   items: Measurement[];
@@ -141,7 +142,7 @@ export const TakeoffPanel = memo(function TakeoffPanel({
                       {m.boq_code ?? "—"}
                     </td>
                     <td title={m.layer}>
-                      <bdi>{m.layer}</bdi>
+                      <bdi>{shortLayerName(m.layer)}</bdi>
                     </td>
                     <td>
                       <div className="actions">
