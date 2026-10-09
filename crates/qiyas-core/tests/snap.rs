@@ -1,6 +1,9 @@
 //! Object snaps on the sample drawing, and the drafting settings in the project file.
 
-use opencadcodec::{DxfWriter, EntityType, Line, Point};
+use std::f64::consts::{FRAC_PI_2, FRAC_PI_4};
+
+use opencadcodec::entities::Insert;
+use opencadcodec::{Arc, BlockRecord, DxfWriter, EntityType, Line, Point, Vector3};
 use qiyas_core::{Command, Drafting, Session, SnapKind, SnapModes};
 
 /// The sample (a 10 m line along y = 0, a 4 x 3 rectangle from the origin, an arc of radius 2
@@ -174,4 +177,74 @@ fn drafting_settings_out_of_range_are_refused() {
         assert!(s.run(Command::SetDrafting { drafting: bad }).is_err());
     }
     assert_eq!(s.drafting, Drafting::default());
+}
+
+#[test]
+fn of_two_ends_in_reach_the_nearer_wins() {
+    let (_dir, s) = session();
+    // The rectangle's corner (0, 0) and the first door leaf's end (1, 1) are both in reach;
+    // whichever is nearer wins, from either side.
+    let (kind, point) = snap(&s, [0.6, 0.6], 1.2, &SnapModes::default());
+    assert_eq!(kind, SnapKind::End);
+    assert!(near(point, [1.0, 1.0]), "{point:?}");
+    let (kind, point) = snap(&s, [0.3, 0.3], 1.2, &SnapModes::default());
+    assert_eq!(kind, SnapKind::End);
+    assert!(near(point, [0.0, 0.0]), "{point:?}");
+}
+
+/// A block ARCB holding a quarter arc about (1, 0), radius 1, from 0 to 90 degrees, inserted at
+/// (50, 50) turned 45 degrees and scaled 2. In the world its centre is (50 + sqrt 2, 50 + sqrt 2),
+/// its radius 2, and it runs from 45 to 135 degrees.
+fn rotated_block_session() -> (tempfile::TempDir, Session, [f64; 2]) {
+    let dir = tempfile::tempdir().unwrap();
+    let mut doc = qiyas_core::fixtures::sample_doc();
+    let mut record = BlockRecord::new("ARCB");
+    record.handle = doc.allocate_handle();
+    let owner = record.handle;
+    doc.block_records.add(record).unwrap();
+    let mut arc = EntityType::Arc(Arc::from_center_radius_angles(
+        Vector3::new(1.0, 0.0, 0.0),
+        1.0,
+        0.0,
+        FRAC_PI_2,
+    ));
+    arc.common_mut().owner_handle = owner;
+    doc.add_entity(arc).unwrap();
+    let insert = Insert::new("ARCB", Vector3::new(50.0, 50.0, 0.0))
+        .with_rotation(FRAC_PI_4)
+        .with_scale(2.0, 2.0, 2.0);
+    doc.add_entity(EntityType::Insert(insert)).unwrap();
+    let path = dir.path().join("arcb.dxf");
+    DxfWriter::new(&doc).write_to_file(&path).unwrap();
+    let session = Session::open(&path).unwrap();
+    let c = 50.0 + 2f64.sqrt();
+    (dir, session, [c, c])
+}
+
+#[test]
+fn an_arc_in_a_turned_and_scaled_block_snaps_where_it_is_drawn() {
+    let (_dir, s, centre) = rotated_block_session();
+    let at = |deg: f64, r: f64| {
+        let a = deg.to_radians();
+        [centre[0] + r * a.cos(), centre[1] + r * a.sin()]
+    };
+    // On the arc at 70 degrees, away from its ends (45, 135) and middle (90): its centre.
+    let found = s
+        .snap(at(70.0, 2.01), 0.05, &SnapModes::default(), None)
+        .unwrap();
+    assert_eq!(found.kind, SnapKind::Centre);
+    assert!(near(found.point, centre), "{:?}", found.point);
+    assert_eq!(found.chain.len(), 1);
+    // Near the top: its middle, at 90 degrees.
+    let found = s
+        .snap(at(90.5, 2.02), 0.05, &SnapModes::default(), None)
+        .unwrap();
+    assert_eq!(found.kind, SnapKind::Mid);
+    assert!(near(found.point, at(90.0, 2.0)), "{:?}", found.point);
+    // And an end, at 45 degrees.
+    let found = s
+        .snap(at(45.5, 2.01), 0.05, &SnapModes::default(), None)
+        .unwrap();
+    assert_eq!(found.kind, SnapKind::End);
+    assert!(near(found.point, at(45.0, 2.0)), "{:?}", found.point);
 }

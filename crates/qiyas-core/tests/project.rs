@@ -225,3 +225,30 @@ fn link_boq_round_trips_in_project() {
     let project: Project = serde_json::from_str(v1).unwrap();
     assert_eq!(project.version, 1);
 }
+
+#[test]
+fn hand_edited_drafting_settings_are_brought_into_range() {
+    let (_dir, drawing) = sample();
+    Session::open(&drawing).unwrap().save_project().unwrap();
+    let file = project_path(&drawing);
+    let mut json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    json["drafting"]["precision"] = 200.into();
+    json["drafting"]["polar_step_deg"] = 0.0.into();
+    json["drafting"]["grid_spacing"] = (-2.0).into();
+    json["drafting"]["ortho"] = true.into();
+    std::fs::write(&file, json.to_string()).unwrap();
+
+    let session = Session::open(&drawing).unwrap();
+    assert!(
+        session.drawing.problems.is_empty(),
+        "{:?}",
+        session.drawing.problems
+    );
+    let d = &session.drafting;
+    assert_eq!(d.precision, 6);
+    assert_eq!(d.polar_step_deg, 1.0);
+    assert_eq!(d.grid_spacing, 1.0);
+    // What was in range is kept.
+    assert!(d.ortho);
+}

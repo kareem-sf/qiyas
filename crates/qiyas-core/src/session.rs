@@ -256,7 +256,7 @@ impl Session {
                     conflicts = project.conflicts;
                     schedules = project.schedules;
                     arabic_reversed = project.arabic_reversed;
-                    drafting = project.drafting;
+                    drafting = project.drafting.clamped();
                 }
                 // Keep a copy, since the next save replaces the unreadable file.
                 Err(e) => drawing

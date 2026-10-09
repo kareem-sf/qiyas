@@ -10,4 +10,5 @@ scripts/check.sh                                              # all local checks
 pnpm tauri dev --config crates/qiyas-desktop/tauri.conf.json  # run the app
 ```
 
-The opencadcodec library is MPL-2.0; its licence text is in `LICENSES/`.
+The opencadcodec (rev `a35f43e`) and opencadkernel (rev `99b6b48`, `geom2d` only) libraries are
+MPL-2.0; their licence texts are in `LICENSES/`.

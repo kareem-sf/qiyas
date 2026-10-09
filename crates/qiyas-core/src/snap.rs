@@ -117,6 +117,27 @@ impl Default for Drafting {
 }
 
 impl Drafting {
+    /// The settings with every number brought into range, for ones read from a project file
+    /// someone may have edited: precision 0 to 6, polar step 1 to 180 degrees, a grid spacing
+    /// above 0 (else the default).
+    pub(crate) fn clamped(self) -> Drafting {
+        let default = Drafting::default();
+        Drafting {
+            precision: self.precision.min(6),
+            polar_step_deg: if self.polar_step_deg.is_nan() {
+                default.polar_step_deg
+            } else {
+                self.polar_step_deg.clamp(1.0, 180.0)
+            },
+            grid_spacing: if self.grid_spacing.is_finite() && self.grid_spacing > 0.0 {
+                self.grid_spacing
+            } else {
+                default.grid_spacing
+            },
+            ..self
+        }
+    }
+
     /// Fails when a number is out of range.
     pub(crate) fn check(&self) -> Result<(), CoreError> {
         let invalid = |m: &str| Err(CoreError::InvalidCommand(m.to_string()));
