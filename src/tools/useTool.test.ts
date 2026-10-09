@@ -557,3 +557,31 @@ test("the kinds picked go with the selection set, so a rotate leaves dimensions 
   expect(scale.modify?.handles).toEqual([]);
   expect(scale.modify?.skipped).toBe(1);
 });
+
+test("an edit tool picks with the click point, swaps trim for extend on Shift, and snaps its points", () => {
+  // Trim: Enter (everything cuts), then a click on a piece and a Shift+click.
+  let s = run("trim", [{ type: "finish" }, click([3, 4], 0, 5)]);
+  expect(s.pendingCommand).toEqual({ type: "edit", kind: "trim", cutters: [], target: targets([5])[0], at_point: [3, 4] });
+  s = toolReducer(s, { ...click([6, 0], 1000, 6), shift: true } as ToolEvent);
+  expect(s.pendingCommand).toEqual({ type: "edit", kind: "extend", boundaries: [], target: targets([6])[0], at_end: [6, 0] });
+  // Esc ends the clicking: back to the edges.
+  expect(toolReducer(s, { type: "escape" }).edit?.phase).toBe("edges");
+
+  // Offset: the side is a point, placed as snapped (no entity picked).
+  let o = toolReducer(initialToolState("offset"), { type: "draw", input: { type: "number", value: 0.5 } });
+  o = toolReducer(o, click([0, 0], 0, 3));
+  expect(o.edit?.phase).toBe("point");
+  o = toolReducer(o, { ...click([1, -2], 1000), snapped: true } as ToolEvent);
+  expect(o.pendingCommand).toEqual({
+    type: "edit",
+    kind: "offset",
+    target: targets([3])[0],
+    distance: 0.5,
+    side_point: [1, -2],
+  });
+
+  // A selection made with the select tool goes along: overkill runs on it at once.
+  const picked = toolReducer(initialToolState("select"), { type: "selected", handles: [8, 9], add: false });
+  const overkill = toolReducer(picked, { type: "tool", tool: "overkill" });
+  expect(overkill.pendingCommand).toEqual({ type: "edit", kind: "overkill", targets: targets([8, 9]), tol: 1e-6 });
+});

@@ -30,6 +30,18 @@ import {
   type ModifyInput,
   type ModifyState,
 } from "./modifyTools";
+import {
+  editBoxes,
+  editHighlight,
+  editOptions,
+  editPicks,
+  editReducer,
+  initialEditState,
+  isEditTool,
+  takesEditNumber,
+  type EditInput,
+  type EditState,
+} from "./editTools";
 import { constrain, gridRound, NO_TRACK, type Track } from "./tracking";
 
 /** Two clicks this close in time and on screen are a double click. */
@@ -66,6 +78,8 @@ export type ToolState = {
   draw: DrawState | null;
   /** A modify tool's own state, with the entities it works on; null for the other tools. */
   modify: ModifyState | null;
+  /** An edit tool's own state (trim, extend, fillet…); null for the other tools. */
+  edit: EditState | null;
   /** The selection set: top-level handles the select tool picked (a click replaces it, Shift and
    *  boxes add). A modify tool takes it when it starts; Esc and resets clear it. */
   selection: number[];
@@ -136,7 +150,9 @@ const promptOf = (tool: Tool): string =>
     ? initialDrawState(tool).hint
     : isModifyTool(tool)
       ? initialModifyState(tool, []).hint
-      : (PROMPT[tool] ?? "");
+      : isEditTool(tool)
+        ? initialEditState(tool).hint
+        : (PROMPT[tool] ?? "");
 
 /** The draw tools that take points until Enter, which a double click also ends. */
 const MANY_POINTS = new Set(["polyline", "spline", "revcloud", "wipeout"]);
@@ -149,12 +165,14 @@ export const initialToolState = (
   kinds: Record<number, string> = {},
 ): ToolState => {
   const modify = isModifyTool(tool) ? initialModifyState(tool, selection, kinds) : null;
+  const edit = isEditTool(tool) ? initialEditState(tool, selection) : null;
+  const own = modify ?? edit;
   return {
     tool,
     points: [],
-    pendingCommand: modify?.command ?? null,
-    hint: modify ? modify.hint : tool === "select" ? "" : promptOf(tool),
-    hintArgs: modify ? modify.hintArgs : null,
+    pendingCommand: own?.command ?? null,
+    hint: own ? own.hint : tool === "select" ? "" : promptOf(tool),
+    hintArgs: own ? own.hintArgs : null,
     selected: null,
     lastClick: null,
     asking: null,
@@ -162,8 +180,9 @@ export const initialToolState = (
     pendingZoom: null,
     draw: isDrawTool(tool) ? initialDrawState(tool) : null,
     modify,
-    selection: modify ? [] : selection,
-    kinds: modify ? {} : kinds,
+    edit,
+    selection: own ? [] : selection,
+    kinds: own ? {} : kinds,
   };
 };
 
@@ -187,6 +206,16 @@ function modifyStep(s: ToolState, input: ModifyInput): ToolState {
   const modify = modifyReducer(s.modify, input);
   return { ...s, modify, hint: modify.hint, hintArgs: modify.hintArgs, pendingCommand: modify.command };
 }
+
+/** Hands `input` to the edit tool; a change it finishes becomes the pending command. */
+function editStep(s: ToolState, input: EditInput): ToolState {
+  if (!s.edit) return s;
+  const edit = editReducer(s.edit, input);
+  return { ...s, edit, hint: edit.hint, hintArgs: edit.hintArgs, pendingCommand: edit.command };
+}
+
+/** Where an edit tool's last click was (the first break point, the entity offset). */
+const lastEditPoint = (s: ToolState): Point | null => s.edit?.first?.at ?? null;
 
 /** The last point a modify tool placed. */
 const lastModifyPoint = (s: ToolState): Point | null =>
@@ -237,6 +266,7 @@ function measureSelected(s: ToolState): ToolState {
 
 function finish(s: ToolState): ToolState {
   if (s.modify) return modifyStep(s, { type: "finish" });
+  if (s.edit) return editStep(s, { type: "finish" });
   if (s.tool === "select") return measureSelected(s);
   if (s.draw) return { ...drawStep(s, { type: "finish" }), lastClick: null };
   const need = s.tool === "area" ? 3 : 2;
@@ -254,15 +284,17 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
       // The selection set goes along; with none, the entity the select tool picked (whole).
       const carried = s.selection.length > 0 ? s.selection : s.selected ? [s.selected.picked.top] : [];
       const next = initialToolState(event.tool, carried, s.kinds);
-      return next.modify ? next : { ...next, hint: promptOf(event.tool) };
+      return next.modify || next.edit ? next : { ...next, hint: promptOf(event.tool) };
     }
     case "draw":
       if (s.modify && event.input.type !== "ring") return modifyStep(s, event.input);
+      if (s.edit && event.input.type !== "ring") return editStep(s, event.input);
       return drawStep(s, event.input);
     case "modify":
       return modifyStep(s, event.input);
     case "selected": {
       if (s.modify) return modifyStep(s, { type: "picked", handles: event.handles, kinds: event.kinds });
+      if (s.edit) return editStep(s, { type: "picked", handles: event.handles });
       if (s.tool !== "select") return s;
       const kinds = withKinds(event.add ? s.kinds : {}, event.handles, event.kinds);
       return { ...s, selection: event.add ? union(s.selection, event.handles) : event.handles, kinds };
@@ -270,7 +302,12 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
     case "prune": {
       const selection = s.selection.filter(event.present);
       const modify = s.modify && { ...s.modify, handles: s.modify.handles.filter(event.present) };
-      return { ...s, selection, modify };
+      const edit = s.edit && {
+        ...s.edit,
+        handles: s.edit.handles.filter(event.present),
+        first: s.edit.first && event.present(s.edit.first.handle) ? s.edit.first : null,
+      };
+      return { ...s, selection, modify, edit };
     }
     case "cancel":
       return initialToolState(s.tool);
@@ -300,6 +337,21 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
         Math.hypot(event.screen[0] - last.screen[0], event.screen[1] - last.screen[1]) <=
           DOUBLE_CLICK_PX;
       const clicked = { ...s, lastClick: { screen: event.screen, time: event.time } };
+      if (s.edit) {
+        if (editPicks(s.edit)) {
+          const picked = event.picked;
+          if (!picked) return clicked;
+          return editStep(clicked, {
+            type: "pick",
+            handle: picked.top,
+            kind: picked.kind,
+            at: event.world,
+            shift: event.shift,
+          });
+        }
+        const point = event.snapped ? event.world : constrain(lastEditPoint(s), event.world, event.track ?? NO_TRACK);
+        return editStep(clicked, { type: "point", p: point });
+      }
       if (s.modify) {
         if (s.modify.phase === "select") {
           const picked = event.picked;
@@ -453,10 +505,11 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
     ),
   );
   const modifyPhase = state.modify?.phase ?? null;
+  const editPicking = state.edit ? editPicks(state.edit) : null;
   /** Clicks place snapped points, pick an entity, or neither (corners). */
-  const snapsNow = snaps(tool) || modifyPhase === "points";
-  const picksNow = picksEntity(tool) || modifyPhase === "select";
-  const placesNow = placesPoints(tool) || modifyPhase === "points";
+  const snapsNow = snaps(tool) || modifyPhase === "points" || editPicking === false;
+  const picksNow = picksEntity(tool) || modifyPhase === "select" || editPicking === true;
+  const placesNow = placesPoints(tool) || modifyPhase === "points" || editPicking === false;
   const snapping = snapsNow && !!drafting?.osnap;
   const track: Track = drafting
     ? { ortho: drafting.ortho, polar: drafting.polar, polarStepDeg: drafting.polar_step_deg }
@@ -465,7 +518,9 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
     ? lastDrawPoint(state)
     : state.modify
       ? lastModifyPoint(state)
-      : state.points.length > 0
+      : state.edit
+        ? lastEditPoint(state)
+        : state.points.length > 0
         ? state.points[state.points.length - 1]
         : null;
 
@@ -595,7 +650,8 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
       dispatch({ type: "modify", input: { type: "box", bounds } });
       return;
     }
-    if (tool !== "select" && modifyPhase !== "select") return;
+    const editBox = state.edit ? editBoxes(state.edit) : false;
+    if (tool !== "select" && modifyPhase !== "select" && !editBox) return;
     try {
       const picked = await api.pickWindow(bounds, crossing);
       dispatch({ type: "selected", handles: picked.map((p) => p.top), add: shift, kinds: picked.map((p) => p.kind) });
@@ -618,6 +674,7 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
 
   const draw = state.draw;
   const modify = state.modify;
+  const edit = state.edit;
   return {
     points: state.points,
     /** A draw tool's state (null for the others), the option words and whether a typed distance
@@ -626,9 +683,11 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
     draw,
     /** A modify tool's state; null for the other tools. */
     modify,
-    drawOptions: draw ? drawOptions(draw) : modify ? modifyOptions(modify) : [],
-    takesNumber: draw ? takesNumber(draw) : modify ? takesModifyNumber(modify) : false,
-    lastDrawPoint: lastDrawPoint(state) ?? lastModifyPoint(state),
+    /** An edit tool's state (trim, extend, fillet…); null for the other tools. */
+    edit,
+    drawOptions: draw ? drawOptions(draw) : modify ? modifyOptions(modify) : edit ? editOptions(edit) : [],
+    takesNumber: draw ? takesNumber(draw) : modify ? takesModifyNumber(modify) : edit ? takesEditNumber(edit) : false,
+    lastDrawPoint: lastDrawPoint(state) ?? lastModifyPoint(state) ?? lastEditPoint(state),
     preview: useMemo(
       () => (draw ? drawPreview(draw, cursor) : modify ? modifyPreview(modify, cursor) : null),
       [draw, modify, cursor],
@@ -637,13 +696,19 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
      *  the select tool's own pick, which is highlighted as picked, maybe inside a block). */
     selection: modify
       ? modify.handles
-      : state.selection.filter((h) => !state.selected || h !== state.selected.picked.top),
+      : edit
+        ? editHighlight(edit)
+        : state.selection.filter((h) => !state.selected || h !== state.selected.picked.top),
     /** Dimensions and tables the modify tool just left out: say how many. */
     skipped,
     /** The drawing changed: keep only the selected handles `present`. */
     prune: (present: (handle: number) => boolean) => dispatch({ type: "prune", present }),
     /** A left drag in the viewport draws a selection box now. */
-    boxes: tool === "select" || modifyPhase === "select" || modifyPhase === "window",
+    boxes:
+      tool === "select" ||
+      modifyPhase === "select" ||
+      modifyPhase === "window" ||
+      (edit !== null && editBoxes(edit)),
     onBox,
     /** Hands a typed option or distance to the draw or modify tool. */
     drawInput: (input: DrawInput) => dispatch({ type: "draw", input }),

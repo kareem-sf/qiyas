@@ -21,6 +21,7 @@ import {
 } from "./camera";
 import { isClick } from "./click";
 import type { DrawKind } from "../tools/drawTools";
+import type { EditKind } from "../tools/editTools";
 import type { ModifyKind } from "../tools/modifyTools";
 import { createRenderer, type Renderer, type Theme } from "./gl";
 import { wheelFactor } from "./wheel";
@@ -30,6 +31,8 @@ export type Tool =
   | DrawKind
   /** The modify tools (`MODIFY_TOOLS`). */
   | ModifyKind
+  /** The edit tools (`EDIT_TOOLS`): trim, extend, fillet… */
+  | EditKind
   | "select"
   | "distance"
   | "area"

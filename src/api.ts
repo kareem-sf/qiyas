@@ -565,6 +565,43 @@ export type ModifySpec =
   | { kind: "array_polar"; targets: EntityTarget[]; centre: P; count: number; angle: number }
   | { kind: "explode"; targets: EntityTarget[] };
 
+/** A polyline edit (`qiyas_core::PEditOp`). */
+export type PEditOp =
+  | "close"
+  | "open"
+  | "fit_curve"
+  | "decurve"
+  | "convert_to_polyline"
+  | { width: number }
+  /** A vertex on the polyline nearest the point. */
+  | { add_vertex: P }
+  /** The vertex nearest the point goes. */
+  | { delete_vertex: P };
+
+/** What an edit changes (`qiyas_core::EditSpec`): entities at the top of the sheet, in drawing
+ *  coordinates. `at_*` points are where the entity was clicked: which piece, end or side. */
+export type EditSpec =
+  /** No cutters: everything drawn cuts. */
+  | { kind: "trim"; cutters: EntityTarget[]; target: EntityTarget; at_point: P }
+  /** No boundaries: everything drawn. */
+  | { kind: "extend"; boundaries: EntityTarget[]; target: EntityTarget; at_end: P }
+  | { kind: "break"; target: EntityTarget; p1: P; p2: P }
+  | { kind: "join"; targets: EntityTarget[] }
+  | {
+      kind: "lengthen";
+      target: EntityTarget;
+      at_end: P;
+      by: { delta: number } | { total: number } | { percent: number };
+    }
+  | { kind: "reverse"; targets: EntityTarget[] }
+  | { kind: "offset"; target: EntityTarget; distance: number; side_point: P }
+  | { kind: "fillet"; a: EntityTarget; b: EntityTarget; at_a: P; at_b: P; radius: number }
+  | { kind: "chamfer"; a: EntityTarget; b: EntityTarget; at_a: P; at_b: P; d1: number; d2: number }
+  | { kind: "blend"; a: EntityTarget; b: EntityTarget; at_a: P; at_b: P }
+  | { kind: "pedit"; target: EntityTarget; op: PEditOp }
+  | { kind: "overkill"; targets: EntityTarget[]; tol: number }
+  | { kind: "flatten"; targets: EntityTarget[] };
+
 /** What new entities are drawn with (`qiyas_core::Current`). */
 export type Current = {
   layer: string;
@@ -662,7 +699,10 @@ export type Command =
   | { type: "delete_entities"; targets: EntityTarget[] }
   /** Moves, copies, turns… entities at the top of the sheet: one undo step (`changed`, or `added`
    *  with the new handles). */
-  | ({ type: "modify" } & ModifySpec);
+  | ({ type: "modify" } & ModifySpec)
+  /** Trims, extends, breaks, joins… entities at the top of the sheet: one undo step (`edited`, or
+   *  `added` for offset and blend). */
+  | ({ type: "edit" } & EditSpec);
 
 export type Outcome =
   | { type: "measured"; measurement: Measurement }
@@ -672,6 +712,8 @@ export type Outcome =
   | { type: "added"; handles: number[] }
   /** An explode's parts, and how many entities picked had none and were left as they are. */
   | { type: "exploded"; handles: number[]; left_alone: number }
+  /** An edit in place: entities it added and removed, and how many picked it left as they were. */
+  | { type: "edited"; added: number[]; removed: number[]; left_alone: number }
   | { type: "nothing" }
   /** Facts to show: rows of a label key ("radius", "centre"…) and its value written out. */
   | { type: "info"; title: string; rows: [string, string][] }

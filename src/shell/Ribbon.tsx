@@ -2,6 +2,7 @@ import { useState, type KeyboardEvent } from "react";
 import type { NamedView, Recent } from "../api";
 import { useT } from "../i18n";
 import { DRAW_TOOLS } from "../tools/drawTools";
+import { EDIT_TOOLS } from "../tools/editTools";
 import { MODIFY_TOOLS } from "../tools/modifyTools";
 import type { Tool } from "../viewport/Viewport";
 import { RecentsMenu } from "./RecentsMenu";
@@ -135,6 +136,9 @@ export function Ribbon(props: Props) {
           <span key="sep-modify" className="sep" />,
           <span key="modify" className="ribbon-group" role="group" aria-label={t("modify.group")}>
             {MODIFY_TOOLS.map((name) => tool(name, `modify.${name}`))}
+            {/* The second row of Modify: trim, extend, fillet… */}
+            <span className="ribbon-break" />
+            {EDIT_TOOLS.map((name) => tool(name, `edit.${name}`))}
           </span>,
         ]}
         {tab === "measure" && [

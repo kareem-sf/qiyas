@@ -196,6 +196,25 @@ test("the modify commands and their aliases start the modify tools", () => {
   expect(parse("Z E", cmd)).toEqual({ type: "zoom", how: "extents" });
 });
 
+test("the edit commands and their aliases start the edit tools", () => {
+  const tools: [string, string][] = [
+    ["TR", "trim"],
+    ["EX", "extend"],
+    ["BR", "break"],
+    ["J", "join"],
+    ["LEN", "lengthen"],
+    ["REVERSE", "reverse"],
+    ["O", "offset"],
+    ["F", "fillet"],
+    ["CHA", "chamfer"],
+    ["BLEND", "blend"],
+    ["PE", "pedit"],
+    ["OVERKILL", "overkill"],
+    ["FLATTEN", "flatten"],
+  ];
+  for (const [line, tool] of tools) expect(parse(line, cmd)).toEqual({ type: "tool", tool });
+});
+
 test("a draw tool's options and typed distances", () => {
   const pline = { ...at("point", [0, 0]), options: ["A", "L", "C", "U"] };
   expect(parse("a", pline)).toEqual({ type: "option", option: "A" });

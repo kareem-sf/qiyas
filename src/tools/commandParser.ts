@@ -115,6 +115,19 @@ const TOOLS: Partial<Record<CommandName, Tool>> = {
   ARRAY: "array",
   EXPLODE: "explode",
   ERASE: "erase",
+  TRIM: "trim",
+  EXTEND: "extend",
+  BREAK: "break",
+  JOIN: "join",
+  LENGTHEN: "lengthen",
+  REVERSE: "reverse",
+  OFFSET: "offset",
+  FILLET: "fillet",
+  CHAMFER: "chamfer",
+  BLEND: "blend",
+  PEDIT: "pedit",
+  OVERKILL: "overkill",
+  FLATTEN: "flatten",
 };
 
 /** The draws typed whole on one line. */

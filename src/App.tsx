@@ -390,13 +390,20 @@ export default function App() {
       changed = true;
       await refreshTakeoffAndBoq();
       // Divide, measure along, the draws and the modifies change the drawing itself.
-      const drawingChanged = ["divide_along", "measure_along", "draw", "modify", "delete_entities"];
+      const drawingChanged = ["divide_along", "measure_along", "draw", "modify", "edit", "delete_entities"];
       if (drawingChanged.includes(cmd.type)) {
         await redraw();
       }
       if (outcome.type === "measured") setSelectedId(outcome.measurement.id);
       if (outcome.type === "exploded" && outcome.left_alone > 0) {
         setNotice(t("modify.leftAlone", { n: outcome.left_alone }));
+      }
+      if (outcome.type === "edited") {
+        if (cmd.type === "edit" && cmd.kind === "overkill") {
+          setNotice(t("edit.removed", { n: outcome.removed.length }));
+        } else if (outcome.left_alone > 0) {
+          setNotice(t("edit.leftAlone", { n: outcome.left_alone }));
+        }
       }
     });
     if (changed) await autosave();
@@ -1681,7 +1688,7 @@ export default function App() {
   } else if (measure.asking) {
     expect = measure.asking === "divide" ? "count" : "step";
     promptKey = `cmd.prompt.${expect}`;
-  } else if (measure.draw || measure.modify) {
+  } else if (measure.draw || measure.modify || measure.edit) {
     expect = "point";
     promptKey = measure.hint;
   } else if (tool === "distance" || tool === "area") {

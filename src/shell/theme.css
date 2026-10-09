@@ -178,6 +178,11 @@ button[aria-pressed="true"] {
 .ribbon-group {
   display: contents;
 }
+/* Starts a new row of the panel (Modify's second row). */
+.ribbon-break {
+  flex-basis: 100%;
+  height: 0;
+}
 .ribbon-check {
   display: inline-flex;
   align-items: center;
