@@ -52,3 +52,37 @@ impl PickIndex {
             .collect()
     }
 }
+
+/// Release only: guards the `codegen-units = 1` setting for this crate in `Cargo.toml`.
+/// Without it rstar's bulk load runs about 4 times slower. Run by `scripts/check.sh`.
+#[cfg(all(test, not(debug_assertions)))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pick_index_one_million_segments_under_a_second() {
+        // Short segments scattered over 1 km, as a big drawing has them.
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 40) as f32 / (1u64 << 24) as f32
+        };
+        let mut batch = Batch::default();
+        for _ in 0..1_000_000 {
+            let (x, y) = (next() * 1000.0 - 500.0, next() * 1000.0 - 500.0);
+            batch
+                .segments
+                .extend([x, y, x + next() * 2.0, y + next() * 2.0]);
+        }
+        let t = std::time::Instant::now();
+        let index = PickIndex::new(&batch);
+        let secs = t.elapsed().as_secs_f64();
+        assert!(index.pick([0.0, 0.0], 1000.0).is_some());
+        assert!(
+            secs < 1.0,
+            "PickIndex::new took {secs:.2} s for 1 M segments"
+        );
+    }
+}

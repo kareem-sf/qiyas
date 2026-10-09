@@ -28,6 +28,11 @@ fn main() {
     let batch_ms = ms(t);
     let bytes = batch.to_bytes().len();
 
+    // The batch above already built one; this times the click index on its own.
+    let t = Instant::now();
+    drop(qiyas_render::PickIndex::new(&batch));
+    let index_ms = ms(t);
+
     let [[x0, y0], [x1, y1]] = batch.bounds;
     let centre = [(x0 + x1) / 2.0, (y0 + y1) / 2.0];
     let t = Instant::now();
@@ -44,6 +49,7 @@ fn main() {
     println!("file      {}", path.display());
     println!("open ms   {open_ms:.0}");
     println!("batch ms  {batch_ms:.0}");
+    println!("index ms  {index_ms:.0} (click index alone, part of the batch)");
     println!("pick ms   {pick_ms:.3} (avg of 20, hit {:?})", hits[0]);
     println!("clone ms  {clone_ms:.0} (copy of the document, as save makes)");
     println!("segments  {}", batch.segments.len() / 4);

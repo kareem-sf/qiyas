@@ -42,3 +42,10 @@ opt-level = 3
 
 [profile.dev.package.qiyas-render]
 opt-level = 3
+# One codegen unit: split across units, rstar's bulk load in the pick index runs about 4 times
+# slower (1.6 s against 0.35 s on a 1.4 M-segment drawing). Guarded by the release test
+# `pick_index_one_million_segments_under_a_second` in scripts/check.sh.
+codegen-units = 1
+
+[profile.release.package.qiyas-render]
+codegen-units = 1
