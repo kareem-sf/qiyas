@@ -57,7 +57,7 @@ export function LinkPicker({ title, items, current, onPick, onClose }: Props) {
     <div className="link-picker" role="dialog" aria-label={`${t("boq.link")}: ${title}`} ref={box}>
       <div className="link-picker-head">
         <span className="heading" title={title}>
-          {t("boq.link")}: {title}
+          {t("boq.link")}: <bdi>{title}</bdi>
         </span>
         {current !== null && (
           <button type="button" onClick={() => onPick(null)}>

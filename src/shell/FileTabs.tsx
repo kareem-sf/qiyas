@@ -50,7 +50,7 @@ export function FileTabs({ tabs, active, onSelect, onClose }: Props) {
             tabIndex={roving.tabIndex(i)}
             onClick={() => onSelect(tab.id)}
           >
-            {tab.title}
+            <bdi>{tab.title}</bdi>
             {tab.dirty && (
               <span className="dirty" aria-label={t("tab.unsaved")}>
                 {" •"}

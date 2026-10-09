@@ -152,8 +152,7 @@ test("a row measured inside a block names the block path in its tooltip", () => 
       onLink={() => {}}
     />,
   );
-  expect(screen.getByText("Line on A-DOOR").getAttribute("title")).toBe(
-    "Line on A-DOOR\nIn block PLAN / DOOR",
-  );
-  expect(screen.getByText("Wall run").getAttribute("title")).toBe("Wall run");
+  const row = (text: string) => screen.getByText(text).closest("button")!;
+  expect(row("Line on A-DOOR").getAttribute("title")).toBe("Line on A-DOOR\nIn block PLAN / DOOR");
+  expect(row("Wall run").getAttribute("title")).toBe("Wall run");
 });

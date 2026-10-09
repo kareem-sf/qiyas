@@ -118,7 +118,7 @@ export const TakeoffPanel = memo(function TakeoffPanel({
                             }
                             onDoubleClick={() => startEdit(m)}
                           >
-                            {m.description}
+                            <bdi>{m.description}</bdi>
                           </button>
                         )}
                         {m.self_intersecting && (
@@ -140,7 +140,9 @@ export const TakeoffPanel = memo(function TakeoffPanel({
                     <td title={m.boq_code ?? undefined} className={m.boq_code ? undefined : "muted"}>
                       {m.boq_code ?? "—"}
                     </td>
-                    <td title={m.layer}>{m.layer}</td>
+                    <td title={m.layer}>
+                      <bdi>{m.layer}</bdi>
+                    </td>
                     <td>
                       <div className="actions">
                         <button

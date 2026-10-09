@@ -19,7 +19,7 @@ export function InfoCard({ info, onClose }: { info: Info; onClose(): void }) {
     <section className="info-card" aria-labelledby="info-card-title">
       <header>
         <h2 id="info-card-title" className="heading">
-          {t("inquiry.info")}: {title}
+          {t("inquiry.info")}: <bdi>{title}</bdi>
         </h2>
         <button type="button" aria-label={t("inquiry.close")} title={t("inquiry.close")} onClick={onClose}>
           ×

@@ -22,7 +22,7 @@ export function SheetTabs({ sheets, active, onSelect }: Props) {
           tabIndex={roving.tabIndex(i)}
           onClick={() => onSelect(s.block)}
         >
-          {s.is_model ? t("model") : s.name}
+          {s.is_model ? t("model") : <bdi>{s.name}</bdi>}
         </button>
       ))}
     </div>

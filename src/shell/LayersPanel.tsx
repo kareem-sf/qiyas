@@ -47,7 +47,7 @@ export const LayersPanel = memo(function LayersPanel({
             <li key={l.name} className={visible ? undefined : "dim"}>
               <span className="swatch" style={{ background: `rgb(${swatchColor(l.color, theme).join(",")})` }} />
               <span className="name" title={l.name}>
-                {l.name}
+                <bdi>{l.name}</bdi>
               </span>
               <button
                 type="button"

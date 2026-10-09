@@ -80,7 +80,7 @@ export function ViewsMenu({ load, onGo, onSave, onDelete, onKey }: Props) {
                   onGo(v);
                 }}
               >
-                {v.name}
+                <bdi>{v.name}</bdi>
               </button>
               <button
                 type="button"

@@ -74,3 +74,24 @@ test("a white layer's swatch is Ink on the light theme and white on the dark one
   rerender(<LayersPanel {...props} theme="dark" />);
   expect(swatch().style.background).toBe("rgb(255, 255, 255)");
 });
+
+test("in Arabic, a Latin layer name is isolated so it reads in its own direction", () => {
+  const name = "01-IVORY TOWER$0$A-FURN";
+  document.documentElement.dir = "rtl";
+  try {
+    render(
+      <LayersPanel
+        layers={[layer(name)]}
+        hidden={new Set()}
+        onToggle={() => {}}
+        onIsolate={() => {}}
+        onShowAll={() => {}}
+      />,
+    );
+    const shown = screen.getByText(name);
+    expect(shown.tagName).toBe("BDI");
+    expect(shown.closest(".name")).not.toBeNull();
+  } finally {
+    document.documentElement.dir = "";
+  }
+});

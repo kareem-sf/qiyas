@@ -64,10 +64,12 @@ export function RecentsMenu({ onOpen, load, onOpenRecent, onClear, onKey }: Prop
               }}
             >
               <span>
-                {r.name}
+                <bdi>{r.name}</bdi>
                 {r.missing && ` ${t("recent.missing")}`}
               </span>
-              <span className="muted">{r.folder}</span>
+              <span className="muted">
+                <bdi>{r.folder}</bdi>
+              </span>
             </button>
           ))}
           {list.length > 0 && (
