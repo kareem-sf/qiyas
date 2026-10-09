@@ -238,6 +238,33 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
   DOR, DBA, DCO, QDIM, DED (T text, F flip, M move), DIMBREAK, DIMSPACE, DIMJOGLINE, LE, MLD, TOL,
   D (DIMSTYLE). Not AI tools yet.
 
+## Tables and fields
+
+- Tables are drawn as themselves (`qiyas_geom::table_entities`, flatten's Table arm): the `*T`
+  block when it has something in it (in table coordinates: insertion point, horizontal direction,
+  rows going down), else grid lines (none inside a merged cell) and each cell's text as an MText
+  generated from the rows, columns and cells. Picking and windows give the table; `entity_info`
+  has `table` (cells as plain text, widths, heights, merges, field cells) and no length or area;
+  `table_cell_at` (IPC too) is the cell under a point.
+- `qiyas-core/src/table.rs`: `Command::Table { at, rows, cols, col_width, row_height, data }` (current
+  layer, current text style, text half the row height, middle centre), `EditCell` (plain text,
+  stored escaped; a merged cell's first), `InsertRow/InsertCol { at }`, `DeleteRow/DeleteCol`
+  (one kept), `MergeCells { first, last }` (one cell unmerges). One undo step each; each draws the
+  `*T` block again (`rebuild_table`). Find and replace reaches cells. Qiyas's tables are marked
+  `QIYAS_TEXT` (reading order).
+- `qiyas-core/src/field.rs`: fields are AutoCAD field codes in the text (`%<\AcVar Date ...>%`,
+  `%<\AcVar Filename>%`, `%<\AcObjProp Object(%<\_ObjId HEX>%).Area|Length ...>%`, Qiyas's own
+  `%<\AcVar QiyasCount "BLOCK">%`). The visible text is the value; the code (the whole text as
+  typed) is kept in `QIYAS_FIELD` xdata (on a table: row, column, code per cell). `Command::Field
+  { at, height, field }` adds a one-line text; codes typed into Text, MText or a cell count too.
+  `UpdateFields` works them all out again; area and length fields follow every modify, edit and
+  erase in the same step (`follow_fields`). Drawing units, 3 decimals; UTC date; `####` when the
+  entity is gone. Not worked out on open.
+- Annotate tab, Tables group: Table (click, then rows, columns and sizes), Edit table (or a double
+  click on a table: `TableEditor`, a grid in the drawing's column order, Shift+click to merge),
+  Field (click, then `FieldDialog`; area and length pick their entity; also from the table
+  editor into a cell), Update fields. Command line TABLE (TB), TABLEDIT, FIELD, UPDATEFIELD.
+
 ## PDF
 
 - PDFs are read through pdfium (BSD-3), a shared library loaded at run time through
