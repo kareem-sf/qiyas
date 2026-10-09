@@ -9,6 +9,7 @@
 
 use std::io::Cursor;
 
+use opencadcodec::types::Transform;
 use opencadcodec::{BlockRecord, Vector3};
 use opencadcodec::{CadDocument, DxfReader, DxfReaderConfiguration, DxfWriter, EntityType, Handle};
 use qiyas_geom::{flatten_with, is_xref_block, Xform};
@@ -16,7 +17,7 @@ use qiyas_geom::{flatten_with, is_xref_block, Xform};
 use crate::blocks::Importer;
 use crate::modify::{place, place_keeping_blocks, Placing, MAX_NEW};
 use crate::session::BATCH_TOL;
-use crate::{CoreError, Session, Target};
+use crate::{CoreError, Session, Target, Units};
 
 /// The first line of every clipboard text Qiyas writes (a DXF comment), so paste knows it.
 pub const CLIPBOARD_MARK: &str = "999\nQIYAS CLIPBOARD 1\n";
@@ -34,10 +35,15 @@ fn invalid(why: impl Into<String>) -> CoreError {
 /// Moves the entity `h` of `doc` by `d`; a dimension takes its own block along (its block is in
 /// world coordinates, see `Session::shift_block`).
 fn shift_in(doc: &mut CadDocument, h: Handle, d: [f64; 2]) {
+    place_in(doc, h, &Placing::shift(d));
+}
+
+/// `shift_in` for any placing (a scale from another drawing's units).
+fn place_in(doc: &mut CadDocument, h: Handle, p: &Placing) {
     let Some(e) = doc.get_entity_mut(h) else {
         return;
     };
-    let Some(block) = place_keeping_blocks(e, &Placing::shift(d)) else {
+    let Some(block) = place_keeping_blocks(e, p) else {
         return;
     };
     let inside = doc
@@ -47,7 +53,7 @@ fn shift_in(doc: &mut CadDocument, h: Handle, d: [f64; 2]) {
         .unwrap_or_default();
     for h in inside {
         if let Some(e) = doc.get_entity_mut(h) {
-            place(e, &Placing::shift(d));
+            place(e, p);
         }
     }
 }
@@ -161,6 +167,9 @@ impl Session {
             .and_then(|r| r.with_configuration(config).read_with_stats())
             .map_err(|e| invalid(format!("The clipboard could not be read: {e}")))?;
         let src = read.document;
+        // Drawn in other units (unitless as millimetres): scaled to this drawing's.
+        let factor = Units::from_header(src.header.insertion_units).to_metres()
+            / self.drawing.units.to_metres();
         let count = src.entities_in_block(MODEL).count();
         if count == 0 {
             return Err(invalid("The clipboard holds no entities"));
@@ -181,7 +190,9 @@ impl Session {
                 importer.fill(MODEL, owner, Vector3::ZERO)?;
             }
             let values = Default::default();
-            return Ok(vec![self.insert_block(&name, at, 1.0, 0.0, &values, None)?]);
+            return Ok(vec![
+                self.insert_block(&name, at, factor, 0.0, &values, None)?
+            ]);
         }
         let owner = self
             .sheet_owner()
@@ -195,7 +206,15 @@ impl Session {
                 }
             }
         }
+        let scale = Transform::from_scaling(Vector3::new(factor, factor, factor));
         for &h in &added {
+            if factor != 1.0 {
+                place_in(
+                    &mut self.drawing.doc,
+                    Handle::new(h),
+                    &Placing::plain(scale),
+                );
+            }
             shift_in(&mut self.drawing.doc, Handle::new(h), at);
         }
         Ok(added)

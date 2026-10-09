@@ -377,3 +377,32 @@ fn blocks_nested_too_deep_and_oversized_pastes_are_refused_and_nothing_changes()
 fn paste_ok(s: &mut Session, text: String) -> Vec<u64> {
     paste(s, [0.0, 0.0], &text, false)
 }
+
+#[test]
+fn a_paste_from_a_millimetre_drawing_into_a_metre_one_is_scaled() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut mm = CadDocument::new();
+    mm.header.insertion_units = 4;
+    mm.add_entity(EntityType::Line(Line::from_coords(
+        0.0, 0.0, 0.0, 1000.0, 0.0, 0.0,
+    )))
+    .unwrap();
+    let mut from = open(&mm, dir.path(), "mm.dxf");
+    let line: Vec<Target> = handles(&from).into_iter().map(t).collect();
+    let text = copy(&mut from, line, Some([0.0, 0.0]));
+    let mut to = open(&plain_doc(), dir.path(), "m.dxf");
+    let pasted = paste(&mut to, [5.0, 5.0], &text, false);
+    let EntityType::Line(l) = to.drawing.doc.get_entity(Handle::new(pasted[0])).unwrap() else {
+        panic!("a line");
+    };
+    let ends = [l.start.x, l.start.y, l.end.x, l.end.y];
+    for (got, want) in ends.iter().zip([5.0, 5.0, 6.0, 5.0]) {
+        assert!((got - want).abs() < 1e-9, "{ends:?}");
+    }
+    // As a block: one reference at a thousandth.
+    let block = paste(&mut to, [0.0, 0.0], &text, true);
+    let EntityType::Insert(i) = to.drawing.doc.get_entity(Handle::new(block[0])).unwrap() else {
+        panic!("a reference");
+    };
+    assert!((i.x_scale() - 0.001).abs() < 1e-12, "{}", i.x_scale());
+}
