@@ -52,6 +52,11 @@ pub enum Command {
     SetSheet {
         block: String,
     },
+    /// Says whether the drawing holds its Arabic text backwards (`Session::arabic_reversed`).
+    /// Not an undo step.
+    SetArabicReversed {
+        on: bool,
+    },
     /// A measurement of any kind, described by the caller (usually the AI). Geometry is `points`
     /// (drawing coordinates) or `handles` (measured from the entities' flattened paths, summed),
     /// not both. A length, area or count is worked out from the geometry, so `value` must be
@@ -123,7 +128,9 @@ impl Command {
     /// it is not an undo step.
     pub(crate) fn changes(&self) -> Option<Part> {
         match self {
-            Command::SetLayerHidden { .. } | Command::SetSheet { .. } => None,
+            Command::SetLayerHidden { .. }
+            | Command::SetSheet { .. }
+            | Command::SetArabicReversed { .. } => None,
             Command::SetBoq { .. } | Command::SetBoqTolerance { .. } => Some(Part::Boq),
             Command::SetConflicts { .. } | Command::ResolveConflict { .. } => Some(Part::Conflicts),
             _ => Some(Part::Takeoff),
@@ -209,6 +216,10 @@ impl Session {
             }
             Command::SetSheet { block } => {
                 self.set_sheet(&block)?;
+                return Ok(Outcome::Changed);
+            }
+            Command::SetArabicReversed { on } => {
+                self.arabic_reversed = on;
                 return Ok(Outcome::Changed);
             }
             Command::AddMeasurement {

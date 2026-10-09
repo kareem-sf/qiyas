@@ -8,7 +8,9 @@ use opencadcodec::entities::Insert;
 use opencadcodec::tables::normalize_name;
 use opencadcodec::{CadDocument, DwgWriter, DxfWriter, EntityType, Handle};
 use qiyas_geom::{exact_area, exact_length, flatten, insert_instances, Xform};
-use qiyas_render::{build_batch, Batch, PickIndex, Visibility};
+use qiyas_render::{
+    build_batch_with_text, place_text, Batch, PickIndex, TextEngine, TextOptions, Visibility,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::commands::Part;
@@ -43,6 +45,9 @@ pub struct Session {
     pub conflicts: Vec<Conflict>,
     /// The schedules read off every sheet at the last comparison.
     pub schedules: Vec<Schedule>,
+    /// The drawing holds its Arabic text backwards (typed in visual order for old CAD fonts):
+    /// draw every Arabic run reversed. Saved in the project file.
+    pub arabic_reversed: bool,
     history: History,
     /// Which session this is; see `NEXT_EPOCH`.
     epoch: u64,
@@ -50,11 +55,15 @@ pub struct Session {
     document_revision: u64,
     /// Batch and pick index of the last sheet and visibility drawn; rebuilt when either changes.
     cache: RefCell<Option<Cached>>,
+    /// Fonts, glyph atlas and glyph cache, kept across batches so the atlas pages the window
+    /// holds stay valid.
+    text: RefCell<TextEngine>,
 }
 
 struct Cached {
     sheet: String,
     hidden_layers: HashSet<String>,
+    arabic_reversed: bool,
     batch: Batch,
     index: PickIndex,
 }
@@ -67,6 +76,8 @@ pub struct DrawingInfo {
     /// "inches", "feet", "millimetres", "centimetres", "metres" or "unknown".
     pub units: String,
     pub problems: Vec<String>,
+    /// See `Session::arabic_reversed`.
+    pub arabic_reversed: bool,
 }
 
 /// Shown when some block content was too deep or too large to draw.
@@ -215,6 +226,7 @@ impl Session {
         let mut boq = None;
         let mut conflicts = Vec::new();
         let mut schedules = Vec::new();
+        let mut arabic_reversed = false;
         let project_file = project_path(path);
         if project_file.exists() {
             match project::load(&project_file) {
@@ -231,6 +243,7 @@ impl Session {
                     boq = project.boq;
                     conflicts = project.conflicts;
                     schedules = project.schedules;
+                    arabic_reversed = project.arabic_reversed;
                 }
                 // Keep a copy, since the next save replaces the unreadable file.
                 Err(e) => drawing
@@ -253,10 +266,12 @@ impl Session {
             boq,
             conflicts,
             schedules,
+            arabic_reversed,
             history: History::default(),
             epoch: NEXT_EPOCH.fetch_add(1, Ordering::Relaxed),
             document_revision: 0,
             cache: RefCell::new(None),
+            text: RefCell::new(TextEngine::new()),
         })
     }
 
@@ -271,6 +286,7 @@ impl Session {
             boq: self.boq.clone(),
             conflicts: self.conflicts.clone(),
             schedules: self.schedules.clone(),
+            arabic_reversed: self.arabic_reversed,
         };
         project::save(&path, &project)?;
         Ok(path)
@@ -328,7 +344,7 @@ impl Session {
     /// current sheet (builds the sheet's batch when it is not cached yet).
     pub fn info(&self) -> DrawingInfo {
         let mut problems = self.drawing.problems.clone();
-        if self.with_cache(|c| c.batch.truncated) {
+        if self.with_cache(None, |c| c.batch.truncated) {
             problems.push(TRUNCATED.to_string());
         }
         DrawingInfo {
@@ -337,6 +353,7 @@ impl Session {
             layers: self.drawing.layers(),
             units: units_name(self.drawing.units).to_string(),
             problems,
+            arabic_reversed: self.arabic_reversed,
         }
     }
 
@@ -369,15 +386,17 @@ impl Session {
         names
     }
 
-    /// Line segments of the current sheet with the current visibility.
+    /// Line segments and text glyphs of the current sheet with the current visibility.
     pub fn batch(&self) -> Batch {
-        self.with_cache(|cached| cached.batch.clone())
+        self.with_cache(None, |cached| cached.batch.clone())
     }
 
-    /// Names what `batch` would give: it changes when the sheet, the hidden layers or the
-    /// drawing itself change, and not for take-off, BOQ or conflict changes, undo or redo.
-    /// A 64-bit FNV-1a hash of the session, sheet, hidden layers (sorted, case-folded) and
-    /// document revision, cut to 53 bits so it survives a trip through a JavaScript number.
+    /// Names what `batch` would give: it changes when the sheet, the hidden layers, the Arabic
+    /// setting or the drawing itself change, and not for take-off, BOQ or conflict changes, undo
+    /// or redo. Not for the zoom the glyphs are drawn for either: the window asks for that.
+    /// A 64-bit FNV-1a hash of the session, sheet, hidden layers (sorted, case-folded), Arabic
+    /// setting and document revision, cut to 53 bits so it survives a trip through a JavaScript
+    /// number.
     pub fn batch_version(&self) -> u64 {
         let mut hash = Fnv::new();
         hash.write(&self.epoch.to_le_bytes());
@@ -394,23 +413,36 @@ impl Session {
             hash.write(name.as_bytes());
             hash.write(&[0xFF]);
         }
+        hash.write(&[u8::from(self.arabic_reversed)]);
         hash.write(&self.document_revision.to_le_bytes());
         hash.0 & ((1 << 53) - 1)
     }
 
     /// The batch as `Batch::to_bytes` lays it out, or `None` when `if_version` is the current
-    /// `batch_version`, so the caller keeps the batch it already holds.
-    pub fn batch_bytes_if(&self, if_version: Option<u64>) -> Option<Vec<u8>> {
+    /// `batch_version`, so the caller keeps the batch it already holds. `px_per_unit` is the
+    /// zoom to draw the glyphs for (screen pixels per drawing unit); `None` keeps the zoom of the
+    /// batch in hand, or fits the sheet on a new one.
+    pub fn batch_bytes_if(
+        &self,
+        if_version: Option<u64>,
+        px_per_unit: Option<f64>,
+    ) -> Option<Vec<u8>> {
         if if_version == Some(self.batch_version()) {
             return None;
         }
-        Some(self.batch().to_bytes())
+        Some(self.with_cache(px_per_unit, |cached| cached.batch.to_bytes()))
+    }
+
+    /// The glyph atlas pages changed after version `since` (all when `None`), as
+    /// `Atlas::to_bytes` lays them out.
+    pub fn atlas_bytes(&self, since: Option<u64>) -> Vec<u8> {
+        self.text.borrow().atlas_bytes(since)
     }
 
     /// The entity nearest to `p` (drawing coordinates) within `tol`, among what is drawn, down
     /// to the entity inside any blocks.
     pub fn pick(&self, p: [f64; 2], tol: f64) -> Option<Picked> {
-        self.with_cache(|cached| {
+        self.with_cache(None, |cached| {
             let range = cached.batch.range_of(cached.index.pick(p, tol)?)?;
             Some(Picked {
                 top: range.top,
@@ -536,22 +568,45 @@ impl Session {
         }
     }
 
-    /// Runs `f` on the cached batch, rebuilding it first if the sheet or visibility changed.
-    fn with_cache<R>(&self, f: impl FnOnce(&Cached) -> R) -> R {
+    /// Runs `f` on the cached batch, rebuilding it first if the sheet, visibility or Arabic
+    /// setting changed, and drawing its glyphs again for `px_per_unit` when given and new.
+    fn with_cache<R>(&self, px_per_unit: Option<f64>, f: impl FnOnce(&Cached) -> R) -> R {
         let mut cache = self.cache.borrow_mut();
+        let mut text = self.text.borrow_mut();
         let stale = cache.as_ref().is_none_or(|c| {
-            c.sheet != self.sheet || c.hidden_layers != self.visibility.hidden_layers
+            c.sheet != self.sheet
+                || c.hidden_layers != self.visibility.hidden_layers
+                || c.arabic_reversed != self.arabic_reversed
         });
         if stale {
-            let batch = build_batch(&self.drawing.doc, &self.sheet, &self.visibility, BATCH_TOL);
+            let options = TextOptions {
+                arabic_reversed: self.arabic_reversed,
+                px_per_unit,
+            };
+            let batch = build_batch_with_text(
+                &self.drawing.doc,
+                &self.sheet,
+                &self.visibility,
+                BATCH_TOL,
+                &mut text,
+                options,
+            );
             *cache = Some(Cached {
                 sheet: self.sheet.clone(),
                 hidden_layers: self.visibility.hidden_layers.clone(),
+                arabic_reversed: self.arabic_reversed,
                 index: PickIndex::new(&batch),
                 batch,
             });
         }
-        f(cache.as_ref().expect("cache was just filled"))
+        let cached = cache.as_mut().expect("cache was just filled");
+        if let Some(px) = px_per_unit.filter(|p| *p > 0.0 && p.is_finite()) {
+            if !cached.batch.texts.is_empty() && px != cached.batch.px_per_unit {
+                place_text(&mut cached.batch, &mut text, px);
+            }
+        }
+        drop(text);
+        f(cached)
     }
 }
 

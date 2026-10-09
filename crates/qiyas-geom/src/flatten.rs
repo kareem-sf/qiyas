@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 use std::f64::consts::TAU;
 
-use opencadcodec::entities::{BoundaryEdge, EntityCommon, EntityType, Insert};
+use opencadcodec::entities::{
+    AttributeEntity, BoundaryEdge, EntityCommon, EntityType, HorizontalAlignment, Insert, MText,
+    Text, TextHorizontalAlignment, TextVerticalAlignment, VerticalAlignment,
+};
 use opencadcodec::types::Matrix3;
 use opencadcodec::{CadDocument, Color, Vector3};
 
@@ -33,6 +36,69 @@ pub struct FlatPath {
     pub entity: u64,
     /// Name of the xref the path comes from; always `None` for now.
     pub xref: Option<String>,
+    /// For a text's box (picked, not drawn): what the text draws.
+    pub text: Option<Box<FlatText>>,
+}
+
+/// What a text (TEXT, MTEXT, or an attribute) draws, for the text renderer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FlatText {
+    /// A TEXT's or attribute's string, or an MTEXT's with its formatting codes.
+    pub value: String,
+    /// Text style name.
+    pub style: String,
+    /// Text height in entity coordinates; 0 when the entity gives none (the style's then).
+    pub height: f64,
+    pub layout: TextLayout,
+    /// Entity (object) coordinates to world: the extrusion normal, then the block references.
+    pub xf: Xform,
+}
+
+/// Where a text sits and how it is aligned, in entity coordinates.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TextLayout {
+    /// TEXT and attributes: one line. When the alignment is not left and baseline, `alignment`
+    /// (if any) is the point aligned to; aligned and fit text runs from `insertion` to it.
+    Line {
+        insertion: [f64; 2],
+        alignment: Option<[f64; 2]>,
+        rotation: f64,
+        /// 0 when the entity gives none (the style's then).
+        width_factor: f64,
+        horizontal: HAlign,
+        vertical: VAlign,
+        /// Generation flag 2: drawn mirrored in X.
+        backward: bool,
+        /// Generation flag 4: drawn mirrored in Y.
+        upside_down: bool,
+    },
+    /// MTEXT: lines wrapped at `width` (0: no wrapping), placed by `attachment` (1 top left to
+    /// 9 bottom right, as in DXF), `line_spacing` a factor of the default spacing.
+    Block {
+        insertion: [f64; 2],
+        rotation: f64,
+        width: f64,
+        attachment: u8,
+        line_spacing: f64,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HAlign {
+    Left,
+    Center,
+    Right,
+    Aligned,
+    Middle,
+    Fit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VAlign {
+    Baseline,
+    Bottom,
+    Middle,
+    Top,
 }
 
 /// What `flatten` produced. `truncated` is true when block content was left out: nesting deeper
@@ -209,14 +275,18 @@ impl Walk<'_> {
                 self.insert(e, xf, style, depth);
                 return;
             }
-            EntityType::Text(e) => (
-                text_box(&e.insertion_point, e.height, e.rotation, &e.value),
-                true,
-            ),
-            EntityType::MText(e) => (
-                text_box(&e.insertion_point, e.height, e.rotation, &e.value),
-                true,
-            ),
+            EntityType::Text(e) => {
+                let points = text_box(&e.insertion_point, e.height, e.rotation, &e.value);
+                let text = line_text(e, xf);
+                self.push_text(points, xf, style, handle, text);
+                return;
+            }
+            EntityType::MText(e) => {
+                let points = text_box(&e.insertion_point, e.height, e.rotation, &e.value);
+                let text = block_text(e, xf);
+                self.push_text(points, xf, style, handle, text);
+                return;
+            }
             _ => return,
         };
         self.push(points, closed, xf, style, handle);
@@ -233,7 +303,8 @@ impl Walk<'_> {
             let at = ocs(&a.normal, a.insertion_point.z).map_or(*xf, |o| o.then(xf));
             let points = text_box(&a.insertion_point, a.height, a.rotation, &a.value);
             let attribute_style = self.style(&a.common, Some(style));
-            self.push(points, true, &at, &attribute_style, handle);
+            let text = attribute_text(a, &at);
+            self.push_text(points, &at, &attribute_style, handle, text);
         }
         if depth >= MAX_DEPTH {
             self.truncated = true;
@@ -260,15 +331,39 @@ impl Walk<'_> {
         self.chain.pop();
     }
 
+    /// Appends a text's closed box, carrying what the text draws.
+    fn push_text(
+        &mut self,
+        points: Vec<[f64; 2]>,
+        xf: &Xform,
+        style: &Style,
+        entity: u64,
+        text: FlatText,
+    ) {
+        self.push_with(points, true, xf, style, entity, Some(Box::new(text)));
+    }
+
     /// Maps `points` through `xf` and appends them as a path, spending one unit of the budget;
     /// a closed path drops a final point that repeats its first.
     fn push(
+        &mut self,
+        points: Vec<[f64; 2]>,
+        closed: bool,
+        xf: &Xform,
+        style: &Style,
+        entity: u64,
+    ) {
+        self.push_with(points, closed, xf, style, entity, None);
+    }
+
+    fn push_with(
         &mut self,
         mut points: Vec<[f64; 2]>,
         closed: bool,
         xf: &Xform,
         style: &Style,
         entity: u64,
+        text: Option<Box<FlatText>>,
     ) {
         if points.is_empty() {
             return;
@@ -291,6 +386,7 @@ impl Walk<'_> {
             chain: self.chain.clone(),
             entity,
             xref: None,
+            text,
         });
     }
 }
@@ -531,6 +627,95 @@ fn extend_ring(ring: &mut Vec<[f64; 2]>, points: Vec<[f64; 2]>) {
         if ring.last().is_none_or(|&last| !same_point(last, p)) {
             ring.push(p);
         }
+    }
+}
+
+/// What a TEXT draws, placed by `xf` (its normal already in it).
+fn line_text(e: &Text, xf: &Xform) -> FlatText {
+    use TextHorizontalAlignment as H;
+    use TextVerticalAlignment as V;
+    FlatText {
+        value: e.value.clone(),
+        style: e.style.clone(),
+        height: e.height,
+        layout: TextLayout::Line {
+            insertion: xy(&e.insertion_point),
+            alignment: e.alignment_point.as_ref().map(xy),
+            rotation: e.rotation,
+            width_factor: e.width_factor,
+            horizontal: match e.horizontal_alignment {
+                H::Left => HAlign::Left,
+                H::Center => HAlign::Center,
+                H::Right => HAlign::Right,
+                H::Aligned => HAlign::Aligned,
+                H::Middle => HAlign::Middle,
+                H::Fit => HAlign::Fit,
+            },
+            vertical: match e.vertical_alignment {
+                V::Baseline => VAlign::Baseline,
+                V::Bottom => VAlign::Bottom,
+                V::Middle => VAlign::Middle,
+                V::Top => VAlign::Top,
+            },
+            backward: e.generation_flags & 2 != 0,
+            upside_down: e.generation_flags & 4 != 0,
+        },
+        xf: *xf,
+    }
+}
+
+/// What an attribute draws, placed by `xf` (its normal already in it). A multi-line attribute
+/// draws as its MTEXT.
+fn attribute_text(a: &AttributeEntity, xf: &Xform) -> FlatText {
+    if let Some(mtext) = a.embedded_mtext.as_deref().filter(|_| a.is_multiline) {
+        return block_text(mtext, xf);
+    }
+    use HorizontalAlignment as H;
+    use VerticalAlignment as V;
+    FlatText {
+        value: a.value.clone(),
+        style: a.text_style.clone(),
+        height: a.height,
+        layout: TextLayout::Line {
+            insertion: xy(&a.insertion_point),
+            alignment: Some(xy(&a.alignment_point)),
+            rotation: a.rotation,
+            width_factor: a.width_factor,
+            horizontal: match a.horizontal_alignment {
+                H::Left => HAlign::Left,
+                H::Center => HAlign::Center,
+                H::Right => HAlign::Right,
+                H::Aligned => HAlign::Aligned,
+                H::Middle => HAlign::Middle,
+                H::Fit => HAlign::Fit,
+            },
+            vertical: match a.vertical_alignment {
+                V::Baseline => VAlign::Baseline,
+                V::Bottom => VAlign::Bottom,
+                V::Middle => VAlign::Middle,
+                V::Top => VAlign::Top,
+            },
+            backward: a.text_generation_flags & 2 != 0,
+            upside_down: a.text_generation_flags & 4 != 0,
+        },
+        xf: *xf,
+    }
+}
+
+/// What an MTEXT draws, placed by `xf`.
+fn block_text(e: &MText, xf: &Xform) -> FlatText {
+    FlatText {
+        value: e.value.clone(),
+        style: e.style.clone(),
+        height: e.height,
+        layout: TextLayout::Block {
+            insertion: xy(&e.insertion_point),
+            rotation: e.rotation,
+            width: e.rectangle_width,
+            attachment: e.attachment_point as u8,
+            line_spacing: e.line_spacing_factor,
+        },
+        xf: *xf,
     }
 }
 

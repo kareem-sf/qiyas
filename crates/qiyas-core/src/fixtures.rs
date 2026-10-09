@@ -111,6 +111,53 @@ pub fn schedule_doc() -> CadDocument {
     doc
 }
 
+/// Arabic room labels on the sample's layers, for drawing Arabic text: a room outline on A-WALL
+/// with "غرفة المعيشة" (living room, 0.6 tall) inside it at (1, 2), "مطبخ" (kitchen) at (7, 2)
+/// stored backwards (letter by letter in visual order, as old CAD fonts needed it), and the
+/// mixed "Door D1 باب" at (1, -1), 0.4 tall, on A-DOOR. Units are metres.
+pub fn arabic_text_doc() -> CadDocument {
+    let mut doc = CadDocument::new();
+    doc.header.insertion_units = 6;
+    add_layers(&mut doc);
+    let mut room = LwPolyline::new();
+    for (x, y) in [(0.0, 0.0), (10.0, 0.0), (10.0, 4.0), (0.0, 4.0)] {
+        room.add_point(Vector2::new(x, y));
+    }
+    room.is_closed = true;
+    let kitchen_backwards: String = "مطبخ".chars().rev().collect();
+    let entities = [
+        ("A-WALL", EntityType::LwPolyline(room)),
+        (
+            "A-WALL",
+            EntityType::Text(
+                Text::with_value("غرفة المعيشة", Vector3::new(1.0, 2.0, 0.0)).with_height(0.6),
+            ),
+        ),
+        (
+            "A-WALL",
+            EntityType::Text(
+                Text::with_value(kitchen_backwards, Vector3::new(7.0, 2.0, 0.0)).with_height(0.6),
+            ),
+        ),
+        (
+            "A-DOOR",
+            EntityType::Text(
+                Text::with_value("Door D1 باب", Vector3::new(1.0, -1.0, 0.0)).with_height(0.4),
+            ),
+        ),
+    ];
+    for (layer, mut entity) in entities {
+        entity.common_mut().layer = layer.to_string();
+        doc.add_entity(entity).unwrap();
+    }
+    doc
+}
+
+/// Writes the Arabic text drawing as `arabic.<ext>` in `dir`.
+pub fn write_arabic(dir: &Path, ext: &str) -> PathBuf {
+    write_doc(&arabic_text_doc(), &dir.join(format!("arabic.{ext}")))
+}
+
 /// Layers A-WALL (red) and A-DOOR (green).
 fn add_layers(doc: &mut CadDocument) {
     for (name, index) in [("A-WALL", 1), ("A-DOOR", 3)] {

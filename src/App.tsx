@@ -14,6 +14,7 @@ import {
   openDrawing,
   pick,
   redo,
+  atlasPages,
   batchVersion,
   renderBatch,
   runCommand,
@@ -57,7 +58,13 @@ import {
 } from "./tools/overlay";
 import { shortcutFor } from "./tools/shortcuts";
 import { useTool } from "./tools/useTool";
-import { parseBatch, type Batch, type Target } from "./viewport/batch";
+import {
+  parseAtlas,
+  parseBatch,
+  type AtlasPage,
+  type Batch,
+  type Target,
+} from "./viewport/batch";
 import type { Bounds } from "./viewport/camera";
 import type { Theme } from "./viewport/gl";
 import { Viewport, type ViewportHandle } from "./viewport/Viewport";
@@ -108,6 +115,14 @@ export default function App() {
   const batchVersionRef = useRef<number | null>(null);
   /** Bumped to run the fit effect when a redraw keeps the batch it has. */
   const [fitTick, setFitTick] = useState(0);
+  /** Every glyph atlas page received for this drawing, and the atlas version they make up. */
+  const [atlas, setAtlas] = useState<AtlasPage[]>([]);
+  const atlasHeld = useRef(new Map<number, AtlasPage>());
+  const atlasVersionRef = useRef<number | null>(null);
+  /** True while glyphs are fetched for a new zoom, so zooming on doesn't stack requests. */
+  const glyphsBusy = useRef(false);
+  /** The drawing holds its Arabic text backwards (View tab). */
+  const [arabicReversed, setArabicReversed] = useState(false);
   const [sheet, setSheetBlock] = useState("");
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [tool, setTool] = useState<Tool>("select");
@@ -240,8 +255,18 @@ export default function App() {
     if (changed) await autosave();
   }
 
+  /** Fetches the atlas pages `next` needs that the window doesn't hold yet. */
+  async function syncAtlas(next: Batch) {
+    if (next.atlasVersion === 0 || next.atlasVersion === atlasVersionRef.current) return;
+    const update = parseAtlas(await atlasPages(atlasVersionRef.current ?? undefined));
+    for (const page of update.pages) atlasHeld.current.set(page.index, page);
+    atlasVersionRef.current = update.version;
+    setAtlas([...atlasHeld.current.values()]);
+  }
+
   /** Draws the core's current batch. When the core says the drawing, sheet and layers are as they
-   *  were at the last draw, the batch in hand stays and only the fit (if asked) happens. */
+   *  were at the last draw, the batch in hand stays and only the fit (if asked) happens. A fit draws
+   *  the glyphs for the core's own guess at the zoom; otherwise for the zoom on screen. */
   async function redraw(fit = false) {
     const version = await batchVersion();
     if (version === batchVersionRef.current && batchHeld.current) {
@@ -252,13 +277,50 @@ export default function App() {
       }
       return;
     }
-    const bytes = await renderBatch();
+    const bytes = await renderBatch(undefined, fit ? undefined : viewport.current?.pxPerUnit());
     if (!bytes) return;
     const next = parseBatch(bytes);
+    await syncAtlas(next);
     batchVersionRef.current = version;
     batchHeld.current = next;
     fitNext.current = fit;
     setBatch(next);
+  }
+
+  /** Draws the text again for the zoom on screen (`pxPerUnit` screen pixels per drawing unit). The
+   *  lines of the batch in hand stay when the core's batch is the same one. */
+  async function redrawGlyphs(pxPerUnit: number) {
+    if (!batchHeld.current || glyphsBusy.current) return;
+    glyphsBusy.current = true;
+    await run(async () => {
+      const version = await batchVersion();
+      const bytes = await renderBatch(undefined, pxPerUnit);
+      if (!bytes) return;
+      let next = parseBatch(bytes);
+      await syncAtlas(next);
+      const held = batchHeld.current;
+      if (held && version === batchVersionRef.current) {
+        // The same lines: keep the arrays the viewport has uploaded already.
+        const { segments, colors, ranges, chains } = held;
+        next = { ...next, segments, colors, ranges, chains };
+      }
+      batchVersionRef.current = version;
+      batchHeld.current = next;
+      setBatch(next);
+    });
+    glyphsBusy.current = false;
+  }
+
+  /** Says whether the drawing holds its Arabic text backwards, and redraws its text. */
+  async function chooseArabicReversed(on: boolean) {
+    let changed = false;
+    await run(async () => {
+      await runCommand({ type: "set_arabic_reversed", on });
+      setArabicReversed(on);
+      changed = true;
+      await redraw();
+    });
+    if (changed) await autosave();
   }
 
   /** Does what a tool's result asks of the window: another sheet, other layers, a zoom. */
@@ -363,6 +425,11 @@ export default function App() {
       const next = await openDrawing(path);
       batchVersionRef.current = null;
       batchHeld.current = null;
+      // A new drawing has a new atlas.
+      atlasVersionRef.current = null;
+      atlasHeld.current = new Map();
+      setAtlas([]);
+      setArabicReversed(next.arabic_reversed);
       autosaveOff.current = false;
       setInfo(next);
       // The core opens a drawing on its first sheet.
@@ -746,6 +813,8 @@ export default function App() {
             viewport.current?.fitExtents();
             focusDrawing();
           }}
+          arabicReversed={arabicReversed}
+          onArabicReversed={info ? chooseArabicReversed : undefined}
         />
         <div className="prefs">
           <div role="group" aria-label={t("language")}>
@@ -807,6 +876,8 @@ export default function App() {
             <Viewport
               ref={viewport}
               batch={batch}
+              atlas={atlas}
+              onZoomHint={redrawGlyphs}
               highlight={highlight}
               overlay={overlay}
               tool={tool}

@@ -77,22 +77,38 @@ pub async fn batch_version(state: State<'_, AppState>) -> Result<u64, String> {
     with_session(&state, |s| Ok(s.batch_version()))
 }
 
-/// The current sheet's line batch, in the binary layout of `Batch::to_bytes`. When `if_version` is
-/// the current `batch_version`, only the 8 bytes `NOT_MODIFIED`: the window keeps its batch.
+/// The current sheet's batch (lines and text glyph quads), in the binary layout of
+/// `Batch::to_bytes`. When `if_version` is the current `batch_version`, only the 8 bytes
+/// `NOT_MODIFIED`: the window keeps its batch. `px_per_unit` is the zoom to draw the glyphs for
+/// (screen pixels per drawing unit); left out, the batch in hand keeps its zoom.
 #[tauri::command]
 pub async fn render_batch(
     if_version: Option<u64>,
+    px_per_unit: Option<f64>,
     state: State<'_, AppState>,
 ) -> Result<Response, String> {
-    with_session(&state, |s| Ok(Response::new(batch_response(s, if_version))))
+    with_session(&state, |s| {
+        Ok(Response::new(batch_response(s, if_version, px_per_unit)))
+    })
+}
+
+/// The glyph atlas pages changed after `since_version` (all when left out), in the binary layout
+/// of `Atlas::to_bytes`: `u64` version, `u32` page count, then per page `u32` index, width,
+/// height and byte length and the R8 bytes.
+#[tauri::command]
+pub async fn atlas_pages(
+    since_version: Option<u64>,
+    state: State<'_, AppState>,
+) -> Result<Response, String> {
+    with_session(&state, |s| Ok(Response::new(s.atlas_bytes(since_version))))
 }
 
 /// "QINM" and four zero bytes, in place of a batch that is unchanged. A batch starts with "BYIQ".
 const NOT_MODIFIED: [u8; 8] = [0x51, 0x49, 0x4E, 0x4D, 0, 0, 0, 0];
 
-fn batch_response(session: &Session, if_version: Option<u64>) -> Vec<u8> {
+fn batch_response(session: &Session, if_version: Option<u64>, px_per_unit: Option<f64>) -> Vec<u8> {
     session
-        .batch_bytes_if(if_version)
+        .batch_bytes_if(if_version, px_per_unit)
         .unwrap_or_else(|| NOT_MODIFIED.to_vec())
 }
 

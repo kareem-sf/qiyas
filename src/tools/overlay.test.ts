@@ -51,8 +51,8 @@ test("bounds come from the points, else from the handles drawn in the batch", ()
     origin: [100, 100],
     segments: new Float32Array([0, 0, 1, 0, 2, 2, 3, 5, 4, 4, 6, 4]),
     ranges: rangesOf([
-      { top: 7n, entity: 7n, chain: NO_CHAIN, first: 0, count: 1 },
-      { top: 8n, entity: 9n, chain: 0, first: 1, count: 2 },
+      { top: 7n, entity: 7n, chain: NO_CHAIN, first: 0, count: 1, flags: 0 },
+      { top: 8n, entity: 9n, chain: 0, first: 1, count: 2, flags: 0 },
     ]),
     chains: [[8n]],
   } as unknown as Batch;

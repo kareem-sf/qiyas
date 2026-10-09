@@ -168,6 +168,17 @@ button[aria-pressed="true"] {
   padding: 6px 10px;
   background: var(--bg);
 }
+.ribbon-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 6px;
+  cursor: pointer;
+}
+.ribbon-check input {
+  accent-color: #6e4a9e;
+  margin: 0;
+}
 .sep {
   width: 1px;
   height: 20px;

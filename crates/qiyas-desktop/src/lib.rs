@@ -29,6 +29,7 @@ pub fn run() {
             commands::set_layer_hidden,
             commands::batch_version,
             commands::render_batch,
+            commands::atlas_pages,
             commands::pick,
             commands::entity_info,
             commands::run_command,

@@ -132,13 +132,78 @@ fn batch_bytes_are_sent_only_when_the_version_differs() {
     let (_dir, mut session) = sample_session();
     let v0 = session.batch_version();
     let full = session.batch().to_bytes();
-    assert_eq!(session.batch_bytes_if(None), Some(full.clone()));
-    assert_eq!(session.batch_bytes_if(Some(v0 ^ 1)), Some(full));
-    assert_eq!(session.batch_bytes_if(Some(v0)), None);
+    assert_eq!(session.batch_bytes_if(None, None), Some(full.clone()));
+    assert_eq!(session.batch_bytes_if(Some(v0 ^ 1), None), Some(full));
+    assert_eq!(session.batch_bytes_if(Some(v0), None), None);
 
     // A layer click changes the version, so the old one gets the new batch.
     session.set_layer_hidden("A-WALL", true);
-    let bytes = session.batch_bytes_if(Some(v0)).expect("batch changed");
+    let bytes = session
+        .batch_bytes_if(Some(v0), None)
+        .expect("batch changed");
     assert_eq!(bytes, session.batch().to_bytes());
-    assert_eq!(session.batch_bytes_if(Some(session.batch_version())), None);
+    assert_eq!(
+        session.batch_bytes_if(Some(session.batch_version()), None),
+        None
+    );
+}
+
+#[test]
+fn the_arabic_setting_redraws_text_is_saved_and_is_no_undo_step() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = qiyas_core::fixtures::write_arabic(dir.path(), "dxf");
+    let mut session = Session::open(&path).unwrap();
+    assert!(!session.arabic_reversed);
+    assert!(!session.info().arabic_reversed);
+    let v0 = session.batch_version();
+    let before = session.batch();
+    assert_eq!(before.text_ranges.len(), 3);
+    assert!(!before.quads.is_empty());
+
+    session
+        .run(Command::SetArabicReversed { on: true })
+        .unwrap();
+    assert!(session.arabic_reversed);
+    assert!(!session.can_undo());
+    assert_ne!(session.batch_version(), v0);
+    // Same glyph count, other glyphs for the Arabic texts.
+    let after = session.batch();
+    assert_eq!(after.quads.len(), before.quads.len());
+    assert_ne!(after.quads, before.quads);
+
+    session.save_project().unwrap();
+    let again = Session::open(&path).unwrap();
+    assert!(again.arabic_reversed);
+    assert!(again.info().arabic_reversed);
+}
+
+#[test]
+fn glyphs_are_drawn_again_for_another_zoom_and_atlas_pages_follow() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = qiyas_core::fixtures::write_arabic(dir.path(), "dxf");
+    let session = Session::open(&path).unwrap();
+    let first = session.batch();
+    assert!(first.px_per_unit > 0.0);
+    assert!(first.atlas_version >= 1);
+    // Every page is sent the first time; none once the window holds this version.
+    let all = session.atlas_bytes(None);
+    let pages = u32::from_le_bytes(all[8..12].try_into().unwrap());
+    assert_eq!(pages, first.atlas_pages);
+    assert_eq!(session.atlas_bytes(Some(first.atlas_version)).len(), 12);
+
+    let v = session.batch_version();
+    let bytes = session
+        .batch_bytes_if(None, Some(first.px_per_unit * 16.0))
+        .unwrap();
+    // The zoom is not part of the version: the window decides when to ask.
+    assert_eq!(session.batch_version(), v);
+    let zoomed = session.batch();
+    assert_eq!(bytes, zoomed.to_bytes());
+    assert_eq!(zoomed.px_per_unit, first.px_per_unit * 16.0);
+    assert_eq!(zoomed.segments, first.segments);
+    assert!(zoomed.atlas_version > first.atlas_version);
+    assert!(session.atlas_bytes(Some(first.atlas_version)).len() > 12);
+    // Without a zoom the batch keeps the one it has.
+    session.batch_bytes_if(None, None).unwrap();
+    assert_eq!(session.batch().px_per_unit, zoomed.px_per_unit);
 }

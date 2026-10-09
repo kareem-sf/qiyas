@@ -1,5 +1,13 @@
 import { expect, test } from "vitest";
-import { NO_CHAIN, parseBatch, rangeMatcher } from "./batch";
+import {
+  glyphsNeedRedraw,
+  matchingRanges,
+  NO_CHAIN,
+  parseAtlas,
+  parseBatch,
+  rangeMatcher,
+  TEXT_BOX,
+} from "./batch";
 
 /** A version 2 batch, laid out as `Batch::to_bytes` does: two segments, the first of a line at the
  *  top level (handle 7), the second of a line (9) inside block reference 8. `extra` adds a section
@@ -61,9 +69,13 @@ test("parseBatch reads the header and the section table", () => {
     expect(Array.from(b.segments)).toEqual([-2, -1.5, 2, 1.5, 0, 0, 1, 1]);
     expect(b.ranges.length).toBe(2);
     expect([b.ranges.at(0), b.ranges.at(1)]).toEqual([
-      { top: 7n, entity: 7n, chain: NO_CHAIN, first: 0, count: 1 },
-      { top: 8n, entity: 9n, chain: 0, first: 1, count: 1 },
+      { top: 7n, entity: 7n, chain: NO_CHAIN, first: 0, count: 1, flags: 0 },
+      { top: 8n, entity: 9n, chain: 0, first: 1, count: 1, flags: 0 },
     ]);
+    // A batch without the text sections has no texts.
+    expect(b.quads.length).toBe(0);
+    expect(b.textRanges.length).toBe(0);
+    expect([b.atlasVersion, b.atlasPages, b.pxPerUnit]).toEqual([0, 0, 0]);
     expect(b.chains).toEqual([[8n]]);
     expect(Array.from(b.colors)).toEqual([0xff0000, 0x00ff00]);
     expect(b.bounds).toEqual([
@@ -114,19 +126,108 @@ test("rangeMatcher tells a whole block from an entity inside it", () => {
   expect(rangeMatcher(b, [{ handle: 7, chain: [] }])(line)).toBe(true);
 });
 
-/** The bytes `Batch::to_bytes` writes for the batch of `v2()` (crates/qiyas-render/tests/batch.rs,
- *  `bytes_match_the_frontend_fixture`). */
+/** The bytes `Batch::to_bytes` writes for `bytes_match_the_frontend_fixture`
+ *  (crates/qiyas-render/tests/batch.rs): the segments of `v2()`, the first being a text's box
+ *  (handle 7, flagged) drawn as one glyph quad, and the atlas section. */
 const FROM_RUST = [
   "4259495102000000000000000000594000000000000069400000000000005a400000000000606940",
-  "000000000080594000000000003069400400000003000000700000004000000004000000b0000000",
-  "0c00000005000000c00000002000000006000000e000000008000000000000000700000000000000",
-  "0700000000000000ffffffff00000000010000000000000008000000000000000900000000000000",
-  "0000000001000000010000000000000001000000080000000000000000000000000000c00000c0bf",
-  "000000400000c03f00000000000000000000803f0000803f0000ff0000ff0000",
+  "000000000080594000000000003069400700000003000000900000004000000004000000d0000000",
+  "0c00000005000000e000000020000000060000000001000008000000070000000801000030000000",
+  "08000000380100001800000009000000500100002000000007000000000000000700000000000000",
+  "ffffffff000000000100000001000000080000000000000009000000000000000000000001000000",
+  "010000000000000001000000080000000000000000000000000000c00000c0bf000000400000c03f",
+  "00000000000000000000803f0000803f0000ff0000ff0000000000c00000c03f000080bf0000c03f",
+  "000080bf0000003f000000c00000003f0a0014001e002c000000ff00010000000300000000000000",
+  "0200000000000000000000000000044007000000000000000700000000000000ffffffff00000000",
+  "0100000000000000",
 ].join("");
 
-test("parseBatch reads what the Rust side writes", () => {
-  const bytes = new Uint8Array(FROM_RUST.length / 2);
-  for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(FROM_RUST.slice(2 * i, 2 * i + 2), 16);
-  expect(parseBatch(bytes.buffer)).toEqual(parseBatch(v2()));
+function fromHex(hex: string): ArrayBuffer {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.slice(2 * i, 2 * i + 2), 16);
+  return bytes.buffer;
+}
+
+test("parseBatch reads what the Rust side writes, glyph quads and text ranges too", () => {
+  const b = parseBatch(fromHex(FROM_RUST));
+  const lines = parseBatch(v2());
+  expect(Array.from(b.segments)).toEqual(Array.from(lines.segments));
+  expect(Array.from(b.colors)).toEqual(Array.from(lines.colors));
+  expect(b.chains).toEqual(lines.chains);
+  expect([b.bounds, b.origin]).toEqual([lines.bounds, lines.origin]);
+  expect([b.ranges.at(0), b.ranges.at(1)]).toEqual([
+    { top: 7n, entity: 7n, chain: NO_CHAIN, first: 0, count: 1, flags: TEXT_BOX },
+    { top: 8n, entity: 9n, chain: 0, first: 1, count: 1, flags: 0 },
+  ]);
+  expect(b.quads.length).toBe(1);
+  expect(b.quads.at(0)).toEqual({
+    corners: [-2, 1.5, -1, 1.5, -1, 0.5, -2, 0.5],
+    uv: [10, 20, 30, 44],
+    color: 0xff0000,
+    page: 1,
+    flags: 0,
+  });
+  expect(b.textRanges.length).toBe(1);
+  expect(b.textRanges.at(0)).toEqual({
+    top: 7n,
+    entity: 7n,
+    chain: NO_CHAIN,
+    first: 0,
+    count: 1,
+    flags: 0,
+  });
+  expect([b.atlasVersion, b.atlasPages, b.pxPerUnit]).toEqual([3, 2, 2.5]);
+  // Highlighting the text finds its box among the segments and its glyph among the quads.
+  const text = [{ handle: 7, chain: [] }];
+  expect([...matchingRanges(b, text)]).toEqual([[0, 1]]);
+  expect([...matchingRanges(b, text, b.textRanges)]).toEqual([[0, 1]]);
+});
+
+test("parseBatch rejects text ranges that do not cover the quads", () => {
+  const buf = fromHex(FROM_RUST);
+  const v = new DataView(buf);
+  // Section table entry 6 is the text ranges (kind 9); its one range's count sits at +24.
+  const entry = 60 + 12 * 6;
+  expect(v.getUint32(entry, true)).toBe(9);
+  const at = v.getUint32(entry + 4, true);
+  v.setUint32(at + 24, 2, true);
+  expect(() => parseBatch(buf)).toThrow("section 9 too short");
+});
+
+test("parseAtlas reads the pages after the version", () => {
+  const page = (index: number, w: number, h: number, fill: number) => {
+    const out = new Uint8Array(16 + w * h);
+    const v = new DataView(out.buffer);
+    [index, w, h, w * h].forEach((x, i) => v.setUint32(4 * i, x, true));
+    out.fill(fill, 16);
+    return out;
+  };
+  const parts = [page(0, 2, 3, 7), page(4, 1, 1, 9)];
+  const buf = new Uint8Array(12 + parts.reduce((n, p) => n + p.length, 0));
+  const v = new DataView(buf.buffer);
+  v.setBigUint64(0, 5n, true);
+  v.setUint32(8, 2, true);
+  let at = 12;
+  for (const p of parts) {
+    buf.set(p, at);
+    at += p.length;
+  }
+  const atlas = parseAtlas(buf.buffer);
+  expect(atlas.version).toBe(5);
+  expect(atlas.pages.map((p) => [p.index, p.width, p.height, Array.from(p.data)])).toEqual([
+    [0, 2, 3, [7, 7, 7, 7, 7, 7]],
+    [4, 1, 1, [9]],
+  ]);
+  expect(() => parseAtlas(buf.buffer.slice(0, buf.length - 1))).toThrow("too short");
+  // Nothing changed since the version asked for: the version and no pages.
+  const none = buf.buffer.slice(0, 12);
+  new DataView(none).setUint32(8, 0, true);
+  expect(parseAtlas(none)).toEqual({ version: 5, pages: [] });
+});
+
+test("glyphs are drawn again when the zoom has more than doubled or halved", () => {
+  expect(glyphsNeedRedraw(10, 19)).toBe(false);
+  expect(glyphsNeedRedraw(10, 21)).toBe(true);
+  expect(glyphsNeedRedraw(10, 4.9)).toBe(true);
+  expect(glyphsNeedRedraw(0, 100)).toBe(false);
 });

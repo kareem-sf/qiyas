@@ -1,5 +1,6 @@
 /**
- * WebGL2 line renderer for a `Batch`.
+ * WebGL2 renderer for a `Batch`: its line segments, then its text as glyph quads textured from the
+ * glyph atlas (one R8 texture per page; the texel is the glyph's coverage, drawn as alpha).
  *
  * Precision: drawings can sit far from (0, 0) (survey grids in metres or millimetres), where f32
  * keeps only a few useful digits. So no absolute coordinate ever reaches the GPU. The segments arrive
@@ -7,14 +8,18 @@
  * in f64 on the JS side relative to that same origin (camera centre minus origin), and only that
  * small offset is passed to the shader as f32.
  */
-import { matchingRanges, type Batch, type Target } from "./batch";
+import { matchingRanges, TEXT_BOX, type AtlasPage, type Batch, type Target } from "./batch";
 import type { Camera } from "./camera";
 
 export type Theme = "light" | "dark";
 
 export type Renderer = {
-  /** `null` clears the drawing. */
+  /** `null` clears the drawing. A batch whose `segments` are the very array of the one before
+   *  (only its glyphs drawn again for another zoom) keeps the lines already uploaded. */
   setBatch(b: Batch | null): void;
+  /** Uploads atlas pages the textures don't hold yet (by page index; a page with other data is
+   *  uploaded again). */
+  setAtlas(pages: AtlasPage[]): void;
   /** Draws these entities violet (see `Target`). */
   setHighlight(targets: Target[]): void;
   /** Violet segments `x0 y0 x1 y1` in absolute drawing coordinates, drawn on top; `null` for none. */
@@ -55,12 +60,47 @@ uniform vec3 u_ink;
 uniform vec3 u_paper;
 out vec4 outColor;
 void main() {
+  // A text's box (vertex alpha 0) is only for picking and highlighting.
+  if (u_color.a == 0.0 && v_color.a == 0.0) discard;
   vec3 c = u_color.a > 0.0 ? u_color.rgb : v_color.rgb;
   // White lines (ACI 7 and friends) would vanish on Paper; draw them in Ink.
   if (u_light && all(greaterThan(c, vec3(0.999)))) c = u_ink;
   // Black lines would vanish on Ink; draw them in Paper.
   if (!u_light && all(lessThan(c, vec3(0.001)))) c = u_paper;
   outColor = vec4(c, 1.0);
+}`;
+
+const TEXT_VERTEX = `#version 300 es
+in vec2 a_pos;
+in vec2 a_uv;
+in vec4 a_color;
+uniform vec2 u_center;
+uniform vec2 u_toClip;
+out vec2 v_uv;
+out vec4 v_color;
+void main() {
+  gl_Position = vec4((a_pos - u_center) * u_toClip, 0.0, 1.0);
+  v_uv = a_uv;
+  v_color = a_color;
+}`;
+
+const TEXT_FRAGMENT = `#version 300 es
+precision highp float;
+in vec2 v_uv;      // texels
+in vec4 v_color;
+uniform sampler2D u_atlas;
+uniform vec4 u_color;  // overrides the vertex colour when alpha > 0
+uniform bool u_light;
+uniform vec3 u_ink;
+uniform vec3 u_paper;
+out vec4 outColor;
+void main() {
+  float coverage = texture(u_atlas, v_uv / vec2(textureSize(u_atlas, 0))).r;
+  if (coverage <= 0.0) discard;
+  vec3 c = u_color.a > 0.0 ? u_color.rgb : v_color.rgb;
+  if (u_light && all(greaterThan(c, vec3(0.999)))) c = u_ink;
+  if (!u_light && all(lessThan(c, vec3(0.001)))) c = u_paper;
+  outColor = vec4(c, coverage);
 }`;
 
 function compile(gl: WebGL2RenderingContext, type: number, source: string): WebGLShader {
@@ -73,14 +113,10 @@ function compile(gl: WebGL2RenderingContext, type: number, source: string): WebG
   return shader;
 }
 
-export function createRenderer(canvas: HTMLCanvasElement): Renderer {
-  const context = canvas.getContext("webgl2", { antialias: true });
-  if (!context) throw new Error("WebGL2 is not available");
-  const gl = context;
-
+function link(gl: WebGL2RenderingContext, vertex: string, fragment: string): WebGLProgram {
   const program = gl.createProgram();
-  const vs = compile(gl, gl.VERTEX_SHADER, VERTEX);
-  const fs = compile(gl, gl.FRAGMENT_SHADER, FRAGMENT);
+  const vs = compile(gl, gl.VERTEX_SHADER, vertex);
+  const fs = compile(gl, gl.FRAGMENT_SHADER, fragment);
   gl.attachShader(program, vs);
   gl.attachShader(program, fs);
   gl.linkProgram(program);
@@ -89,6 +125,44 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
   }
   gl.deleteShader(vs);
   gl.deleteShader(fs);
+  return program;
+}
+
+/** Element indices of the quads `[first, first + count)` per atlas page, two triangles each. */
+function quadIndices(b: Batch, spans: Iterable<[number, number]>): Map<number, number[]> {
+  const byPage = new Map<number, number[]>();
+  for (const [first, count] of spans) {
+    for (let i = first; i < first + count; i++) {
+      const page = b.quads.page(i);
+      let list = byPage.get(page);
+      if (!list) byPage.set(page, (list = []));
+      const v = 4 * i;
+      list.push(v, v + 1, v + 2, v, v + 2, v + 3);
+    }
+  }
+  return byPage;
+}
+
+/** One index buffer holding the pages' lists back to back, and where each page's list starts. */
+type PagedIndices = { pages: { page: number; offset: number; count: number }[] };
+
+function uploadPaged(gl: WebGL2RenderingContext, byPage: Map<number, number[]>): PagedIndices {
+  const all: number[] = [];
+  const pages = [];
+  for (const [page, list] of byPage) {
+    pages.push({ page, offset: 4 * all.length, count: list.length });
+    for (const i of list) all.push(i);
+  }
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(all), gl.STATIC_DRAW);
+  return { pages };
+}
+
+export function createRenderer(canvas: HTMLCanvasElement): Renderer {
+  const context = canvas.getContext("webgl2", { antialias: true });
+  if (!context) throw new Error("WebGL2 is not available");
+  const gl = context;
+
+  const program = link(gl, VERTEX, FRAGMENT);
   const u = (name: string) => gl.getUniformLocation(program, name);
   const uCenter = u("u_center");
   const uToClip = u("u_toClip");
@@ -123,6 +197,40 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
   gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
   gl.bindVertexArray(null);
 
+  // Glyph quads: positions and texels interleaved (x y u v per vertex), colours, and index buffers
+  // per atlas page for all quads and for the highlighted ones.
+  const textProgram = link(gl, TEXT_VERTEX, TEXT_FRAGMENT);
+  const tu = (name: string) => gl.getUniformLocation(textProgram, name);
+  const tCenter = tu("u_center");
+  const tToClip = tu("u_toClip");
+  const tColor = tu("u_color");
+  const tLight = tu("u_light");
+  const tInk = tu("u_ink");
+  const tPaper = tu("u_paper");
+  const tAtlas = tu("u_atlas");
+  const textVao = gl.createVertexArray();
+  const textVertices = gl.createBuffer();
+  const textColors = gl.createBuffer();
+  const textIndices = gl.createBuffer();
+  const textHighlightIndices = gl.createBuffer();
+  gl.bindVertexArray(textVao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, textVertices);
+  const taPos = gl.getAttribLocation(textProgram, "a_pos");
+  const taUv = gl.getAttribLocation(textProgram, "a_uv");
+  gl.enableVertexAttribArray(taPos);
+  gl.vertexAttribPointer(taPos, 2, gl.FLOAT, false, 16, 0);
+  gl.enableVertexAttribArray(taUv);
+  gl.vertexAttribPointer(taUv, 2, gl.FLOAT, false, 16, 8);
+  gl.bindBuffer(gl.ARRAY_BUFFER, textColors);
+  const taColor = gl.getAttribLocation(textProgram, "a_color");
+  gl.enableVertexAttribArray(taColor);
+  gl.vertexAttribPointer(taColor, 4, gl.UNSIGNED_BYTE, true, 0, 0);
+  gl.bindVertexArray(null);
+  let textAll: PagedIndices = { pages: [] };
+  let textHighlight: PagedIndices = { pages: [] };
+  /** Atlas page index to its texture and the bytes uploaded into it. */
+  const textures = new Map<number, { texture: WebGLTexture; data: Uint8Array }>();
+
   let batch: Batch | null = null;
   let vertexCount = 0;
   let highlight: Target[] = [];
@@ -139,31 +247,134 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
     highlightCount = indices.length;
     gl.bindVertexArray(vao);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(indices), gl.STATIC_DRAW);
+    gl.bindVertexArray(textVao);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, textHighlightIndices);
+    textHighlight = batch
+      ? uploadPaged(gl, quadIndices(batch, matchingRanges(batch, highlight, batch.textRanges)))
+      : { pages: [] };
     gl.bindVertexArray(null);
   }
 
-  return {
-    setBatch(b) {
-      batch = b;
-      const segmentColors = b?.colors ?? new Uint32Array();
-      const n = segmentColors.length;
-      vertexCount = 2 * n;
-      // One RGBA byte quad per vertex; both ends of a segment share its colour.
-      const rgba = new Uint8Array(8 * n);
+  function uploadLines(b: Batch | null) {
+    const segmentColors = b?.colors ?? new Uint32Array();
+    const n = segmentColors.length;
+    vertexCount = 2 * n;
+    // One RGBA byte quad per vertex; both ends of a segment share its colour. A text's box gets
+    // alpha 0: it is drawn only when highlighted.
+    const rgba = new Uint8Array(8 * n);
+    for (let i = 0; i < n; i++) {
+      const c = segmentColors[i];
+      for (const at of [8 * i, 8 * i + 4]) {
+        rgba[at] = (c >> 16) & 255;
+        rgba[at + 1] = (c >> 8) & 255;
+        rgba[at + 2] = c & 255;
+        rgba[at + 3] = 255;
+      }
+    }
+    if (b) {
+      const { ranges } = b;
+      for (let r = 0; r < ranges.length; r++) {
+        if (!(ranges.flags(r) & TEXT_BOX)) continue;
+        const first = ranges.first(r);
+        for (let i = first; i < first + ranges.count(r); i++) {
+          rgba[8 * i + 3] = 0;
+          rgba[8 * i + 7] = 0;
+        }
+      }
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, positions);
+    gl.bufferData(gl.ARRAY_BUFFER, b?.segments ?? new Float32Array(), gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, colors);
+    gl.bufferData(gl.ARRAY_BUFFER, rgba, gl.STATIC_DRAW);
+  }
+
+  function uploadText(b: Batch | null) {
+    const n = b?.quads.length ?? 0;
+    const vertices = new Float32Array(16 * n);
+    const rgba = new Uint8Array(16 * n);
+    if (b) {
+      const q = b.quads;
+      // Texel corners in the order of the position corners: top-left, top-right, bottom-right,
+      // bottom-left.
+      const corners = [
+        [0, 1],
+        [2, 1],
+        [2, 3],
+        [0, 3],
+      ];
       for (let i = 0; i < n; i++) {
-        const c = segmentColors[i];
-        for (const at of [8 * i, 8 * i + 4]) {
+        const c = q.color(i);
+        for (let k = 0; k < 4; k++) {
+          const at = 16 * i + 4 * k;
+          vertices[at] = q.x(i, k);
+          vertices[at + 1] = q.y(i, k);
+          vertices[at + 2] = q.uv(i, corners[k][0]);
+          vertices[at + 3] = q.uv(i, corners[k][1]);
           rgba[at] = (c >> 16) & 255;
           rgba[at + 1] = (c >> 8) & 255;
           rgba[at + 2] = c & 255;
           rgba[at + 3] = 255;
         }
       }
-      gl.bindBuffer(gl.ARRAY_BUFFER, positions);
-      gl.bufferData(gl.ARRAY_BUFFER, b?.segments ?? new Float32Array(), gl.STATIC_DRAW);
-      gl.bindBuffer(gl.ARRAY_BUFFER, colors);
-      gl.bufferData(gl.ARRAY_BUFFER, rgba, gl.STATIC_DRAW);
+    }
+    gl.bindVertexArray(textVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, textVertices);
+    gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, textColors);
+    gl.bufferData(gl.ARRAY_BUFFER, rgba, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, textIndices);
+    textAll = b ? uploadPaged(gl, quadIndices(b, [[0, n]])) : { pages: [] };
+    gl.bindVertexArray(null);
+  }
+
+  /** Draws the quads of `indices` from the bound text VAO, a page texture at a time. */
+  function drawText(indices: PagedIndices, buffer: WebGLBuffer) {
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buffer);
+    for (const { page, offset, count } of indices.pages) {
+      const texture = textures.get(page);
+      if (!texture || count === 0) continue;
+      gl.bindTexture(gl.TEXTURE_2D, texture.texture);
+      gl.drawElements(gl.TRIANGLES, count, gl.UNSIGNED_INT, offset);
+    }
+  }
+
+  return {
+    setBatch(b) {
+      const sameLines = !!b && !!batch && b.segments === batch.segments;
+      batch = b;
+      if (!sameLines) uploadLines(b);
+      uploadText(b);
       uploadHighlight();
+    },
+
+    setAtlas(pages) {
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+      for (const page of pages) {
+        let held = textures.get(page.index);
+        if (held?.data === page.data) continue;
+        if (!held) {
+          held = { texture: gl.createTexture(), data: page.data };
+          textures.set(page.index, held);
+        }
+        held.data = page.data;
+        gl.bindTexture(gl.TEXTURE_2D, held.texture);
+        gl.texImage2D(
+          gl.TEXTURE_2D,
+          0,
+          gl.R8,
+          page.width,
+          page.height,
+          0,
+          gl.RED,
+          gl.UNSIGNED_BYTE,
+          page.data,
+        );
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      }
+      gl.bindTexture(gl.TEXTURE_2D, null);
     },
 
     setHighlight(targets) {
@@ -192,6 +403,30 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       gl.uniform2f(uOffset, 0, 0);
       gl.uniform4f(uColor, 0, 0, 0, 0);
       gl.drawArrays(gl.LINES, 0, vertexCount);
+
+      // The text over the lines, its coverage blended onto them.
+      const text = (indices: PagedIndices, buffer: WebGLBuffer, color: number[] | null) => {
+        if (indices.pages.length === 0) return;
+        gl.useProgram(textProgram);
+        gl.bindVertexArray(textVao);
+        gl.uniform2f(tCenter, camera.cx - batch!.origin[0], camera.cy - batch!.origin[1]);
+        gl.uniform2f(tToClip, 2 / (camera.width * camera.scale), 2 / (camera.height * camera.scale));
+        gl.uniform1i(tLight, light ? 1 : 0);
+        gl.uniform3f(tInk, ...INK);
+        gl.uniform3f(tPaper, ...PAPER);
+        gl.uniform4f(tColor, ...((color ?? [0, 0, 0, 0]) as [number, number, number, number]));
+        gl.uniform1i(tAtlas, 0);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+        drawText(indices, buffer);
+        gl.disable(gl.BLEND);
+        gl.bindVertexArray(null);
+        gl.useProgram(program);
+        gl.bindVertexArray(vao);
+      };
+      text(textAll, textIndices, null);
+      text(textHighlight, textHighlightIndices, [...VIOLET, 1]);
 
       // Line width is 1 device pixel on most platforms, so violet work is thickened by redrawing
       // it nudged one device pixel at a time across and down.
@@ -238,6 +473,14 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       gl.deleteBuffer(overlayPositions);
       gl.deleteVertexArray(overlayVao);
       gl.deleteProgram(program);
+      gl.deleteBuffer(textVertices);
+      gl.deleteBuffer(textColors);
+      gl.deleteBuffer(textIndices);
+      gl.deleteBuffer(textHighlightIndices);
+      gl.deleteVertexArray(textVao);
+      gl.deleteProgram(textProgram);
+      for (const { texture } of textures.values()) gl.deleteTexture(texture);
+      textures.clear();
     },
   };
 }

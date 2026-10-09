@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 
-import { batchVersion, isNotModified, renderBatch } from "./api";
+import { atlasPages, batchVersion, isNotModified, renderBatch } from "./api";
 
 const buffer = (bytes: number[]) => new Uint8Array(bytes).buffer;
 // What qiyas-desktop sends for a batch that is still current: "QINM" and four zero bytes.
@@ -15,7 +15,7 @@ describe("renderBatch", () => {
   it("gives null for the not-modified marker and asks with the version", async () => {
     invoke.mockResolvedValue(NOT_MODIFIED);
     expect(await renderBatch(42)).toBeNull();
-    expect(invoke).toHaveBeenCalledWith("render_batch", { ifVersion: 42 });
+    expect(invoke).toHaveBeenCalledWith("render_batch", { ifVersion: 42, pxPerUnit: undefined });
   });
 
   it("gives the bytes of a batch", async () => {
@@ -23,7 +23,13 @@ describe("renderBatch", () => {
     const batch = buffer([0x42, 0x59, 0x49, 0x51, 2, 0, 0, 0, 0, 0, 0, 0]);
     invoke.mockResolvedValue(batch);
     expect(await renderBatch()).toBe(batch);
-    expect(invoke).toHaveBeenCalledWith("render_batch", { ifVersion: undefined });
+    expect(invoke).toHaveBeenCalledWith("render_batch", {
+      ifVersion: undefined,
+      pxPerUnit: undefined,
+    });
+    // With the zoom the glyphs should be drawn for.
+    await renderBatch(undefined, 12.5);
+    expect(invoke).toHaveBeenCalledWith("render_batch", { ifVersion: undefined, pxPerUnit: 12.5 });
   });
 
   it("does not take an 8-byte buffer that is not the marker for it", () => {
@@ -37,5 +43,14 @@ describe("batchVersion", () => {
     invoke.mockResolvedValue(7);
     expect(await batchVersion()).toBe(7);
     expect(invoke).toHaveBeenCalledWith("batch_version");
+  });
+});
+
+describe("atlasPages", () => {
+  it("asks for the pages changed since a version", async () => {
+    const bytes = buffer([1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    invoke.mockResolvedValue(bytes);
+    expect(await atlasPages(3)).toBe(bytes);
+    expect(invoke).toHaveBeenCalledWith("atlas_pages", { sinceVersion: 3 });
   });
 });

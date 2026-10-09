@@ -1,5 +1,5 @@
 import { useEffect, useImperativeHandle, useRef, useState, type PointerEvent, type Ref } from "react";
-import type { Batch, Target } from "./batch";
+import { glyphsNeedRedraw, type AtlasPage, type Batch, type Target } from "./batch";
 import {
   fitBounds,
   pan,
@@ -15,10 +15,17 @@ import { createRenderer, type Renderer, type Theme } from "./gl";
 
 export type Tool = "select" | "distance" | "area" | "count" | "zoomWindow";
 
-export type ViewportHandle = { fitExtents(): void; fitTo(bounds: Bounds): void };
+export type ViewportHandle = {
+  fitExtents(): void;
+  fitTo(bounds: Bounds): void;
+  /** Screen (device) pixels per drawing unit at the current zoom. */
+  pxPerUnit(): number;
+};
 
 type Props = {
   batch: Batch | null;
+  /** Every glyph atlas page received so far; the batch's quads draw from them. */
+  atlas?: AtlasPage[];
   highlight: Target[];
   tool: Tool;
   theme: Theme;
@@ -27,6 +34,9 @@ type Props = {
   /** A left click; `worldPerPixel` is the zoom at that moment, for pick tolerances. */
   onClick(world: Point, screen: Point, worldPerPixel: number): void;
   onMove(world: Point): void;
+  /** The zoom has more than doubled or halved since the batch's glyphs were drawn: draw them
+   *  again for `pxPerUnit` screen pixels per drawing unit. Called once the zoom settles. */
+  onZoomHint?(pxPerUnit: number): void;
   ref?: Ref<ViewportHandle>;
 };
 
@@ -35,12 +45,26 @@ const FIT_MARGIN_PX = 20;
 const DOUBLE_CLICK_MS = 400;
 /** Movement below this many pixels is still a click, not a drag. */
 const DRAG_PX = 4;
+/** How long the zoom must rest before glyphs are asked for at the new size. */
+const ZOOM_SETTLE_MS = 200;
+const NO_PAGES: AtlasPage[] = [];
 
 type Drag = { kind: "pan" | "zoomWindow"; start: Point; last: Point };
 
 /** The drawing canvas: wheel zoom at the cursor, middle or space drag to pan, double middle click
  *  for extents, and a drag rectangle to zoom into when the tool is `zoomWindow`. */
-export function Viewport({ batch, highlight, tool, theme, overlay = null, onClick, onMove, ref }: Props) {
+export function Viewport({
+  batch,
+  atlas = NO_PAGES,
+  highlight,
+  tool,
+  theme,
+  overlay = null,
+  onClick,
+  onMove,
+  onZoomHint,
+  ref,
+}: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const renderer = useRef<Renderer | null>(null);
   const camera = useRef<Camera>({ cx: 0, cy: 0, scale: 1, width: 1, height: 1 });
@@ -53,6 +77,24 @@ export function Viewport({ batch, highlight, tool, theme, overlay = null, onClic
   const space = useRef(false);
   const lastMiddle = useRef(0);
   const [zoomBox, setZoomBox] = useState<[Point, Point] | null>(null);
+  const zoomTimer = useRef(0);
+  const onZoomHintRef = useRef(onZoomHint);
+  onZoomHintRef.current = onZoomHint;
+
+  const pxPerUnit = () => window.devicePixelRatio / camera.current.scale;
+
+  /** Asks for glyphs at the current size once the zoom has rested, if they are off by over 2x. */
+  function checkGlyphs() {
+    const stale = () => {
+      const b = batchRef.current;
+      return !!b && b.quads.length > 0 && glyphsNeedRedraw(b.pxPerUnit, pxPerUnit());
+    };
+    if (!stale()) return;
+    clearTimeout(zoomTimer.current);
+    zoomTimer.current = window.setTimeout(() => {
+      if (stale()) onZoomHintRef.current?.(pxPerUnit());
+    }, ZOOM_SETTLE_MS);
+  }
 
   function requestDraw() {
     if (frame.current) return;
@@ -66,6 +108,7 @@ export function Viewport({ batch, highlight, tool, theme, overlay = null, onClic
     camera.current = c;
     if (!keepView) view.current = visibleBounds(c);
     requestDraw();
+    checkGlyphs();
   }
 
   function fitExtents() {
@@ -75,7 +118,11 @@ export function Viewport({ batch, highlight, tool, theme, overlay = null, onClic
 
   useImperativeHandle(
     ref,
-    () => ({ fitExtents, fitTo: (b) => setCamera(fitBounds(camera.current, b, FIT_MARGIN_PX)) }),
+    () => ({
+      fitExtents,
+      fitTo: (b) => setCamera(fitBounds(camera.current, b, FIT_MARGIN_PX)),
+      pxPerUnit,
+    }),
     [],
   );
 
@@ -135,16 +182,24 @@ export function Viewport({ batch, highlight, tool, theme, overlay = null, onClic
       window.removeEventListener("blur", onBlur);
       cancelAnimationFrame(frame.current);
       frame.current = 0;
+      clearTimeout(zoomTimer.current);
       renderer.current?.dispose();
       renderer.current = null;
     };
   }, []);
+
+  // Before the batch, so its quads find their pages.
+  useEffect(() => {
+    renderer.current!.setAtlas(atlas);
+    requestDraw();
+  }, [atlas]);
 
   // No fit here: hiding a layer gives a new batch but should keep the view. The app fits on open.
   useEffect(() => {
     batchRef.current = batch;
     renderer.current!.setBatch(batch);
     requestDraw();
+    checkGlyphs();
   }, [batch]);
 
   useEffect(() => {

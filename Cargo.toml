@@ -24,6 +24,10 @@ uuid = { version = "1", features = ["v4"] }
 time = { version = "0.3", features = ["formatting"] }
 # 2D rasteriser for the drawing pictures the AI looks at (BSD-3-Clause).
 tiny-skia = "0.12"
+# Text in the viewport: shaping (MIT), glyph rasterising (Apache-2.0), bidi order (MIT/Apache-2.0).
+rustybuzz = "0.20"
+ab_glyph = "0.2"
+unicode-bidi = "0.3"
 
 # Dependencies (the DWG reader above all) and the two hot crates that flatten and batch the
 # drawing are optimised in dev builds too, so `pnpm tauri dev` draws big drawings in about a second

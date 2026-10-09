@@ -18,6 +18,9 @@ type Props = {
   onZoomExtents(): void;
   onUndo?(): void;
   onRedo?(): void;
+  /** The drawing holds its Arabic text backwards; the checkbox is disabled without a handler. */
+  arabicReversed?: boolean;
+  onArabicReversed?(on: boolean): void;
 };
 
 type Tab = "home" | "measure" | "view";
@@ -91,7 +94,22 @@ export function Ribbon(props: Props) {
           action("redo", props.onRedo),
         ]}
         {tab === "measure" && (["select", "distance", "area", "count"] as Tool[]).map(tool)}
-        {tab === "view" && [action("zoomExtents", props.onZoomExtents), tool("zoomWindow")]}
+        {tab === "view" && [
+          action("zoomExtents", props.onZoomExtents),
+          tool("zoomWindow"),
+          <span key="sep" className="sep" />,
+          <label key="arabicReversed" className="ribbon-check">
+            <input
+              type="checkbox"
+              checked={props.arabicReversed ?? false}
+              disabled={!props.onArabicReversed}
+              onChange={(e) => props.onArabicReversed?.(e.currentTarget.checked)}
+              onKeyDown={ignoreSpace}
+              onKeyUp={ignoreSpace}
+            />
+            {t("arabicReversed")}
+          </label>,
+        ]}
       </div>
     </div>
   );

@@ -19,6 +19,8 @@ export type DrawingInfo = {
   layers: LayerInfo[];
   units: Units;
   problems: string[];
+  /** The drawing holds its Arabic text backwards (typed in visual order for old CAD fonts). */
+  arabic_reversed: boolean;
 };
 
 export type EntityInfo = {
@@ -123,11 +125,21 @@ export function isNotModified(bytes: ArrayBuffer): boolean {
 }
 
 /** Raw bytes of the current sheet's batch; decode with `parseBatch`. `null` when the batch is
- *  still `ifVersion` (from `batchVersion`), so the caller keeps the one it has. */
-export async function renderBatch(ifVersion?: number): Promise<ArrayBuffer | null> {
-  const bytes = await invoke<ArrayBuffer>("render_batch", { ifVersion });
+ *  still `ifVersion` (from `batchVersion`), so the caller keeps the one it has. `pxPerUnit` is the
+ *  zoom to draw the text glyphs for (screen pixels per drawing unit); left out, the core keeps the
+ *  zoom of its batch, or fits a new sheet. */
+export async function renderBatch(
+  ifVersion?: number,
+  pxPerUnit?: number,
+): Promise<ArrayBuffer | null> {
+  const bytes = await invoke<ArrayBuffer>("render_batch", { ifVersion, pxPerUnit });
   return isNotModified(bytes) ? null : bytes;
 }
+
+/** Raw bytes of the glyph atlas pages changed after `sinceVersion` (all when left out); decode
+ *  with `parseAtlas`. */
+export const atlasPages = (sinceVersion?: number) =>
+  invoke<ArrayBuffer>("atlas_pages", { sinceVersion });
 
 /** The entity nearest to the drawing point (x, y) within `tol` drawing units, down to the entity
  *  inside any blocks. */
@@ -253,6 +265,8 @@ export type Command =
   | { type: "set_description"; id: string; text: string }
   | { type: "set_layer_hidden"; name: string; hidden: boolean }
   | { type: "set_sheet"; block: string }
+  /** The drawing holds its Arabic text backwards; not an undo step. */
+  | { type: "set_arabic_reversed"; on: boolean }
   /** Length, area and count values come from the geometry (points or handles, not both). */
   | {
       type: "add_measurement";

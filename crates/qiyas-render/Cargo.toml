@@ -9,6 +9,9 @@ rust-version.workspace = true
 opencadcodec.workspace = true
 qiyas-geom = { path = "../qiyas-geom" }
 rstar.workspace = true
+rustybuzz.workspace = true
+ab_glyph.workspace = true
+unicode-bidi.workspace = true
 
 [dev-dependencies]
 # Dev-only, for the sample drawing: qiyas-core depends on qiyas-render, never the other way.

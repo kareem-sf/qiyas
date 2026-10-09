@@ -26,6 +26,9 @@ pub struct Project {
     /// The schedules read off the sheets at the last comparison.
     #[serde(default)]
     pub schedules: Vec<Schedule>,
+    /// The drawing holds its Arabic text backwards (`Session::arabic_reversed`).
+    #[serde(default)]
+    pub arabic_reversed: bool,
 }
 
 /// The project file of `drawing`: same folder, same stem, extension `qiyas`.
@@ -124,6 +127,7 @@ mod tests {
             boq: None,
             conflicts: Vec::new(),
             schedules: Vec::new(),
+            arabic_reversed: false,
         };
         assert!(save(&path, &project).is_err());
         assert!(!dir.path().join("villa.qiyas.tmp").exists());

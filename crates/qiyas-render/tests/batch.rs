@@ -4,8 +4,8 @@ use opencadcodec::entities::Insert;
 use opencadcodec::{BlockRecord, CadDocument, Color, EntityType, Layer, Line, Vector3};
 use qiyas_core::fixtures::sample_doc;
 use qiyas_render::{
-    build_batch, resolve_color, section, Batch, PickIndex, Range, Visibility, MAGIC, NO_CHAIN,
-    VERSION,
+    build_batch, resolve_color, section, Batch, PickIndex, Quad, Range, Visibility, MAGIC,
+    NO_CHAIN, TEXT_BOX, VERSION,
 };
 
 const MODEL: &str = "*Model_Space";
@@ -172,7 +172,10 @@ fn bytes_decode_every_section() {
     );
 
     let table = section_table(&bytes);
-    assert_eq!(table.iter().map(|s| s.0).collect::<Vec<_>>(), [3, 4, 5, 6]);
+    assert_eq!(
+        table.iter().map(|s| s.0).collect::<Vec<_>>(),
+        [3, 4, 5, 6, 7, 8, 9]
+    );
     for (_, at, len) in &table {
         assert_eq!(at % 8, 0, "{table:?}");
         assert!(at + len <= bytes.len());
@@ -201,6 +204,7 @@ fn bytes_decode_every_section() {
         chain: u32_at(&bytes, at + 16),
         first: u32_at(&bytes, at + 20),
         count: u32_at(&bytes, at + 24),
+        flags: u32_at(&bytes, at + 28),
     };
     assert_eq!(range, batch.ranges[door]);
     // A top-level range has no chain.
@@ -223,7 +227,18 @@ fn bytes_decode_every_section() {
     let (colors, len) = section_at(&bytes, section::COLORS);
     assert_eq!(len, 4 * n);
     assert_eq!(u32_at(&bytes, colors), batch.colors[0]);
-    assert_eq!(bytes.len(), colors + len);
+    // Without a text engine there are no quads; the text's box is flagged, not drawn.
+    assert_eq!(section_at(&bytes, section::QUADS).1, 0);
+    assert_eq!(section_at(&bytes, section::ATLAS).1, 24);
+    let (text_ranges, len) = section_at(&bytes, section::TEXT_RANGES);
+    assert_eq!(len, 0);
+    assert_eq!(bytes.len(), text_ranges);
+    let text = batch
+        .ranges
+        .iter()
+        .position(|r| r.flags == TEXT_BOX)
+        .unwrap();
+    assert_eq!(u32_at(&bytes, ranges + 32 * text + 28), TEXT_BOX);
 }
 
 #[test]
@@ -248,9 +263,11 @@ fn empty_sheet_is_empty() {
     assert_eq!(batch.bounds, [[0.0; 2]; 2]);
     assert_eq!(batch.origin, [0.0; 2]);
     let bytes = batch.to_bytes();
-    // Header and a table of four empty sections, padded to 8 bytes.
-    assert_eq!(bytes.len(), 112);
-    assert!(section_table(&bytes).iter().all(|s| s.2 == 0));
+    // Header and a table of seven sections (144 bytes), and the 24-byte atlas section.
+    assert_eq!(bytes.len(), 144 + 24);
+    assert!(section_table(&bytes)
+        .iter()
+        .all(|s| s.2 == if s.0 == section::ATLAS { 24 } else { 0 }));
 }
 
 #[test]
@@ -356,7 +373,8 @@ fn line_handle(doc: &CadDocument) -> u64 {
 }
 
 /// The batch `src/viewport/batch.test.ts` decodes from the same bytes, so both sides agree on
-/// layout version 2.
+/// layout version 2: a text's box (handle 7, flagged) drawn as one glyph quad, and a line (9)
+/// inside block reference 8.
 #[test]
 fn bytes_match_the_frontend_fixture() {
     let batch = Batch {
@@ -369,6 +387,7 @@ fn bytes_match_the_frontend_fixture() {
                 chain: NO_CHAIN,
                 first: 0,
                 count: 1,
+                flags: TEXT_BOX,
             },
             Range {
                 top: 8,
@@ -376,29 +395,56 @@ fn bytes_match_the_frontend_fixture() {
                 chain: 0,
                 first: 1,
                 count: 1,
+                flags: 0,
             },
         ],
         chains: vec![vec![8]],
         bounds: [[100.0, 200.0], [104.0, 203.0]],
         origin: [102.0, 201.5],
-        truncated: false,
+        quads: vec![Quad {
+            corners: [-2.0, 1.5, -1.0, 1.5, -1.0, 0.5, -2.0, 0.5],
+            uv: [10, 20, 30, 44],
+            color: 0xFF0000,
+            page: 1,
+            flags: 0,
+        }],
+        text_ranges: vec![Range {
+            top: 7,
+            entity: 7,
+            chain: NO_CHAIN,
+            first: 0,
+            count: 1,
+            flags: 0,
+        }],
+        atlas_version: 3,
+        atlas_pages: 2,
+        px_per_unit: 2.5,
+        ..Batch::default()
     };
     let hex: String = batch
         .to_bytes()
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect();
-    assert_eq!(hex, FRONTEND_FIXTURE);
+    let lines: Vec<&str> = (0..hex.len())
+        .step_by(80)
+        .map(|i| &hex[i..(i + 80).min(hex.len())])
+        .collect();
+    assert_eq!(hex, FRONTEND_FIXTURE, "new fixture:\n{}", lines.join("\n"));
 }
 
 /// Also in `src/viewport/batch.test.ts`.
 const FRONTEND_FIXTURE: &str = concat!(
     "4259495102000000000000000000594000000000000069400000000000005a400000000000606940",
-    "000000000080594000000000003069400400000003000000700000004000000004000000b0000000",
-    "0c00000005000000c00000002000000006000000e000000008000000000000000700000000000000",
-    "0700000000000000ffffffff00000000010000000000000008000000000000000900000000000000",
-    "0000000001000000010000000000000001000000080000000000000000000000000000c00000c0bf",
-    "000000400000c03f00000000000000000000803f0000803f0000ff0000ff0000",
+    "000000000080594000000000003069400700000003000000900000004000000004000000d0000000",
+    "0c00000005000000e000000020000000060000000001000008000000070000000801000030000000",
+    "08000000380100001800000009000000500100002000000007000000000000000700000000000000",
+    "ffffffff000000000100000001000000080000000000000009000000000000000000000001000000",
+    "010000000000000001000000080000000000000000000000000000c00000c0bf000000400000c03f",
+    "00000000000000000000803f0000803f0000ff0000ff0000000000c00000c03f000080bf0000c03f",
+    "000080bf0000003f000000c00000003f0a0014001e002c000000ff00010000000300000000000000",
+    "0200000000000000000000000000044007000000000000000700000000000000ffffffff00000000",
+    "0100000000000000",
 );
 
 #[test]
