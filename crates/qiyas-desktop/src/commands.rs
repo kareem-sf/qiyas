@@ -344,11 +344,11 @@ pub async fn run_command(mut cmd: Command, state: State<'_, AppState>) -> Result
         text: text @ None, ..
     } = &mut cmd
     {
-        *text = Some(files::clipboard_text()?);
+        *text = Some(files::clipboard_text(&state)?);
     }
     match with_session(&state, |s| s.run(cmd))? {
         Outcome::Clipboard { text, count } => {
-            files::set_clipboard_text(&text)?;
+            files::set_clipboard_text(&state, &text)?;
             Ok(Outcome::Clipboard {
                 text: String::new(),
                 count,
@@ -1076,6 +1076,32 @@ mod tests {
             ipc.call("sheet_set_open", json!({ "path": qss })).unwrap()["set"],
             view["set"]
         );
+    }
+
+    #[test]
+    fn closing_without_saving_deletes_the_autosave() {
+        let ipc = Ipc::open();
+        let path = ipc.call("drawing_info", json!({})).unwrap()["path"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let line = json!({ "cmd": { "type": "draw", "kind": "line", "a": [0, 0], "b": [5, 5] } });
+        ipc.call("run_command", line).unwrap();
+        let run = ipc.call("autosave_drawings", json!({})).unwrap();
+        let written = run["written"][0].as_str().unwrap().to_string();
+        assert!(std::path::Path::new(&written).exists());
+        let id = ipc.call("tabs", json!({})).unwrap()["active"].clone();
+        // Refused without force: the window asks first.
+        assert!(ipc.call("close_tab", json!({ "id": id })).is_err());
+        assert!(std::path::Path::new(&written).exists());
+        // Don't Save.
+        ipc.call("close_tab", json!({ "id": id, "force": true }))
+            .unwrap();
+        assert!(!std::path::Path::new(&written).exists());
+        let found = ipc
+            .call("recoverable_drawings", json!({ "paths": [path] }))
+            .unwrap();
+        assert_eq!(found, json!([]));
     }
 
     #[test]

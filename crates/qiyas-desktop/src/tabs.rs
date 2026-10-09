@@ -151,8 +151,18 @@ pub(crate) fn activate<R: Runtime>(
     Ok(())
 }
 
+/// Deletes the autosave of a drawing closed without saving (best effort: logged).
+fn forget_autosave(s: &Session) {
+    if let Err(e) = qiyas_core::discard_autosave(&s.drawing.path) {
+        eprintln!(
+            "The autosave of {} could not be deleted: {e}",
+            s.drawing.path.display()
+        );
+    }
+}
+
 /// Closes tab `id`. One with unsaved drawing changes is refused with `UNSAVED` unless `force`
-/// (the window asks first). Closing the tab on screen shows the next one (else the one before);
+/// (the window asks first; closed without saving, its autosave is deleted). Closing the tab on screen shows the next one (else the one before);
 /// the assistant then starts a new conversation.
 fn close<R: Runtime>(
     app: &AppHandle<R>,
@@ -169,6 +179,10 @@ fn close<R: Runtime>(
     if list.active == Some(id) {
         if !force && session.as_ref().is_some_and(Session::is_dirty) {
             return Err(UNSAVED.into());
+        }
+        // Closed without saving: its autosave goes too.
+        if let Some(s) = session.as_ref().filter(|s| s.is_dirty()) {
+            forget_autosave(s);
         }
         new_conversation(app, state);
         list.order.remove(pos);
@@ -192,7 +206,10 @@ fn close<R: Runtime>(
             return Err(UNSAVED.into());
         }
         if let Some(at) = at {
-            parked.remove(at);
+            let gone = parked.remove(at);
+            if gone.session.is_dirty() {
+                forget_autosave(&gone.session);
+            }
         }
         list.order.remove(pos);
     }

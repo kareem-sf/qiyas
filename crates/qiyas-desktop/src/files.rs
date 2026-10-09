@@ -20,17 +20,27 @@ fn lock<T>(m: &std::sync::Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// Runs `f` on the app's system clipboard, opening it on first use.
+fn with_clipboard<R>(
+    state: &AppState,
+    f: impl FnOnce(&mut arboard::Clipboard) -> Result<R, arboard::Error>,
+) -> Result<R, arboard::Error> {
+    let mut held = lock(&state.clipboard);
+    if held.is_none() {
+        *held = Some(arboard::Clipboard::new()?);
+    }
+    f(held.as_mut().expect("just opened"))
+}
+
 /// The text on the system clipboard.
-pub(crate) fn clipboard_text() -> Result<String, String> {
-    arboard::Clipboard::new()
-        .and_then(|mut c| c.get_text())
+pub(crate) fn clipboard_text(state: &AppState) -> Result<String, String> {
+    with_clipboard(state, |c| c.get_text())
         .map_err(|e| format!("The clipboard could not be read: {e}"))
 }
 
-/// Puts `text` on the system clipboard.
-pub(crate) fn set_clipboard_text(text: &str) -> Result<(), String> {
-    arboard::Clipboard::new()
-        .and_then(|mut c| c.set_text(text.to_string()))
+/// Puts `text` on the system clipboard; the app keeps it there while it runs.
+pub(crate) fn set_clipboard_text(state: &AppState, text: &str) -> Result<(), String> {
+    with_clipboard(state, |c| c.set_text(text.to_string()))
         .map_err(|e| format!("The clipboard could not be written: {e}"))
 }
 

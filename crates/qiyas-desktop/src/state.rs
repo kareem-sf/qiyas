@@ -43,6 +43,9 @@ pub struct AppState {
     pub mcp: Mutex<McpRun>,
     /// Underlay pictures drawn lately.
     pub pictures: Mutex<PictureCache>,
+    /// The system clipboard, opened on first use and kept: on X11 a dropped one takes what it
+    /// copied with it.
+    pub clipboard: Mutex<Option<arboard::Clipboard>>,
 }
 
 impl AppState {
@@ -56,6 +59,7 @@ impl AppState {
             ai: Mutex::new(AiRun::default()),
             mcp: Mutex::new(McpRun::default()),
             pictures: Mutex::new(PictureCache::default()),
+            clipboard: Mutex::new(None),
         }
     }
 }
