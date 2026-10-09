@@ -21,7 +21,7 @@ afterEach(cleanup);
 
 const BLOCKS: BlockInfo[] = [
   { name: "DOOR", attdefs: [] },
-  { name: "TAG", attdefs: [{ tag: "MARK", prompt: "Mark", default: "D1" }] },
+  { name: "TAG", attdefs: [{ tag: "MARK", prompt: "Mark", default: "D1", constant: false }] },
 ];
 
 function palette() {
@@ -80,6 +80,11 @@ test("an empty drawing says it has no blocks", async () => {
   expect(await screen.findByText("This drawing has no blocks")).toBeTruthy();
 });
 
+const BLOCKS_THERE: BlockInfo[] = [
+  { name: "DOOR", attdefs: [] },
+  { name: "WIN", attdefs: [{ tag: "TYPE", prompt: "Type", default: "W1", constant: false }] },
+];
+
 test("the Design Center lists another drawing's blocks to insert or redefine", async () => {
   const onInsert = vi.fn();
   const onRedefine = vi.fn(async () => {});
@@ -87,7 +92,7 @@ test("the Design Center lists another drawing's blocks to insert or redefine", a
     <LanguageProvider>
       <DesignCenter
         choose={async () => "/plans/other.dwg"}
-        list={async () => ["DOOR", "WIN"]}
+        list={async () => BLOCKS_THERE}
         has={(name) => name === "DOOR"}
         onInsert={onInsert}
         onRedefine={onRedefine}
@@ -101,8 +106,9 @@ test("the Design Center lists another drawing's blocks to insert or redefine", a
   expect(screen.queryByRole("button", { name: "Redefine WIN" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Redefine DOOR" }));
   await waitFor(() => expect(onRedefine).toHaveBeenCalledWith("DOOR", "/plans/other.dwg"));
+  // Its attribute definitions come along, so the insert can prompt for them.
   fireEvent.click(screen.getByRole("button", { name: "Insert WIN" }));
-  expect(onInsert).toHaveBeenCalledWith("WIN", "/plans/other.dwg");
+  expect(onInsert).toHaveBeenCalledWith(BLOCKS_THERE[1], "/plans/other.dwg");
 });
 
 test("the tool palette runs its buttons and keeps what is added or removed", async () => {

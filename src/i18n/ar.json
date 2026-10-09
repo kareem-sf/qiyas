@@ -806,5 +806,8 @@
   "palette.command": "أمر",
   "palette.label": "الاسم",
   "palette.value": "البلوك أو الأمر",
-  "palette.add": "إضافة"
+  "palette.add": "إضافة",
+  "block.discarded": "تم تجاهل تحرير البلوك {name}",
+  "block.closedUnlinked": "فُكّ ربط {n} من صفوف الحصر (غادرت عناصرها اللوحة؛ تبقى قيمها)",
+  "block.closedDropped": "أُزيلت {n} من خطوات التراجع مع التحرير"
 }

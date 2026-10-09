@@ -2,7 +2,14 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import { LanguageProvider } from "../i18n";
-import { AttDefDialog, AttributeManager, AttributesDialog, BlockEditBar, CreateBlockDialog } from "./BlockDialogs";
+import {
+  AttDefDialog,
+  AttributeManager,
+  AttributesDialog,
+  BlockEditBar,
+  CreateBlockDialog,
+  promptsFor,
+} from "./BlockDialogs";
 
 beforeAll(() => {
   HTMLDialogElement.prototype.showModal ??= function (this: HTMLDialogElement) {
@@ -57,6 +64,15 @@ test("the attributes dialog asks each prompt and hands back every value by tag",
   await waitFor(() => expect(onSubmit).toHaveBeenCalledWith({ MARK: "D7", SIZE: "" }));
 });
 
+test("inserting asks for every attribute but a constant one", () => {
+  expect(
+    promptsFor([
+      { tag: "MARK", prompt: "Door mark", default: "D1", constant: false },
+      { tag: "MAKER", prompt: "", default: "ACME", constant: true },
+    ]),
+  ).toEqual([{ tag: "MARK", prompt: "Door mark", value: "D1" }]);
+});
+
 test("an attribute definition needs a one-word tag", async () => {
   const onSubmit = vi.fn(async () => {});
   wrap(<AttDefDialog height={0.25} onSubmit={onSubmit} onClose={() => {}} />);
@@ -82,8 +98,8 @@ test("the attribute manager edits the definitions changed and syncs the referenc
         {
           name: "TAG",
           attdefs: [
-            { tag: "MARK", prompt: "Mark", default: "D1" },
-            { tag: "SIZE", prompt: "Width", default: "900" },
+            { tag: "MARK", prompt: "Mark", default: "D1", constant: false },
+            { tag: "SIZE", prompt: "Width", default: "900", constant: false },
           ],
         },
       ]}

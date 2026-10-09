@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import type { BlockInfo } from "../api";
+import type { AttDefInfo, BlockInfo } from "../api";
 import { useT } from "../i18n";
 
 /** Characters AutoCAD refuses in a block name (as the core checks them). */
@@ -117,6 +117,11 @@ export function CreateBlockDialog({ names, onSubmit, onClose }: CreateProps) {
 
 /** One attribute to ask for: its tag, its prompt (empty: the tag is shown) and its value. */
 export type AttributeField = { tag: string; prompt: string; value: string };
+
+/** What INSERT asks for a block's attribute definitions: each but the constant ones (they draw
+ *  from the block), starting from its default. */
+export const promptsFor = (attdefs: AttDefInfo[]): AttributeField[] =>
+  attdefs.filter((a) => !a.constant).map((a) => ({ tag: a.tag, prompt: a.prompt, value: a.default }));
 
 type AttributesProps = {
   /** An i18n key: inserting a block, or editing a reference's attributes. */

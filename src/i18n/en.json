@@ -806,5 +806,8 @@
   "palette.command": "Command",
   "palette.label": "Label",
   "palette.value": "Block or command",
-  "palette.add": "Add"
+  "palette.add": "Add",
+  "block.discarded": "Edit of block {name} discarded",
+  "block.closedUnlinked": "{n} take-off rows lost their link (their entities left the sheet; values stay)",
+  "block.closedDropped": "{n} undo steps went with the edit"
 }

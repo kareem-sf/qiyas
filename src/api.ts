@@ -859,6 +859,8 @@ export type Command =
   | { type: "write_block"; name: string; path: string }
   /** Edits the reference's block in place until saved or discarded: not an undo step. */
   | { type: "edit_block_in_place"; target: EntityTarget }
+  /** End the edit in place, the block taking what was edited or not: a `block_edit_closed`
+   *  outcome, no undo step (the edit's steps leave the history). */
   | { type: "save_block_edits" }
   | { type: "discard_block_edits" }
   | { type: "att_def"; tag: string; prompt: string; default: string; at: P; height: number }
@@ -901,7 +903,9 @@ export type Outcome =
   | { type: "nothing" }
   /** Facts to show: rows of a label key ("radius", "centre"…) and its value written out. */
   | { type: "info"; title: string; rows: [string, string][] }
-  | { type: "table"; columns: string[]; rows: string[][] };
+  | { type: "table"; columns: string[]; rows: string[][] }
+  /** An edit in place ended: rows that lost their link, undo steps that left with it. */
+  | { type: "block_edit_closed"; name: string; saved: boolean; unlinked: number; dropped: number };
 
 export const runCommand = (cmd: Command) => invoke<Outcome>("run_command", { cmd });
 
@@ -989,8 +993,9 @@ export type PaletteItem = { kind: "block" | "command"; label: string; value: str
 /** Keeps the tool palette in the settings file. */
 export const setToolPalette = (items: PaletteItem[]) => invoke<void>("set_tool_palette", { items });
 
-/** An attribute definition: its tag, the prompt asked on insert and its default value. */
-export type AttDefInfo = { tag: string; prompt: string; default: string };
+/** An attribute definition: its tag, the prompt asked on insert, its default value, and whether
+ *  it is constant (never asked). */
+export type AttDefInfo = { tag: string; prompt: string; default: string; constant: boolean };
 
 /** A named block of the drawing, with its attribute definitions. */
 export type BlockInfo = { name: string; attdefs: AttDefInfo[] };
@@ -1001,8 +1006,9 @@ export const blocks = () => invoke<BlockInfo[]>("blocks");
 export const blockThumbnail = (name: string, px: number) =>
   invoke<ArrayBuffer>("block_thumbnail", { name, px });
 
-/** The named blocks of another drawing, opened read-only (the Design Center). */
-export const drawingBlocks = (path: string) => invoke<string[]>("drawing_blocks", { path });
+/** The named blocks of another drawing, opened read-only, with their attribute definitions
+ *  (the Design Center). */
+export const drawingBlocks = (path: string) => invoke<BlockInfo[]>("drawing_blocks", { path });
 
 /** WBLOCK to a .dwg the user chose in the Save dialog. */
 export const writeBlock = (name: string, path: string) => invoke<void>("write_block", { name, path });

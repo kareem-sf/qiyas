@@ -111,6 +111,7 @@ import {
   AttributesDialog,
   BlockEditBar,
   CreateBlockDialog,
+  promptsFor,
   type AttributeField,
 } from "./shell/BlockDialogs";
 import { BlockPalette } from "./shell/BlockPalette";
@@ -752,11 +753,11 @@ export default function App() {
       attribute_values: values,
       from_path: choice.fromPath,
     });
-    if (choice.block.attdefs.length === 0) {
+    const fields = promptsFor(choice.block.attdefs);
+    if (fields.length === 0) {
       apply(command({}));
       return;
     }
-    const fields = choice.block.attdefs.map((a) => ({ tag: a.tag, prompt: a.prompt, value: a.default }));
     setAttributesAsk({ heading: "block.attributesTitle", fields, command });
   }
 
@@ -778,8 +779,12 @@ export default function App() {
       return;
     }
     run(async () => {
-      await runBlock({ type: keep ? "save_block_edits" : "discard_block_edits" });
-      setNotice(keep ? t("block.saved", { name }) : null);
+      const outcome = await runBlock({ type: keep ? "save_block_edits" : "discard_block_edits" });
+      if (outcome.type !== "block_edit_closed") return;
+      const notes = [t(keep ? "block.saved" : "block.discarded", { name })];
+      if (outcome.unlinked > 0) notes.push(t("block.closedUnlinked", { n: outcome.unlinked }));
+      if (outcome.dropped > 0) notes.push(t("block.closedDropped", { n: outcome.dropped }));
+      setNotice(notes.join(" · "));
     });
   }
 
@@ -2477,12 +2482,16 @@ export default function App() {
           }}
           list={drawingBlocks}
           has={(name) => designCenter.includes(name.toUpperCase())}
-          onInsert={(name, path) => {
+          onInsert={(block, path) => {
             // A block this drawing has is inserted as this drawing defines it.
-            const own = designCenter.includes(name.toUpperCase());
+            const want = block.name.toUpperCase();
+            if (!designCenter.includes(want)) {
+              startInsert(block, path);
+              return;
+            }
             run(async () => {
-              const found = own ? (await readBlocks()).find((b) => b.name.toUpperCase() === name.toUpperCase()) : null;
-              startInsert(found ?? { name, attdefs: [] }, own ? null : path);
+              const own = (await readBlocks()).find((b) => b.name.toUpperCase() === want);
+              startInsert(own ?? block);
             });
           }}
           onRedefine={async (name, path) => {
