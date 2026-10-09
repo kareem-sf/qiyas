@@ -22,6 +22,9 @@ const MAX_SEGMENTS: usize = 1 << 16;
 /// Keeps a block that inserts itself, or a huge nested array, from hanging the app. A caller
 /// flattening many entities shares one budget through `flatten_within`.
 pub const MAX_WORK: usize = 1_000_000;
+/// The xdata application marking a text Qiyas wrote: its value is in reading order, so it is
+/// never drawn reversed, whatever "Arabic text is reversed" says (see `is_logical_text`).
+pub const LOGICAL_TEXT_APP: &str = "QIYAS_TEXT";
 /// Bulges smaller than this are straight segments.
 const MIN_BULGE: f64 = 1e-12;
 /// Deepest xref nesting drawn: an xref inside an xref inside ... four levels down.
@@ -108,6 +111,14 @@ pub struct FlatText {
     pub layout: TextLayout,
     /// Entity (object) coordinates to world: the extrusion normal, then the block references.
     pub xf: Xform,
+    /// Written by Qiyas in reading order (`LOGICAL_TEXT_APP`): never drawn reversed.
+    pub logical: bool,
+}
+
+/// Whether the entity carries the `LOGICAL_TEXT_APP` mark: its text was written by Qiyas in
+/// reading order.
+pub fn is_logical_text(common: &EntityCommon) -> bool {
+    common.extended_data.get_record(LOGICAL_TEXT_APP).is_some()
 }
 
 /// Where a text sits and how it is aligned, in entity coordinates.
@@ -1096,6 +1107,7 @@ fn line_text(e: &Text, xf: &Xform) -> FlatText {
             upside_down: e.generation_flags & 4 != 0,
         },
         xf: *xf,
+        logical: is_logical_text(&e.common),
     }
 }
 
@@ -1103,7 +1115,9 @@ fn line_text(e: &Text, xf: &Xform) -> FlatText {
 /// draws as its MTEXT.
 fn attribute_text(a: &AttributeEntity, xf: &Xform) -> FlatText {
     if let Some(mtext) = a.embedded_mtext.as_deref().filter(|_| a.is_multiline) {
-        return block_text(mtext, xf);
+        let mut text = block_text(mtext, xf);
+        text.logical |= is_logical_text(&a.common);
+        return text;
     }
     use HorizontalAlignment as H;
     use VerticalAlignment as V;
@@ -1134,6 +1148,7 @@ fn attribute_text(a: &AttributeEntity, xf: &Xform) -> FlatText {
             upside_down: a.text_generation_flags & 4 != 0,
         },
         xf: *xf,
+        logical: is_logical_text(&a.common),
     }
 }
 
@@ -1151,6 +1166,7 @@ fn block_text(e: &MText, xf: &Xform) -> FlatText {
             line_spacing: e.line_spacing_factor,
         },
         xf: *xf,
+        logical: is_logical_text(&e.common),
     }
 }
 

@@ -1,6 +1,6 @@
 //! Qiyas core: the document, selection, undo and redo, command bus, PDF import and underlays,
 //! raster images, inquiry (geometry, divide and measure along, data extraction), drawing new
-//! entities and modifying them.
+//! entities and modifying them, text and find and replace.
 
 mod boq;
 mod commands;
@@ -21,6 +21,7 @@ mod session;
 mod snap;
 mod tables;
 mod takeoff;
+mod text;
 mod underlay;
 mod undo;
 mod units;
@@ -44,6 +45,7 @@ pub use session::{DrawingInfo, EntityInfo, Picked, Session, BATCH_TOL, EMPTY_MOD
 pub use snap::{Drafting, Snap, SnapKind, SnapModes};
 pub use tables::Schedule;
 pub use takeoff::{Kind, Measurement, Source, Takeoff, Total};
+pub use text::{TextMatch, TextScope};
 pub use underlay::{AttachMode, PictureSource, PreparedPdf, UnderlayImage, UNDERLAY_LAYER};
 pub use units::Units;
 pub use views::NamedView;

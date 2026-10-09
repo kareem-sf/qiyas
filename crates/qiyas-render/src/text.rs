@@ -325,7 +325,8 @@ impl TextEngine {
         self.lay_out_with(doc, &XrefDocs::new(), text, arabic_reversed)
     }
 
-    /// `lay_out`, with a style named `XREF|STYLE` looked up in that loaded xref.
+    /// `lay_out`, with a style named `XREF|STYLE` looked up in that loaded xref. A text Qiyas
+    /// wrote (`FlatText::logical`) is in reading order: `arabic_reversed` leaves it alone.
     pub fn lay_out_with(
         &mut self,
         doc: &CadDocument,
@@ -333,6 +334,7 @@ impl TextEngine {
         text: &FlatText,
         arabic_reversed: bool,
     ) -> Option<(Xform, Vec<ShapedGlyph>, [[f64; 2]; 4])> {
+        let arabic_reversed = arabic_reversed && !text.logical;
         let style = self.style(doc, xrefs, &text.style);
         let height = [text.height, style.height]
             .into_iter()

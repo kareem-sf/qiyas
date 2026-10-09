@@ -123,6 +123,10 @@ pub struct DrawingInfo {
     pub hidden_layers: Vec<String>,
     /// What new entities are drawn with (`Session::current`).
     pub current: Current,
+    /// The drawing's own text styles, sorted (`Session::text_styles`).
+    pub text_styles: Vec<String>,
+    /// The style new text takes (`Session::text_style`).
+    pub text_style: String,
 }
 
 /// An entity by its handle and the block references it sits inside (outermost first).
@@ -174,6 +178,8 @@ pub struct EntityInfo {
     /// For a block reference, its block (for a dynamic block, the block it was made from).
     pub block_name: Option<String>,
     pub text: Option<String>,
+    /// `text` as read: an MText's without its formatting codes, its lines split by `\n`.
+    pub plain_text: Option<String>,
     /// The block the entity sits in, when it was picked inside one.
     pub inside_block: Option<String>,
     /// The block references the entity sits inside, outermost first; empty at the top level.
@@ -542,6 +548,8 @@ impl Session {
             sheet: self.sheet.clone(),
             hidden_layers: self.hidden_layers(),
             current: self.current.clone(),
+            text_styles: self.text_styles(),
+            text_style: self.text_style(),
         }
     }
 
@@ -865,6 +873,12 @@ impl Session {
             EntityType::MText(t) => (None, Some(t.value.clone())),
             _ => (None, None),
         };
+        let plain_text = match entity {
+            EntityType::MText(t) => Some(
+                opencadcodec::entities::mtext_format::parse_mtext(&t.value, true).to_plain_text(),
+            ),
+            _ => text.clone(),
+        };
         let (height, style) = match entity {
             EntityType::Text(t) => (Some(t.height), Some(t.style.clone())),
             EntityType::MText(t) => (Some(t.height), Some(t.style.clone())),
@@ -906,6 +920,7 @@ impl Session {
             area,
             block_name,
             text,
+            plain_text,
             inside_block: located.block_path.last().cloned(),
             chain: chain.to_vec(),
             color: color_name(&common.color),

@@ -12,9 +12,11 @@ use crate::drawing::short_layer_name;
 use crate::inquiry::{Field, Spacing};
 use crate::session::{effective_block_name, locate, variant_name, xref_of_chain, Located};
 use crate::takeoff::in_metres;
+use crate::text::Finder;
 use crate::{
     AttachMode, Boq, Conflict, ConflictStatus, CoreError, Current, Drafting, DrawSpec, EditSpec,
     EntityFilter, Kind, Measurement, ModifySpec, PreparedPdf, Schedule, Session, SnapKind, Source,
+    TextMatch, TextScope,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -238,6 +240,60 @@ pub enum Command {
     /// edits polylines, removes duplicates or flattens entities at the top of the sheet on screen
     /// (see `EditSpec`): one undo step.
     Edit(EditSpec),
+    /// One line of text at `at` on the sheet on screen, `height` drawing units tall, turned
+    /// `rotation` degrees, in the text style `style` (the drawing's current one when `None`),
+    /// with the current layer, colour and linetype: one undo step, `Outcome::Added`. Stored in
+    /// reading order (see `crate::text`).
+    Text {
+        at: [f64; 2],
+        height: f64,
+        rotation: f64,
+        value: String,
+        #[serde(default)]
+        style: Option<String>,
+    },
+    /// Multiline text: `value` is plain text, lines split by `\n`, in a box `width` drawing units
+    /// wide (0: no wrapping) whose top left corner is `at`. As `Text` otherwise.
+    #[serde(rename = "mtext")]
+    MText {
+        at: [f64; 2],
+        width: f64,
+        height: f64,
+        value: String,
+        #[serde(default)]
+        style: Option<String>,
+    },
+    /// Changes the text of `target` (a text or an MText at the top of the sheet on screen) to
+    /// `value`, plain text (an MText's formatting goes); for a block reference the value of its
+    /// attribute `tag`. One undo step.
+    EditText {
+        target: Target,
+        value: String,
+        #[serde(default)]
+        tag: Option<String>,
+    },
+    /// Replaces `find` with `replace` in the texts, MText (plain runs: formatting codes stay),
+    /// attribute values and dimension text overrides of `scope`, in any case unless
+    /// `match_case`, inside words too unless `whole_word`: one undo step (none when nothing
+    /// matches). `Outcome::Replaced`.
+    FindReplace {
+        find: String,
+        replace: String,
+        scope: TextScope,
+        #[serde(default)]
+        match_case: bool,
+        #[serde(default)]
+        whole_word: bool,
+    },
+    /// What `FindReplace` would replace: `Outcome::Found`. Not an undo step.
+    FindText {
+        find: String,
+        scope: TextScope,
+        #[serde(default)]
+        match_case: bool,
+        #[serde(default)]
+        whole_word: bool,
+    },
 }
 
 /// An entity as picked (see `Picked`): its handle and the block references it sits inside,
@@ -277,6 +333,7 @@ impl Command {
             | Command::MeasureGeometry { .. }
             | Command::IdPoint { .. }
             | Command::ExtractData { .. }
+            | Command::FindText { .. }
             | Command::SetCurrent { .. } => None,
             Command::SetBoq { .. } | Command::SetBoqTolerance { .. } => Some(Part::Boq),
             Command::SetConflicts { .. } | Command::ResolveConflict { .. } => Some(Part::Conflicts),
@@ -285,10 +342,18 @@ impl Command {
             | Command::SetImageDisplay { .. }
             | Command::DeleteEntities { .. }
             | Command::Modify(_)
-            | Command::Edit(_) => Some(Part::Document {
+            | Command::Edit(_)
+            | Command::FindReplace { .. } => Some(Part::Document {
                 tables: false,
                 takeoff: false,
             }),
+            // The text mark's application, when the drawing has none yet (`document_extras`).
+            Command::Text { .. } | Command::MText { .. } | Command::EditText { .. } => {
+                Some(Part::Document {
+                    tables: false,
+                    takeoff: false,
+                })
+            }
             // A wipeout registers its class with the drawing.
             Command::Draw(spec) => Some(Part::Document {
                 tables: matches!(spec, DrawSpec::Wipeout { .. }),
@@ -343,6 +408,17 @@ pub enum Outcome {
         left_alone: usize,
         unlinked: usize,
         joined_rows: usize,
+    },
+    /// A find and replace: how many replacements, and the entities changed (a block
+    /// reference's, for an attribute).
+    Replaced {
+        count: usize,
+        handles: Vec<u64>,
+    },
+    /// A find: how many matches, and each entity holding one with its sheet.
+    Found {
+        count: usize,
+        matches: Vec<TextMatch>,
     },
     /// The command named a measurement or BOQ item that does not exist.
     Nothing,
@@ -626,6 +702,51 @@ impl Session {
             }
             Command::Modify(spec) => return self.modify(spec),
             Command::Edit(spec) => return self.edit_entities(spec),
+            Command::Text {
+                at,
+                height,
+                rotation,
+                value,
+                style,
+            } => {
+                let h = self.add_text(at, height, rotation, value, style.as_deref())?;
+                return Ok(Outcome::Added { handles: vec![h] });
+            }
+            Command::MText {
+                at,
+                width,
+                height,
+                value,
+                style,
+            } => {
+                let h = self.add_mtext(at, width, height, &value, style.as_deref())?;
+                return Ok(Outcome::Added { handles: vec![h] });
+            }
+            Command::EditText { target, value, tag } => {
+                self.edit_text(&target, &value, tag.as_deref())?;
+                return Ok(Outcome::Changed);
+            }
+            Command::FindReplace {
+                find,
+                replace,
+                scope,
+                match_case,
+                whole_word,
+            } => {
+                let finder = Finder::new(&find, match_case, whole_word)?;
+                let (count, handles) = self.find_replace(&finder, &replace, scope);
+                return Ok(Outcome::Replaced { count, handles });
+            }
+            Command::FindText {
+                find,
+                scope,
+                match_case,
+                whole_word,
+            } => {
+                let finder = Finder::new(&find, match_case, whole_word)?;
+                let (count, matches) = self.find_text(&finder, scope);
+                return Ok(Outcome::Found { count, matches });
+            }
         };
         measurement.source = source.name().to_string();
         self.takeoff.add(measurement.clone());

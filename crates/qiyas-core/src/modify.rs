@@ -1044,6 +1044,9 @@ impl Session {
                 edited = spec.targets();
                 (edited.as_slice(), false, false)
             }
+            Command::Text { .. } | Command::MText { .. } | Command::EditText { .. } => {
+                return (self.needs_text_app(), false)
+            }
             _ => return (false, false),
         };
         let doc = &self.drawing.doc;

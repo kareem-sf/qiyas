@@ -451,6 +451,12 @@ impl Session {
             // WIPEOUT needs its class for the DWG and DXF writers.
             self.drawing.doc.classes.update_defaults();
         }
+        self.add_styled(entities)
+    }
+
+    /// Adds `entities` to the sheet on screen styled by the current drawing state, and returns
+    /// their handles.
+    pub(crate) fn add_styled(&mut self, entities: Vec<EntityType>) -> Result<Vec<u64>, CoreError> {
         let doc = &self.drawing.doc;
         let c = &self.current;
         let layer = if doc.layers.contains(&c.layer) {
