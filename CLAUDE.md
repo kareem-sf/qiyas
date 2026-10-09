@@ -250,16 +250,19 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
   layer, current text style, text half the row height, middle centre), `EditCell` (plain text,
   stored escaped; a merged cell's first), `InsertRow/InsertCol { at }`, `DeleteRow/DeleteCol`
   (one kept), `MergeCells { first, last }` (one cell unmerges). One undo step each; each draws the
-  `*T` block again (`rebuild_table`). Find and replace reaches cells. Qiyas's tables are marked
-  `QIYAS_TEXT` (reading order).
+  `*T` block again (`rebuild_table`; a block another table shares gets a fresh `*Tn` instead).
+  A table's block is found by name, else by `block_record_handle` (the DWG reader sets only the
+  handle; `qiyas_geom::table_block`), also when copying. Find and replace reaches cells. Qiyas's
+  tables are marked `QIYAS_TEXT` (reading order).
 - `qiyas-core/src/field.rs`: fields are AutoCAD field codes in the text (`%<\AcVar Date ...>%`,
   `%<\AcVar Filename>%`, `%<\AcObjProp Object(%<\_ObjId HEX>%).Area|Length ...>%`, Qiyas's own
   `%<\AcVar QiyasCount "BLOCK">%`). The visible text is the value; the code (the whole text as
   typed) is kept in `QIYAS_FIELD` xdata (on a table: row, column, code per cell). `Command::Field
   { at, height, field }` adds a one-line text; codes typed into Text, MText or a cell count too.
   `UpdateFields` works them all out again; area and length fields follow every modify, edit and
-  erase in the same step (`follow_fields`). Drawing units, 3 decimals; UTC date; `####` when the
-  entity is gone. Not worked out on open.
+  erase in the same step (`follow_fields`). Metres and square metres (`in_metres`, as the
+  take-off), 3 decimals; UTC date; `####` when the entity is gone. Not worked out on open. Find
+  and replace leaves field texts and field cells as they are and counts them in `skipped`.
 - Annotate tab, Tables group: Table (click, then rows, columns and sizes), Edit table (or a double
   click on a table: `TableEditor`, a grid in the drawing's column order, Shift+click to merge),
   Field (click, then `FieldDialog`; area and length pick their entity; also from the table
