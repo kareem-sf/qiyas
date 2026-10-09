@@ -206,6 +206,34 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
   highlights what changed and says how many were skipped). New text height starts at
   2.5 mm in drawing units, then the last one used.
 
+## Dimensions
+
+- Drawn as themselves: a Dimension draws its `*D` block (or, without one, the geometry
+  `qiyas_geom::dimension_entities` generates from its points and style); leaders draw their line
+  and arrowhead, tolerances their frame (flatten's `owner`: every path, even an arrowhead block
+  inside, is the entity, chain as for any entity). Picking, windows, `entity_info` (its text) and
+  `MeasureEntity` (its measured distance, a length row; angles have none) see the dimension.
+- `Command::Dimension(DimSpec)` (`qiyas-core/src/dimension.rs`, wire `{"type":"dimension",
+  "kind":"linear",...}`): linear (no rotation: horizontal or vertical by where the line point is),
+  aligned, angular (3 points + arc point), radius, diameter, arc length, ordinate, baseline,
+  continue, quick (lines, arcs, circles). Each is a real Dimension on the current layer in the
+  current style (DIMSTYLE) with a `*Dn` block: Lines, Solid arrowheads, one Text (marked
+  `QIYAS_TEXT`), sized DIMASZ/DIMTXT/DIMEXO/DIMEXE/DIMGAP x DIMSCALE, numbers by DIMDEC, DIMZIN,
+  DIMLFAC, DIMRND, DIMDSEP, DIMPOST (decimal only).
+- `DimEdit` (text override with `<>`, flip, move text) and find and replace rebuild the block in
+  the same step (`rebuild_dimension`). `DimBreak` and `DimJogLine` change the block's lines only:
+  a later rebuild drops them. `DimSpace` moves parallel linear dimensions to equal spacing.
+  Dimensions are not re-measured by `follow_edit`; a moved dimension's take-off row follows.
+- `Leader`/`MLeader` (a Leader + MText; Qiyas writes no MULTILEADER), `Tolerance` (frame in
+  AutoCAD codes). `SetDimStyle` (create from current, common fields, make current; header DIM vars
+  follow). `AnnotationScale` sets CANNOSCALE ("1:50", header and the variable dictionary); new
+  dimensions, leaders and tolerances keep style DIMSCALE x scale as their own `DSTYLE` override,
+  new text 2.5 mm x scale. No annotative scale lists. All undoable (header bits are in
+  `TablesSnapshot`).
+- Annotate tab (Dimensions, Leaders, Dimension style…); command line DLI, DAL, DAN, DRA, DDI, DAR,
+  DOR, DBA, DCO, QDIM, DED (T text, F flip, M move), DIMBREAK, DIMSPACE, DIMJOGLINE, LE, MLD, TOL,
+  D (DIMSTYLE). Not AI tools yet.
+
 ## PDF
 
 - PDFs are read through pdfium (BSD-3), a shared library loaded at run time through
