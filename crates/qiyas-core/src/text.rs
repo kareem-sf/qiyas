@@ -14,7 +14,7 @@ use opencadcodec::{AppId, EntityType, Handle, MText, Text, Vector3};
 use qiyas_geom::LOGICAL_TEXT_APP;
 use serde::{Deserialize, Serialize};
 
-use crate::field::{has_fields, set_text_field};
+use crate::field::{cell_fields, has_fields, set_text_field, text_field};
 use crate::session::variant_name;
 use crate::table::is_text_value;
 use crate::{CoreError, Session, Target};
@@ -49,6 +49,8 @@ struct Hit {
     entity: EntityType,
     count: usize,
     fits: bool,
+    /// Table cells with matches left as they were: they hold a field.
+    skipped: usize,
 }
 
 /// How a string is read: which parts are codes, never searched.
@@ -467,20 +469,24 @@ impl Session {
 
     /// The text of `e` with the matches replaced by `with` (counted only when `None`); `None`
     /// when there is no match. It does not fit when a text would be left blank or a single line
-    /// would take a line break.
+    /// would take a line break, or when it is a field (the next update would put the field's value
+    /// back); a table's field cells are left as they were and counted in `skipped`.
     fn replaced(finder: &Finder, e: &EntityType, with: Option<&str>) -> Option<Hit> {
         let mut e = e.clone();
         let one_line = |v: &str| !v.contains(['\n', '\r']);
+        let field = text_field(e.common()).is_some();
         let mut fits = true;
+        let mut skipped = 0;
         let count = match &mut e {
             EntityType::Text(t) => {
                 let (v, n) = finder.replace(&t.value, Mode::Text, with);
-                fits = one_line(&v) && !v.trim().is_empty();
+                fits = one_line(&v) && !v.trim().is_empty() && !field;
                 t.value = v;
                 n
             }
             EntityType::MText(t) => {
                 let (v, n) = finder.replace(&t.value, Mode::MText, with);
+                fits = !field;
                 t.value = v;
                 n
             }
@@ -520,31 +526,42 @@ impl Session {
                 base.set_text_override(Some(v));
                 n
             }
-            // Every cell's text, read as MText.
+            // Every cell's text, read as MText; a field's cell is never replaced.
             EntityType::Table(t) => {
+                let fields: Vec<(usize, usize)> =
+                    cell_fields(t).into_iter().map(|(r, c, _)| (r, c)).collect();
                 let mut total = 0;
-                let contents = t
-                    .rows
-                    .iter_mut()
-                    .flat_map(|r| &mut r.cells)
-                    .flat_map(|c| &mut c.contents);
-                for content in contents.filter(|c| is_text_value(&c.value)) {
-                    let (v, n) = finder.replace(content.value.display(), Mode::MText, with);
-                    if n > 0 && with.is_some() {
-                        content.value.text = v.clone();
-                        content.value.formatted_value = v;
+                for (r, row) in t.rows.iter_mut().enumerate() {
+                    for (c, cell) in row.cells.iter_mut().enumerate() {
+                        let field = fields.contains(&(r, c));
+                        let contents = cell.contents.iter_mut();
+                        for content in contents.filter(|x| is_text_value(&x.value)) {
+                            let (v, n) = finder.replace(content.value.display(), Mode::MText, with);
+                            if n == 0 {
+                                continue;
+                            }
+                            if with.is_some() {
+                                if field {
+                                    skipped += 1;
+                                    continue;
+                                }
+                                content.value.text = v.clone();
+                                content.value.formatted_value = v;
+                            }
+                            total += n;
+                        }
                     }
-                    total += n;
                 }
                 total
             }
             _ => 0,
         };
         e.common_mut().graphic_data = None;
-        (count > 0).then_some(Hit {
+        (count > 0 || skipped > 0).then_some(Hit {
             entity: e,
             count,
             fits,
+            skipped,
         })
     }
 
@@ -588,6 +605,10 @@ impl Session {
                 .expect("listed from the drawing");
             match Self::replaced(finder, e, Some(with)) {
                 Some(hit) if hit.fits => {
+                    skipped += hit.skipped;
+                    if hit.count == 0 {
+                        continue;
+                    }
                     let dimension = matches!(hit.entity, EntityType::Dimension(_));
                     let table = matches!(hit.entity, EntityType::Table(_));
                     *self.drawing.doc.get_entity_mut(h).expect("listed") = hit.entity;

@@ -11,8 +11,8 @@
 //!
 //! Area and length fields follow the entity they read: after every modify, edit and erase they
 //! are worked out again in the same undo step (`Session::follow_fields`). Dates, file names and
-//! counts change on `UpdateFields`. Areas and lengths are in drawing units, 3 decimals; an entity
-//! gone, or a code Qiyas does not know, shows `####`.
+//! counts change on `UpdateFields`. Areas and lengths are in square metres and metres (as the
+//! take-off shows them), 3 decimals; an entity gone, or a code Qiyas does not know, shows `####`.
 
 use opencadcodec::entities::Table;
 use opencadcodec::tables::normalize_name;
@@ -22,8 +22,9 @@ use qiyas_geom::Xform;
 use serde::{Deserialize, Serialize};
 
 use crate::session::effective_block_name;
+use crate::takeoff::in_metres;
 use crate::text::escape_mtext;
-use crate::{CoreError, Session, Target};
+use crate::{CoreError, Kind, Session, Target};
 
 /// The xdata application holding a field's code (never `QIYAS`: `embed_measurements` deletes
 /// those).
@@ -41,9 +42,9 @@ pub enum FieldKind {
     Date,
     /// The drawing's file name.
     FileName,
-    /// The area of the closed entity `target` (at the top of the sheet), in drawing units.
+    /// The area of the closed entity `target` (at the top of the sheet), in square metres.
     Area { target: Target },
-    /// The length of the entity `target`, in drawing units.
+    /// The length of the entity `target`, in metres.
     Length { target: Target },
     /// How many references of the block `block` the sheet holds.
     Count { block: String },
@@ -291,8 +292,14 @@ impl Session {
         let measure = |h: u64, area: bool| {
             let e = doc.get_entity(Handle::new(h))?;
             let extent = self.extent(doc, e, &Xform::identity());
-            let v = if area { extent.area } else { extent.length }?;
-            Some(format!("{v:.3}"))
+            let (kind, v) = if area {
+                (Kind::Area, extent.area?)
+            } else {
+                (Kind::Length, extent.length?)
+            };
+            // In metres and square metres, as the take-off shows them.
+            let (_, shown) = in_metres(kind, v, self.drawing.units);
+            Some(format!("{shown:.3}"))
         };
         let value = match parse_code(code) {
             Code::Date => Some(today()),

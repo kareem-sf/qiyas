@@ -5,8 +5,8 @@
 //! count) are text whose field code Qiyas keeps (`QIYAS_FIELD` xdata) and evaluates; object fields
 //! follow the entity they read in the same step as the edit.
 
-use opencadcodec::entities::Table;
-use opencadcodec::{CadDocument, EntityType, Handle};
+use opencadcodec::entities::{Table, TableColumn, TableRow};
+use opencadcodec::{BlockRecord, CadDocument, EntityType, Handle, MText, Vector3};
 use qiyas_core::fixtures::{sample_doc, schedule_doc, write_drawing};
 use qiyas_core::{
     field_code, Command, FieldKind, ModifySpec, Outcome, Session, Target, TextScope, FIELD_APP,
@@ -648,4 +648,154 @@ fn wire_forms() {
     ] {
         serde_json::from_str::<Command>(wire).unwrap_or_else(|e| panic!("{wire}: {e}"));
     }
+}
+
+/// The texts of the block a table refers to, found as a DWG reader leaves it: by its record
+/// handle when it has no block name.
+fn record_texts(s: &Session, h: u64) -> (Handle, Vec<String>) {
+    let tb = table(s, h);
+    let doc = &s.drawing.doc;
+    let record = match tb.block_record_handle {
+        Some(r) => doc.block_records.iter().find(|b| b.handle == r).unwrap(),
+        None => doc.block_records.get(&tb.block_name).unwrap(),
+    };
+    let texts = doc
+        .entities_in_block(&record.name)
+        .filter_map(|e| match e {
+            EntityType::MText(m) => Some(m.value.clone()),
+            _ => None,
+        })
+        .collect();
+    (record.handle, texts)
+}
+
+#[test]
+fn a_copied_dwg_table_gets_a_block_of_its_own() {
+    // An AutoCAD-like table: its *T1 block holds what it shows.
+    let mut doc = sample_doc();
+    let mut record = BlockRecord::new("*T1");
+    record.handle = doc.allocate_handle();
+    record.block_entity_handle = doc.allocate_handle();
+    record.block_end_handle = doc.allocate_handle();
+    record.flags.anonymous = true;
+    let owner = record.handle;
+    doc.block_records.add(record).unwrap();
+    let mut text = EntityType::MText(MText::with_value("A", Vector3::new(1.0, -0.5, 0.0)));
+    text.common_mut().owner_handle = owner;
+    doc.add_entity(text).unwrap();
+    let mut tb = Table::new(Vector3::new(50.0, 0.0, 0.0), 0, 0);
+    tb.rows = vec![TableRow::from_texts(&["A"])];
+    tb.columns = vec![TableColumn::with_width(2.0)];
+    tb.block_name = "*T1".to_string();
+    tb.block_record_handle = Some(owner);
+    let original = doc.add_entity(EntityType::Table(tb)).unwrap().value();
+    let (_dir, mut s) = open(&doc, "plan.dwg");
+    let (record, texts) = record_texts(&s, original);
+    assert_eq!(texts, ["A"]);
+
+    let copy = one(s
+        .run(Command::Modify(ModifySpec::Copy {
+            targets: vec![t(original)],
+            delta: [0.0, -10.0],
+            count: 1,
+        }))
+        .unwrap());
+    let (copied, _) = record_texts(&s, copy);
+    assert_ne!(copied, record, "the copy has a block of its own");
+    s.run(Command::EditCell {
+        target: t(copy),
+        row: 0,
+        col: 0,
+        text: "Z".into(),
+    })
+    .unwrap();
+    assert_eq!(record_texts(&s, original), (record, vec!["A".to_string()]));
+    assert_eq!(record_texts(&s, copy).1, ["Z"]);
+
+    // Two tables sharing one block (as an older copy left them): editing one gives it a new block.
+    let mut shared = table(&s, original);
+    shared.common.handle = Handle::NULL;
+    shared.insertion_point = Vector3::new(80.0, 0.0, 0.0);
+    let twin = s
+        .drawing
+        .doc
+        .add_entity(EntityType::Table(shared))
+        .unwrap()
+        .value();
+    s.run(Command::EditCell {
+        target: t(twin),
+        row: 0,
+        col: 0,
+        text: "Y".into(),
+    })
+    .unwrap();
+    assert_eq!(record_texts(&s, original), (record, vec!["A".to_string()]));
+    let (own, texts) = record_texts(&s, twin);
+    assert_ne!(own, record);
+    assert_eq!(texts, ["Y"]);
+}
+
+#[test]
+fn area_and_length_fields_read_in_metres() {
+    // The sample in millimetres: its 10-unit line is 0.010 m long.
+    let mut doc = sample_doc();
+    doc.header.insertion_units = 4;
+    let (_dir, mut s) = open(&doc, "plan.dxf");
+    let line = wall_line(&s);
+    let h = one(s
+        .run(Command::Field {
+            at: [0.0, 5.0],
+            height: 2.5,
+            field: FieldKind::Length { target: t(line) },
+        })
+        .unwrap());
+    assert_eq!(text_of(&s, h), "0.010");
+}
+
+#[test]
+fn find_and_replace_leaves_fields_alone_and_says_so() {
+    let (_dir, mut s) = open(&sample_doc(), "plan.dxf");
+    let rect = rectangle(&s);
+    let code = field_code(&FieldKind::Area { target: t(rect) });
+    let text = one(s
+        .run(Command::Text {
+            at: [0.0, 5.0],
+            height: 0.25,
+            rotation: 0.0,
+            value: format!("m2 {code}"),
+            style: None,
+        })
+        .unwrap());
+    let h = new_table(&mut s, [50.0, 0.0], &[&["m2 note", ""]]);
+    s.run(Command::EditCell {
+        target: t(h),
+        row: 0,
+        col: 1,
+        text: format!("{code} m2"),
+    })
+    .unwrap();
+    let replace = |s: &mut Session| {
+        s.run(Command::FindReplace {
+            find: "m2".into(),
+            replace: "sqm".into(),
+            scope: TextScope::Sheet,
+            match_case: true,
+            whole_word: false,
+        })
+        .unwrap()
+    };
+    match replace(&mut s) {
+        Outcome::Replaced {
+            count,
+            handles,
+            skipped,
+        } => {
+            assert_eq!(count, 1, "the table's plain cell");
+            assert_eq!(handles, [h]);
+            assert_eq!(skipped, 2, "the field text and the field cell");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(text_of(&s, text), "m2 12.000");
+    assert_eq!(texts(&table(&s, h)), [["sqm note", "12.000 m2"]]);
 }
