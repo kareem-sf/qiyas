@@ -226,6 +226,18 @@ pub async fn pick(
     with_session(&state, |s| Ok(s.pick([x, y], tol)))
 }
 
+/// The ring around (x, y) that the drawn lines within `radius` close, for a hatch; `None` when
+/// (x, y) is inside no closed area.
+#[tauri::command]
+pub async fn boundary_at(
+    x: f64,
+    y: f64,
+    radius: f64,
+    state: State<'_, AppState>,
+) -> Result<Option<Vec<[f64; 2]>>, String> {
+    with_session(&state, |s| Ok(s.boundary_at([x, y], radius)))
+}
+
 /// The object snap within `tol` (drawing units) of `(x, y)`, with the session's snap modes;
 /// `from_x`, `from_y` is the previous point, for perpendicular snaps. None while snaps are off.
 #[tauri::command]

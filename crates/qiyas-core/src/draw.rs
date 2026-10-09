@@ -189,8 +189,8 @@ pub enum DrawSpec {
         points: Vec<[f64; 2]>,
         pattern: HatchPattern,
     },
-    /// A filled triangle or quadrilateral (AutoCAD's SOLID), its corners in AutoCAD's order (the
-    /// fourth opposite the first... third and fourth swap round the outline).
+    /// A filled triangle or quadrilateral (AutoCAD's SOLID), its corners in AutoCAD's order: the
+    /// outline runs first, second, fourth, third.
     #[serde(rename = "solid2d")]
     Solid2D {
         points: Vec<[f64; 2]>,
@@ -741,15 +741,15 @@ impl Session {
         points: &[[f64; 2]],
         pattern: HatchPattern,
     ) -> Result<Hatch, CoreError> {
+        let pattern = match pattern {
+            HatchPattern::Solid => None,
+            HatchPattern::Ansi31 => Some(("ANSI31".to_string(), 0.0, 1.0)),
+            HatchPattern::Ansi37 => Some(("ANSI37".to_string(), 0.0, 1.0)),
+            HatchPattern::Custom { name, angle, scale } => Some((name, angle, scale)),
+        };
         let mut hatch = match pattern {
-            HatchPattern::Solid => Hatch::solid(),
-            other => {
-                let (name, angle, scale) = match other {
-                    HatchPattern::Ansi31 => ("ANSI31".to_string(), 0.0, 1.0),
-                    HatchPattern::Ansi37 => ("ANSI37".to_string(), 0.0, 1.0),
-                    HatchPattern::Custom { name, angle, scale } => (name, angle, scale),
-                    HatchPattern::Solid => unreachable!("matched above"),
-                };
+            None => Hatch::solid(),
+            Some((name, angle, scale)) => {
                 finite(&[[angle, scale]])?;
                 positive(scale, "pattern scale")?;
                 let (name, lines) = pattern_lines(&name, angle.to_radians(), scale)
