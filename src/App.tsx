@@ -42,6 +42,7 @@ import {
   reloadXrefs,
   atlasPages,
   batchVersion,
+  boundaryAt,
   renderBatch,
   runCommand,
   saveDrawing,
@@ -387,8 +388,10 @@ export default function App() {
       }
       changed = true;
       await refreshTakeoffAndBoq();
-      // Divide and measure along add points to the drawing itself.
-      if (cmd.type === "divide_along" || cmd.type === "measure_along") await redraw();
+      // Divide, measure along and the draws add to the drawing itself.
+      if (cmd.type === "divide_along" || cmd.type === "measure_along" || cmd.type === "draw") {
+        await redraw();
+      }
       if (outcome.type === "measured") setSelectedId(outcome.measurement.id);
     });
     if (changed) await autosave();
@@ -402,6 +405,12 @@ export default function App() {
       entityInfo,
       run: apply,
       zoomTo: (bounds) => viewport.current?.fitTo(bounds),
+      boundary: (p) => {
+        // The lines in view (and as far again around the point) can close the area.
+        const view = viewport.current?.visible();
+        const radius = view ? Math.max(view[1][0] - view[0][0], view[1][1] - view[0][1]) : 1000;
+        return boundaryAt(p[0], p[1], radius);
+      },
       onError: (e) => setError(String(e)),
     },
     drafting,
@@ -533,9 +542,9 @@ export default function App() {
       if (isStale(gen, switchGen.current)) return;
       const held = batchHeld.current;
       if (held && version === batchVersionRef.current) {
-        // The same lines: keep the arrays the viewport has uploaded already.
-        const { segments, colors, ranges, chains } = held;
-        next = { ...next, segments, colors, ranges, chains };
+        // The same lines and fills: keep the arrays the viewport has uploaded already.
+        const { segments, colors, ranges, chains, fills, fillRanges } = held;
+        next = { ...next, segments, colors, ranges, chains, fills, fillRanges };
       }
       batchVersionRef.current = version;
       batchHeld.current = next;
@@ -1116,6 +1125,22 @@ export default function App() {
 
   const showAll = useCallback(() => applyHidden(new Set()), [hidden, info]);
 
+  /** Draws new entities on layer `name` from now on (saved with the project, not an undo step). */
+  const makeCurrent = useCallback(
+    (name: string) => {
+      if (!info) return;
+      const gen = switchGen.current;
+      run(async () => {
+        await runCommand({ type: "set_current", current: { ...info.current, layer: name } });
+        const next = await drawingInfo();
+        if (isStale(gen, switchGen.current)) return;
+        setInfo(next);
+        await autosave();
+      });
+    },
+    [info],
+  );
+
   /** Attaches a PDF page from the dialog, then draws it: an underlay's picture is fetched before
    *  the dialog closes, so its progress shows there. Errors go to the dialog. */
   async function attachPdfPage(r: AttachRequest) {
@@ -1255,6 +1280,15 @@ export default function App() {
         return;
       case "number":
         answerAlong(a.value);
+        return;
+      case "option":
+        measure.drawInput({ type: "option", option: a.option });
+        return;
+      case "distance":
+        measure.drawInput({ type: "number", value: a.value });
+        return;
+      case "draw":
+        if (!needDrawing()) apply({ type: "draw", ...a.spec });
         return;
       case "tool":
         if (needDrawing()) return;
@@ -1563,8 +1597,12 @@ export default function App() {
   }, [selected, boqLinked, conflictLinked, batch]);
   const rubberBand = useMemo(
     () =>
-      measure.points.length > 0 ? overlaySegments(measure.points, measure.cursor, tool) : null,
-    [measure.points, measure.cursor, tool],
+      measure.preview && measure.preview.length > 0
+        ? measure.preview
+        : measure.points.length > 0
+          ? overlaySegments(measure.points, measure.cursor, tool)
+          : null,
+    [measure.preview, measure.points, measure.cursor, tool],
   );
   // A measure in progress hides the selected row's outline; the snap marker goes over either.
   const overlay = useMemo(() => {
@@ -1619,6 +1657,9 @@ export default function App() {
   } else if (measure.asking) {
     expect = measure.asking === "divide" ? "count" : "step";
     promptKey = `cmd.prompt.${expect}`;
+  } else if (measure.draw) {
+    expect = "point";
+    promptKey = measure.hint;
   } else if (tool === "distance" || tool === "area") {
     expect = "point";
     promptKey = measure.points.length > 0 ? "cmd.prompt.nextPoint" : "cmd.prompt.firstPoint";
@@ -1633,8 +1674,10 @@ export default function App() {
   }
   const commandState: ParseState = {
     expect,
-    last: measure.points[measure.points.length - 1] ?? lastPoint.current,
+    last: measure.lastDrawPoint ?? measure.points[measure.points.length - 1] ?? lastPoint.current,
     aliases: commandAliases,
+    options: measure.drawOptions,
+    numberToo: measure.takesNumber,
   };
   const sheetShown = info?.sheets.find((s) => s.block.toLowerCase() === sheet.toLowerCase());
   const sheetName = sheetShown?.name ?? sheet;
@@ -1841,6 +1884,8 @@ export default function App() {
             onToggle={toggleLayer}
             onIsolate={isolateLayer}
             onShowAll={showAll}
+            current={info?.current.layer}
+            onMakeCurrent={info ? makeCurrent : undefined}
           />
           <PropertiesPanel
             entity={pickedInfo}

@@ -95,3 +95,24 @@ test("in Arabic, a Latin layer name is isolated so it reads in its own direction
     document.documentElement.dir = "";
   }
 });
+
+test("make current marks the current layer; an xref's layer can't be current", () => {
+  const onMakeCurrent = vi.fn();
+  render(
+    <LayersPanel
+      layers={[layer("0"), layer("A-WALL"), layer("PLAN|A-DOOR")]}
+      hidden={new Set()}
+      current="A-WALL"
+      onToggle={() => {}}
+      onIsolate={() => {}}
+      onShowAll={() => {}}
+      onMakeCurrent={onMakeCurrent}
+    />,
+  );
+  const button = (name: string) => screen.getByRole("button", { name }) as HTMLButtonElement;
+  expect(button("Make current: A-WALL").getAttribute("aria-pressed")).toBe("true");
+  expect(button("Make current: 0").getAttribute("aria-pressed")).toBe("false");
+  fireEvent.click(button("Make current: 0"));
+  expect(onMakeCurrent).toHaveBeenCalledWith("0");
+  expect(button("Make current: PLAN|A-DOOR").disabled).toBe(true);
+});

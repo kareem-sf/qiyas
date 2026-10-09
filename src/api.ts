@@ -48,6 +48,8 @@ export type DrawingInfo = {
   sheet: string;
   /** The layers the user has hidden, sorted. */
   hidden_layers: string[];
+  /** What new entities are drawn with. */
+  current: Current;
 };
 
 /** In `problems` when the drawing opened with nothing in model space (`qiyas_core::EMPTY_MODEL`). */
@@ -353,6 +355,11 @@ export type Drafting = {
 
 /** The object snap within `tol` drawing units of (x, y) with the drawing's snap modes; `from` is the
  *  previous point, for perpendicular snaps. Null when there is none or snaps are off. */
+/** The ring around (x, y) that the drawn lines within `radius` close (counter-clockwise), for a
+ *  hatch; null when (x, y) is inside no closed area. */
+export const boundaryAt = (x: number, y: number, radius: number) =>
+  invoke<[number, number][] | null>("boundary_at", { x, y, radius });
+
 export const snap = (x: number, y: number, tol: number, from: [number, number] | null = null) =>
   invoke<Snap | null>("snap", { x, y, tol, fromX: from?.[0] ?? null, fromY: from?.[1] ?? null });
 
@@ -471,6 +478,55 @@ export type Conflict = {
   hash_key: string;
 };
 
+type P = [number, number];
+
+/** A hatch's fill (`qiyas_core::HatchPattern`): a pattern of the built-in table by name (ANSI31,
+ *  ANSI37, LINE, NET, DASH, BRICK) turned by `angle` degrees and scaled by `scale`. */
+export type HatchPattern =
+  | "solid"
+  | "ansi31"
+  | "ansi37"
+  | { custom: { name: string; angle: number; scale: number } };
+
+/** What a draw adds (`qiyas_core::DrawSpec`), in drawing coordinates; angles in degrees. */
+export type DrawSpec =
+  | { kind: "line"; a: P; b: P }
+  /** One bulge per point (the segment starting there), or none. */
+  | { kind: "polyline"; points: P[]; bulges: number[]; closed: boolean }
+  | { kind: "rectangle"; a: P; b: P }
+  | { kind: "polygon"; centre: P; sides: number; radius: number; inscribed: boolean }
+  | { kind: "circle"; centre: P; radius: number }
+  /** Counter-clockwise from `start` to `end`. */
+  | { kind: "arc"; centre: P; radius: number; start: number; end: number }
+  | { kind: "three_point_arc"; a: P; b: P; c: P }
+  /** `major`: the major semi-axis from the centre; `ratio` minor over major (0 to 1]. */
+  | { kind: "ellipse"; centre: P; major: P; ratio: number }
+  | { kind: "spline"; fit_points: P[] }
+  | { kind: "point"; p: P }
+  /** Inner and outer diameters. */
+  | { kind: "donut"; centre: P; inner: number; outer: number }
+  | { kind: "ray"; origin: P; dir: P }
+  | { kind: "xline"; origin: P; dir: P }
+  | { kind: "revcloud"; points: P[]; arc_len: number }
+  | { kind: "wipeout"; points: P[] }
+  /** Inside the closed entities `boundary_handles` or the ring `points`: one of the two. */
+  | { kind: "hatch"; boundary_handles: number[]; points: P[]; pattern: HatchPattern }
+  | { kind: "solid2d"; points: P[] }
+  | { kind: "trace"; points: P[]; width: number }
+  | { kind: "mline"; points: P[]; style: string | null; scale: number | null }
+  | { kind: "sketch"; points: P[] };
+
+/** What new entities are drawn with (`qiyas_core::Current`). */
+export type Current = {
+  layer: string;
+  /** "ByLayer", "ByBlock", "ACI n" or "#rrggbb". */
+  color: string;
+  /** "ByLayer", "ByBlock" or a linetype of the drawing. */
+  linetype: string;
+  /** Hundredths of a millimetre; -1 ByLayer, -2 ByBlock, -3 Default. */
+  lineweight: number;
+};
+
 /** The command bus (`qiyas_core::Command`). Points are in drawing coordinates. */
 export type Command =
   | { type: "measure_distance"; points: [number, number][] }
@@ -548,7 +604,11 @@ export type Command =
   /** Saves the named view `name` (replacing one of that name) showing `bounds`; Model sheet only. */
   | { type: "save_view"; name: string; bounds: [[number, number], [number, number]] }
   /** Removes the named view `name`; `nothing` when there is none. */
-  | { type: "delete_view"; name: string };
+  | { type: "delete_view"; name: string }
+  /** Adds what the spec describes on the current layer: one undo step, an `added` outcome. */
+  | ({ type: "draw" } & DrawSpec)
+  /** What new entities are drawn with; not an undo step. */
+  | { type: "set_current"; current: Current };
 
 export type Outcome =
   | { type: "measured"; measurement: Measurement }

@@ -14,9 +14,14 @@ type Props = {
   onToggle(name: string): void;
   onIsolate(name: string): void;
   onShowAll(): void;
+  /** The layer new entities are drawn on, and making another one that. Without a handler there
+   *  is no button. */
+  current?: string;
+  onMakeCurrent?(name: string): void;
 };
 
-/** The drawing's layers: colour, name, an eye to hide or show, and isolate to show only that one.
+/** The drawing's layers: colour, name, an eye to hide or show, isolate to show only that one, and
+ *  make current to draw on it (not an xref's layer, `XREF|LAYER`).
  *  Memoised: the app re-renders on every pointer move (cursor in the status bar). */
 export const LayersPanel = memo(function LayersPanel({
   layers,
@@ -26,6 +31,8 @@ export const LayersPanel = memo(function LayersPanel({
   onToggle,
   onIsolate,
   onShowAll,
+  current,
+  onMakeCurrent,
 }: Props) {
   const t = useT();
   return (
@@ -43,6 +50,8 @@ export const LayersPanel = memo(function LayersPanel({
           const visible = !locked && !hidden.has(l.name);
           const eyeLabel = `${t("visible")}: ${l.name}`;
           const isolateLabel = `${t("isolate")}: ${l.name}`;
+          const currentLabel = `${t("makeCurrent")}: ${l.name}`;
+          const isCurrent = current?.toUpperCase() === l.name.toUpperCase();
           return (
             <li key={l.name} className={visible ? undefined : "dim"}>
               <span className="swatch" style={{ background: `rgb(${swatchColor(l.color, theme).join(",")})` }} />
@@ -78,6 +87,23 @@ export const LayersPanel = memo(function LayersPanel({
                   <circle cx="8" cy="8" r="1.5" />
                 </svg>
               </button>
+              {onMakeCurrent && (
+                <button
+                  type="button"
+                  className="icon"
+                  aria-label={currentLabel}
+                  title={currentLabel}
+                  aria-pressed={isCurrent}
+                  disabled={l.name.includes("|")}
+                  aria-disabled={busy || undefined}
+                  onClick={() => !busy && !isCurrent && onMakeCurrent(l.name)}
+                >
+                  <svg viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M3 13l2.5-.5L13 5l-2-2-7.5 7.5z" />
+                    {isCurrent && <path d="M2 15h12" />}
+                  </svg>
+                </button>
+              )}
             </li>
           );
         })}

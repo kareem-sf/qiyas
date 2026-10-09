@@ -8,7 +8,7 @@ Qiyas (قياس) is a desktop measurement CAD for quantity surveyors, part of QS
 qiyas/
   crates/
     qiyas-core      the document: opencadcodec CadDocument in memory, layers, blocks,
-                    layouts, xrefs, selection, snaps, units, undo and redo, command bus
+                    layouts, xrefs, selection, snaps, units, undo and redo, command bus, draws
     qiyas-geom      2D geometry on top of opencadkernel: offset, trim, fillet, area,
                     length, closed regions, intersections
     qiyas-render    turns the document into GPU buffers: lines, fills, text glyphs,
@@ -95,6 +95,33 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
   Arabic digits accepted. Extra aliases: `aliases` in `settings.json` (no screen for them yet).
 - Properties palette under Layers: what the Select tool picked (colour as drawn, linetype,
   weight, attributes, values in metres).
+- The batch also carries fill triangles (section 12, `u32` colour each, bit 24 =
+  `FILL_BACKGROUND`) and their ranges (13), only when there are fills; GL draws them under the
+  lines, wipeouts last in the background colour. Solid hatches, 2D solids and traces fill;
+  pattern hatches draw pattern lines clipped to the boundary (range flag `PATTERN`, never part
+  of a hatch boundary, left out when denser than 20,000 lines); rays and xlines run across the
+  sheet without growing its bounds; multilines draw their element lines. Measuring sees outlines
+  only (`FlattenOutcome::into_paths`). Points are still not drawn.
+
+## Drawing
+
+- `Command::Draw(DrawSpec)` (`qiyas-core/src/draw.rs`): line, polyline (bulges), rectangle,
+  polygon, circle, arc (centre or three points), ellipse, spline (fit points plus the cubic's
+  control points), point, donut, ray, xline, revcloud, wipeout, hatch (closed entities or a
+  ring; solid, ANSI31, ANSI37 or a built-in pattern: LINE, NET, DASH, BRICK), 2D solid, trace,
+  multiline, sketch. One undo step on the sheet on screen; `Outcome::Added` lists the handles.
+  Wire form `{"type":"draw","kind":"line",...}`, angles in degrees. Not an AI tool yet.
+- `Session::current` (layer, colour, linetype, lineweight; layer "0" and ByLayer by default)
+  styles new entities. `Command::SetCurrent` is not an undo step; saved in the project file; a
+  layer gone from the drawing falls back to "0". Layers panel: the pen button makes a layer
+  current (not an xref's).
+- Home tab, Draw: Line, Polyline (A arc, L line, C close, U undo), Rectangle, Circle (2P, 3P,
+  typed radius), Arc (three points, or C centre first), Ellipse, Spline, Point, Hatch (click
+  inside; `Session::boundary_at` finds the ring with `arrangement::bounded_faces` over the drawn
+  segments in view; type SOLID, ANSI31, ANSI37, LINE, NET, DASH or BRICK first), Revision cloud,
+  Wipeout. Command line: L, PL, REC, C, A, EL, SPL, PO, H, REVCLOUD, WIPEOUT; typed whole:
+  POLYGON (POL) sides x,y radius [I|C], DONUT (DO) inner outer x,y, RAY / XLINE (XL) x,y x,y,
+  SOLID (SO) 3 or 4 points, TRACE width points, MLINE (ML) points, SKETCH points.
 
 ## PDF
 

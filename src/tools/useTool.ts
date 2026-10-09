@@ -1,5 +1,6 @@
-/** The measure tools: which clicks become which take-off command. The rules live in a pure reducer;
- *  the hook does the async picking around it and hands each finished command to the app. */
+/** The measure and draw tools: which clicks become which command. The rules live in a pure reducer
+ *  (the draw tools' in `drawTools`); the hook does the async picking around it and hands each
+ *  finished command to the app. */
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { Command, Drafting, EntityInfo, Picked, Snap, SnapKind } from "../api";
 import type { Target } from "../viewport/batch";
@@ -7,6 +8,16 @@ import type { Bounds, Point } from "../viewport/camera";
 import { markerSegments } from "../viewport/snapMarker";
 import type { Tool } from "../viewport/Viewport";
 import { coalesce } from "./coalesce";
+import {
+  drawOptions,
+  drawPreview,
+  drawReducer,
+  initialDrawState,
+  isDrawTool,
+  takesNumber,
+  type DrawInput,
+  type DrawState,
+} from "./drawTools";
 import { constrain, gridRound, NO_TRACK, type Track } from "./tracking";
 
 /** Two clicks this close in time and on screen are a double click. */
@@ -39,6 +50,8 @@ export type ToolState = {
   corner: Point | null;
   /** Set by the event that gave `zoomWindow` its second corner; the hook zooms to it. */
   pendingZoom: Bounds | null;
+  /** A draw tool's own state; null for the other tools. */
+  draw: DrawState | null;
 };
 
 export type ToolEvent =
@@ -62,9 +75,11 @@ export type ToolEvent =
   | { type: "escape" }
   | { type: "tool"; tool: Tool }
   /** The number of parts (`divide`) or the step in drawing units (`measureAlong`) was typed. */
-  | { type: "answer"; value: number };
+  | { type: "answer"; value: number }
+  /** For a draw tool: an option or a distance typed, or the ring a hatch asked for. */
+  | { type: "draw"; input: DrawInput };
 
-const PROMPT: Record<Tool, string> = {
+const PROMPT: Partial<Record<Tool, string>> = {
   select: "measure.clickEntity",
   distance: "measure.needTwo",
   area: "measure.needThree",
@@ -84,19 +99,39 @@ const picksEntity = (tool: Tool) =>
   tool === "divide" ||
   tool === "measureAlong";
 
+/** The first prompt of `tool`. */
+const promptOf = (tool: Tool): string =>
+  isDrawTool(tool) ? initialDrawState(tool).hint : (PROMPT[tool] ?? "");
+
+/** The draw tools that take points until Enter, which a double click also ends. */
+const MANY_POINTS = new Set(["polyline", "spline", "revcloud", "wipeout"]);
+
 /** `select` starts quiet, so the status bar shows the file name. */
 export const initialToolState = (tool: Tool): ToolState => ({
   tool,
   points: [],
   pendingCommand: null,
-  hint: tool === "select" ? "" : PROMPT[tool],
+  hint: tool === "select" ? "" : promptOf(tool),
   hintArgs: null,
   selected: null,
   lastClick: null,
   asking: null,
   corner: null,
   pendingZoom: null,
+  draw: isDrawTool(tool) ? initialDrawState(tool) : null,
 });
+
+/** Hands `input` to the draw tool; a draw it finishes becomes the pending command. */
+function drawStep(s: ToolState, input: DrawInput): ToolState {
+  if (!s.draw) return s;
+  const draw = drawReducer(s.draw, input);
+  const pendingCommand: Command | null = draw.spec ? { type: "draw", ...draw.spec } : null;
+  return { ...s, draw, hint: draw.hint, hintArgs: null, pendingCommand };
+}
+
+/** The last point a draw tool placed. */
+const lastDrawPoint = (s: ToolState): Point | null =>
+  s.draw && s.draw.points.length > 0 ? s.draw.points[s.draw.points.length - 1] : null;
 
 const samePick = (a: Picked, b: Picked) =>
   a.top === b.top && a.entity === b.entity && a.chain.join(",") === b.chain.join(",");
@@ -128,9 +163,10 @@ function measureSelected(s: ToolState): ToolState {
 
 function finish(s: ToolState): ToolState {
   if (s.tool === "select") return measureSelected(s);
+  if (s.draw) return { ...drawStep(s, { type: "finish" }), lastClick: null };
   const need = s.tool === "area" ? 3 : 2;
   if (s.tool !== "distance" && s.tool !== "area") return s;
-  if (s.points.length < need) return { ...s, hint: PROMPT[s.tool] };
+  if (s.points.length < need) return { ...s, hint: promptOf(s.tool) };
   const type = s.tool === "area" ? "measure_area" : "measure_distance";
   return { ...s, points: [], lastClick: null, pendingCommand: { type, points: s.points } };
 }
@@ -140,7 +176,9 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
   const s = { ...state, pendingCommand: null, pendingZoom: null };
   switch (event.type) {
     case "tool":
-      return { ...initialToolState(event.tool), hint: PROMPT[event.tool] };
+      return { ...initialToolState(event.tool), hint: promptOf(event.tool) };
+    case "draw":
+      return drawStep(s, event.input);
     case "escape":
       return initialToolState(s.tool);
     case "finish":
@@ -153,7 +191,7 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
         asking.kind === "divide"
           ? { type: "divide_along", handle, chain, count: Math.round(event.value) }
           : { type: "measure_along", handle, chain, step: event.value };
-      return { ...s, asking: null, hint: PROMPT[s.tool], pendingCommand };
+      return { ...s, asking: null, hint: promptOf(s.tool), pendingCommand };
     }
     case "click": {
       const last = s.lastClick;
@@ -163,6 +201,12 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
         Math.hypot(event.screen[0] - last.screen[0], event.screen[1] - last.screen[1]) <=
           DOUBLE_CLICK_PX;
       const clicked = { ...s, lastClick: { screen: event.screen, time: event.time } };
+      if (s.draw) {
+        if (double && MANY_POINTS.has(s.draw.kind)) return finish(s);
+        const prev = lastDrawPoint(s);
+        const point = event.snapped ? event.world : constrain(prev, event.world, event.track ?? NO_TRACK);
+        return drawStep(clicked, { type: "point", p: point });
+      }
       switch (s.tool) {
         case "distance":
         case "area": {
@@ -191,29 +235,29 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
         case "count":
           // The second click of a double click would count the same block twice.
           if (double) return clicked;
-          if (event.picked === null) return { ...clicked, hint: PROMPT.count };
+          if (event.picked === null) return { ...clicked, hint: promptOf("count") };
           if (!event.info?.block_name) return { ...clicked, hint: "measure.notABlock" };
           return {
             ...clicked,
-            hint: PROMPT.count,
+            hint: promptOf("count"),
             pendingCommand: { type: "count_block", block_name: event.info.block_name, layer: null },
           };
         case "geometry": {
           if (double) return clicked;
           const picked = event.picked;
-          if (picked === null) return { ...clicked, hint: PROMPT.geometry };
+          if (picked === null) return { ...clicked, hint: promptOf("geometry") };
           const pendingCommand: Command = {
             type: "measure_geometry",
             handle: picked.entity,
             chain: picked.chain,
             at: event.world,
           };
-          return { ...clicked, hint: PROMPT.geometry, pendingCommand };
+          return { ...clicked, hint: promptOf("geometry"), pendingCommand };
         }
         case "divide":
         case "measureAlong": {
           const picked = event.picked;
-          if (picked === null) return { ...clicked, asking: null, hint: PROMPT[s.tool] };
+          if (picked === null) return { ...clicked, asking: null, hint: promptOf(s.tool) };
           const target = { handle: picked.entity, chain: picked.chain };
           const hint = s.tool === "divide" ? "inquiry.askCount" : "inquiry.askStep";
           return { ...clicked, asking: { kind: s.tool, target }, hint };
@@ -227,7 +271,7 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
             [Math.min(a[0], b[0]), Math.min(a[1], b[1])],
             [Math.max(a[0], b[0]), Math.max(a[1], b[1])],
           ];
-          return { ...clicked, corner: null, hint: PROMPT.zoomWindow, pendingZoom };
+          return { ...clicked, corner: null, hint: promptOf("zoomWindow"), pendingZoom };
         }
         case "idPoint":
           return {
@@ -250,11 +294,15 @@ export type ToolApi = {
   run(cmd: Command): void;
   /** Shows the window `zoomWindow` was given by two typed corners. */
   zoomTo(bounds: Bounds): void;
+  /** The ring around `p` the drawn lines close, for a hatch (null when none). */
+  boundary(p: Point): Promise<Point[] | null>;
   onError(e: unknown): void;
 };
 
-/** The tools that place points, and so snap and track. */
-const placesPoints = (tool: Tool) => tool === "distance" || tool === "area";
+/** The tools that place points, and so snap and track. A hatch's click is inside an area, never
+ *  snapped onto its edge. */
+const placesPoints = (tool: Tool) =>
+  tool === "distance" || tool === "area" || (isDrawTool(tool) && tool !== "hatch");
 /** The tools that snap: those that place points, and `idPoint`. */
 const snaps = (tool: Tool) => placesPoints(tool) || tool === "idPoint";
 
@@ -282,7 +330,11 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
   const track: Track = drafting
     ? { ortho: drafting.ortho, polar: drafting.polar, polarStepDeg: drafting.polar_step_deg }
     : NO_TRACK;
-  const prev = state.points.length > 0 ? state.points[state.points.length - 1] : null;
+  const prev = state.draw
+    ? lastDrawPoint(state)
+    : state.points.length > 0
+      ? state.points[state.points.length - 1]
+      : null;
 
   useEffect(() => {
     if (state.tool !== tool) dispatch({ type: "tool", tool });
@@ -301,6 +353,24 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
   useEffect(() => {
     if (state.pendingZoom) api.zoomTo(state.pendingZoom);
   }, [state.pendingZoom]);
+
+  // A hatch's click: find the ring around it, then hand it back.
+  const seek = state.draw?.seek ?? null;
+  useEffect(() => {
+    if (!seek) return;
+    let gone = false;
+    api.boundary(seek).then(
+      (ring) => !gone && dispatch({ type: "draw", input: { type: "ring", ring } }),
+      (e) => {
+        if (gone) return;
+        api.onError(e);
+        dispatch({ type: "draw", input: { type: "ring", ring: null } });
+      },
+    );
+    return () => {
+      gone = true;
+    };
+  }, [seek]);
 
   /** Where an unsnapped point goes: to the grid when grid snap is on. */
   const onGrid = (p: Point): Point =>
@@ -365,8 +435,18 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
     [snap, hover],
   );
 
+  const draw = state.draw;
   return {
     points: state.points,
+    /** A draw tool's state (null for the others), the option words and whether a typed distance
+     *  is taken now, the last point it placed, and what it would draw at the cursor. */
+    draw,
+    drawOptions: draw ? drawOptions(draw) : [],
+    takesNumber: draw ? takesNumber(draw) : false,
+    lastDrawPoint: lastDrawPoint(state),
+    preview: useMemo(() => (draw ? drawPreview(draw, cursor) : null), [draw, cursor]),
+    /** Hands a typed option or distance to the draw tool. */
+    drawInput: (input: DrawInput) => dispatch({ type: "draw", input }),
     /** See `cursor` above: snapped, on the grid or tracked. */
     cursor,
     /** The object snap under the cursor, for the status bar. */

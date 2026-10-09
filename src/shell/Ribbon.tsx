@@ -1,6 +1,7 @@
 import { useState, type KeyboardEvent } from "react";
 import type { NamedView, Recent } from "../api";
 import { useT } from "../i18n";
+import { DRAW_TOOLS } from "../tools/drawTools";
 import type { Tool } from "../viewport/Viewport";
 import { RecentsMenu } from "./RecentsMenu";
 import { useRoving } from "./useRoving";
@@ -73,7 +74,7 @@ export function Ribbon(props: Props) {
     </button>
   );
 
-  const tool = (name: Tool) => (
+  const tool = (name: Tool, label: string = name) => (
     <button
       key={name}
       type="button"
@@ -82,7 +83,7 @@ export function Ribbon(props: Props) {
       onKeyDown={ignoreSpace}
       onKeyUp={ignoreSpace}
     >
-      {t(name)}
+      {t(label)}
     </button>
   );
 
@@ -126,11 +127,15 @@ export function Ribbon(props: Props) {
           <span key="sep" className="sep" />,
           action("undo", props.onUndo),
           action("redo", props.onRedo),
+          <span key="sep-draw" className="sep" />,
+          <span key="draw" className="ribbon-group" role="group" aria-label={t("draw.group")}>
+            {DRAW_TOOLS.map((name) => tool(name, `draw.${name}`))}
+          </span>,
         ]}
         {tab === "measure" && [
-          ...(["select", "distance", "area", "count"] as Tool[]).map(tool),
+          ...(["select", "distance", "area", "count"] as Tool[]).map((name) => tool(name)),
           <span key="sep" className="sep" />,
-          ...(["geometry", "divide", "measureAlong", "idPoint"] as Tool[]).map(tool),
+          ...(["geometry", "divide", "measureAlong", "idPoint"] as Tool[]).map((name) => tool(name)),
           action("extract", props.onExtract),
         ]}
         {tab === "view" && [

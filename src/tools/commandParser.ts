@@ -4,6 +4,7 @@
  *  Command names and aliases match in any case. Numbers take Arabic-Indic digits and the Arabic
  *  decimal separator (٫); points take `,` or `،` between x and y. Points are in drawing units:
  *  `x,y` absolute, `@dx,dy` from the last point, `@distance<angle` (degrees) from the last point. */
+import type { DrawSpec } from "../api";
 import type { Point } from "../viewport/camera";
 import type { Tool } from "../viewport/Viewport";
 import { COMMANDS, type CommandName } from "./aliases";
@@ -19,6 +20,10 @@ export type ParseState = {
   last: Point | null;
   /** Alias to command, upper-case aliases (`mergeAliases`). */
   aliases: Record<string, string>;
+  /** Where a point is expected, the option words a draw tool takes now (upper case). */
+  options?: string[];
+  /** Where a point is expected, a lone number is a distance (a radius, an axis, an arc length). */
+  numberToo?: boolean;
 };
 
 /** One of the app's own actions, run from the command line. */
@@ -46,6 +51,11 @@ export type Action =
   | { type: "point"; p: Point }
   /** The number of parts, or the step in metres. */
   | { type: "number"; value: number }
+  /** A draw tool's option word (upper case), or a distance typed for it (drawing units). */
+  | { type: "option"; option: string }
+  | { type: "distance"; value: number }
+  /** A draw typed whole (polygon, donut, ray, xline, solid, trace, mline, sketch). */
+  | { type: "draw"; spec: DrawSpec }
   /** Starts a tool; `preset` is the divide's number of parts or the measure along's step (m),
    *  used once the entity is clicked. */
   | { type: "tool"; tool: Tool; preset?: number }
@@ -83,7 +93,21 @@ const TOOLS: Partial<Record<CommandName, Tool>> = {
   AREA: "area",
   GEOMETRY: "geometry",
   ID: "idPoint",
+  LINE: "line",
+  PLINE: "polyline",
+  RECTANG: "rectangle",
+  CIRCLE: "circle",
+  ARC: "arc",
+  ELLIPSE: "ellipse",
+  SPLINE: "spline",
+  POINT: "point",
+  HATCH: "hatch",
+  REVCLOUD: "revcloud",
+  WIPEOUT: "wipeout",
 };
+
+/** The draws typed whole on one line. */
+const TYPED_DRAWS = ["POLYGON", "DONUT", "RAY", "XLINE", "SOLID", "TRACE", "MLINE", "SKETCH"];
 
 const TOGGLES: Partial<Record<CommandName, DraftingToggle>> = {
   OSNAP: "osnap",
@@ -172,7 +196,84 @@ function expand(line: string, aliases: Record<string, string>): { name: string; 
   return { name, rest };
 }
 
-function command(line: string, aliases: Record<string, string>): Action | ParseError {
+/** Reads the words of a typed draw: numbers and points, `@` from the point before (the first from
+ *  `last`). Null when a word is not what `pattern` asks for ("n" a number, "p" a point). */
+function readWords(words: string[], pattern: string, last: Point | null): (number | Point)[] | null {
+  if (words.length !== pattern.length) return null;
+  const out: (number | Point)[] = [];
+  for (let i = 0; i < words.length; i++) {
+    if (pattern[i] === "n") {
+      const n = readNumber(words[i]);
+      if (n === null) return null;
+      out.push(n);
+    } else {
+      const p = readPoint(words[i], last);
+      if (!Array.isArray(p)) return null;
+      out.push(p);
+      last = p;
+    }
+  }
+  return out;
+}
+
+/** The draw a whole line describes (see `TYPED_DRAWS`), or null when it is malformed:
+ *  POLYGON sides centre radius [I|C], DONUT inner outer centre, RAY and XLINE point through,
+ *  SOLID 3 or 4 points, TRACE width points, MLINE and SKETCH points. */
+function typedDraw(cmd: string, rest: string, last: Point | null): Action | null {
+  const words = tokenize(rest);
+  const draw = (spec: DrawSpec): Action => ({ type: "draw", spec });
+  const points = (from: number, min: number, max = Infinity) => {
+    const n = words.length - from;
+    if (n < min || n > max) return null;
+    const read = readWords(words.slice(from), "p".repeat(n), last);
+    return read as Point[] | null;
+  };
+  switch (cmd) {
+    case "POLYGON": {
+      const how = words[3]?.toUpperCase();
+      if (how !== undefined && how !== "I" && how !== "C") return null;
+      const read = readWords(words.slice(0, 3), "npn", last);
+      if (!read) return null;
+      const [sides, centre, radius] = read as [number, Point, number];
+      return draw({ kind: "polygon", centre, sides, radius, inscribed: how !== "C" });
+    }
+    case "DONUT": {
+      const read = readWords(words, "nnp", last);
+      if (!read) return null;
+      const [inner, outer, centre] = read as [number, number, Point];
+      return draw({ kind: "donut", centre, inner, outer });
+    }
+    case "RAY":
+    case "XLINE": {
+      const read = points(0, 2, 2);
+      if (!read) return null;
+      const [origin, through] = read;
+      const dir: Point = [through[0] - origin[0], through[1] - origin[1]];
+      return draw(cmd === "RAY" ? { kind: "ray", origin, dir } : { kind: "xline", origin, dir });
+    }
+    case "SOLID": {
+      const read = points(0, 3, 4);
+      return read ? draw({ kind: "solid2d", points: read }) : null;
+    }
+    case "TRACE": {
+      const width = words.length > 0 ? readNumber(words[0]) : null;
+      const read = points(1, 2);
+      return width !== null && read ? draw({ kind: "trace", width, points: read }) : null;
+    }
+    case "MLINE": {
+      const read = points(0, 2);
+      return read ? draw({ kind: "mline", points: read, style: null, scale: null }) : null;
+    }
+    case "SKETCH": {
+      const read = points(0, 2);
+      return read ? draw({ kind: "sketch", points: read }) : null;
+    }
+    default:
+      return null;
+  }
+}
+
+function command(line: string, aliases: Record<string, string>, last: Point | null): Action | ParseError {
   const { name, rest } = expand(line, aliases);
   if (!(COMMANDS as readonly string[]).includes(name)) {
     return { type: "error", key: "cmd.unknown", args: { name: line.trim().split(/\s/, 1)[0] } };
@@ -185,6 +286,7 @@ function command(line: string, aliases: Record<string, string>): Action | ParseE
   const toggle = TOGGLES[cmd];
   if (toggle) return { type: "toggle", toggle };
   const needs = (key: string): ParseError => ({ type: "error", key, args: { name: cmd } });
+  if (TYPED_DRAWS.includes(cmd)) return typedDraw(cmd, rest, last) ?? needs("cmd.drawUsage");
   switch (cmd) {
     case "ESC":
       return { type: "cancel" };
@@ -240,6 +342,12 @@ export function parse(line: string, state: ParseState): Action | ParseError {
     return { type: "error", key: state.expect === "count" ? "cmd.badCount" : "cmd.badStep" };
   }
   if (state.expect === "point") {
+    const word = text.toUpperCase();
+    if (state.options?.includes(word)) return { type: "option", option: word };
+    const value = state.numberToo ? readNumber(text) : null;
+    if (value !== null) {
+      return value > 0 ? { type: "distance", value } : { type: "error", key: "cmd.badDistance" };
+    }
     const p = readPoint(text, state.last);
     if (p !== null) return Array.isArray(p) ? { type: "point", p } : p;
   }
@@ -248,7 +356,7 @@ export function parse(line: string, state: ParseState): Action | ParseError {
     const bad = state.expect === "count" ? badCount(value) : badStep(value);
     return bad ?? { type: "number", value: value! };
   }
-  return command(text, state.aliases);
+  return command(text, state.aliases, state.last);
 }
 
 /** One autocomplete entry: a command, or an alias and the command it runs. */

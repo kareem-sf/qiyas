@@ -379,3 +379,45 @@ test("a drag zoom after one typed corner drops that corner", () => {
   expect(next.pendingZoom).toBeNull();
   expect(next.corner).toEqual([12, 9]);
 });
+
+test("draw tools run each finished draw and end a polyline on a double click", () => {
+  const line = run("line", [click([0, 0], 0), click([3, 4], 1000)]);
+  expect(line.pendingCommand).toEqual({ type: "draw", kind: "line", a: [0, 0], b: [3, 4] });
+  expect(line.hint).toBe("draw.prompt.nextPoint");
+
+  // The second click of a double click ends the polyline without a doubled point.
+  const pline = run("polyline", [click([0, 0], 0), click([2, 0], 1000), click([2, 2], 2000), click([2, 2], 2100)]);
+  expect(pline.pendingCommand).toEqual({
+    type: "draw",
+    kind: "polyline",
+    points: [
+      [0, 0],
+      [2, 0],
+      [2, 2],
+    ],
+    bulges: [0, 0, 0],
+    closed: false,
+  });
+
+  // A typed option and a typed radius reach the tool.
+  const circle = run("circle", [click([1, 1], 0), { type: "draw", input: { type: "number", value: 2 } }]);
+  expect(circle.pendingCommand).toEqual({ type: "draw", kind: "circle", centre: [1, 1], radius: 2 });
+  const closed = run("polyline", [
+    click([0, 0], 0),
+    click([2, 0], 1000),
+    click([2, 2], 2000),
+    { type: "draw", input: { type: "option", option: "C" } },
+  ]);
+  expect(closed.pendingCommand).toMatchObject({ type: "draw", kind: "polyline", closed: true });
+
+  // Ortho squares the next point to the last one, as for a distance.
+  const ortho = run("line", [
+    click([0, 0], 0),
+    { ...click([5, 1], 1000), track: { ortho: true, polar: false, polarStepDeg: 45 } } as ToolEvent,
+  ]);
+  expect(ortho.pendingCommand).toEqual({ type: "draw", kind: "line", a: [0, 0], b: [5, 0] });
+
+  // Esc drops what was placed.
+  const dropped = toolReducer(run("polyline", [click([0, 0], 0)]), { type: "escape" });
+  expect(dropped.draw?.points).toEqual([]);
+});

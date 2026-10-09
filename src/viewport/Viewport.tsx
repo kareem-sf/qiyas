@@ -20,10 +20,13 @@ import {
   type Point,
 } from "./camera";
 import { isClick } from "./click";
+import type { DrawKind } from "../tools/drawTools";
 import { createRenderer, type Renderer, type Theme } from "./gl";
 import { wheelFactor } from "./wheel";
 
 export type Tool =
+  /** The draw tools (`DRAW_TOOLS`). */
+  | DrawKind
   | "select"
   | "distance"
   | "area"

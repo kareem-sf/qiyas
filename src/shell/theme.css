@@ -167,11 +167,16 @@ button[aria-pressed="true"] {
 }
 .ribbon-panel {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
   min-height: 44px;
   padding: 6px 10px;
   background: var(--bg);
+}
+/* A named group of buttons (Home, Draw) that flows with the rest of the panel. */
+.ribbon-group {
+  display: contents;
 }
 .ribbon-check {
   display: inline-flex;

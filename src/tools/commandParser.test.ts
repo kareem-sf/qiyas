@@ -154,3 +154,92 @@ test("suggestions list commands, then aliases, the exact match first", () => {
   expect(suggest("LAYOFF A", aliases)).toEqual([]);
   expect(suggest("", aliases)).toEqual([]);
 });
+
+test("the draw commands and their aliases start the draw tools", () => {
+  const tools: [string, string][] = [
+    ["L", "line"],
+    ["line", "line"],
+    ["PL", "polyline"],
+    ["pline", "polyline"],
+    ["REC", "rectangle"],
+    ["rectang", "rectangle"],
+    ["C", "circle"],
+    ["A", "arc"],
+    ["EL", "ellipse"],
+    ["SPL", "spline"],
+    ["PO", "point"],
+    ["H", "hatch"],
+    ["revcloud", "revcloud"],
+    ["WIPEOUT", "wipeout"],
+  ];
+  for (const [line, tool] of tools) expect(parse(line, cmd)).toEqual({ type: "tool", tool });
+});
+
+test("a draw tool's options and typed distances", () => {
+  const pline = { ...at("point", [0, 0]), options: ["A", "L", "C", "U"] };
+  expect(parse("a", pline)).toEqual({ type: "option", option: "A" });
+  expect(parse("C", pline)).toEqual({ type: "option", option: "C" });
+  // A point still is one; another word is a command.
+  expect(parse("1,2", pline)).toEqual({ type: "point", p: [1, 2] });
+  expect(parse("L", { ...at("point"), options: [] })).toEqual({ type: "tool", tool: "line" });
+  expect(parse("2p", { ...at("point"), options: ["2P", "3P"] })).toEqual({ type: "option", option: "2P" });
+  // A lone number is a distance only where the tool takes one.
+  expect(parse("2.5", { ...at("point"), numberToo: true })).toEqual({ type: "distance", value: 2.5 });
+  expect(parse("٢٫٥", { ...at("point"), numberToo: true })).toEqual({ type: "distance", value: 2.5 });
+  expect(parse("2.5", at("point"))).toEqual({ type: "error", key: "cmd.badPoint" });
+  expect(parse("-1", { ...at("point"), numberToo: true })).toEqual({ type: "error", key: "cmd.badDistance" });
+});
+
+test("the other draws are typed whole", () => {
+  expect(parse("POLYGON 6 10,10 2", cmd)).toEqual({
+    type: "draw",
+    spec: { kind: "polygon", centre: [10, 10], sides: 6, radius: 2, inscribed: true },
+  });
+  expect(parse("pol 4 0,0 1 c", cmd)).toEqual({
+    type: "draw",
+    spec: { kind: "polygon", centre: [0, 0], sides: 4, radius: 1, inscribed: false },
+  });
+  expect(parse("DONUT 1 2 5,5", cmd)).toEqual({
+    type: "draw",
+    spec: { kind: "donut", centre: [5, 5], inner: 1, outer: 2 },
+  });
+  // Through a second point; `@` from the point before it on the line.
+  expect(parse("RAY 1,1 4,5", cmd)).toEqual({ type: "draw", spec: { kind: "ray", origin: [1, 1], dir: [3, 4] } });
+  expect(parse("XLINE 2,2 @0,1", cmd)).toEqual({
+    type: "draw",
+    spec: { kind: "xline", origin: [2, 2], dir: [0, 1] },
+  });
+  expect(parse("SOLID 0,0 1,0 0,1 1,1", cmd)).toEqual({
+    type: "draw",
+    spec: {
+      kind: "solid2d",
+      points: [
+        [0, 0],
+        [1, 0],
+        [0, 1],
+        [1, 1],
+      ],
+    },
+  });
+  expect(parse("TRACE 0.5 0,0 4,0", cmd)).toEqual({
+    type: "draw",
+    spec: {
+      kind: "trace",
+      width: 0.5,
+      points: [
+        [0, 0],
+        [4, 0],
+      ],
+    },
+  });
+  expect(parse("MLINE 0,0 5,0 5,5", cmd)).toMatchObject({
+    type: "draw",
+    spec: { kind: "mline", style: null, scale: null },
+  });
+  expect(parse("SKETCH 0,0 1,1", cmd)).toMatchObject({ type: "draw", spec: { kind: "sketch" } });
+  // Wrong or missing parts say how the command goes.
+  for (const line of ["POLYGON", "POLYGON x 0,0 1", "DONUT 1 2", "RAY 0,0", "SOLID 0,0 1,0", "TRACE 0,0 1,1"]) {
+    const name = line.split(" ")[0];
+    expect(parse(line, cmd)).toEqual({ type: "error", key: "cmd.drawUsage", args: { name } });
+  }
+});

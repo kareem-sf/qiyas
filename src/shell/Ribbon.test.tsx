@@ -82,3 +82,30 @@ test("the ribbon tabs have a roving tab stop and Space presses a tab", () => {
   expect(tab("Measure").getAttribute("aria-selected")).toBe("true");
   expect(["Home", "Measure", "View"].map((n) => tab(n).tabIndex)).toEqual([-1, 0, -1]);
 });
+
+test("the Home tab has the Draw group", () => {
+  const onTool = vi.fn();
+  const { rerender } = render(<Ribbon {...props} onTool={onTool} />);
+  for (const [name, tool] of [
+    ["Line", "line"],
+    ["Polyline", "polyline"],
+    ["Rectangle", "rectangle"],
+    ["Circle", "circle"],
+    ["Arc", "arc"],
+    ["Ellipse", "ellipse"],
+    ["Spline", "spline"],
+    ["Point", "point"],
+    ["Hatch", "hatch"],
+    ["Revision cloud", "revcloud"],
+    ["Wipeout", "wipeout"],
+  ]) {
+    fireEvent.click(screen.getByRole("button", { name }));
+    expect(onTool).toHaveBeenLastCalledWith(tool);
+  }
+  // The tool on goes back to Select when pressed again.
+  rerender(<Ribbon {...props} active="line" onTool={onTool} />);
+  const line = screen.getByRole("button", { name: "Line" });
+  expect(line.getAttribute("aria-pressed")).toBe("true");
+  fireEvent.click(line);
+  expect(onTool).toHaveBeenLastCalledWith("select");
+});
