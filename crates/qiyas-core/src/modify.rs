@@ -552,8 +552,8 @@ impl Session {
                 self.shift_block(&name, d);
             }
         }
-        self.follow_takeoff(handles, &[]);
-        Ok(Outcome::Changed)
+        let unlinked = self.follow_takeoff(handles, &[]);
+        Ok(Self::changed_unlinking(unlinked))
     }
 
     /// Moves every entity of the block `name` by `d`.
@@ -786,8 +786,8 @@ impl Session {
         if !moved {
             return Ok(Outcome::Nothing);
         }
-        self.follow_takeoff(handles, &[]);
-        Ok(Outcome::Changed)
+        let unlinked = self.follow_takeoff(handles, &[]);
+        Ok(Self::changed_unlinking(unlinked))
     }
 
     /// Every point of `e` as drawn lies in `window`.
@@ -850,10 +850,12 @@ impl Session {
                 added.push(self.add_fresh(piece, owner)?);
             }
         }
-        self.follow_takeoff(&[], &removed);
+        let (remeasured, unlinked) = self.follow_erase(&removed);
         Ok(Outcome::Exploded {
             handles: added,
             left_alone,
+            remeasured,
+            unlinked,
         })
     }
 }
@@ -1122,11 +1124,45 @@ impl Session {
         (tables, takeoff)
     }
 
-    /// The take-off follows a drawing edit: rows measuring an entity `removed` keep their value
-    /// and points but lose the link; rows measuring an entity `changed` are measured again. How
-    /// many rows lost their link because they could no longer be measured (see `follow_edit`).
+    /// The take-off follows a drawing edit: a row measuring an entity `removed` and others too
+    /// is measured again without it (a count counts one less); one measuring only removed ones
+    /// keeps its value and points but loses the link; rows measuring an entity `changed` are
+    /// measured again. How many rows lost their link because they could no longer be measured
+    /// (see `follow_edit`).
     pub(crate) fn follow_takeoff(&mut self, changed: &[Handle], removed: &[Handle]) -> usize {
         self.follow_edit(changed, removed, &[], &[])
+    }
+
+    /// `follow_takeoff` for entities `removed` (erased or exploded), and what it did to the rows:
+    /// how many were measured again and how many lost their link (`Outcome::TakeoffFollowed`).
+    pub(crate) fn follow_erase(&mut self, removed: &[Handle]) -> (usize, usize) {
+        let gone: HashSet<u64> = removed.iter().map(|h| h.value()).collect();
+        let (mut partly, mut whole) = (0, 0);
+        for m in &self.takeoff.items {
+            if !gone.iter().any(|&h| measures(m, h)) {
+                continue;
+            }
+            if m.chain.is_empty() && m.handles.iter().any(|h| !gone.contains(h)) {
+                partly += 1;
+            } else {
+                whole += 1;
+            }
+        }
+        // Only a row measured again can fail to measure.
+        let failed = self.follow_takeoff(&[], removed);
+        (partly - failed, whole + failed)
+    }
+
+    /// `Outcome::Changed`, or `TakeoffFollowed` when `unlinked` take-off rows lost their link.
+    fn changed_unlinking(unlinked: usize) -> Outcome {
+        if unlinked == 0 {
+            Outcome::Changed
+        } else {
+            Outcome::TakeoffFollowed {
+                remeasured: 0,
+                unlinked,
+            }
+        }
     }
 
     /// `follow_takeoff`, for edits that cut entities into pieces or join them: a row measuring
@@ -1166,12 +1202,23 @@ impl Session {
             }
         }
         let removed: HashSet<u64> = removed.iter().map(|h| h.value()).collect();
-        for m in &mut self.takeoff.items {
+        // Rows that measured an erased entity and others too: measured again without it.
+        let mut partly: Vec<usize> = Vec::new();
+        for (i, m) in self.takeoff.items.iter_mut().enumerate() {
             if !removed.iter().any(|&h| measures(m, h)) {
                 continue;
             }
             if m.chain.is_empty() {
+                let before = m.handles.len();
                 m.handles.retain(|h| !removed.contains(h));
+                if !m.handles.is_empty() {
+                    if m.kind == Kind::Count {
+                        // Each reference counts one.
+                        m.value -= (before - m.handles.len()) as f64;
+                        m.shown = m.value;
+                    }
+                    partly.push(i);
+                }
             } else {
                 unlink(m);
             }
@@ -1185,7 +1232,7 @@ impl Session {
         let again: Vec<usize> = (0..self.takeoff.items.len())
             .filter(|&i| {
                 let m = &self.takeoff.items[i];
-                touched.iter().any(|&h| measures(m, h))
+                partly.contains(&i) || touched.iter().any(|&h| measures(m, h))
             })
             .collect();
         let mut unlinked = 0;

@@ -802,10 +802,20 @@ pub enum Outcome {
         handles: Vec<u64>,
     },
     /// An explode's parts, by handle, and how many entities picked had no parts and were left
-    /// as they are.
+    /// as they are; the take-off rows that followed, as in `TakeoffFollowed`.
     Exploded {
         handles: Vec<u64>,
         left_alone: usize,
+        remeasured: usize,
+        unlinked: usize,
+    },
+    /// An erase that the take-off followed (or a move, turn, scale, mirror, stretch or align that
+    /// left a row unmeasurable; `Changed` otherwise): how many take-off rows that measured an erased entity and others too were measured again
+    /// without it (a count counts one less), and how many rows lost their link (every entity
+    /// erased, or no longer measurable; their values stay).
+    TakeoffFollowed {
+        remeasured: usize,
+        unlinked: usize,
     },
     /// An edit made in place: the entities it added (pieces of a trim or a break, a fillet's
     /// arc...) and removed (joined or duplicates), how many picked it left as they were, how
@@ -1114,9 +1124,9 @@ impl Session {
                 });
             }
             Command::DeleteEntities { targets } => {
-                self.delete_entities(&targets)?;
+                let outcome = self.delete_entities(&targets)?;
                 self.follow_fields()?;
-                return Ok(Outcome::Changed);
+                return Ok(outcome);
             }
             Command::Draw(spec) => {
                 let handles = self.draw(spec)?;
@@ -1693,8 +1703,8 @@ impl Session {
     /// Removes the entities `targets` from the sheet on screen, once every one is found at its
     /// top.
     /// Images and PDF underlays leave their definitions' links; take-off rows measuring a
-    /// deleted entity keep their value without the link.
-    fn delete_entities(&mut self, targets: &[Target]) -> Result<(), CoreError> {
+    /// deleted entity follow (`Outcome::TakeoffFollowed` says how, `Changed` when none did).
+    fn delete_entities(&mut self, targets: &[Target]) -> Result<Outcome, CoreError> {
         let handles = self.sheet_targets(targets)?;
         for &h in &handles {
             let doc = &mut self.drawing.doc;
@@ -1716,8 +1726,13 @@ impl Session {
             }
             self.drawing.doc.remove_entity_arc(h);
         }
-        self.follow_takeoff(&[], &handles);
-        Ok(())
+        Ok(match self.follow_erase(&handles) {
+            (0, 0) => Outcome::Changed,
+            (remeasured, unlinked) => Outcome::TakeoffFollowed {
+                remeasured,
+                unlinked,
+            },
+        })
     }
 
     /// The handles of `targets` (each once, in order) when every one is an entity of the drawing

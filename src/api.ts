@@ -1031,8 +1031,12 @@ export type Outcome =
   | { type: "changed" }
   /** Entities added to the drawing (PDF import or underlay). */
   | { type: "added"; handles: number[] }
-  /** An explode's parts, and how many entities picked had none and were left as they are. */
-  | { type: "exploded"; handles: number[]; left_alone: number }
+  /** An explode's parts, how many entities picked had none and were left as they are, and the
+   *  take-off rows that followed (as `takeoff_followed`). */
+  | { type: "exploded"; handles: number[]; left_alone: number; remeasured: number; unlinked: number }
+  /** An erase (or a move, turn, scale... that left a row unmeasurable): take-off rows measured
+   *  again without an erased entity, and rows that lost their link (their values stay). */
+  | { type: "takeoff_followed"; remeasured: number; unlinked: number }
   /** An edit in place: entities it added and removed, how many picked it left as they were, how
    *  many take-off rows lost their link (their entities could no longer be measured), and for a
    *  join how many rows now measure the joined polyline. */

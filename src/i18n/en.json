@@ -516,6 +516,8 @@
   "modify.prompt.between": "Angle between items in degrees (Enter: fill the circle)",
   "modify.skipped": "{n} dimensions or tables left out: this tool can't change them yet (move and copy can)",
   "modify.leftAlone": "{n} picked had nothing to explode and were left as they are",
+  "modify.remeasured": "{n} take-off rows measured again without the erased entities",
+  "modify.unlinked": "{n} take-off rows unlinked (their values stay)",
   "edit.trim": "Trim",
   "edit.extend": "Extend",
   "edit.break": "Break",

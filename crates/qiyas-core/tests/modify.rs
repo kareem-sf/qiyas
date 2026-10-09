@@ -1481,6 +1481,98 @@ fn the_take_off_follows_moves_scales_and_erases_in_the_same_step() {
 }
 
 #[test]
+fn a_partly_erased_row_is_measured_again_and_a_count_counts_one_less() {
+    let (_dir, mut s, ids) = modify_session();
+    // A row on a line cut in two by a break: both pieces.
+    let m = measure_line(&mut s, ids.line);
+    let Outcome::Edited { added: pieces, .. } = s
+        .run(Command::Edit(qiyas_core::EditSpec::Break {
+            target: Target {
+                handle: ids.line,
+                chain: Vec::new(),
+            },
+            p1: [1.25, 0.0],
+            p2: [1.25, 0.0],
+        }))
+        .unwrap()
+    else {
+        panic!("a break")
+    };
+    assert_eq!(row(&s, &m.id).handles, vec![ids.line, pieces[0]]);
+    // Erasing one piece: the row measures the other one, still linked, and the outcome says so.
+    let out = s
+        .run(Command::DeleteEntities {
+            targets: targets(&[pieces[0]]),
+        })
+        .unwrap();
+    assert!(
+        matches!(
+            out,
+            Outcome::TakeoffFollowed {
+                remeasured: 1,
+                unlinked: 0
+            }
+        ),
+        "{out:?}"
+    );
+    let r = row(&s, &m.id);
+    assert_eq!(r.handles, vec![ids.line]);
+    // The break keeps the line's handle on the longer piece, 1.25 to 2.
+    assert!((r.value - 0.75).abs() < 1e-9, "{}", r.value);
+    assert!((r.shown - 0.75).abs() < 1e-9, "{}", r.shown);
+    // Erasing the last one: the value stays, unlinked.
+    let out = s
+        .run(Command::DeleteEntities {
+            targets: targets(&[ids.line]),
+        })
+        .unwrap();
+    assert!(
+        matches!(
+            out,
+            Outcome::TakeoffFollowed {
+                remeasured: 0,
+                unlinked: 1
+            }
+        ),
+        "{out:?}"
+    );
+    assert!(row(&s, &m.id).handles.is_empty());
+
+    // A count of two references, one erased: 1 piece, linked to the other.
+    let Outcome::Added { handles: copy } = run(
+        &mut s,
+        ModifySpec::Copy {
+            targets: targets(&[ids.insert]),
+            delta: [0.0, 10.0],
+            count: 1,
+        },
+    ) else {
+        panic!("a copy")
+    };
+    let count = match s
+        .run(Command::CountBlock {
+            block_name: "B".into(),
+            layer: None,
+        })
+        .unwrap()
+    {
+        Outcome::Measured { measurement } => *measurement,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(count.value, 2.0);
+    s.run(Command::DeleteEntities {
+        targets: targets(&[copy[0]]),
+    })
+    .unwrap();
+    let r = row(&s, &count.id);
+    assert_eq!(r.handles, vec![ids.insert]);
+    assert_eq!((r.value, r.shown), (1.0, 1.0));
+    // One step: undo counts both again.
+    assert!(s.undo());
+    assert_eq!(row(&s, &count.id).value, 2.0);
+}
+
+#[test]
 fn erasing_an_image_cleans_its_definition_link() {
     let dir = tempfile::tempdir().unwrap();
     let mut s = Session::open(&write_sample(dir.path(), "dxf")).unwrap();
@@ -1537,6 +1629,7 @@ fn explode_keeps_attribute_values_as_texts_and_says_what_it_left_alone() {
     let Outcome::Exploded {
         handles,
         left_alone,
+        ..
     } = out
     else {
         panic!("{out:?}")

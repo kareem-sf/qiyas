@@ -622,8 +622,14 @@ export default function App() {
         chooseTool("select");
       }
       if (outcome.type === "measured") setSelectedId(outcome.measurement.id);
-      if (outcome.type === "exploded" && outcome.left_alone > 0) {
-        setNotice(t("modify.leftAlone", { n: outcome.left_alone }));
+      if (outcome.type === "exploded" || outcome.type === "takeoff_followed") {
+        const notes: string[] = [];
+        if (outcome.type === "exploded" && outcome.left_alone > 0) {
+          notes.push(t("modify.leftAlone", { n: outcome.left_alone }));
+        }
+        if (outcome.remeasured > 0) notes.push(t("modify.remeasured", { n: outcome.remeasured }));
+        if (outcome.unlinked > 0) notes.push(t("modify.unlinked", { n: outcome.unlinked }));
+        if (notes.length > 0) setNotice(notes.join(" · "));
       }
       if (outcome.type === "edited") {
         const notes: string[] = [];
