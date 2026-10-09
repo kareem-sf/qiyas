@@ -1,5 +1,6 @@
 //! Pure 2D geometry: flatten CAD entities to polylines, measure length and area.
 
+mod dimension;
 mod exact;
 mod flatten;
 mod paint;
@@ -7,6 +8,10 @@ mod path;
 mod shapes;
 mod transform;
 
+pub use dimension::{
+    dimension_entities, dimension_text, dimscale, format_measure, leader_entities, set_dimscale,
+    style_named, tolerance_entities, DimGeometry, DimLook,
+};
 pub use exact::{exact_area, exact_length};
 pub use flatten::{
     arc_points, drawn_style, find_layer, flatten, flatten_with, flatten_within, insert_instances,

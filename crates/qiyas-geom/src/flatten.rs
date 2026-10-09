@@ -2,14 +2,15 @@ use std::collections::HashMap;
 use std::f64::consts::TAU;
 
 use opencadcodec::entities::{
-    AttributeEntity, BoundaryEdge, EntityCommon, EntityType, HorizontalAlignment, Insert, MText,
-    Text, TextHorizontalAlignment, TextVerticalAlignment, VerticalAlignment,
+    AttributeEntity, BoundaryEdge, Dimension, EntityCommon, EntityType, HorizontalAlignment,
+    Insert, MText, Text, TextHorizontalAlignment, TextVerticalAlignment, VerticalAlignment,
 };
 use opencadcodec::tables::normalize_name;
 use opencadcodec::types::Matrix3;
 use opencadcodec::{CadDocument, Color, Layer, Vector3};
 use opencadkernel::geom2d::NurbsCurve;
 
+use crate::dimension::{dimension_entities, leader_entities, tolerance_entities};
 use crate::paint::{mline_paths, pattern_spans, solid_outline, wipeout_outline, FlatFill, Paint};
 use crate::path::same_point;
 use crate::{Path, Xform};
@@ -249,6 +250,7 @@ fn walk(
         xref_stack: Vec::new(),
         xref_entity: None,
         xref_insert_layers: Vec::new(),
+        owner: None,
     };
     let style = walk.style(entity.common(), None);
     walk.entity(entity, xf, &style, 0);
@@ -284,6 +286,7 @@ pub fn drawn_style(
         xref_stack: Vec::new(),
         xref_entity: None,
         xref_insert_layers: Vec::new(),
+        owner: None,
     };
     let mut parent: Option<Style> = None;
     for common in chain {
@@ -326,6 +329,9 @@ struct Walk<'a> {
     xref_entity: Option<u64>,
     /// Inside an xref: the layers of the references entered there (see `FlatPath`).
     xref_insert_layers: Vec<String>,
+    /// Inside what a dimension, leader or tolerance draws: that entity, which every path is
+    /// reported as (its block's block references are never part of a chain).
+    owner: Option<u64>,
 }
 
 impl Walk<'_> {
@@ -528,6 +534,20 @@ impl Walk<'_> {
                 self.insert(e, xf, style, depth);
                 return;
             }
+            EntityType::Dimension(d) => {
+                self.dimension(d, xf, style, depth);
+                return;
+            }
+            EntityType::Leader(l) => {
+                let parts = leader_entities(self.doc, l);
+                self.owned(handle, &parts.iter().collect::<Vec<_>>(), xf, style, depth);
+                return;
+            }
+            EntityType::Tolerance(t) => {
+                let parts = tolerance_entities(self.doc, t);
+                self.owned(handle, &parts.iter().collect::<Vec<_>>(), xf, style, depth);
+                return;
+            }
             EntityType::Text(e) => {
                 let points = text_box(&e.insertion_point, e.height, e.rotation, &e.value);
                 let text = line_text(e, xf);
@@ -569,11 +589,13 @@ impl Walk<'_> {
             return;
         }
         // Inside an xref the chain stays at the xref's reference; the reference's layer is kept
-        // instead, so hiding it hides what it shows.
-        let tracked = self.xref_stack.is_empty();
+        // instead, so hiding it hides what it shows. Inside a dimension's block (an arrowhead
+        // block) neither: it is all the dimension.
+        let tracked = self.xref_stack.is_empty() && self.owner.is_none();
+        let in_xref = !self.xref_stack.is_empty();
         if tracked {
             self.chain.push(handle);
-        } else {
+        } else if in_xref {
             self.xref_insert_layers.push(style.layer.clone());
         }
         let doc = self.doc;
@@ -595,9 +617,68 @@ impl Walk<'_> {
         }
         if tracked {
             self.chain.pop();
-        } else {
+        } else if in_xref {
             self.xref_insert_layers.pop();
         }
+    }
+
+    /// A dimension: its `*D` block when it has one with something in it, else the geometry
+    /// generated from its definition points and style. Both are in world coordinates (on its
+    /// plane) and drawn as the dimension itself.
+    fn dimension(&mut self, d: &Dimension, xf: &Xform, style: &Style, depth: usize) {
+        let base = d.base();
+        let xf = ocs(&base.normal, 0.0).map_or(*xf, |o| o.then(xf));
+        let doc = self.doc;
+        let inside: Vec<&EntityType> = if base.block_name.is_empty() {
+            Vec::new()
+        } else {
+            doc.entities_in_block(&base.block_name)
+                .filter(|c| !c.common().invisible)
+                .collect()
+        };
+        let handle = base.common.handle.value();
+        if inside.is_empty() {
+            let generated = dimension_entities(doc, d).entities;
+            self.owned(
+                handle,
+                &generated.iter().collect::<Vec<_>>(),
+                &xf,
+                style,
+                depth,
+            );
+        } else {
+            self.owned(handle, &inside, &xf, style, depth);
+        }
+    }
+
+    /// Draws `parts` (in the coordinates `xf` maps) as the entity `owner` drawn with `style`:
+    /// layer "0" and ByBlock take its own.
+    fn owned(
+        &mut self,
+        owner: u64,
+        parts: &[&EntityType],
+        xf: &Xform,
+        style: &Style,
+        depth: usize,
+    ) {
+        if depth >= MAX_DEPTH {
+            self.truncated = true;
+            return;
+        }
+        if self.budget == 0 {
+            self.truncated = true;
+            return;
+        }
+        self.budget -= 1;
+        let outer = self.owner.replace(owner);
+        let styled: Vec<Style> = parts
+            .iter()
+            .map(|p| self.style(p.common(), Some(style)))
+            .collect();
+        for (part, part_style) in parts.iter().zip(&styled) {
+            self.entity(part, xf, part_style, depth + 1);
+        }
+        self.owner = outer;
     }
 
     /// An xref reference: the loaded xref's model space under the reference's transform. A
@@ -711,7 +792,7 @@ impl Walk<'_> {
             layer: style.layer.clone(),
             color: style.color,
             chain: self.chain.clone(),
-            entity: self.xref_entity.unwrap_or(entity),
+            entity: self.xref_entity.or(self.owner).unwrap_or(entity),
             xref: self.xref_stack.first().cloned(),
             xref_insert_layers: self.xref_insert_layers.clone(),
             text: None,
@@ -749,7 +830,7 @@ impl Walk<'_> {
             layer: style.layer.clone(),
             color: style.color,
             chain: self.chain.clone(),
-            entity: self.xref_entity.unwrap_or(entity),
+            entity: self.xref_entity.or(self.owner).unwrap_or(entity),
             xref: self.xref_stack.first().cloned(),
             xref_insert_layers: self.xref_insert_layers.clone(),
             text,
