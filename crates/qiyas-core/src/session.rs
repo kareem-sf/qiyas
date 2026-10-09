@@ -28,7 +28,7 @@ use crate::undo::{DocChange, History, Parts, Step, TablesSnapshot};
 use crate::xref::{XrefInfo, XrefSet};
 use crate::{
     Boq, Command, Conflict, CoreError, Current, DimStyleInfo, Drafting, Drawing, LayerInfo,
-    Outcome, Schedule, Sheet, Source, Takeoff, Units,
+    Outcome, Schedule, Sheet, Source, TableInfo, Takeoff, Units,
 };
 
 /// Flatten tolerance for drawing on screen, in drawing units.
@@ -214,6 +214,8 @@ pub struct EntityInfo {
     pub height: Option<f64>,
     /// A text's style name.
     pub style: Option<String>,
+    /// A table's cells (`crate::table::TableInfo`).
+    pub table: Option<TableInfo>,
 }
 
 /// An entity found by handle and chain, with what places it in the world.
@@ -951,6 +953,10 @@ impl Session {
             attributes,
             height,
             style,
+            table: match entity {
+                EntityType::Table(t) => Some(crate::table::table_info(t)),
+                _ => None,
+            },
             block_path: located.block_path,
             xref: located.xref,
         })
@@ -1138,6 +1144,14 @@ impl Session {
             let m = d.measurement() * (x1 - x0).hypot(y1 - y0);
             return Extent {
                 length: (!d.base().is_angular() && m.is_finite()).then_some(m),
+                area: None,
+                self_intersecting: false,
+            };
+        }
+        // A table is no outline: its grid lines and text boxes measure nothing.
+        if let EntityType::Table(_) = entity {
+            return Extent {
+                length: None,
                 area: None,
                 self_intersecting: false,
             };

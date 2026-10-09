@@ -14,7 +14,9 @@ use opencadcodec::{AppId, EntityType, Handle, MText, Text, Vector3};
 use qiyas_geom::LOGICAL_TEXT_APP;
 use serde::{Deserialize, Serialize};
 
+use crate::field::{has_fields, set_text_field};
 use crate::session::variant_name;
+use crate::table::is_text_value;
 use crate::{CoreError, Session, Target};
 
 /// Where find and replace looks: the sheet on screen, or every sheet of the drawing (model and
@@ -307,11 +309,14 @@ impl Session {
             return Err(invalid("The rotation must be a number"));
         }
         check_one_line(&value)?;
-        let mut text = Text::with_value(value, at).with_height(height);
+        let style = self.style_named(style)?;
+        let (shown, field) = self.with_fields(value);
+        let mut text = Text::with_value(shown, at).with_height(height);
         text.rotation = rotation.to_radians();
-        text.style = self.style_named(style)?;
+        text.style = style;
         self.register_text_app();
         mark_logical(&mut text.common);
+        set_text_field(&mut text.common, field.as_deref());
         Ok(self.add_styled(vec![EntityType::Text(text)])?[0])
     }
 
@@ -331,12 +336,15 @@ impl Session {
             return Err(invalid("The width must be 0 or more"));
         }
         check_value(value)?;
-        let mut text = MText::with_value(escape_mtext(value), at).with_height(height);
+        let style = self.style_named(style)?;
+        let (shown, field) = self.with_fields(value.to_string());
+        let mut text = MText::with_value(escape_mtext(&shown), at).with_height(height);
         text.rectangle_width = width;
         text.attachment_point = AttachmentPoint::TopLeft;
-        text.style = self.style_named(style)?;
+        text.style = style;
         self.register_text_app();
         mark_logical(&mut text.common);
+        set_text_field(&mut text.common, field.as_deref());
         Ok(self.add_styled(vec![EntityType::MText(text)])?[0])
     }
 
@@ -385,14 +393,21 @@ impl Session {
             }
         };
         self.register_text_app();
+        let (shown, field) = if attribute.is_none() {
+            self.with_fields(value.to_string())
+        } else {
+            (value.to_string(), None)
+        };
         match self.drawing.doc.get_entity_mut(h).expect("a sheet target") {
             EntityType::Text(t) => {
-                t.value = value.to_string();
+                t.value = shown;
                 mark_logical(&mut t.common);
+                set_text_field(&mut t.common, field.as_deref());
             }
             EntityType::MText(t) => {
-                t.value = escape_mtext(value);
+                t.value = escape_mtext(&shown);
                 mark_logical(&mut t.common);
+                set_text_field(&mut t.common, field.as_deref());
             }
             EntityType::Insert(insert) => {
                 let a = &mut insert.attributes[attribute.expect("checked above")];
@@ -410,6 +425,17 @@ impl Session {
             _ => unreachable!("checked above"),
         }
         Ok(())
+    }
+
+    /// What a text typed as `value` shows, and the field code it keeps when it holds one (worked
+    /// out on the sheet on screen).
+    fn with_fields(&mut self, value: String) -> (String, Option<String>) {
+        if !has_fields(&value) {
+            return (value, None);
+        }
+        self.register_field_app();
+        let sheet = self.sheet_owner().unwrap_or(Handle::NULL);
+        (self.evaluate_fields(&value, sheet), Some(value))
     }
 
     /// The handles of the entities `scope` searches, with the sheet (block name) of each.
@@ -430,6 +456,7 @@ impl Session {
                                 | EntityType::MText(_)
                                 | EntityType::Insert(_)
                                 | EntityType::Dimension(_)
+                                | EntityType::Table(_)
                         )
                     })
                     .map(|e| (e.common().handle, sheet.clone()))
@@ -493,6 +520,24 @@ impl Session {
                 base.set_text_override(Some(v));
                 n
             }
+            // Every cell's text, read as MText.
+            EntityType::Table(t) => {
+                let mut total = 0;
+                let contents = t
+                    .rows
+                    .iter_mut()
+                    .flat_map(|r| &mut r.cells)
+                    .flat_map(|c| &mut c.contents);
+                for content in contents.filter(|c| is_text_value(&c.value)) {
+                    let (v, n) = finder.replace(content.value.display(), Mode::MText, with);
+                    if n > 0 && with.is_some() {
+                        content.value.text = v.clone();
+                        content.value.formatted_value = v;
+                    }
+                    total += n;
+                }
+                total
+            }
             _ => 0,
         };
         e.common_mut().graphic_data = None;
@@ -544,10 +589,14 @@ impl Session {
             match Self::replaced(finder, e, Some(with)) {
                 Some(hit) if hit.fits => {
                     let dimension = matches!(hit.entity, EntityType::Dimension(_));
+                    let table = matches!(hit.entity, EntityType::Table(_));
                     *self.drawing.doc.get_entity_mut(h).expect("listed") = hit.entity;
+                    // Its block shows the new text.
                     if dimension {
-                        // Its block shows the new text.
                         self.rebuild_dimension(h)?;
+                    }
+                    if table {
+                        self.rebuild_table(h)?;
                     }
                     count += hit.count;
                     handles.push(h.value());

@@ -1,0 +1,477 @@
+//! Fields: text that Qiyas works out (`Command::Field`, or field codes typed into a text, an
+//! MText or a table cell) and works out again (`Command::UpdateFields`).
+//!
+//! A field is written as AutoCAD writes its field codes: `%<\AcVar Date \f "yyyy-MM-dd">%`, the
+//! file name `%<\AcVar Filename>%`, an entity's area or length `%<\AcObjProp
+//! Object(%<\_ObjId 2A>%).Area \f "%lu2%pr3">%` (the entity's handle in hex) and, Qiyas's own, a
+//! count of block references on the sheet `%<\AcVar QiyasCount "DOOR">%`. The text keeps the
+//! value as its visible text (what any CAD program shows); the code (the whole text as typed, field
+//! codes and the words around them) is kept in `FIELD_APP` xdata: on a text or an MText as its
+//! strings; on a table as (row, column, strings) for each cell holding one.
+//!
+//! Area and length fields follow the entity they read: after every modify, edit and erase they
+//! are worked out again in the same undo step (`Session::follow_fields`). Dates, file names and
+//! counts change on `UpdateFields`. Areas and lengths are in drawing units, 3 decimals; an entity
+//! gone, or a code Qiyas does not know, shows `####`.
+
+use opencadcodec::entities::Table;
+use opencadcodec::tables::normalize_name;
+use opencadcodec::xdata::{ExtendedDataRecord, XDataValue};
+use opencadcodec::{AppId, EntityType, Handle};
+use qiyas_geom::Xform;
+use serde::{Deserialize, Serialize};
+
+use crate::session::effective_block_name;
+use crate::text::escape_mtext;
+use crate::{CoreError, Session, Target};
+
+/// The xdata application holding a field's code (never `QIYAS`: `embed_measurements` deletes
+/// those).
+pub const FIELD_APP: &str = "QIYAS_FIELD";
+/// What a field shows when it can't be worked out, as AutoCAD does.
+const UNKNOWN: &str = "####";
+/// Longest xdata string written (DXF allows 255 bytes).
+const CHUNK: usize = 250;
+
+/// A field to insert (`Command::Field`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FieldKind {
+    /// Today's date, `yyyy-MM-dd` (UTC).
+    Date,
+    /// The drawing's file name.
+    FileName,
+    /// The area of the closed entity `target` (at the top of the sheet), in drawing units.
+    Area { target: Target },
+    /// The length of the entity `target`, in drawing units.
+    Length { target: Target },
+    /// How many references of the block `block` the sheet holds.
+    Count { block: String },
+}
+
+/// The field code of `kind`, as it goes into a text.
+pub fn field_code(kind: &FieldKind) -> String {
+    match kind {
+        FieldKind::Date => r#"%<\AcVar Date \f "yyyy-MM-dd">%"#.to_string(),
+        FieldKind::FileName => r#"%<\AcVar Filename>%"#.to_string(),
+        FieldKind::Area { target } => object_code(target.handle, "Area"),
+        FieldKind::Length { target } => object_code(target.handle, "Length"),
+        FieldKind::Count { block } => {
+            format!(r#"%<\AcVar QiyasCount "{}">%"#, block.replace('"', ""))
+        }
+    }
+}
+
+fn object_code(handle: u64, property: &str) -> String {
+    format!(r#"%<\AcObjProp Object(%<\_ObjId {handle:X}>%).{property} \f "%lu2%pr3">%"#)
+}
+
+/// True when `text` holds a field code.
+pub(crate) fn has_fields(text: &str) -> bool {
+    text.contains("%<\\")
+}
+
+/// True when `text` holds a field reading an entity (area, length): one to follow edits.
+fn has_object_fields(text: &str) -> bool {
+    text.contains("%<\\AcObjProp")
+}
+
+/// What one field code reads.
+enum Code {
+    Date,
+    FileName,
+    Area(u64),
+    Length(u64),
+    Count(String),
+    Unknown,
+}
+
+/// The outermost field codes in `text` (`%<` to its matching `>%`, codes nested inside counted),
+/// as byte ranges.
+fn code_spans(text: &str) -> Vec<(usize, usize)> {
+    let bytes = text.as_bytes();
+    let mut spans = Vec::new();
+    let (mut depth, mut start, mut i) = (0usize, 0usize, 0usize);
+    while i + 1 < bytes.len() {
+        match (bytes[i], bytes[i + 1]) {
+            (b'%', b'<') => {
+                if depth == 0 {
+                    start = i;
+                }
+                depth += 1;
+                i += 2;
+            }
+            (b'>', b'%') if depth > 0 => {
+                depth -= 1;
+                i += 2;
+                if depth == 0 {
+                    spans.push((start, i));
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    spans
+}
+
+fn parse_code(code: &str) -> Code {
+    let inner = code
+        .strip_prefix("%<")
+        .and_then(|c| c.strip_suffix(">%"))
+        .unwrap_or(code)
+        .trim();
+    if let Some(rest) = inner.strip_prefix("\\AcVar") {
+        let rest = rest.trim_start();
+        let word: String = rest.chars().take_while(|c| c.is_alphanumeric()).collect();
+        return match word.to_ascii_lowercase().as_str() {
+            "date" => Code::Date,
+            "filename" => Code::FileName,
+            "qiyascount" => rest
+                .split('"')
+                .nth(1)
+                .map_or(Code::Unknown, |name| Code::Count(name.to_string())),
+            _ => Code::Unknown,
+        };
+    }
+    if inner.starts_with("\\AcObjProp") {
+        let Some(id) = inner.split("\\_ObjId").nth(1) else {
+            return Code::Unknown;
+        };
+        let hex: String = id
+            .trim_start()
+            .chars()
+            .take_while(|c| c.is_ascii_hexdigit())
+            .collect();
+        let Ok(handle) = u64::from_str_radix(&hex, 16) else {
+            return Code::Unknown;
+        };
+        let property: String = inner
+            .rsplit(").")
+            .next()
+            .unwrap_or_default()
+            .chars()
+            .take_while(|c| c.is_alphanumeric())
+            .collect();
+        return match property.to_ascii_lowercase().as_str() {
+            "area" => Code::Area(handle),
+            "length" => Code::Length(handle),
+            _ => Code::Unknown,
+        };
+    }
+    Code::Unknown
+}
+
+/// Today's date (UTC) as `yyyy-MM-dd`.
+fn today() -> String {
+    let d = time::OffsetDateTime::now_utc().date();
+    format!("{:04}-{:02}-{:02}", d.year(), u8::from(d.month()), d.day())
+}
+
+/// `template`'s strings as xdata values, cut to fit.
+fn chunks(template: &str) -> Vec<XDataValue> {
+    let mut out = Vec::new();
+    let mut rest = template;
+    while !rest.is_empty() {
+        let mut cut = rest.len().min(CHUNK);
+        while !rest.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        let (head, tail) = rest.split_at(cut);
+        out.push(XDataValue::String(head.to_string()));
+        rest = tail;
+    }
+    out
+}
+
+/// The field code a text keeps, if any.
+pub(crate) fn text_field(common: &opencadcodec::entities::EntityCommon) -> Option<String> {
+    let record = common.extended_data.get_record(FIELD_APP)?;
+    Some(
+        record
+            .values
+            .iter()
+            .filter_map(|v| match v {
+                XDataValue::String(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect(),
+    )
+}
+
+/// Keeps `template` as the text's field code; `None` drops it.
+pub(crate) fn set_text_field(
+    common: &mut opencadcodec::entities::EntityCommon,
+    template: Option<&str>,
+) {
+    match template {
+        Some(template) => {
+            let mut record = ExtendedDataRecord::new(FIELD_APP);
+            for v in chunks(template) {
+                record.add_value(v);
+            }
+            common.extended_data.upsert_record(record);
+        }
+        None => {
+            common.extended_data.remove_record(FIELD_APP);
+        }
+    }
+}
+
+/// The field codes a table keeps, as (row, column, code).
+pub(crate) fn cell_fields(t: &Table) -> Vec<(usize, usize, String)> {
+    let Some(record) = t.common.extended_data.get_record(FIELD_APP) else {
+        return Vec::new();
+    };
+    let mut out: Vec<(usize, usize, String)> = Vec::new();
+    let mut values = record.values.iter().peekable();
+    while let Some(v) = values.next() {
+        let (XDataValue::Integer32(r), Some(XDataValue::Integer32(c))) = (v, values.next()) else {
+            continue;
+        };
+        let mut code = String::new();
+        while let Some(XDataValue::String(s)) = values.peek() {
+            code.push_str(s);
+            values.next();
+        }
+        if let (Ok(r), Ok(c)) = (usize::try_from(*r), usize::try_from(*c)) {
+            out.push((r, c, code));
+        }
+    }
+    out
+}
+
+/// Keeps `fields` as the table's field codes (none: the record goes).
+pub(crate) fn set_cell_fields(t: &mut Table, fields: &[(usize, usize, String)]) {
+    if fields.is_empty() {
+        t.common.extended_data.remove_record(FIELD_APP);
+        return;
+    }
+    let mut record = ExtendedDataRecord::new(FIELD_APP);
+    for (r, c, code) in fields {
+        record.add_value(XDataValue::Integer32(*r as i32));
+        record.add_value(XDataValue::Integer32(*c as i32));
+        for v in chunks(code) {
+            record.add_value(v);
+        }
+    }
+    t.common.extended_data.upsert_record(record);
+}
+
+impl Session {
+    /// True when the drawing has no `FIELD_APP` application yet.
+    pub(crate) fn needs_field_app(&self) -> bool {
+        !self.drawing.doc.app_ids.contains(FIELD_APP)
+    }
+
+    pub(crate) fn register_field_app(&mut self) {
+        if self.needs_field_app() {
+            let doc = &mut self.drawing.doc;
+            let mut app = AppId::new(FIELD_APP);
+            app.handle = doc.allocate_handle();
+            doc.app_ids.add(app).expect("checked it is missing");
+        }
+    }
+
+    /// `template` with every field code replaced by its value now; `sheet` is the block the text
+    /// sits in (counts are counted there).
+    pub(crate) fn evaluate_fields(&self, template: &str, sheet: Handle) -> String {
+        let mut out = String::with_capacity(template.len());
+        let mut at = 0;
+        for (a, b) in code_spans(template) {
+            out.push_str(&template[at..a]);
+            out.push_str(&self.field_value(&template[a..b], sheet));
+            at = b;
+        }
+        out.push_str(&template[at..]);
+        out
+    }
+
+    fn field_value(&self, code: &str, sheet: Handle) -> String {
+        let doc = &self.drawing.doc;
+        let measure = |h: u64, area: bool| {
+            let e = doc.get_entity(Handle::new(h))?;
+            let extent = self.extent(doc, e, &Xform::identity());
+            let v = if area { extent.area } else { extent.length }?;
+            Some(format!("{v:.3}"))
+        };
+        let value = match parse_code(code) {
+            Code::Date => Some(today()),
+            Code::FileName => self
+                .drawing
+                .path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned()),
+            Code::Area(h) => measure(h, true),
+            Code::Length(h) => measure(h, false),
+            Code::Count(block) => {
+                let name = normalize_name(&block);
+                let sheet = doc.block_records.iter().find(|b| b.handle == sheet);
+                sheet.map(|b| {
+                    doc.entities_in_block(&b.name)
+                        .filter(|e| match e {
+                            EntityType::Insert(i) => {
+                                !i.common.invisible
+                                    && normalize_name(&effective_block_name(doc, i)) == name
+                            }
+                            _ => false,
+                        })
+                        .count()
+                        .to_string()
+                })
+            }
+            Code::Unknown => None,
+        };
+        value.unwrap_or_else(|| UNKNOWN.to_string())
+    }
+
+    /// Works every field of the drawing out again (with `objects_only`, those reading an
+    /// entity's area or length only), writing the texts and cells whose value changed; a table
+    /// changed gets its block drawn again. How many texts and tables changed.
+    pub(crate) fn update_fields(&mut self, objects_only: bool) -> Result<usize, CoreError> {
+        if self.needs_field_app() {
+            return Ok(0);
+        }
+        let wanted = |code: &str| !objects_only || has_object_fields(code);
+        let holders: Vec<Handle> = self
+            .drawing
+            .doc
+            .entities()
+            .filter(|e| e.common().extended_data.get_record(FIELD_APP).is_some())
+            .map(|e| e.common().handle)
+            .collect();
+        let mut changed = 0;
+        for h in holders {
+            let e = self.drawing.doc.get_entity(h).expect("listed above");
+            let sheet = e.common().owner_handle;
+            match e {
+                EntityType::Text(t) => {
+                    let Some(code) = text_field(&t.common).filter(|c| wanted(c)) else {
+                        continue;
+                    };
+                    let value = self.evaluate_fields(&code, sheet);
+                    if t.value != value {
+                        if let Some(EntityType::Text(t)) = self.drawing.doc.get_entity_mut(h) {
+                            t.value = value;
+                            t.common.graphic_data = None;
+                        }
+                        changed += 1;
+                    }
+                }
+                EntityType::MText(t) => {
+                    let Some(code) = text_field(&t.common).filter(|c| wanted(c)) else {
+                        continue;
+                    };
+                    let value = escape_mtext(&self.evaluate_fields(&code, sheet));
+                    if t.value != value {
+                        if let Some(EntityType::MText(t)) = self.drawing.doc.get_entity_mut(h) {
+                            t.value = value;
+                            t.common.graphic_data = None;
+                        }
+                        changed += 1;
+                    }
+                }
+                EntityType::Table(t) => {
+                    let mut table = t.clone();
+                    let mut any = false;
+                    for (r, c, code) in cell_fields(t) {
+                        if !wanted(&code) {
+                            continue;
+                        }
+                        let value = escape_mtext(&self.evaluate_fields(&code, sheet));
+                        if table.cell_text(r, c).is_some_and(|now| now != value) {
+                            crate::table::set_cell_value(&mut table, r, c, &value);
+                            any = true;
+                        }
+                    }
+                    if any {
+                        *self.drawing.doc.get_entity_mut(h).expect("listed above") =
+                            EntityType::Table(table);
+                        self.rebuild_table(h)?;
+                        changed += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(changed)
+    }
+
+    /// After a modify, an edit or an erase: the fields reading an entity are worked out again,
+    /// in the same step.
+    pub(crate) fn follow_fields(&mut self) -> Result<(), CoreError> {
+        self.update_fields(true).map(|_| ())
+    }
+
+    /// True when following fields may draw a table's block again: a table holds a field reading
+    /// an entity (so the step keeps the block records).
+    pub(crate) fn tables_follow_fields(&self) -> bool {
+        !self.needs_field_app()
+            && self.drawing.doc.entities().any(|e| match e {
+                EntityType::Table(t) => cell_fields(t).iter().any(|(_, _, c)| has_object_fields(c)),
+                _ => false,
+            })
+    }
+
+    /// `Command::Field`: a one-line text at `at` holding the field `kind`, `height` tall, in the
+    /// current text style.
+    pub(crate) fn add_field(
+        &mut self,
+        at: [f64; 2],
+        height: f64,
+        kind: &FieldKind,
+    ) -> Result<u64, CoreError> {
+        if let FieldKind::Area { target } | FieldKind::Length { target } = kind {
+            self.sheet_targets(std::slice::from_ref(target))?;
+        }
+        if let FieldKind::Count { block } = kind {
+            if block.trim().is_empty() {
+                return Err(CoreError::InvalidCommand("Name the block to count".into()));
+            }
+        }
+        self.add_text(at, height, 0.0, field_code(kind), None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codes_are_found_whole_with_their_nested_ids() {
+        let area = object_code(0x2A, "Area");
+        let text = format!("Area: {area} m2, {}", field_code(&FieldKind::Date));
+        let spans = code_spans(&text);
+        assert_eq!(spans.len(), 2);
+        assert_eq!(&text[spans[0].0..spans[0].1], area);
+        assert!(matches!(parse_code(&area), Code::Area(0x2A)));
+        assert!(matches!(
+            parse_code(&object_code(0xFF, "Length")),
+            Code::Length(0xFF)
+        ));
+        assert!(matches!(
+            parse_code(&field_code(&FieldKind::Count {
+                block: "DOOR".into()
+            })),
+            Code::Count(ref b) if b == "DOOR"
+        ));
+        assert!(matches!(parse_code("%<\\AcVar Filename>%"), Code::FileName));
+        assert!(matches!(
+            parse_code("%<\\AcDiesel $(edtime)>%"),
+            Code::Unknown
+        ));
+        // An unclosed code is left as it is.
+        assert!(code_spans("50%<\\AcVar Date").is_empty());
+    }
+
+    #[test]
+    fn long_codes_are_cut_into_xdata_strings() {
+        let long = "ج".repeat(300);
+        let values = chunks(&long);
+        assert_eq!(values.len(), 3);
+        let mut t = Table::new(opencadcodec::Vector3::ZERO, 2, 2);
+        set_cell_fields(&mut t, &[(1, 0, long.clone()), (0, 1, "x".into())]);
+        assert_eq!(cell_fields(&t), [(1, 0, long), (0, 1, "x".to_string())]);
+        set_cell_fields(&mut t, &[]);
+        assert!(cell_fields(&t).is_empty());
+    }
+}

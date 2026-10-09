@@ -1044,8 +1044,11 @@ impl Session {
                 edited = spec.targets();
                 (edited.as_slice(), false, false)
             }
-            Command::Text { .. } | Command::MText { .. } | Command::EditText { .. } => {
-                return (self.needs_text_app(), false)
+            Command::Text { value, .. }
+            | Command::MText { value, .. }
+            | Command::EditText { value, .. } => {
+                let field = crate::field::has_fields(value) && self.needs_field_app();
+                return (self.needs_text_app() || field, false);
             }
             _ => return (false, false),
         };
@@ -1056,7 +1059,9 @@ impl Session {
                 Some(EntityType::Dimension(_) | EntityType::Table(_)) => copying,
                 Some(EntityType::RasterImage(_) | EntityType::Underlay(_)) => erasing,
                 _ => false,
-            });
+            })
+            // A table's field reading an entity draws the table's block again.
+            || self.tables_follow_fields();
         let takeoff = targets
             .iter()
             .any(|t| self.takeoff.items.iter().any(|m| measures(m, t.handle)));

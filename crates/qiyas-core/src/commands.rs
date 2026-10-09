@@ -15,8 +15,8 @@ use crate::takeoff::in_metres;
 use crate::text::Finder;
 use crate::{
     AttachMode, Boq, Conflict, ConflictStatus, CoreError, Current, DimEditOp, DimSpec,
-    DimStyleFields, Drafting, DrawSpec, EditSpec, EntityFilter, Kind, Measurement, ModifySpec,
-    PreparedPdf, Schedule, Session, SnapKind, Source, TextMatch, TextScope,
+    DimStyleFields, Drafting, DrawSpec, EditSpec, EntityFilter, FieldKind, Kind, Measurement,
+    ModifySpec, PreparedPdf, Schedule, Session, SnapKind, Source, TextMatch, TextScope,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -354,6 +354,62 @@ pub enum Command {
         #[serde(default)]
         current: bool,
     },
+    /// A table of `rows` x `cols` cells, its top left corner at `at`, columns `col_width` and rows
+    /// `row_height` drawing units, cells filled row by row from `data` (plain text; field codes
+    /// make a cell a field), on the current layer in the current text style (its text half the
+    /// row height), with its `*T` block: one undo step, `Outcome::Added` (see `crate::table`).
+    Table {
+        at: [f64; 2],
+        rows: usize,
+        cols: usize,
+        col_width: f64,
+        row_height: f64,
+        #[serde(default)]
+        data: Vec<Vec<String>>,
+    },
+    /// Cell `row`, `col` (from 0) of the table `target` holds `text` (plain text; a cell inside a
+    /// merged cell edits the merged cell).
+    EditCell {
+        target: Target,
+        row: usize,
+        col: usize,
+        text: String,
+    },
+    /// A new row before row `at` of the table `target` (`at` = its row count: after the last).
+    InsertRow {
+        target: Target,
+        at: usize,
+    },
+    /// A new column before column `at`.
+    InsertCol {
+        target: Target,
+        at: usize,
+    },
+    /// Removes row `row` (a table keeps one).
+    DeleteRow {
+        target: Target,
+        row: usize,
+    },
+    /// Removes column `col` (a table keeps one).
+    DeleteCol {
+        target: Target,
+        col: usize,
+    },
+    /// Merges the cells from `first` to `last` (`[row, column]`); one cell given unmerges the
+    /// merged cell it is in.
+    MergeCells {
+        target: Target,
+        first: [usize; 2],
+        last: [usize; 2],
+    },
+    /// A one-line text at `at`, `height` tall, holding the field `field` (see `crate::field`).
+    Field {
+        at: [f64; 2],
+        height: f64,
+        field: FieldKind,
+    },
+    /// Works every field of the drawing out again: one undo step when one changes.
+    UpdateFields,
 }
 
 /// An entity as picked (see `Picked`): its handle and the block references it sits inside,
@@ -418,7 +474,17 @@ impl Command {
             | Command::MLeader { .. }
             | Command::Tolerance { .. }
             | Command::AnnotationScale { .. }
-            | Command::SetDimStyle { .. } => Some(Part::Document {
+            | Command::SetDimStyle { .. }
+            // A table's block; the field mark's application.
+            | Command::Table { .. }
+            | Command::EditCell { .. }
+            | Command::InsertRow { .. }
+            | Command::InsertCol { .. }
+            | Command::DeleteRow { .. }
+            | Command::DeleteCol { .. }
+            | Command::MergeCells { .. }
+            | Command::Field { .. }
+            | Command::UpdateFields => Some(Part::Document {
                 tables: true,
                 takeoff: false,
             }),
@@ -767,6 +833,7 @@ impl Session {
             }
             Command::DeleteEntities { targets } => {
                 self.delete_entities(&targets)?;
+                self.follow_fields()?;
                 return Ok(Outcome::Changed);
             }
             Command::Draw(spec) => {
@@ -777,8 +844,16 @@ impl Session {
                 self.set_current(current)?;
                 return Ok(Outcome::Changed);
             }
-            Command::Modify(spec) => return self.modify(spec),
-            Command::Edit(spec) => return self.edit_entities(spec),
+            Command::Modify(spec) => {
+                let outcome = self.modify(spec)?;
+                self.follow_fields()?;
+                return Ok(outcome);
+            }
+            Command::Edit(spec) => {
+                let outcome = self.edit_entities(spec)?;
+                self.follow_fields()?;
+                return Ok(outcome);
+            }
             Command::Text {
                 at,
                 height,
@@ -874,6 +949,58 @@ impl Session {
                 current,
             } => {
                 self.set_dim_style(&name, &fields, current)?;
+                return Ok(Outcome::Changed);
+            }
+            Command::Table {
+                at,
+                rows,
+                cols,
+                col_width,
+                row_height,
+                data,
+            } => {
+                let h = self.add_table(at, rows, cols, col_width, row_height, &data)?;
+                return Ok(Outcome::Added { handles: vec![h] });
+            }
+            Command::EditCell {
+                target,
+                row,
+                col,
+                text,
+            } => {
+                self.edit_cell(&target, row, col, &text)?;
+                return Ok(Outcome::Changed);
+            }
+            Command::InsertRow { target, at } => {
+                self.insert_row(&target, at)?;
+                return Ok(Outcome::Changed);
+            }
+            Command::InsertCol { target, at } => {
+                self.insert_col(&target, at)?;
+                return Ok(Outcome::Changed);
+            }
+            Command::DeleteRow { target, row } => {
+                self.delete_row(&target, row)?;
+                return Ok(Outcome::Changed);
+            }
+            Command::DeleteCol { target, col } => {
+                self.delete_col(&target, col)?;
+                return Ok(Outcome::Changed);
+            }
+            Command::MergeCells {
+                target,
+                first,
+                last,
+            } => {
+                self.merge_cells(&target, first, last)?;
+                return Ok(Outcome::Changed);
+            }
+            Command::Field { at, height, field } => {
+                let h = self.add_field(at, height, &field)?;
+                return Ok(Outcome::Added { handles: vec![h] });
+            }
+            Command::UpdateFields => {
+                self.update_fields(false)?;
                 return Ok(Outcome::Changed);
             }
         };

@@ -300,6 +300,18 @@ pub async fn entity_info(
     })
 }
 
+/// The cell `[row, column]` of the table `handle` under (x, y), drawing coordinates; a merged
+/// cell by its first cell. `None` outside it.
+#[tauri::command]
+pub async fn table_cell_at(
+    handle: u64,
+    x: f64,
+    y: f64,
+    state: State<'_, AppState>,
+) -> Result<Option<[usize; 2]>, String> {
+    with_session(&state, |s| Ok(s.table_cell_at(handle, [x, y])))
+}
+
 /// Runs one command on the command bus; see `qiyas_core::Command`.
 #[tauri::command]
 pub async fn run_command(cmd: Command, state: State<'_, AppState>) -> Result<Outcome, String> {

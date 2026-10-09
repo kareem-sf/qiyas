@@ -48,6 +48,7 @@ pub fn run() {
             commands::get_drafting,
             commands::set_drafting,
             commands::entity_info,
+            commands::table_cell_at,
             commands::run_command,
             commands::undo,
             commands::redo,
