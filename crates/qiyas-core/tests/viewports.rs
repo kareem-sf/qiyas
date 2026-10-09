@@ -220,3 +220,27 @@ fn the_palette_sets_a_viewports_scale_and_centre() {
         })
         .is_err());
 }
+
+#[test]
+fn another_sheet_draws_without_leaving_the_one_on_screen() {
+    let (_dir, mut s) = on_layout();
+    let layout = s.sheet.clone();
+    mview(&mut s, [10.0, 10.0], [110.0, 90.0]);
+    let version = s.sheet_batch_version(MODEL);
+    let model = s.sheet_batch_bytes_if(MODEL, None, None).unwrap();
+    assert_eq!(s.sheet, layout);
+    assert_eq!(model, s.model_batch().to_bytes());
+    // Unchanged: nothing sent.
+    assert!(s.sheet_batch_bytes_if(MODEL, Some(version), None).is_none());
+    // The layout's own viewports, seen from model space (a split window's second view).
+    s.set_sheet(MODEL).unwrap();
+    assert_eq!(s.paper_views_of(&layout).len(), 1);
+    assert!(s.paper_views().is_empty());
+    // A drawing change draws it again.
+    s.run(Command::Draw(qiyas_core::DrawSpec::Line {
+        a: [0.0, 0.0],
+        b: [1.0, 1.0],
+    }))
+    .unwrap();
+    assert_ne!(s.sheet_batch_version(MODEL), version);
+}

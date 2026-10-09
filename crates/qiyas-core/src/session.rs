@@ -41,6 +41,9 @@ pub(crate) struct Near {
     pub whole_sheet: bool,
 }
 
+/// Sheets `Session::with_sheet` keeps drawn besides the one on screen.
+const OTHER_SHEETS: usize = 2;
+
 /// Segments looked at past locked ones for a pick while a block is edited in place.
 const PICK_PAST_LOCKED: usize = 4096;
 
@@ -98,9 +101,10 @@ pub struct Session {
     empty_model: bool,
     /// Batch and pick index of the last sheet and visibility drawn; rebuilt when either changes.
     cache: RefCell<Option<Cached>>,
-    /// Model space drawn for the paper-space viewports of a layout on screen, with the version
-    /// it was drawn at (`version_of` model space); see `crate::viewports`.
-    pub(crate) model: RefCell<Option<(u64, Batch)>>,
+    /// Sheets drawn besides the one on screen (model space inside a layout's viewports, the
+    /// second view of a split window), at most `OTHER_SHEETS`, the latest last: each with the
+    /// version it was drawn at (`version_of`); see `with_sheet`.
+    others: RefCell<Vec<(String, u64, Batch)>>,
     /// Fonts, glyph atlas and glyph cache, kept across batches so the atlas pages the window
     /// holds stay valid.
     text: RefCell<TextEngine>,
@@ -508,7 +512,7 @@ impl Session {
             saved_revision: 0,
             empty_model,
             cache: RefCell::new(None),
-            model: RefCell::new(None),
+            others: RefCell::new(Vec::new()),
             text: RefCell::new(TextEngine::new()),
             underlays: RefCell::new(Underlays::default()),
         })
@@ -1254,7 +1258,7 @@ impl Session {
     /// drawing hold hundreds of MB); the next draw or pick builds them again.
     pub fn park(&mut self) {
         *self.cache.get_mut() = None;
-        *self.model.get_mut() = None;
+        self.others.get_mut().clear();
     }
 
     /// The batch and pick index are built and kept (see `park`).
@@ -1358,43 +1362,63 @@ impl Session {
         }
     }
 
-    /// Runs `f` on model space as drawn for the viewports of the layout on screen (the batch on
-    /// screen itself when that is model space), rebuilt when model space would draw differently
-    /// (`version_of`), its glyphs drawn again for `px_per_unit` when given and new. No pick
-    /// index: a click inside a viewport picks the viewport.
+    /// Runs `f` on model space as drawn for the viewports of a layout (see `with_sheet`). No
+    /// pick index: a click inside a viewport picks the viewport.
     pub(crate) fn with_model<R>(&self, px_per_unit: Option<f64>, f: impl FnOnce(&Batch) -> R) -> R {
-        const MODEL: &str = "*Model_Space";
-        if self.sheet.eq_ignore_ascii_case(MODEL) {
+        self.with_sheet("*Model_Space", px_per_unit, f)
+    }
+
+    /// Runs `f` on the batch of the sheet `sheet` (block name) with the session's hidden layers:
+    /// the one on screen's own (`with_cache`) for it, else one kept apart and rebuilt when that
+    /// sheet would draw differently (`version_of`); its glyphs drawn again for `px_per_unit` when
+    /// given and new. The pictures of a sheet not on screen are not drawn yet.
+    pub(crate) fn with_sheet<R>(
+        &self,
+        sheet: &str,
+        px_per_unit: Option<f64>,
+        f: impl FnOnce(&Batch) -> R,
+    ) -> R {
+        if self.sheet.eq_ignore_ascii_case(sheet) {
             return self.with_cache(px_per_unit, |c| f(&c.batch));
         }
-        let version = self.version_of(MODEL);
-        let mut model = self.model.borrow_mut();
+        let version = self.version_of(sheet);
+        let mut others = self.others.borrow_mut();
         let mut text = self.text.borrow_mut();
-        if model.as_ref().is_none_or(|(v, _)| *v != version) {
-            let options = TextOptions {
-                arabic_reversed: self.arabic_reversed,
-                px_per_unit,
-            };
-            let batch = build_batch_with_xrefs(
-                &self.drawing.doc,
-                &self.xref_docs(),
-                MODEL,
-                &self.visibility,
-                BATCH_TOL,
-                &mut text,
-                options,
-            );
-            // Model space's pictures are not drawn inside viewports yet.
-            *model = Some((version, batch));
-        }
-        let (_, batch) = model.as_mut().expect("just filled");
+        let at = others
+            .iter()
+            .position(|(name, v, _)| name.eq_ignore_ascii_case(sheet) && *v == version);
+        let mut entry = match at {
+            Some(i) => others.remove(i),
+            None => {
+                let options = TextOptions {
+                    arabic_reversed: self.arabic_reversed,
+                    px_per_unit,
+                };
+                let batch = build_batch_with_xrefs(
+                    &self.drawing.doc,
+                    &self.xref_docs(),
+                    sheet,
+                    &self.visibility,
+                    BATCH_TOL,
+                    &mut text,
+                    options,
+                );
+                others.retain(|(name, _, _)| !name.eq_ignore_ascii_case(sheet));
+                (sheet.to_string(), version, batch)
+            }
+        };
         if let Some(px) = px_per_unit.filter(|p| *p > 0.0 && p.is_finite()) {
-            if !batch.texts.is_empty() && px != batch.px_per_unit {
-                place_text(batch, &mut text, px);
+            if !entry.2.texts.is_empty() && px != entry.2.px_per_unit {
+                place_text(&mut entry.2, &mut text, px);
             }
         }
         drop(text);
-        f(batch)
+        let out = f(&entry.2);
+        others.push(entry);
+        if others.len() > OTHER_SHEETS {
+            others.remove(0);
+        }
+        out
     }
 
     /// Runs `f` on the cached batch, rebuilding it first if the sheet, visibility or Arabic

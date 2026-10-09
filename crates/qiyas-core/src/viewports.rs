@@ -1,7 +1,8 @@
 //! Paper-space viewports: `Command::MView` makes one on the layout on screen, looking at model
 //! space's extents; its frame draws on the layout as a line (`qiyas_geom` flatten), a click
 //! inside it picks it (`Session::pick`). The window draws model space inside each one
-//! (`Session::paper_views`): model space is drawn once (`Session::with_model`) and shown in each
+//! (`Session::paper_views`): model space is drawn once (`Session::with_model`, fetched by the
+//! window through `Session::sheet_batch_bytes_if`) and shown in each
 //! viewport through its own camera, clipped to its frame, without the layers the viewport freezes
 //! (spans of that one batch). Twisted views are drawn without their twist.
 
@@ -159,10 +160,16 @@ impl Session {
     /// The viewports of the layout on screen and how the window draws model space inside each
     /// (see `PaperView`); none on model space.
     pub fn paper_views(&self) -> Vec<PaperView> {
-        if self.sheet.eq_ignore_ascii_case(MODEL) {
+        self.paper_views_of(&self.sheet)
+    }
+
+    /// `paper_views` for the sheet `sheet` (block name), on screen or not (a split window's
+    /// second view).
+    pub fn paper_views_of(&self, sheet: &str) -> Vec<PaperView> {
+        if sheet.eq_ignore_ascii_case(MODEL) {
             return Vec::new();
         }
-        let viewports = viewports_on(self, &self.sheet);
+        let viewports = viewports_on(self, sheet);
         if viewports.is_empty() {
             return Vec::new();
         }
@@ -217,22 +224,25 @@ impl Session {
         self.with_model(None, Batch::clone)
     }
 
-    /// Names what `model_batch` would give (see `batch_version`).
-    pub fn model_batch_version(&self) -> u64 {
-        self.version_of(MODEL)
+    /// Names what `sheet_batch_bytes_if` would give for the sheet `sheet` (see `batch_version`).
+    pub fn sheet_batch_version(&self, sheet: &str) -> u64 {
+        self.version_of(sheet)
     }
 
-    /// `model_batch` as `Batch::to_bytes` lays it out, its glyphs drawn for `px_per_unit` (see
-    /// `batch_bytes_if`); `None` when `if_version` is `model_batch_version`.
-    pub fn model_batch_bytes_if(
+    /// The batch of the sheet `sheet` (block name; model space for the viewports of a layout, or
+    /// the second view of a split window) as `Batch::to_bytes` lays it out, its glyphs drawn for
+    /// `px_per_unit` (see `batch_bytes_if`); `None` when `if_version` is its version. The sheet
+    /// on screen stays as it is.
+    pub fn sheet_batch_bytes_if(
         &self,
+        sheet: &str,
         if_version: Option<u64>,
         px_per_unit: Option<f64>,
     ) -> Option<Vec<u8>> {
-        if if_version == Some(self.model_batch_version()) {
+        if if_version == Some(self.sheet_batch_version(sheet)) {
             return None;
         }
-        Some(self.with_model(px_per_unit, Batch::to_bytes))
+        Some(self.with_sheet(sheet, px_per_unit, Batch::to_bytes))
     }
 
     /// The viewport of the layout on screen whose frame holds `p` (the last drawn, on top), as
