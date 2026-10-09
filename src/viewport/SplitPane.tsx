@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { paperViews, sheetBatch, type PaperView, type Sheet, type Ucs } from "../api";
+import { paperViews, sheetBatch, sheetBatchVersion, type PaperView, type Sheet, type Ucs } from "../api";
 import { useT } from "../i18n";
 import { parseBatch, type AtlasPage, type Batch } from "./batch";
 import type { Theme } from "./gl";
+import { refreshSheet, type HeldSheet } from "./inset";
 import { Viewport, type ViewportHandle } from "./Viewport";
 
 const MODEL = "*Model_Space";
@@ -49,29 +50,49 @@ export function SplitPane({
   const fit = useRef(true);
   const same = sheet.toLowerCase() === mainSheet.toLowerCase();
 
-  // Another sheet, or the drawing changed (the main batch is new): draw this sheet again.
+  /** This view's sheet and model space for its viewports, as held, with the core's versions. */
+  const held = useRef<{ sheet: string; own: HeldSheet | null; model: HeldSheet | null }>({
+    sheet: "",
+    own: null,
+    model: null,
+  });
+
+  // Another sheet, or the drawing may have changed (the main batch is new): fetched again only
+  // when the core's version of this sheet, or of model space, changed.
   useEffect(() => {
     if (same) {
       setOwn(null);
+      held.current = { sheet: "", own: null, model: null };
       return;
     }
     let gone = false;
     (async () => {
-      const bytes = await sheetBatch(sheet);
-      if (!bytes || gone) return;
-      const batch = parseBatch(bytes);
-      await syncAtlas(batch);
+      const h = held.current.sheet === sheet ? held.current : { sheet, own: null, model: null };
+      const fetchOf = (name: string) => async () => {
+        const bytes = await sheetBatch(name);
+        if (!bytes || gone) return null;
+        const batch = parseBatch(bytes);
+        await syncAtlas(batch);
+        return batch;
+      };
+      const own = await refreshSheet(h.own, undefined, {
+        version: () => sheetBatchVersion(sheet),
+        fetch: fetchOf(sheet),
+      });
+      if (!own || gone) return;
       const views = await paperViews(sheet);
-      let inset = null;
-      if (views.length > 0) {
-        const model = await sheetBatch(MODEL);
-        if (model) {
-          const parsed = parseBatch(model);
-          await syncAtlas(parsed);
-          inset = { batch: parsed, views };
-        }
-      }
-      if (!gone) setOwn({ batch, inset });
+      const model =
+        views.length === 0
+          ? null
+          : await refreshSheet(h.model, undefined, {
+              version: () => sheetBatchVersion(MODEL),
+              fetch: fetchOf(MODEL),
+            });
+      if (gone) return;
+      const unchanged = own === h.own && model === h.model && held.current.sheet === sheet;
+      held.current = { sheet, own, model };
+      if (unchanged) return;
+      setOwn({ batch: own.batch, inset: model && views.length > 0 ? { batch: model.batch, views } : null });
     })().catch(onError);
     return () => {
       gone = true;

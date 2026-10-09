@@ -924,5 +924,6 @@
   "autosave.failed": "تعذّر الحفظ التلقائي: {error}",
   "props.viewportScale": "مقياس نافذة العرض",
   "props.viewportCentre": "مركز العرض (x، y)",
-  "settings.autosave": "حفظ تلقائي كل (دقائق، 0 لإيقافه)"
+  "settings.autosave": "حفظ تلقائي كل (دقائق، 0 لإيقافه)",
+  "settings.autosaveWhole": "الحفظ التلقائي يأخذ عددًا صحيحًا من الدقائق من 0 إلى 120 (0 لإيقافه)"
 }

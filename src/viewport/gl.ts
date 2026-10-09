@@ -48,7 +48,9 @@ export type Renderer = {
    *  world's when left out); `null` for none. */
   setGrid(spacing: number | null, ucs?: Ucs | null): void;
   /** Model space drawn inside a layout's viewports: `batch` through each of `views`, clipped to
-   *  its frame (fills, then lines, then text; wipeouts there hide no lines). `null` for none. */
+   *  its frame (fills, then lines, then text; wipeouts there hide no lines), under the layout's
+   *  own drawing. `null` for none. A batch with the same `segments` as the last uploads only its
+   *  glyphs. */
   setInset(batch: Batch | null, views: PaperView[]): void;
   draw(camera: Camera, theme: Theme): void;
   dispose(): void;
@@ -618,6 +620,11 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
     gl.bufferData(gl.ARRAY_BUFFER, xy, gl.STATIC_DRAW);
     gl.bindBuffer(gl.ARRAY_BUFFER, insetFillColors);
     gl.bufferData(gl.ARRAY_BUFFER, rgba, gl.STATIC_DRAW);
+    uploadInsetText(b);
+  }
+
+  /** Model space's glyph quads for the viewports (again alone when only the glyphs changed). */
+  function uploadInsetText(b: Batch) {
     const text = textData(b);
     gl.bindBuffer(gl.ARRAY_BUFFER, insetTextVertices);
     gl.bufferData(gl.ARRAY_BUFFER, text.vertices, gl.STATIC_DRAW);
@@ -763,7 +770,9 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
         inset = null;
         return;
       }
+      // The same lines (only the glyphs drawn again for another zoom): the text alone.
       if (b.segments !== inset?.segments) uploadInset(b);
+      else if (b.quads !== inset?.quads) uploadInsetText(b);
       inset = b;
       for (const v of insetViews) gl.deleteBuffer(v.buffer);
       gl.bindVertexArray(insetTextVao);
@@ -811,6 +820,51 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
         gl.bindVertexArray(null);
       }
       if (!batch) return;
+
+      // Model space inside each viewport of the layout first, through its own camera, clipped to
+      // its frame: the layout's own pictures, fills, lines and text (labels, title blocks) draw
+      // over it, each pass setting the layout's camera again.
+      if (inset && insetViews.length > 0) {
+        const m = inset;
+        gl.enable(gl.SCISSOR_TEST);
+        for (const v of insetViews) {
+          const box = scissorBox(camera, v.view, canvas.width, canvas.height);
+          if (!box) continue;
+          gl.scissor(...box);
+          const mc = viewCamera(camera, v.view);
+          const toClip: [number, number] = [2 / (mc.width * mc.scale), 2 / (mc.height * mc.scale)];
+          gl.useProgram(program);
+          gl.uniform2f(uCenter, mc.cx - m.origin[0], mc.cy - m.origin[1]);
+          gl.uniform2f(uToClip, ...toClip);
+          gl.uniform4f(uColor, 0, 0, 0, 0);
+          gl.uniform2f(uOffset, 0, 0);
+          gl.uniform1i(uLight, light ? 1 : 0);
+          gl.uniform3f(uInk, ...INK);
+          gl.uniform3f(uPaper, ...PAPER);
+          gl.bindVertexArray(insetFillVao);
+          for (const [first, count] of v.fills) gl.drawArrays(gl.TRIANGLES, 3 * first, 3 * count);
+          gl.bindVertexArray(insetVao);
+          for (const [first, count] of v.lines) gl.drawArrays(gl.LINES, 2 * first, 2 * count);
+          if (v.text.pages.length > 0) {
+            gl.useProgram(textProgram);
+            gl.bindVertexArray(insetTextVao);
+            gl.uniform2f(tCenter, mc.cx - m.origin[0], mc.cy - m.origin[1]);
+            gl.uniform2f(tToClip, ...toClip);
+            gl.uniform1i(tLight, light ? 1 : 0);
+            gl.uniform3f(tInk, ...INK);
+            gl.uniform3f(tPaper, ...PAPER);
+            gl.uniform4f(tColor, 0, 0, 0, 0);
+            gl.uniform1i(tAtlas, 0);
+            gl.activeTexture(gl.TEXTURE0);
+            gl.enable(gl.BLEND);
+            gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+            drawText(v.text, v.buffer);
+            gl.disable(gl.BLEND);
+          }
+        }
+        gl.disable(gl.SCISSOR_TEST);
+        gl.bindVertexArray(null);
+      }
 
       // Underlay pictures under everything else, a quad at a time.
       if (batch.images.length > 0) {
@@ -884,49 +938,6 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
         gl.bindVertexArray(vao);
       };
       text(textAll, textIndices, null);
-
-      // Model space inside each viewport of the layout, through its own camera, clipped to its
-      // frame; then back to the layout's camera for the highlight.
-      if (inset && insetViews.length > 0) {
-        const m = inset;
-        gl.enable(gl.SCISSOR_TEST);
-        for (const v of insetViews) {
-          const box = scissorBox(camera, v.view, canvas.width, canvas.height);
-          if (!box) continue;
-          gl.scissor(...box);
-          const mc = viewCamera(camera, v.view);
-          const toClip: [number, number] = [2 / (mc.width * mc.scale), 2 / (mc.height * mc.scale)];
-          gl.useProgram(program);
-          gl.uniform2f(uCenter, mc.cx - m.origin[0], mc.cy - m.origin[1]);
-          gl.uniform2f(uToClip, ...toClip);
-          gl.uniform4f(uColor, 0, 0, 0, 0);
-          gl.bindVertexArray(insetFillVao);
-          for (const [first, count] of v.fills) gl.drawArrays(gl.TRIANGLES, 3 * first, 3 * count);
-          gl.bindVertexArray(insetVao);
-          for (const [first, count] of v.lines) gl.drawArrays(gl.LINES, 2 * first, 2 * count);
-          if (v.text.pages.length > 0) {
-            gl.useProgram(textProgram);
-            gl.bindVertexArray(insetTextVao);
-            gl.uniform2f(tCenter, mc.cx - m.origin[0], mc.cy - m.origin[1]);
-            gl.uniform2f(tToClip, ...toClip);
-            gl.uniform1i(tLight, light ? 1 : 0);
-            gl.uniform3f(tInk, ...INK);
-            gl.uniform3f(tPaper, ...PAPER);
-            gl.uniform4f(tColor, 0, 0, 0, 0);
-            gl.uniform1i(tAtlas, 0);
-            gl.activeTexture(gl.TEXTURE0);
-            gl.enable(gl.BLEND);
-            gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-            drawText(v.text, v.buffer);
-            gl.disable(gl.BLEND);
-          }
-        }
-        gl.disable(gl.SCISSOR_TEST);
-        gl.useProgram(program);
-        gl.bindVertexArray(vao);
-        gl.uniform2f(uCenter, camera.cx - batch.origin[0], camera.cy - batch.origin[1]);
-        gl.uniform2f(uToClip, 2 / (camera.width * camera.scale), 2 / (camera.height * camera.scale));
-      }
 
       text(textHighlight, textHighlightIndices, [...VIOLET, 1]);
 

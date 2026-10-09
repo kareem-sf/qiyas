@@ -79,7 +79,6 @@ import {
   sheetSetSave,
   type PaperView,
   type ReadReport,
-  type Recoverable,
   type AiUi,
   type BlockInfo,
   type Boq,
@@ -147,6 +146,7 @@ import { LayersPanel } from "./shell/LayersPanel";
 import { LayerTranslator } from "./shell/LayerTranslator";
 import { PropertiesPanel } from "./shell/PropertiesPanel";
 import { RecoverReportDialog, RecoveryDialog } from "./shell/RecoveryDialog";
+import { drop, enqueue, type RecoveryAsk } from "./shell/recoveryQueue";
 import { SheetSetManager, type SheetSetApi } from "./shell/SheetSetManager";
 import { Ribbon, type Tool } from "./shell/Ribbon";
 import { SettingsDialog } from "./shell/SettingsDialog";
@@ -191,6 +191,7 @@ import {
 } from "./viewport/batch";
 import type { Bounds, Point } from "./viewport/camera";
 import type { Theme } from "./viewport/gl";
+import { refreshSheet, type HeldSheet } from "./viewport/inset";
 import { SplitPane } from "./viewport/SplitPane";
 import { Viewport, type ViewportHandle } from "./viewport/Viewport";
 
@@ -267,11 +268,12 @@ export default function App() {
   const batchVersionRef = useRef<number | null>(null);
   /** On a layout: model space drawn inside its viewports, and the core's version of it. */
   const [inset, setInset] = useState<{ batch: Batch; views: PaperView[] } | null>(null);
-  const insetHeld = useRef<{ version: number; batch: Batch } | null>(null);
+  const insetHeld = useRef<HeldSheet | null>(null);
   /** VPORTS: a second view beside the main one. */
   const [split, setSplit] = useState(false);
-  /** Autosaves to offer back (on launch, or before opening `then`). */
-  const [recovery, setRecovery] = useState<{ items: Recoverable[]; then: string | null } | null>(null);
+  /** Autosaves to offer back (on launch, or before opening `then`), one question at a time. */
+  const [recoveries, setRecoveries] = useState<RecoveryAsk[]>([]);
+  const recovery = recoveries[0] ?? null;
   /** What RECOVER read and dropped from a damaged drawing. */
   const [recoverReport, setRecoverReport] = useState<{ path: string; report: ReadReport } | null>(null);
   const [sheetSetShown, setSheetSetShown] = useState(false);
@@ -1096,26 +1098,31 @@ export default function App() {
    *  shows it; elsewhere drops it. Its glyphs are drawn for the largest viewport's zoom. */
   async function syncInset(pxPerUnit?: number) {
     const gen = switchGen.current;
-    const views = await paperViews();
+    let views = await paperViews();
     if (isStale(gen, switchGen.current)) return;
     if (views.length === 0) {
       insetHeld.current = null;
       setInset(null);
       return;
     }
-    const version = await sheetBatchVersion(MODEL);
-    let model = pxPerUnit === undefined && insetHeld.current?.version === version ? insetHeld.current.batch : null;
-    if (!model) {
-      const scale = Math.max(...views.map((v) => v.scale));
-      const px = (pxPerUnit ?? viewport.current?.pxPerUnit() ?? 1) * scale;
-      const bytes = await sheetBatch(MODEL, undefined, px);
-      if (!bytes || isStale(gen, switchGen.current)) return;
-      model = parseBatch(bytes);
-      await syncAtlas(model);
-      if (isStale(gen, switchGen.current)) return;
-    }
-    insetHeld.current = { version, batch: model };
-    setInset({ batch: model, views });
+    const scale = Math.max(...views.map((v) => v.scale));
+    const held = insetHeld.current;
+    const next = await refreshSheet(held, pxPerUnit === undefined ? undefined : pxPerUnit * scale, {
+      version: () => sheetBatchVersion(MODEL),
+      fetch: async (px) => {
+        const bytes = await sheetBatch(MODEL, undefined, px ?? (viewport.current?.pxPerUnit() ?? 1) * scale);
+        if (!bytes || isStale(gen, switchGen.current)) return null;
+        const batch = parseBatch(bytes);
+        await syncAtlas(batch);
+        return batch;
+      },
+    });
+    if (!next || isStale(gen, switchGen.current)) return;
+    // Glyphs drawn again move the viewports' text spans: ask for them again.
+    if (next !== held) views = await paperViews();
+    if (isStale(gen, switchGen.current)) return;
+    insetHeld.current = next;
+    setInset({ batch: next.batch, views });
   }
 
   /** Fetches the underlay pictures in `visible` that `next` needs for a zoom of `pxPerUnit` and
@@ -1303,15 +1310,20 @@ export default function App() {
     const labels = { yes: t("unsaved.yes"), no: t("unsaved.no"), cancel: t("unsaved.cancel") };
     return leaveDrawing({
       isDirty,
-      ask: async () =>
-        readChoice(
+      ask: async () => {
+        const choice = readChoice(
           await messageDialog(t("unsaved.question"), {
             title: t("appName"),
             kind: "warning",
             buttons: labels,
           }),
           labels,
-        ),
+        );
+        // Don't Save: its autosave goes too (the window closing, or the tab). The drawing on
+        // screen now: closing the window shows each drawing before asking.
+        if (choice === "discard") await discardAutosave((await drawingInfo()).path).catch(() => {});
+        return choice;
+      },
       // The drawing on screen now: closing the window shows each drawing before asking.
       confirmSave: async () => confirmRecoveredSave(await drawingInfo()),
       save: saveDrawing,
@@ -1356,7 +1368,7 @@ export default function App() {
     (async () => {
       const paths = (await readRecents()).map((r) => r.path);
       const found = await recoverableDrawings(paths);
-      if (found.length > 0) setRecovery((r) => r ?? { items: found, then: null });
+      if (found.length > 0) setRecoveries((q) => enqueue(q, found, null, true));
     })().catch(() => {});
   }, []);
 
@@ -1474,7 +1486,7 @@ export default function App() {
       const found = await recoverableDrawings([path]).catch(() => []);
       const open = fileTabs.some((f) => f.path === path);
       if (found.length > 0 && !open) {
-        setRecovery({ items: found, then: path });
+        setRecoveries((q) => enqueue(q, found, path));
         return;
       }
     }
@@ -1518,12 +1530,9 @@ export default function App() {
     if (then === drawing) await openPath(drawing, false);
   }
 
-  /** `drawing` is dealt with: the dialog goes when nothing is left in it. */
+  /** `drawing` is dealt with: the question goes when nothing is left in it. */
   function dropRecovery(drawing: string) {
-    setRecovery((r) => {
-      const items = r?.items.filter((i) => i.drawing !== drawing) ?? [];
-      return r && items.length > 0 ? { ...r, items } : null;
-    });
+    setRecoveries((q) => drop(q, drawing));
   }
 
   /** RECOVER: a damaged drawing opens in a new tab through the failsafe reader, and the dialog
@@ -3340,12 +3349,13 @@ export default function App() {
       />
       {recovery && (
         <RecoveryDialog
+          key={recovery.id}
           items={recovery.items}
           onRecover={recoverFrom}
           onDiscard={discardFrom}
           onClose={() => {
             const then = recovery.then;
-            setRecovery(null);
+            setRecoveries((q) => q.filter((r) => r.id !== recovery.id));
             if (then) openPath(then, false);
           }}
         />

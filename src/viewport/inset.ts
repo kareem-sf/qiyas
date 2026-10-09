@@ -47,3 +47,30 @@ export function viewSpans(view: PaperView, batch: Batch) {
     texts: view.texts ?? all(batch.quads.length),
   };
 }
+
+/** A sheet's batch held by the window, and the core's version of it. */
+export type HeldSheet = { version: number; batch: Batch };
+
+/** `next`, its glyphs drawn again for another zoom, with the lines, fills and ranges of `held`
+ *  (the same arrays, so the GPU keeps them). */
+export const keepLines = (held: Batch, next: Batch): Batch => {
+  const { segments, colors, ranges, chains, fills, fillRanges } = held;
+  return { ...next, segments, colors, ranges, chains, fills, fillRanges };
+};
+
+/** The batch of an off-screen sheet (model space for viewports, a split window's other sheet) as
+ *  the core has it now: `held` itself when its version is the core's and no new glyphs are asked
+ *  for; with `pxPerUnit`, the glyphs drawn again for that zoom and the held lines kept; otherwise
+ *  the whole batch fetched (`fetch` resolves to null when there is nothing new). */
+export async function refreshSheet(
+  held: HeldSheet | null,
+  pxPerUnit: number | undefined,
+  api: { version(): Promise<number>; fetch(pxPerUnit?: number): Promise<Batch | null> },
+): Promise<HeldSheet | null> {
+  const version = await api.version();
+  const same = held !== null && held.version === version;
+  if (same && pxPerUnit === undefined) return held;
+  const next = await api.fetch(pxPerUnit);
+  if (!next) return held;
+  return { version, batch: same ? keepLines(held.batch, next) : next };
+}

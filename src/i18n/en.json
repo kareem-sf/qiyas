@@ -924,5 +924,6 @@
   "autosave.failed": "Autosave failed: {error}",
   "props.viewportScale": "Viewport scale",
   "props.viewportCentre": "View centre (x, y)",
-  "settings.autosave": "Autosave every (minutes, 0 off)"
+  "settings.autosave": "Autosave every (minutes, 0 off)",
+  "settings.autosaveWhole": "Autosave takes a whole number of minutes from 0 to 120 (0 turns it off)"
 }

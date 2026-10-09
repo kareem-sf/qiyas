@@ -1,7 +1,8 @@
 import { expect, test } from "vitest";
 import type { PaperView } from "../api";
 import { worldToScreen, type Camera } from "./camera";
-import { scissorBox, viewCamera } from "./inset";
+import type { Batch } from "./batch";
+import { refreshSheet, scissorBox, viewCamera } from "./inset";
 
 const view: PaperView = {
   handle: 7,
@@ -34,4 +35,33 @@ test("the frame clips in device pixels from the bottom, and off screen it is nul
   // Device pixels at a ratio of 2.
   expect(scissorBox(paper, view, 800, 600)).toEqual([40, 40, 400, 320]);
   expect(scissorBox({ ...paper, cx: 10_000 }, view, 800, 600)).toBeNull();
+});
+
+test("an off-screen sheet is fetched again only when the core's changed, or for its glyphs alone", async () => {
+  const batch = (tag: number) =>
+    ({ segments: new Float32Array([tag]), colors: new Uint32Array(), quads: { length: tag } }) as unknown as Batch;
+  const first = batch(1);
+  let version = 7;
+  const fetched: (number | undefined)[] = [];
+  const api = {
+    version: async () => version,
+    fetch: async (px?: number) => {
+      fetched.push(px);
+      return batch(2);
+    },
+  };
+  const held = { version: 7, batch: first };
+  // Unchanged: nothing fetched.
+  expect(await refreshSheet(held, undefined, api)).toBe(held);
+  expect(fetched).toEqual([]);
+  // New glyphs: the lines stay the very arrays held.
+  const glyphs = (await refreshSheet(held, 3, api))!;
+  expect(fetched).toEqual([3]);
+  expect(glyphs.batch.segments).toBe(first.segments);
+  expect(glyphs.batch.quads.length).toBe(2);
+  // A drawing change: the whole new batch.
+  version = 8;
+  const changed = (await refreshSheet(held, undefined, api))!;
+  expect(changed.version).toBe(8);
+  expect(changed.batch.segments).not.toBe(first.segments);
 });

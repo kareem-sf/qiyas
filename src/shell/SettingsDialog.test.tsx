@@ -142,3 +142,15 @@ test("autosave runs every 5 minutes unless set otherwise; 0 turns it off", async
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await vi.waitFor(() => expect(api.setSettings).toHaveBeenCalledWith({ ...settings, autosave_minutes: 10 }));
 });
+
+test("the autosave minutes take whole numbers only; empty leaves them as they were", async () => {
+  setup();
+  const minutes = (await screen.findByLabelText("Autosave every (minutes, 0 off)")) as HTMLInputElement;
+  fireEvent.change(minutes, { target: { value: "2.5" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  expect((await screen.findByRole("alert")).textContent).toContain("whole number");
+  expect(api.setSettings).not.toHaveBeenCalled();
+  fireEvent.change(minutes, { target: { value: "" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await vi.waitFor(() => expect(api.setSettings).toHaveBeenCalledWith(settings));
+});

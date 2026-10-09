@@ -13,6 +13,7 @@ import {
   type Provider,
   type Settings,
 } from "../api";
+import { normalizeDigits } from "../tools/commandParser";
 import { useT } from "../i18n";
 
 const MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1", "claude-haiku-4-5"];
@@ -47,6 +48,8 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   /** A new key typed here; empty keeps the one saved. */
   const [key, setKey] = useState("");
   const [error, setError] = useState<string | null>(null);
+  /** The autosave minutes as typed; null while untouched. */
+  const [minutes, setMinutes] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const [mcp, setMcp] = useState<McpStatus | null>(null);
 
@@ -80,8 +83,19 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
 
   async function save() {
     if (!draft) return;
+    // Whole minutes from 0 to 120; left empty, they stay as they were.
+    let next = draft;
+    const typed = minutes?.trim() ?? "";
+    if (typed !== "") {
+      const n = Number(normalizeDigits(typed));
+      if (!Number.isInteger(n) || n < 0 || n > 120) {
+        setError(t("settings.autosaveWhole"));
+        return;
+      }
+      if (n !== (draft.autosave_minutes ?? 5)) next = { ...draft, autosave_minutes: n };
+    }
     try {
-      await setSettings(draft);
+      await setSettings(next);
       if (key.trim()) await setApiKey(draft.provider, key);
       dialog.current?.close();
     } catch (e) {
@@ -185,11 +199,9 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               <span>{t("settings.autosave")}</span>
               <input
                 dir="ltr"
-                type="number"
-                min={0}
-                max={120}
-                value={draft.autosave_minutes ?? 5}
-                onChange={(e) => change({ autosave_minutes: Number(e.target.value) })}
+                inputMode="numeric"
+                value={minutes ?? String(draft.autosave_minutes ?? 5)}
+                onChange={(e) => setMinutes(e.target.value)}
               />
             </label>
             <div className="field">
