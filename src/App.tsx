@@ -826,7 +826,9 @@ export default function App() {
       const gen = beginShow();
       const next = await activateTab(id);
       if (isStale(gen, switchGen.current)) return;
-      await showDrawing(next, gen);
+      // Work started while the core was switching (a zoom's glyphs) may have read the old drawing
+      // under the new generation: bump it again now that the new one is in place.
+      await showDrawing(next, beginShow());
       ok = true;
     });
     return ok;
