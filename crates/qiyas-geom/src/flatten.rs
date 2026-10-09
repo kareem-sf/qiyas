@@ -565,6 +565,18 @@ impl Walk<'_> {
                 self.push_text(points, xf, style, handle, text);
                 return;
             }
+            // An attribute definition shows its tag on a sheet; inside a block only a constant
+            // one draws, as its value (the references' attributes draw the others).
+            EntityType::AttributeDefinition(e) if depth == 0 || e.flags.constant => {
+                let value = if depth == 0 { &e.tag } else { &e.default_value };
+                let mut shown = AttributeEntity::from_definition(e, Some(value.clone()));
+                shown.common = e.common.clone();
+                let at = ocs(&e.normal, e.insertion_point.z).map_or(*xf, |o| o.then(xf));
+                let points = text_box(&e.insertion_point, e.height, e.rotation, value);
+                let text = attribute_text(&shown, &at);
+                self.push_text(points, &at, style, handle, text);
+                return;
+            }
             _ => return,
         };
         self.push(points, closed, xf, style, handle);

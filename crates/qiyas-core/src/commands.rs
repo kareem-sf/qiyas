@@ -1,6 +1,8 @@
 //! The command bus: every change to the take-off, the BOQ, the conflicts or the drawing goes
 //! through `Session::run` (the user) or `Session::run_as` (the AI, or an outside AI through MCP).
 
+use std::collections::BTreeMap;
+
 use opencadcodec::objects::ObjectType;
 use opencadcodec::tables::normalize_name;
 use opencadcodec::{EntityType, Handle};
@@ -410,6 +412,90 @@ pub enum Command {
     },
     /// Works every field of the drawing out again: one undo step when one changes.
     UpdateFields,
+    /// A new block `name` (not one the drawing has; none of `<>/\":;?*|,=` and the backquote)
+    /// from the entities `targets` at the top of the sheet: they leave the sheet, their
+    /// coordinates taken relative to `base`. With `convert_to_insert` a reference to the block
+    /// takes their place at `base`. Rows measuring them keep their values without the link.
+    /// `Outcome::Edited` (see `crate::blocks`).
+    CreateBlock {
+        name: String,
+        base: [f64; 2],
+        targets: Vec<Target>,
+        #[serde(default)]
+        convert_to_insert: bool,
+    },
+    /// A reference to the block `name` at `at`, `scale` times its size (above 0), turned
+    /// `rotation` degrees, on the current layer and state; its attributes take
+    /// `attribute_values` by tag, else their defaults. With `from_path`, a block the drawing
+    /// lacks is first copied, with what it uses, from the drawing there (read-only).
+    /// `Outcome::Added`.
+    InsertBlock {
+        name: String,
+        at: [f64; 2],
+        #[serde(default = "one")]
+        scale: f64,
+        #[serde(default)]
+        rotation: f64,
+        #[serde(default)]
+        attribute_values: BTreeMap<String, String>,
+        #[serde(default)]
+        from_path: Option<String>,
+    },
+    /// Writes the block `name` as a DWG of its own at `path`, a file in the drawing's folder or
+    /// below it (relative paths start there): its entities in model space, its base point at
+    /// the origin. Not an undo step.
+    WriteBlock {
+        name: String,
+        path: String,
+    },
+    /// Edits the block of the reference `target` in place, until `SaveBlockEdits` or
+    /// `DiscardBlockEdits` (see `crate::blocks`). `Outcome::Added` lists the block's entities as
+    /// copied onto the sheet. Not an undo step.
+    EditBlockInPlace {
+        target: Target,
+    },
+    /// Writes the entities edited in place back into the block: one undo step.
+    SaveBlockEdits,
+    /// Puts everything back as it was before the edit in place began. Not an undo step.
+    DiscardBlockEdits,
+    /// An attribute definition `tag` (one word, upper-cased) on the current layer at `at`,
+    /// `height` tall: it asks `prompt` on insert and takes `default` when nothing is given.
+    AttDef {
+        tag: String,
+        prompt: String,
+        default: String,
+        at: [f64; 2],
+        height: f64,
+    },
+    /// The block reference `target`'s attributes take `values` by tag.
+    EditAttributes {
+        target: Target,
+        values: BTreeMap<String, String>,
+    },
+    /// The attribute definition `tag` of the block `block` asks `prompt` and defaults to
+    /// `default`.
+    EditAttDef {
+        block: String,
+        tag: String,
+        prompt: String,
+        default: String,
+    },
+    /// Every reference to `block` gets its attributes as the block defines them now, keeping
+    /// each tag's value (AutoCAD's ATTSYNC).
+    SyncAttributes {
+        block: String,
+    },
+    /// The block `name` takes the contents of the block of that name in the drawing at
+    /// `from_path` (read-only); every reference changes.
+    RedefineBlock {
+        name: String,
+        from_path: String,
+    },
+}
+
+/// `InsertBlock`'s scale when none is given.
+fn one() -> f64 {
+    1.0
 }
 
 /// An entity as picked (see `Picked`): its handle and the block references it sits inside,
@@ -450,7 +536,11 @@ impl Command {
             | Command::IdPoint { .. }
             | Command::ExtractData { .. }
             | Command::FindText { .. }
-            | Command::SetCurrent { .. } => None,
+            | Command::SetCurrent { .. }
+            | Command::WriteBlock { .. }
+            | Command::EditBlockInPlace { .. }
+            | Command::SaveBlockEdits
+            | Command::DiscardBlockEdits => None,
             Command::SetBoq { .. } | Command::SetBoqTolerance { .. } => Some(Part::Boq),
             Command::SetConflicts { .. } | Command::ResolveConflict { .. } => Some(Part::Conflicts),
             // Entities only.
@@ -484,12 +574,22 @@ impl Command {
             | Command::DeleteCol { .. }
             | Command::MergeCells { .. }
             | Command::Field { .. }
-            | Command::UpdateFields => Some(Part::Document {
+            | Command::UpdateFields
+            // A new or changed block record (and what a copied one uses).
+            | Command::CreateBlock { .. }
+            | Command::RedefineBlock { .. } => Some(Part::Document {
                 tables: true,
                 takeoff: false,
             }),
             // The text mark's application, when the drawing has none yet (`document_extras`).
-            Command::Text { .. } | Command::MText { .. } | Command::EditText { .. } => {
+            Command::Text { .. }
+            | Command::MText { .. }
+            | Command::EditText { .. }
+            | Command::InsertBlock { .. }
+            | Command::AttDef { .. }
+            | Command::EditAttributes { .. }
+            | Command::EditAttDef { .. }
+            | Command::SyncAttributes { .. } => {
                 Some(Part::Document {
                     tables: false,
                     takeoff: false,
@@ -1003,6 +1103,71 @@ impl Session {
                 self.update_fields(false)?;
                 return Ok(Outcome::Changed);
             }
+            Command::CreateBlock {
+                name,
+                base,
+                targets,
+                convert_to_insert,
+            } => return self.create_block(&name, base, &targets, convert_to_insert),
+            Command::InsertBlock {
+                name,
+                at,
+                scale,
+                rotation,
+                attribute_values,
+                from_path,
+            } => {
+                let path = from_path.as_deref();
+                let h = self.insert_block(&name, at, scale, rotation, &attribute_values, path)?;
+                return Ok(Outcome::Added { handles: vec![h] });
+            }
+            Command::WriteBlock { name, path } => {
+                self.write_block_in_folder(&name, &path)?;
+                return Ok(Outcome::Changed);
+            }
+            Command::EditBlockInPlace { target } => {
+                let handles = self.edit_block_in_place(&target)?;
+                return Ok(Outcome::Added { handles });
+            }
+            Command::SaveBlockEdits => {
+                self.save_block_edits(source)?;
+                return Ok(Outcome::Changed);
+            }
+            Command::DiscardBlockEdits => {
+                self.discard_block_edits()?;
+                return Ok(Outcome::Changed);
+            }
+            Command::AttDef {
+                tag,
+                prompt,
+                default,
+                at,
+                height,
+            } => {
+                let h = self.add_attdef(&tag, &prompt, &default, at, height)?;
+                return Ok(Outcome::Added { handles: vec![h] });
+            }
+            Command::EditAttributes { target, values } => {
+                self.edit_attributes(&target, &values)?;
+                return Ok(Outcome::Changed);
+            }
+            Command::EditAttDef {
+                block,
+                tag,
+                prompt,
+                default,
+            } => {
+                self.edit_attdef(&block, &tag, &prompt, &default)?;
+                return Ok(Outcome::Changed);
+            }
+            Command::SyncAttributes { block } => {
+                self.sync_attributes(&block)?;
+                return Ok(Outcome::Changed);
+            }
+            Command::RedefineBlock { name, from_path } => {
+                self.redefine_block(&name, &from_path)?;
+                return Ok(Outcome::Changed);
+            }
         };
         measurement.source = source.name().to_string();
         self.takeoff.add(measurement.clone());
@@ -1300,6 +1465,12 @@ impl Session {
             if Some(entity.common().owner_handle) != sheet {
                 return Err(CoreError::InvalidCommand(format!(
                     "Entity {h:X} is not on this sheet"
+                )));
+            }
+            if let Some(edit) = self.block_edit.as_ref().filter(|e| e.outside.contains(h)) {
+                return Err(CoreError::InvalidCommand(format!(
+                    "Entity {h:X} is locked while block {} is edited in place",
+                    edit.name
                 )));
             }
             if seen.insert(*h) {

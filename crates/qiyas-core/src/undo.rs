@@ -267,13 +267,39 @@ pub(crate) struct History {
     /// The state before each change, and who made the change.
     undo: Vec<(Step, Source)>,
     redo: Vec<(Step, Source)>,
+    /// Undo stops with this many steps left (a block being edited in place keeps the steps
+    /// from before it began).
+    floor: usize,
 }
 
 impl History {
     /// Records the state as it was before a command by `source`. Clears what could be redone.
     pub(crate) fn record(&mut self, before: Step, source: Source) {
         self.redo.clear();
-        push_capped(&mut self.undo, (before, source));
+        self.push(before, source);
+    }
+
+    /// Pushes a step on the undo stack, dropping the oldest past `MAX_STEPS` (the floor drops
+    /// with it).
+    fn push(&mut self, step: Step, source: Source) {
+        if push_capped(&mut self.undo, (step, source)) {
+            self.floor = self.floor.saturating_sub(1);
+        }
+    }
+
+    /// How many steps can be undone, floor or not.
+    pub(crate) fn undo_len(&self) -> usize {
+        self.undo.len()
+    }
+
+    /// Undo stops with `floor` steps left (0: never stops).
+    pub(crate) fn set_floor(&mut self, floor: usize) {
+        self.floor = floor;
+    }
+
+    /// Forgets what could be redone.
+    pub(crate) fn clear_redo(&mut self) {
+        self.redo.clear();
     }
 
     /// Who made the change that `undo` would take back.
@@ -284,6 +310,9 @@ impl History {
     /// Puts the take-off, BOQ, conflicts or drawing back to their state before the last command.
     /// False when there is none.
     pub(crate) fn undo(&mut self, parts: Parts) -> bool {
+        if self.undo.len() <= self.floor {
+            return false;
+        }
         let Some((before, source)) = self.undo.pop() else {
             return false;
         };
@@ -296,12 +325,13 @@ impl History {
         let Some((after, source)) = self.redo.pop() else {
             return false;
         };
-        push_capped(&mut self.undo, (after.swap(parts), source));
+        let step = after.swap(parts);
+        self.push(step, source);
         true
     }
 
     pub(crate) fn can_undo(&self) -> bool {
-        !self.undo.is_empty()
+        self.undo.len() > self.floor
     }
 
     pub(crate) fn can_redo(&self) -> bool {
@@ -309,11 +339,14 @@ impl History {
     }
 }
 
-fn push_capped(stack: &mut Vec<(Step, Source)>, step: (Step, Source)) {
-    if stack.len() == MAX_STEPS {
+/// Pushes `step`, dropping the oldest past `MAX_STEPS`; true when one was dropped.
+fn push_capped(stack: &mut Vec<(Step, Source)>, step: (Step, Source)) -> bool {
+    let full = stack.len() == MAX_STEPS;
+    if full {
         stack.remove(0);
     }
     stack.push(step);
+    full
 }
 
 #[cfg(test)]

@@ -127,14 +127,14 @@ impl ModifySpec {
 /// A transform of the plan and whether it mirrors (then the mirror's line angle, for texts).
 /// `shift` is set for a plain translation: dimensions and tables take only those.
 #[derive(Clone, Copy)]
-struct Placing {
+pub(crate) struct Placing {
     transform: Transform,
     mirror_line: Option<f64>,
     shift: Option<[f64; 2]>,
 }
 
 impl Placing {
-    fn plain(transform: Transform) -> Placing {
+    pub(crate) fn plain(transform: Transform) -> Placing {
         Placing {
             transform,
             mirror_line: None,
@@ -142,7 +142,7 @@ impl Placing {
         }
     }
 
-    fn shift(d: [f64; 2]) -> Placing {
+    pub(crate) fn shift(d: [f64; 2]) -> Placing {
         Placing {
             transform: translation(d),
             mirror_line: None,
@@ -204,7 +204,7 @@ fn check_placeable(e: &EntityType, copying: bool, translation: bool) -> Result<(
 }
 
 /// Places `e` by `p`, its stored DWG graphics dropped (they would show it where it was).
-fn place(e: &mut EntityType, p: &Placing) {
+pub(crate) fn place(e: &mut EntityType, p: &Placing) {
     match p.mirror_line {
         Some(line) => {
             e.apply_mirror(&p.transform);
@@ -217,7 +217,7 @@ fn place(e: &mut EntityType, p: &Placing) {
 
 /// `place`, keeping a dimension's own block placement (its insertion point): the block is moved
 /// with it by the caller. The name of that block, for a dimension.
-fn place_keeping_blocks(e: &mut EntityType, p: &Placing) -> Option<String> {
+pub(crate) fn place_keeping_blocks(e: &mut EntityType, p: &Placing) -> Option<String> {
     let kept = match e {
         EntityType::Dimension(d) => Some(d.base().insertion_point),
         _ => None,
@@ -557,7 +557,7 @@ impl Session {
     }
 
     /// Moves every entity of the block `name` by `d`.
-    fn shift_block(&mut self, name: &str, d: [f64; 2]) {
+    pub(crate) fn shift_block(&mut self, name: &str, d: [f64; 2]) {
         let inside: Vec<Handle> = self
             .drawing
             .doc
@@ -657,60 +657,10 @@ impl Session {
     /// from (reactors, extension dictionary, hatch boundary links).
     pub(crate) fn add_fresh(
         &mut self,
-        mut e: EntityType,
+        e: EntityType,
         owner: Option<Handle>,
     ) -> Result<u64, CoreError> {
-        let doc = &mut self.drawing.doc;
-        let c = e.common_mut();
-        c.handle = Handle::NULL;
-        c.reactors.clear();
-        c.xdictionary_handle = None;
-        c.graphic_data = None;
-        if let Some(owner) = owner {
-            c.owner_handle = owner;
-        }
-        match &mut e {
-            EntityType::Insert(insert) => {
-                let h = doc.allocate_handle();
-                insert.common.handle = h;
-                insert.seqend_handle = None;
-                for a in &mut insert.attributes {
-                    a.common.handle = doc.allocate_handle();
-                    a.common.owner_handle = h;
-                    a.common.reactors.clear();
-                    a.common.xdictionary_handle = None;
-                }
-            }
-            EntityType::Hatch(hatch) => {
-                hatch.is_associative = false;
-                for path in &mut hatch.paths {
-                    path.boundary_handles.clear();
-                }
-            }
-            // The writers give a null handle a new one, and write any other as it is.
-            EntityType::Polyline3D(pl) => {
-                for v in &mut pl.vertices {
-                    v.handle = Handle::NULL;
-                }
-            }
-            EntityType::PolyfaceMesh(mesh) => {
-                for v in &mut mesh.vertices {
-                    v.common.handle = Handle::NULL;
-                }
-                for f in &mut mesh.faces {
-                    f.common.handle = Handle::NULL;
-                }
-                mesh.seqend_handle = None;
-            }
-            EntityType::PolygonMesh(mesh) => {
-                for v in &mut mesh.vertices {
-                    v.common.handle = Handle::NULL;
-                }
-            }
-            _ => {}
-        }
-        let h = doc.add_entity(e).map_err(|e| invalid(e.to_string()))?;
-        Ok(h.value())
+        add_fresh_to(&mut self.drawing.doc, e, owner)
     }
 
     /// `ModifySpec::Stretch`.
@@ -1006,6 +956,64 @@ fn explode_insert(doc: &opencadcodec::CadDocument, insert: &Insert) -> Vec<Entit
     out
 }
 
+/// `Session::add_fresh` into `doc`, which may be another drawing than the session's.
+pub(crate) fn add_fresh_to(
+    doc: &mut opencadcodec::CadDocument,
+    mut e: EntityType,
+    owner: Option<Handle>,
+) -> Result<u64, CoreError> {
+    let c = e.common_mut();
+    c.handle = Handle::NULL;
+    c.reactors.clear();
+    c.xdictionary_handle = None;
+    c.graphic_data = None;
+    if let Some(owner) = owner {
+        c.owner_handle = owner;
+    }
+    match &mut e {
+        EntityType::Insert(insert) => {
+            let h = doc.allocate_handle();
+            insert.common.handle = h;
+            insert.seqend_handle = None;
+            for a in &mut insert.attributes {
+                a.common.handle = doc.allocate_handle();
+                a.common.owner_handle = h;
+                a.common.reactors.clear();
+                a.common.xdictionary_handle = None;
+            }
+        }
+        EntityType::Hatch(hatch) => {
+            hatch.is_associative = false;
+            for path in &mut hatch.paths {
+                path.boundary_handles.clear();
+            }
+        }
+        // The writers give a null handle a new one, and write any other as it is.
+        EntityType::Polyline3D(pl) => {
+            for v in &mut pl.vertices {
+                v.handle = Handle::NULL;
+            }
+        }
+        EntityType::PolyfaceMesh(mesh) => {
+            for v in &mut mesh.vertices {
+                v.common.handle = Handle::NULL;
+            }
+            for f in &mut mesh.faces {
+                f.common.handle = Handle::NULL;
+            }
+            mesh.seqend_handle = None;
+        }
+        EntityType::PolygonMesh(mesh) => {
+            for v in &mut mesh.vertices {
+                v.common.handle = Handle::NULL;
+            }
+        }
+        _ => {}
+    }
+    let h = doc.add_entity(e).map_err(|e| invalid(e.to_string()))?;
+    Ok(h.value())
+}
+
 /// A ByBlock linetype takes the reference's.
 fn by_block_linetype(c: &mut opencadcodec::entities::EntityCommon, insert: &Insert) {
     if c.linetype.eq_ignore_ascii_case("ByBlock") {
@@ -1023,7 +1031,7 @@ fn unlink(m: &mut Measurement) {
 
 /// The take-off row `m` measures the entity `h` at the top of the sheet: one of its handles, or
 /// the block (or xref) reference its chain starts with.
-fn measures(m: &Measurement, h: u64) -> bool {
+pub(crate) fn measures(m: &Measurement, h: u64) -> bool {
     match m.chain.first() {
         Some(&top) => top == h,
         None => m.handles.contains(&h),
@@ -1053,6 +1061,23 @@ impl Session {
                 let field = crate::field::has_fields(value) && self.needs_field_app();
                 return (self.needs_text_app() || field, false);
             }
+            // Typed text is marked; a block copied from another drawing is a new record.
+            Command::InsertBlock {
+                attribute_values,
+                from_path,
+                ..
+            } => {
+                let typed = !attribute_values.is_empty() && self.needs_text_app();
+                return (typed || from_path.is_some(), false);
+            }
+            Command::AttDef { .. }
+            | Command::EditAttributes { .. }
+            | Command::EditAttDef { .. } => {
+                return (self.needs_text_app(), false);
+            }
+            Command::CreateBlock { targets, .. } => (targets.as_slice(), false, false),
+            // Rows measuring a reference to the block are measured again.
+            Command::RedefineBlock { .. } => return (false, true),
             _ => return (false, false),
         };
         let doc = &self.drawing.doc;

@@ -1,7 +1,9 @@
 //! Qiyas core: the document, selection, undo and redo, command bus, PDF import and underlays,
 //! raster images, inquiry (geometry, divide and measure along, data extraction), drawing new
-//! entities and modifying them, text and find and replace, dimensions, leaders and tolerances.
+//! entities and modifying them, text and find and replace, dimensions, leaders and tolerances,
+//! tables and fields, blocks and attributes.
 
+mod blocks;
 mod boq;
 mod commands;
 mod conflict;
@@ -32,6 +34,7 @@ mod views;
 mod xref;
 
 pub use self::image::{draw_picture, image_size, ImageDisplay, IMAGE_EXTENSIONS, IMAGE_LAYER};
+pub use blocks::{drawing_blocks, AttDefInfo, BlockInfo};
 pub use boq::{Boq, BoqItem};
 pub use commands::{Command, Outcome, Target};
 pub use conflict::{Conflict, ConflictKind, ConflictStatus};

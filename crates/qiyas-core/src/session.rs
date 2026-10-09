@@ -19,6 +19,7 @@ use qiyas_render::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::blocks::{fade, BlockEdit};
 use crate::commands::Part;
 use crate::drawing::short_layer_name;
 use crate::embed::{embed_measurements, read_embedded};
@@ -74,7 +75,9 @@ pub struct Session {
     /// The layer, colour, linetype and lineweight new entities take. Saved in the project file;
     /// not an undo step.
     pub current: Current,
-    history: History,
+    pub(crate) history: History,
+    /// The block being edited in place, if one is (see `crate::blocks`).
+    pub(crate) block_edit: Option<BlockEdit>,
     /// Which session this is; see `NEXT_EPOCH`.
     epoch: u64,
     /// Counts the changes to the drawing itself (not the take-off), which is all a batch shows.
@@ -136,6 +139,8 @@ pub struct DrawingInfo {
     /// Drawing units per paper unit it gives (50 for "1:50"): new annotations are that many
     /// times their paper size.
     pub annotation_factor: f64,
+    /// The block being edited in place (`Command::EditBlockInPlace`), if one is.
+    pub block_edit: Option<String>,
 }
 
 /// An entity by its handle and the block references it sits inside (outermost first).
@@ -454,6 +459,7 @@ impl Session {
             xref_overrides,
             current,
             history: History::default(),
+            block_edit: None,
             epoch: NEXT_EPOCH.fetch_add(1, Ordering::Relaxed),
             document_revision: 0,
             saved_revision: 0,
@@ -497,6 +503,11 @@ impl Session {
     /// A file already at `path` is first copied to `<path>.bak`. From then on the session's
     /// drawing is the one at `path`; after a failed write it is unchanged.
     pub fn save_as(&mut self, path: &Path) -> Result<(), CoreError> {
+        if let Some(name) = self.block_edit_name() {
+            return Err(CoreError::InvalidCommand(format!(
+                "Block {name} is being edited in place: save or discard the edit first (REFCLOSE)"
+            )));
+        }
         let ext = path
             .extension()
             .and_then(|e| e.to_str())
@@ -566,6 +577,7 @@ impl Session {
             dim_style: self.dim_style(),
             annotation_scale: annotation_scale.0,
             annotation_factor: annotation_scale.1,
+            block_edit: self.block_edit_name(),
         }
     }
 
@@ -613,6 +625,11 @@ impl Session {
 
     /// Shows the sheet whose block is `block` (case-insensitive).
     pub fn set_sheet(&mut self, block: &str) -> Result<(), CoreError> {
+        if let Some(name) = self.block_edit_name() {
+            return Err(CoreError::InvalidCommand(format!(
+                "Block {name} is being edited in place: save or discard the edit first (REFCLOSE)"
+            )));
+        }
         let sheet = self
             .drawing
             .sheets()
@@ -983,6 +1000,11 @@ impl Session {
     /// drawing, records an undo step.
     /// New measurements are marked as made by `source`.
     pub fn run_as(&mut self, cmd: Command, source: Source) -> Result<Outcome, CoreError> {
+        self.check_block_edit(&cmd)?;
+        if let Command::SaveBlockEdits = cmd {
+            self.save_block_edits(source)?;
+            return Ok(Outcome::Changed);
+        }
         let before = match cmd.changes() {
             None => return self.execute(cmd, source),
             Some(Part::Document { tables, takeoff }) => {
@@ -1070,6 +1092,11 @@ impl Session {
                 Err(e)
             }
         }
+    }
+
+    /// The drawing counts as saved as it is now.
+    pub(crate) fn mark_saved(&mut self) {
+        self.saved_revision = self.document_revision;
     }
 
     /// Drops the drawn batch and pick index (for a drawing put aside in a tab, which on a big
@@ -1201,6 +1228,9 @@ impl Session {
             let (pictures, outlines) = self.underlay_placements();
             add_images(&mut batch, &pictures);
             add_pick_outlines(&mut batch, &outlines);
+            if let Some(edit) = &self.block_edit {
+                fade(&mut batch, &edit.outside);
+            }
             let doc = &self.drawing.doc;
             let points = doc
                 .entities_in_block(&self.sheet)
