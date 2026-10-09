@@ -268,6 +268,36 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
   Field (click, then `FieldDialog`; area and length pick their entity; also from the table
   editor into a cell), Update fields. Command line TABLE (TB), TABLEDIT, FIELD, UPDATEFIELD.
 
+## Blocks
+
+- `qiyas-core/src/blocks.rs`: `CreateBlock { name, base, targets, convert_to_insert }` (sheet
+  entities leave for a new block, relative to `base`; names AutoCAD refuses, or the drawing's own,
+  are refused; with convert a reference takes their place; rows on them are unlinked and counted,
+  `Outcome::Edited`), `InsertBlock { name, at, scale, rotation, attribute_values, from_path }`
+  (current layer; attributes from the block's ATTDEFs, constants excepted; `from_path` copies a
+  missing block with its layers, linetypes, styles and nested blocks from another drawing, read
+  only), `WriteBlock { name, path }` (a .dwg in the drawing's folder; the Save dialog's path goes
+  through IPC `write_block`), `AttDef` (current layer; drawn on a sheet as its tag; inside a block
+  only constants draw), `EditAttributes`, `EditAttDef`, `SyncAttributes` (ATTSYNC, values kept),
+  `RedefineBlock { name, from_path }`. One undo step each; WBLOCK is none.
+- Edit in place (`EditBlockInPlace { target }`, a sheet reference, not arrayed, even scale, no
+  dimensions or tables inside): the block's entities are copied onto the sheet through the
+  reference (no step), the reference hidden, the rest faded (`blocks::fade`) and locked
+  (`sheet_targets`); new sheet entities join the block. Commands are steps as usual, but undo
+  stops at the edit's start (`History` floor); take-off, BOQ and conflict commands, Save, sheet
+  changes and other block definition commands wait for it to close. `SaveBlockEdits` undoes the
+  edit's steps, removes the copies and writes the changed ones back under their own handles in one
+  step (every reference changes; rows on them are measured again); `DiscardBlockEdits` undoes
+  them. `DrawingInfo::block_edit` names the block.
+- Insert tab, Block group: Create block (B: pick, base point, name dialog), Insert… and Write
+  block… (`BlockPalette`: thumbnails from `block_thumbnail` through `render_png`), Edit in place
+  (REFEDIT/BEDIT; the bar saves or discards; REFCLOSE saves), Define attribute (ATT), Edit
+  attributes (ATTEDIT, or a double click on an attribute: `AttributesDialog`), Attribute manager
+  (BATTMAN), Design Center (another drawing's blocks: insert, or redefine one this drawing has),
+  Tool palette (`tool_palette` in `settings.json`, blocks and command lines; kept apart from the
+  Settings dialog like `recents`). Command line B, I, W, REFEDIT, BEDIT, REFCLOSE, ATT, ATTEDIT,
+  BATTMAN.
+
 ## PDF
 
 - PDFs are read through pdfium (BSD-3), a shared library loaded at run time through
