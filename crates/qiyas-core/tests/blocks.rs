@@ -84,6 +84,8 @@ fn pick_inside_the_door_returns_the_leaf_line() {
     let block = session.entity_info(scaled, &[]).unwrap();
     assert_eq!(block.block_name.as_deref(), Some("DOOR"));
     assert_eq!(block.inside_block, None);
+    // A block reference is counted: no length or area from the lines inside it.
+    assert_eq!((block.length, block.area), (None, None));
 }
 
 #[test]

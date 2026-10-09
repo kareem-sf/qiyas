@@ -719,6 +719,11 @@ impl Session {
         let located = locate(&self.drawing.doc, &xrefs, handle, chain)?;
         let entity = located.entity;
         let Extent { length, area, .. } = self.extent(located.doc, entity, &located.xf);
+        // A block reference is counted: the sum of its lines would only confuse.
+        let (length, area) = match entity {
+            EntityType::Insert(_) => (None, None),
+            _ => (length, area),
+        };
         let (block_name, text) = match entity {
             EntityType::Insert(insert) => (Some(effective_block_name(located.doc, insert)), None),
             EntityType::Text(t) => (None, Some(t.value.clone())),
