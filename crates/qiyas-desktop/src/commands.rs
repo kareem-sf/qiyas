@@ -238,6 +238,22 @@ pub async fn boundary_at(
     with_session(&state, |s| Ok(s.boundary_at([x, y], start)))
 }
 
+/// The entities a selection box from (`min_x`, `min_y`) to (`max_x`, `max_y`) picks: wholly
+/// inside it, or with `crossing` touching it (see `Session::pick_window`).
+#[tauri::command]
+pub async fn pick_window(
+    min_x: f64,
+    min_y: f64,
+    max_x: f64,
+    max_y: f64,
+    crossing: bool,
+    state: State<'_, AppState>,
+) -> Result<Vec<Picked>, String> {
+    with_session(&state, |s| {
+        Ok(s.pick_window([[min_x, min_y], [max_x, max_y]], crossing))
+    })
+}
+
 /// The object snap within `tol` (drawing units) of `(x, y)`, with the session's snap modes;
 /// `from_x`, `from_y` is the previous point, for perpendicular snaps. None while snaps are off.
 #[tauri::command]

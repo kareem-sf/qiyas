@@ -43,6 +43,7 @@ pub fn run() {
             commands::atlas_pages,
             commands::pick,
             commands::boundary_at,
+            commands::pick_window,
             commands::snap,
             commands::get_drafting,
             commands::set_drafting,
