@@ -22,7 +22,7 @@ qiyas/
     qiyas-mcp       the stdio bridge Claude Desktop and Claude Code start (bundled beside the app)
     qiyas-desktop   the Tauri app: IPC, file dialogs, settings, keychain, assistant, MCP switch
   src/              React + TypeScript + Vite: viewport, ribbon, command line, panels
-  scripts/check.sh  cargo fmt, clippy, test, tsc, vitest, in one run
+  scripts/check.sh  cargo fmt, clippy, test, a release speed test, tsc, vitest, in one run
 ```
 
 All the crates above exist; `qiyas-pdf` reads PDFs (import, underlays), PDF plot comes later.
@@ -50,6 +50,10 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
 
 - Use pnpm, not npm.
 - Run `scripts/check.sh` before every commit.
+- `qiyas-render` builds with one codegen unit (`Cargo.toml`): split, the pick index builds about
+  4 times slower. `cargo test -p qiyas-render --release pick_index_one_million` guards it.
+- Bound-xref layer names (`XREF$0$A-WALL`) are shown as `A-WALL` (`short_layer_name`); the
+  full name stays in `layer`.
 - Never push or release without the founder's yes.
 - Run the app: `pnpm tauri dev --config crates/qiyas-desktop/tauri.conf.json`.
 - The `.qiyas` project file is saved next to the drawing after every command.
@@ -104,6 +108,7 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
   in its `images/` folder); otherwise the problems list says "Image <file> not found".
   Rectangular clips crop; polygonal and inverted clips draw the whole image for now; images
   inside blocks are not drawn.
+- Images over 20,000 px a side or 512 MB decoded are refused ("This image is too large").
 - Files are decoded once (cut to 4096 px, EXIF orientation applied) with the `image` crate; the
   window gets a picture per zoom (64 to 2048 px) through the same `underlay_image` IPC as PDFs.
 - Picking an image (Select tool, click its frame) shows brightness, contrast and fade sliders
@@ -126,7 +131,8 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
 - Several drawings open at once, one file tab each above the drawing (title, "•" while the drawing
   has unsaved changes, × or a middle click closes; Ctrl+Tab / Ctrl+Shift+Tab / Ctrl+W). The tab on
   screen is `AppState::session`, so every IPC command, the assistant and MCP act on it; the others
-  are parked (`AppState::parked`) and swapped in by `activate_tab`. Lock order: `tabs`, `session`,
+  are parked (`AppState::parked`, without their batch and pick index) and swapped in by
+  `activate_tab`. Lock order: `tabs`, `session`,
   `parked`. Switching or closing the tab on screen starts a new assistant conversation. Opening a
   file that is open already shows its tab. Closing (or quitting) with unsaved drawing changes asks.
 - Recent drawings: `recents` in `settings.json` (10 at most, newest first, kept by the app on every
