@@ -804,7 +804,14 @@ impl Session {
     /// no parts and were left as they are.
     fn explode(&mut self, handles: &[Handle]) -> Result<Outcome, CoreError> {
         let doc = &self.drawing.doc;
+        let too_many = || {
+            invalid(format!(
+                "That makes more than {MAX_NEW} entities: explode fewer at a time"
+            ))
+        };
         let mut parts: Vec<(Handle, Vec<EntityType>)> = Vec::new();
+        // Array cells times the block's entities, counted before any part is made.
+        let mut estimate = 0usize;
         for &h in handles {
             let e = self.entity(h);
             let pieces = match e {
@@ -815,6 +822,13 @@ impl Session {
                             h.value(),
                             insert.block_name
                         )));
+                    }
+                    let cells = usize::from(insert.column_count.max(1))
+                        * usize::from(insert.row_count.max(1));
+                    let children = doc.entities_in_block(&insert.block_name).count();
+                    estimate = estimate.saturating_add(cells.saturating_mul(children));
+                    if estimate > MAX_NEW {
+                        return Err(too_many());
                     }
                     explode_insert(doc, insert)
                 }
@@ -835,9 +849,7 @@ impl Session {
             ));
         }
         if parts.iter().map(|(_, p)| p.len()).sum::<usize>() > MAX_NEW {
-            return Err(invalid(format!(
-                "That makes more than {MAX_NEW} entities: explode fewer at a time"
-            )));
+            return Err(too_many());
         }
         let left_alone = handles.len() - parts.len();
         let owner = self.sheet_owner();

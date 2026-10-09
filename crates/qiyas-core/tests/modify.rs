@@ -1573,6 +1573,33 @@ fn a_partly_erased_row_is_measured_again_and_a_count_counts_one_less() {
 }
 
 #[test]
+fn exploding_a_huge_array_is_refused_before_anything_is_built() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut doc, _) = modify_doc();
+    // Block B (two lines inside) arrayed 1,000 x 1,000: 2 M parts.
+    let mut array = Insert::new("B", Vector3::new(0.0, 100.0, 0.0));
+    array.column_count = 1000;
+    array.row_count = 1000;
+    array.column_spacing = 1.0;
+    array.row_spacing = 1.0;
+    let h = doc.add_entity(EntityType::Insert(array)).unwrap().value();
+    let path = write_drawing(&doc, &dir.path().join("array.dxf"));
+    let mut s = Session::open(&path).unwrap();
+    let t = std::time::Instant::now();
+    let refused = s.run(Command::Modify(ModifySpec::Explode {
+        targets: targets(&[h]),
+    }));
+    assert!(
+        matches!(&refused, Err(CoreError::InvalidCommand(why)) if why.contains("100000")),
+        "{refused:?}"
+    );
+    assert!(
+        t.elapsed().as_secs_f64() < 0.5,
+        "refused before building the parts"
+    );
+}
+
+#[test]
 fn erasing_an_image_cleans_its_definition_link() {
     let dir = tempfile::tempdir().unwrap();
     let mut s = Session::open(&write_sample(dir.path(), "dxf")).unwrap();
