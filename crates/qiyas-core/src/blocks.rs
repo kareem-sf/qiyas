@@ -251,6 +251,23 @@ fn attributes_for(
     Ok(out)
 }
 
+/// Takes off `c` the handles that point into the drawing it was copied from: its linetype's
+/// (the writers find it by name), its colour book's, visual styles', material's and plot style's
+/// (both by layer then).
+fn drop_source_handles(c: &mut opencadcodec::entities::EntityCommon) {
+    c.linetype_handle = None;
+    c.color_book_handle = None;
+    c.full_visual_style_handle = None;
+    c.face_visual_style_handle = None;
+    c.edge_visual_style_handle = None;
+    if c.material_handle.take().is_some() {
+        c.material_flags = 0;
+    }
+    if c.plotstyle_handle.take().is_some() {
+        c.plotstyle_flags = 0;
+    }
+}
+
 /// Copies block definitions, and the layers, linetypes, text and dimension styles their entities
 /// use, from one drawing into another. A block or table entry the target has already (by name)
 /// is kept as it is; an anonymous block gets a free name of its own.
@@ -306,6 +323,21 @@ impl<'a> Importer<'a> {
         let mut lt = lt.clone();
         lt.handle = self.dst.allocate_handle();
         lt.xref_block_record_handle = Handle::NULL;
+        // A text or shape segment's style comes along; one the source lacks is dropped.
+        for complex in lt.elements.iter_mut().filter_map(|e| e.complex.as_mut()) {
+            let name = self
+                .src
+                .text_styles
+                .iter()
+                .find(|s| s.handle == complex.style_handle)
+                .map(|s| s.name.clone());
+            if let Some(name) = &name {
+                self.text_style(name);
+            }
+            complex.style_handle = name
+                .and_then(|n| self.dst.text_styles.get(&n).map(|s| s.handle))
+                .unwrap_or(Handle::NULL);
+        }
         let _ = self.dst.line_types.add(lt);
     }
 
@@ -353,6 +385,7 @@ impl<'a> Importer<'a> {
         let (layer, linetype) = (c.layer.clone(), c.linetype.clone());
         self.layer(&layer);
         self.linetype(&linetype);
+        drop_source_handles(e.common_mut());
         match &mut e {
             EntityType::RasterImage(_) | EntityType::Underlay(_) => {
                 self.skipped += 1;
@@ -365,6 +398,11 @@ impl<'a> Importer<'a> {
                 for a in i.attributes.clone() {
                     self.layer(&a.common.layer);
                     self.text_style(&a.text_style);
+                }
+                i.view_rep_handle = None;
+                for a in &mut i.attributes {
+                    a.attdef_handle = Handle::NULL;
+                    drop_source_handles(&mut a.common);
                 }
                 i.block_name = self.block(&i.block_name.clone())?;
             }
@@ -1227,5 +1265,97 @@ impl Session {
         importer.fill(&source_name, owner, Vector3::ZERO)?;
         self.follow_block(&own_name);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use opencadcodec::tables::{
+        LineType, LineTypeComplexContent, LineTypeComplexData, LineTypeElement,
+    };
+    use opencadcodec::{Line, TextStyle};
+
+    use super::*;
+
+    #[test]
+    fn imported_entities_carry_no_handles_of_the_drawing_they_came_from() {
+        let foreign = Some(Handle::new(0xBEEF));
+        let mut src = CadDocument::new();
+        let mut style = TextStyle::new("SHAPES");
+        style.handle = src.allocate_handle();
+        let style_handle = style.handle;
+        src.text_styles.add(style).unwrap();
+        let mut dashed = LineType::new("TRACKS");
+        dashed.handle = src.allocate_handle();
+        let mut element = LineTypeElement::dash(1.0);
+        element.complex = Some(LineTypeComplexData {
+            content: LineTypeComplexContent::Text { text: "X".into() },
+            style_handle,
+            ..Default::default()
+        });
+        let mut lost = LineTypeElement::dash(1.0);
+        lost.complex = Some(LineTypeComplexData {
+            content: LineTypeComplexContent::Text { text: "Y".into() },
+            style_handle: Handle::new(0xBEEF),
+            ..Default::default()
+        });
+        dashed.elements = vec![element, lost];
+        src.line_types.add(dashed).unwrap();
+
+        let mut line = EntityType::Line(Line::from_coords(0.0, 0.0, 0.0, 1.0, 0.0, 0.0));
+        let c = line.common_mut();
+        c.linetype = "TRACKS".into();
+        c.linetype_handle = foreign;
+        c.color_book_handle = foreign;
+        c.full_visual_style_handle = foreign;
+        c.face_visual_style_handle = foreign;
+        c.edge_visual_style_handle = foreign;
+        c.material_flags = 3;
+        c.material_handle = foreign;
+        c.plotstyle_flags = 3;
+        c.plotstyle_handle = foreign;
+        let mut insert = Insert::new("NONE", Vector3::ZERO);
+        insert.view_rep_handle = foreign;
+        let mut a = AttributeEntity::new("TAG".into(), "V".into());
+        a.attdef_handle = Handle::new(0xBEEF);
+        a.common.linetype_handle = foreign;
+        insert.attributes.push(a);
+
+        let mut dst = CadDocument::new();
+        let mut importer = Importer::new(&src, &mut dst);
+        let line = importer.entity(&line).unwrap().unwrap();
+        let insert = importer
+            .entity(&EntityType::Insert(insert))
+            .unwrap()
+            .unwrap();
+        let c = line.common();
+        assert_eq!(
+            (
+                c.linetype_handle,
+                c.color_book_handle,
+                c.full_visual_style_handle,
+                c.face_visual_style_handle,
+                c.edge_visual_style_handle,
+                c.material_handle,
+                c.plotstyle_handle,
+            ),
+            (None, None, None, None, None, None, None)
+        );
+        assert_eq!((c.material_flags, c.plotstyle_flags), (0, 0), "by layer");
+        let EntityType::Insert(i) = insert else {
+            panic!("a reference");
+        };
+        assert_eq!(i.view_rep_handle, None);
+        assert!(i.attributes[0].attdef_handle.is_null());
+        assert_eq!(i.attributes[0].common.linetype_handle, None);
+        // The linetype's text style comes along; a style the source lacks is dropped.
+        let lt = dst.line_types.get("TRACKS").unwrap();
+        let copied = dst.text_styles.get("SHAPES").unwrap().handle;
+        let styles: Vec<Handle> = lt
+            .elements
+            .iter()
+            .map(|e| e.complex.as_ref().unwrap().style_handle)
+            .collect();
+        assert_eq!(styles, [copied, Handle::NULL]);
     }
 }
