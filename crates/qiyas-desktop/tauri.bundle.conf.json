@@ -1,5 +1,6 @@
 {
   "bundle": {
-    "externalBin": ["binaries/qiyas-mcp"]
+    "externalBin": ["binaries/qiyas-mcp"],
+    "resources": { "resources/pdfium/": "resources/pdfium/" }
   }
 }

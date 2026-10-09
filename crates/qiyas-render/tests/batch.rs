@@ -4,8 +4,8 @@ use opencadcodec::entities::Insert;
 use opencadcodec::{BlockRecord, CadDocument, Color, EntityType, Layer, Line, Vector3};
 use qiyas_core::fixtures::sample_doc;
 use qiyas_render::{
-    build_batch, resolve_color, section, Batch, PickIndex, Quad, Range, Visibility, MAGIC,
-    NO_CHAIN, TEXT_BOX, VERSION,
+    add_images, build_batch, resolve_color, section, Batch, ImageEntry, ImagePlacement, PickIndex,
+    Quad, Range, Visibility, IMAGE_FADED, IMAGE_MONOCHROME, MAGIC, NO_CHAIN, TEXT_BOX, VERSION,
 };
 
 const MODEL: &str = "*Model_Space";
@@ -489,3 +489,87 @@ fn nested_reference_on_a_hidden_layer_hides_its_whole_block() {
     // The leaf's own layer is shown, but the reference holding it is not.
     assert_eq!(parts(&["A-DOOR"]), [vec![top]]);
 }
+
+#[test]
+fn images_widen_the_bounds_and_keep_the_origin_of_the_lines() {
+    let (doc, _) = doc_with_lines(&[(0.0, 0.0, 10.0, 10.0)]);
+    let mut batch = build_batch(&doc, MODEL, &visibility(&[]), 1e-3);
+    assert_eq!(batch.origin, [5.0, 5.0]);
+    let page = |id, x0: f64, flags| ImagePlacement {
+        id,
+        version: 7,
+        corners: [[x0, 20.0], [x0 + 30.0, 20.0], [x0 + 30.0, 0.0], [x0, 0.0]],
+        flags,
+    };
+    // The same page twice (two underlays of one image id) and another.
+    add_images(
+        &mut batch,
+        &[
+            page(1, -10.0, 0),
+            page(1, 40.0, IMAGE_FADED),
+            page(2, 0.0, 0),
+        ],
+    );
+    assert_eq!(batch.origin, [5.0, 5.0]);
+    assert_eq!(batch.bounds, [[-10.0, 0.0], [70.0, 20.0]]);
+    assert_eq!(batch.images.len(), 3);
+    assert_eq!(
+        batch.images[0].corners,
+        [-15.0, 15.0, 15.0, 15.0, 15.0, -5.0, -15.0, -5.0]
+    );
+    assert_eq!(batch.images[1].flags, IMAGE_FADED);
+    assert_eq!(
+        batch.image_table,
+        vec![
+            ImageEntry { id: 1, version: 7 },
+            ImageEntry { id: 2, version: 7 }
+        ]
+    );
+    // Without images, the layout is the 7 sections it always had.
+    let plain = build_batch(&doc, MODEL, &visibility(&[]), 1e-3).to_bytes();
+    assert_eq!(u32::from_le_bytes(plain[56..60].try_into().unwrap()), 7);
+    let bytes = batch.to_bytes();
+    assert_eq!(u32::from_le_bytes(bytes[56..60].try_into().unwrap()), 9);
+}
+
+#[test]
+fn image_sections_match_the_frontend_fixture() {
+    let mut batch = Batch::default();
+    add_images(
+        &mut batch,
+        &[ImagePlacement {
+            id: 3,
+            version: (1 << 53) - 1,
+            corners: [[0.0, 10.0], [20.0, 10.0], [20.0, 0.0], [0.0, 0.0]],
+            flags: IMAGE_FADED | IMAGE_MONOCHROME,
+        }],
+    );
+    assert_eq!(batch.origin, [10.0, 5.0]);
+    let bytes = batch.to_bytes();
+    let table = |i: usize| -> [u32; 3] {
+        [0, 4, 8].map(|o| {
+            u32::from_le_bytes(bytes[60 + 12 * i + o..64 + 12 * i + o].try_into().unwrap())
+        })
+    };
+    assert_eq!(table(7)[0], section::IMAGES);
+    assert_eq!(table(7)[2], 40);
+    assert_eq!(table(8)[0], section::IMAGE_TABLE);
+    assert_eq!(table(8)[2], 16);
+    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    let lines: Vec<&str> = (0..hex.len())
+        .step_by(80)
+        .map(|i| &hex[i..(i + 80).min(hex.len())])
+        .collect();
+    assert_eq!(hex, IMAGES_FIXTURE, "new fixture:\n{}", lines.join("\n"));
+}
+
+/// Also in `src/viewport/batch.test.ts`.
+const IMAGES_FIXTURE: &str = concat!(
+    "42594951020000000000000000000000000000000000000000000000000034400000000000002440",
+    "000000000000244000000000000014400900000003000000a80000000000000004000000a8000000",
+    "0000000005000000a80000000000000006000000a80000000000000007000000a800000000000000",
+    "08000000a80000001800000009000000c0000000000000000a000000c0000000280000000b000000",
+    "e800000010000000000000000000000000000000000000000000000000000000000020c10000a040",
+    "000020410000a040000020410000a0c0000020c10000a0c003000000030000000300000000000000",
+    "ffffffffffff1f00",
+);

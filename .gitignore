@@ -7,3 +7,4 @@ crates/*/gen/schemas/
 samples/*.qiyas
 samples/*.bak
 crates/qiyas-desktop/binaries/
+crates/qiyas-desktop/resources/

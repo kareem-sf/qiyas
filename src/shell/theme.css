@@ -1051,6 +1051,55 @@ button.link {
 .xref-manager tr.dim td:not(:last-child) {
   color: var(--muted);
 }
+.attach-pdf {
+  width: 640px;
+}
+.attach-pdf .pages-head {
+  align-items: center;
+}
+.attach-pdf .pages-head > span {
+  flex: 1;
+  text-align: center;
+  color: var(--muted);
+}
+.attach-pdf .page-number {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+.attach-pdf .page-number input {
+  width: 80px;
+}
+.attach-pdf .thumbs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 8px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+.attach-pdf .thumbs button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+}
+.attach-pdf .thumbs button[aria-selected="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.attach-pdf .thumbs canvas,
+.attach-pdf .thumb-wait {
+  width: 96px;
+  height: 96px;
+  object-fit: contain;
+  background: var(--panel);
+}
+.attach-pdf progress {
+  width: 100%;
+}
 .drafting-settings .modes {
   display: grid;
   grid-template-columns: 1fr 1fr;

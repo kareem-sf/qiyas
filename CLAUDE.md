@@ -25,7 +25,7 @@ qiyas/
   scripts/check.sh  cargo fmt, clippy, test, tsc, vitest, in one run
 ```
 
-The crates that exist now: `qiyas-core`, `qiyas-geom`, `qiyas-render`, `qiyas-takeoff`, `qiyas-boq`, `qiyas-ai`, `qiyas-mcp` and `qiyas-desktop`. `qiyas-pdf` arrives in a later phase.
+All the crates above exist; `qiyas-pdf` reads PDFs (import, underlays), PDF plot comes later.
 
 Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example write_test_plan`) and `samples/test-boq.xlsx` (written by `cargo run -p qiyas-boq --example write_test_boq`); the exact quantities and the two conflicts the BOQ must give are in `samples/test-plan.md`. `cargo run -p qiyas-ai --example phase2_walkthrough` measures, imports, links and compares them through the AI tools, no model needed.
 
@@ -49,6 +49,22 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
 - Run the app: `pnpm tauri dev --config crates/qiyas-desktop/tauri.conf.json`.
 - The `.qiyas` project file is saved next to the drawing after every command.
 - Save keeps a `.bak` of the original drawing (e.g. `villa.dwg.bak`) before writing over it.
+
+## PDF
+
+- PDFs are read through pdfium (BSD-3), a shared library loaded at run time through
+  `pdfium-render`. `scripts/pdfium.sh` downloads the build for this computer from
+  bblanchon/pdfium-binaries into `crates/qiyas-desktop/resources/pdfium/` (git-ignored) and its
+  licence into `LICENSES/pdfium-BSD-3.txt`. Run it once per machine. Without it the PDF commands
+  answer "PDF support is not installed: run scripts/pdfium.sh" and the PDF tests are ignored, so
+  `scripts/check.sh` runs them only where the script has been run (no CI checks them).
+- `QIYAS_PDFIUM` (the library or its folder) overrides where it is looked for.
+- Release: run `scripts/pdfium.sh` before `pnpm bundle`; `tauri.bundle.conf.json` ships the
+  folder as the resource `resources/pdfium/`.
+- pdfium is not thread-safe: every call runs on one worker thread (`qiyas_pdf`).
+- View tab: "Attach PDF…" (underlay or import, scale, page, insert point) and "Calibrate".
+  Underlays are kept in the DWG/DXF as AutoCAD PDF underlays on layer `PDF-UNDERLAY`; imports
+  go on `PDF-RRGGBB`, `PDF-FILL-RRGGBB` and `PDF-TEXT`.
 
 ## AI assistant and settings
 

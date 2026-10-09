@@ -5,6 +5,7 @@ use qiyas_core::Session;
 
 use crate::ai::AiRun;
 use crate::mcp::McpRun;
+use crate::pdf::PictureCache;
 use crate::settings::{self, Settings};
 
 /// Managed by Tauri and shared by every command.
@@ -19,6 +20,8 @@ pub struct AppState {
     pub ai: Mutex<AiRun>,
     /// The MCP server for outside AI apps.
     pub mcp: Mutex<McpRun>,
+    /// Underlay pictures drawn lately.
+    pub pictures: Mutex<PictureCache>,
 }
 
 impl AppState {
@@ -29,6 +32,7 @@ impl AppState {
             config_dir,
             ai: Mutex::new(AiRun::default()),
             mcp: Mutex::new(McpRun::default()),
+            pictures: Mutex::new(PictureCache::default()),
         }
     }
 }

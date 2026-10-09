@@ -3,6 +3,13 @@ import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   aiUndo,
+  attachPdf,
+  calibrate,
+  PDF_PROGRESS,
+  pdfPageCount,
+  pdfPageSize,
+  pdfThumbnails,
+  underlayImage,
   boq as readBoq,
   compare,
   conflicts as readConflicts,
@@ -50,6 +57,7 @@ import { ConflictsPanel, type ResolveCommand } from "./boq/ConflictsPanel";
 import { openCount } from "./boq/conflictsMath";
 import { useLanguage, useT } from "./i18n";
 import { About } from "./shell/About";
+import { AttachPdfDialog, CalibrateDialog, type AttachRequest } from "./shell/AttachPdfDialog";
 import { DraftingSettings } from "./shell/DraftingSettings";
 import { LayersPanel } from "./shell/LayersPanel";
 import { Ribbon, type Tool } from "./shell/Ribbon";
@@ -69,11 +77,15 @@ import { useTool } from "./tools/useTool";
 import {
   parseAtlas,
   parseBatch,
+  parsePicture,
+  parseThumbnails,
+  picturesToFetch,
   type AtlasPage,
   type Batch,
+  type HeldPicture,
   type Target,
 } from "./viewport/batch";
-import type { Bounds } from "./viewport/camera";
+import type { Bounds, Point } from "./viewport/camera";
 import type { Theme } from "./viewport/gl";
 import { Viewport, type ViewportHandle } from "./viewport/Viewport";
 
@@ -86,6 +98,10 @@ const TOGGLED: Record<DraftingToggle, "osnap" | "grid" | "ortho" | "polar"> = {
   ortho: "ortho",
   polar: "polar",
 };
+
+/** A click in the drawing the window is waiting for instead of the tool's: the insert point of a
+ *  PDF page, or the two points of a calibration. */
+type Pending = { kind: "insert" } | { kind: "calibrate"; first: Point | null };
 
 /** Focus is in a text field: keys are typing, not shortcuts. */
 const typing = (e: KeyboardEvent) =>
@@ -137,6 +153,18 @@ export default function App() {
   const atlasVersionRef = useRef<number | null>(null);
   /** True while glyphs are fetched for a new zoom, so zooming on doesn't stack requests. */
   const glyphsBusy = useRef(false);
+  /** The underlay pictures held, by image id, and whether some are being fetched. */
+  const [pictures, setPictures] = useState(new Map<number, HeldPicture>());
+  const picturesHeld = useRef(new Map<number, HeldPicture>());
+  const picturesBusy = useRef(false);
+  /** Percent drawn of the PDF page pdfium is rendering; null when none is. */
+  const [renderProgress, setRenderProgress] = useState<number | null>(null);
+  const [attachOpen, setAttachOpen] = useState(false);
+  /** A click the window waits for (see `Pending`), the insert point it gave, and the two
+   *  calibration points once both are picked. */
+  const [pending, setPending] = useState<Pending | null>(null);
+  const [pickedInsert, setPickedInsert] = useState<Point | null>(null);
+  const [calibration, setCalibration] = useState<[Point, Point] | null>(null);
   /** The drawing holds its Arabic text backwards (View tab). */
   const [arabicReversed, setArabicReversed] = useState(false);
   const [sheet, setSheetBlock] = useState("");
@@ -294,6 +322,8 @@ export default function App() {
       if (!info || !(await step())) return;
       changed = true;
       await refreshTakeoffAndBoq();
+      // The step may have been a PDF import, an underlay or a calibration.
+      await redraw();
     });
     if (changed) await autosave();
   }
@@ -328,6 +358,28 @@ export default function App() {
     batchHeld.current = next;
     fitNext.current = fit;
     setBatch(next);
+  }
+
+  /** Fetches the underlay pictures `next` needs for a zoom of `pxPerUnit` that the window doesn't
+   *  hold at that version and about that zoom, and lets go of those it no longer shows. One fetch
+   *  runs at a time; the viewport asks again when the zoom settles. */
+  async function syncPictures(next: Batch | null, pxPerUnit: number) {
+    if (picturesBusy.current) return;
+    picturesBusy.current = true;
+    try {
+      const held = picturesHeld.current;
+      const wanted = new Set(next?.imageTable.map((e) => e.id) ?? []);
+      for (const id of held.keys()) if (!wanted.has(id)) held.delete(id);
+      for (const id of picturesToFetch(next, held, pxPerUnit)) {
+        const entry = next!.imageTable.find((e) => e.id === id)!;
+        const picture = parsePicture(await underlayImage(id, pxPerUnit));
+        held.set(id, { ...picture, version: entry.version, pxPerUnit });
+      }
+      setPictures(new Map(held));
+    } finally {
+      picturesBusy.current = false;
+      setRenderProgress(null);
+    }
   }
 
   /** Draws the text again for the zoom on screen (`pxPerUnit` screen pixels per drawing unit). The
@@ -423,6 +475,7 @@ export default function App() {
       else offs.push(unlisten);
     };
     listen(TAKEOFF_CHANGED, () => onMcpChange.current()).then(keep);
+    listen<number>(PDF_PROGRESS, (e) => setRenderProgress(e.payload)).then(keep);
     listen<AiUi>(SESSION_CHANGED, (e) => onMcpUi.current(e.payload)).then(keep);
     return () => {
       gone = true;
@@ -472,6 +525,9 @@ export default function App() {
       atlasVersionRef.current = null;
       atlasHeld.current = new Map();
       setAtlas([]);
+      // And no underlay pictures yet.
+      picturesHeld.current = new Map();
+      setPictures(new Map());
       setArabicReversed(next.arabic_reversed);
       setDraftingState(await getDrafting());
       autosaveOff.current = false;
@@ -690,6 +746,35 @@ export default function App() {
 
   const showAll = useCallback(() => applyHidden(new Set()), [hidden, info]);
 
+  /** Attaches a PDF page from the dialog, then draws it: an underlay's picture is fetched before
+   *  the dialog closes, so its progress shows there. Errors go to the dialog. */
+  async function attachPdfPage(r: AttachRequest) {
+    const added = await attachPdf(r.path, r.page, r.at, r.scale, r.mode);
+    setInfo(await drawingInfo());
+    await redraw();
+    if (r.mode === "underlay") {
+      await syncPictures(batchHeld.current, viewport.current?.pxPerUnit() ?? 1);
+    } else {
+      setNotice(t("attachPdf.imported", { n: added }));
+    }
+  }
+
+  /** A click in the drawing: the one a PDF insert point or a calibration waits for, else the
+   *  tool's. */
+  function clickDrawing(world: Point, screen: Point, worldPerPixel: number) {
+    if (pending?.kind === "insert") {
+      setPickedInsert(world);
+      setPending(null);
+    } else if (pending?.kind === "calibrate" && !pending.first) {
+      setPending({ kind: "calibrate", first: world });
+    } else if (pending?.kind === "calibrate" && pending.first) {
+      setCalibration([pending.first, world]);
+      setPending(null);
+    } else {
+      measure.onClick(world, screen, worldPerPixel);
+    }
+  }
+
   // Hand the keyboard back to the drawing, so Space pans instead of pressing a button.
   const focusDrawing = () => viewportBox.current?.focus();
 
@@ -713,6 +798,7 @@ export default function App() {
         else saveFile();
         e.preventDefault();
       } else if (action === "escape") {
+        setPending(null);
         measure.escape();
         setSelectedId(null);
         setBoqCode(null);
@@ -862,7 +948,17 @@ export default function App() {
   const fileName = info?.path.split(/[\\/]/).pop() ?? "";
   const message = opening
     ? t("opening")
-    : measure.hint
+    : pending
+      ? t(
+          pending.kind === "insert"
+            ? "attachPdf.pickHint"
+            : pending.first
+              ? "calibrate.second"
+              : "calibrate.first",
+        )
+      : renderProgress !== null && !attachOpen
+        ? t("pdf.drawing", { n: renderProgress })
+        : measure.hint
       ? t(measure.hint, measure.hintArgs ?? undefined)
       : (notice ?? (info ? fileName : t("noDrawing")));
   // Unknown units are measured as millimetres; the status bar says so.
@@ -888,6 +984,23 @@ export default function App() {
             focusDrawing();
           }}
           onXrefs={info ? () => setXrefsOpen(true) : undefined}
+          onAttachPdf={
+            info
+              ? () => {
+                  setPickedInsert(null);
+                  setAttachOpen(true);
+                }
+              : undefined
+          }
+          onCalibrate={
+            batch && batch.imageTable.length > 0
+              ? () => {
+                  measure.escape();
+                  setPending({ kind: "calibrate", first: null });
+                  focusDrawing();
+                }
+              : undefined
+          }
           arabicReversed={arabicReversed}
           onArabicReversed={info ? chooseArabicReversed : undefined}
         />
@@ -939,6 +1052,40 @@ export default function App() {
           onClose={() => setXrefsOpen(false)}
         />
       )}
+      {attachOpen && info && (
+        <AttachPdfDialog
+          units={info.units}
+          picked={pickedInsert}
+          picking={pending?.kind === "insert"}
+          progress={renderProgress}
+          chooseFile={async () => {
+            const path = await open({ filters: [{ name: "PDF", extensions: ["pdf"] }] });
+            return typeof path === "string" ? path : null;
+          }}
+          pageCount={pdfPageCount}
+          pageSize={pdfPageSize}
+          thumbnails={async (path, first, count) =>
+            parseThumbnails(await pdfThumbnails(path, first, count, 96))
+          }
+          onPickPoint={() => setPending({ kind: "insert" })}
+          onAttach={attachPdfPage}
+          onClose={() => {
+            setAttachOpen(false);
+            setPending(null);
+          }}
+        />
+      )}
+      {calibration && info && (
+        <CalibrateDialog
+          points={calibration}
+          units={info.units}
+          onCalibrate={async (distance) => {
+            await calibrate(calibration[0], calibration[1], distance);
+            await redraw();
+          }}
+          onClose={() => setCalibration(null)}
+        />
+      )}
       {draftingOpen && drafting && (
         <DraftingSettings
           drafting={drafting}
@@ -969,11 +1116,13 @@ export default function App() {
               batch={batch}
               atlas={atlas}
               onZoomHint={redrawGlyphs}
+              pictures={pictures}
+              onPictureHint={(px) => run(() => syncPictures(batchHeld.current, px))}
               highlight={highlight}
               overlay={overlay}
               tool={tool}
               theme={theme}
-              onClick={measure.onClick}
+              onClick={clickDrawing}
               grid={drafting?.grid ? drafting.grid_spacing : null}
               onMove={measure.onMove}
             />

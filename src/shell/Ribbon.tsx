@@ -18,6 +18,10 @@ type Props = {
   onZoomExtents(): void;
   /** Opens the external references (xrefs) dialog. */
   onXrefs?(): void;
+  /** Opens the Attach PDF dialog. */
+  onAttachPdf?(): void;
+  /** Starts calibrating a PDF underlay: two points, then their real distance. */
+  onCalibrate?(): void;
   onUndo?(): void;
   onRedo?(): void;
   /** The drawing holds its Arabic text backwards; the checkbox is disabled without a handler. */
@@ -100,6 +104,8 @@ export function Ribbon(props: Props) {
           action("zoomExtents", props.onZoomExtents),
           tool("zoomWindow"),
           action("xrefs", props.onXrefs),
+          action("attachPdf", props.onAttachPdf),
+          action("calibrate", props.onCalibrate),
           <span key="sep" className="sep" />,
           <label key="arabicReversed" className="ribbon-check">
             <input

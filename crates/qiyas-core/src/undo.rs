@@ -1,6 +1,10 @@
-//! Undo and redo for the take-off, the BOQ and the conflicts, as whole snapshots: small enough
-//! at take-off sizes. A step keeps only the part its command changed, so editing the take-off
-//! never copies a long BOQ. Each step remembers who made it, so the AI can undo only its own last change.
+//! Undo and redo for the take-off, the BOQ, the conflicts and the drawing itself, as whole
+//! snapshots: small enough at take-off sizes. A step keeps only the part its command changed, so
+//! editing the take-off never copies a long BOQ. A drawing snapshot shares the entities with the
+//! drawing (they are reference-counted), so it costs the tables and indexes, not the geometry.
+//! Each step remembers who made it, so the AI can undo only its own last change.
+
+use opencadcodec::CadDocument;
 
 use crate::{Boq, Conflict, Schedule, Source, Takeoff};
 
@@ -13,6 +17,8 @@ pub(crate) enum Snapshot {
     Takeoff(Takeoff),
     Boq(Option<Boq>),
     Conflicts(Vec<Conflict>, Vec<Schedule>),
+    /// The drawing (PDF import, underlays, calibration).
+    Document(Box<CadDocument>),
 }
 
 /// The parts of the session undo and redo put back.
@@ -21,6 +27,9 @@ pub(crate) struct Parts<'a> {
     pub boq: &'a mut Option<Boq>,
     pub conflicts: &'a mut Vec<Conflict>,
     pub schedules: &'a mut Vec<Schedule>,
+    pub doc: &'a mut CadDocument,
+    /// Set when the drawing was put back, so the session redraws it.
+    pub doc_changed: &'a mut bool,
 }
 
 impl Snapshot {
@@ -33,6 +42,10 @@ impl Snapshot {
                 std::mem::replace(parts.conflicts, c),
                 std::mem::replace(parts.schedules, s),
             ),
+            Snapshot::Document(d) => {
+                *parts.doc_changed = true;
+                Snapshot::Document(Box::new(std::mem::replace(parts.doc, *d)))
+            }
         }
     }
 }
@@ -100,6 +113,7 @@ mod tests {
         let mut history = History::default();
         let (mut takeoff, mut boq, mut conflicts, mut schedules) =
             (Takeoff::default(), None, Vec::new(), Vec::new());
+        let (mut doc, mut doc_changed) = (CadDocument::new(), false);
         for _ in 0..MAX_STEPS + 5 {
             history.record(Snapshot::Takeoff(Takeoff::default()), Source::User);
         }
@@ -109,6 +123,8 @@ mod tests {
                 boq: &mut boq,
                 conflicts: &mut conflicts,
                 schedules: &mut schedules,
+                doc: &mut doc,
+                doc_changed: &mut doc_changed,
             };
             history.undo(parts).then_some(())
         })

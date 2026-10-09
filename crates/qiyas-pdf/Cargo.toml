@@ -1,0 +1,27 @@
+[package]
+name = "qiyas-pdf"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+opencadcodec.workspace = true
+thiserror.workspace = true
+# PDF reading through pdfium (MIT OR Apache-2.0), bound at run time to the pdfium shared library
+# (BSD-3-Clause) that scripts/pdfium.sh downloads. No `thread_safe` feature: every pdfium call runs
+# on one worker thread (see lib.rs), so its mutex would only add cost.
+pdfium-render = { version = "0.9.4", default-features = false, features = ["pdfium_latest"] }
+# RgbaImage for rendered pages (MIT OR Apache-2.0); no codecs needed.
+image = { version = "0.25", default-features = false }
+
+# Writes the test PDFs (MIT), for `fixtures`. Without its HTML layout feature.
+printpdf = { version = "0.12", default-features = false, optional = true }
+
+[dev-dependencies]
+qiyas-pdf = { path = ".", features = ["fixtures"] }
+tempfile.workspace = true
+
+[features]
+# Test PDFs written on the spot (`qiyas_pdf::fixtures`), for this crate's and qiyas-core's tests.
+fixtures = ["dep:printpdf"]

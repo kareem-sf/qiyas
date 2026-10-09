@@ -3,6 +3,7 @@ mod commands;
 mod mcp;
 #[cfg(debug_assertions)]
 mod mock;
+mod pdf;
 pub mod secrets;
 pub mod settings;
 mod state;
@@ -19,6 +20,7 @@ pub fn run() {
             }
             let config_dir = app.path().app_config_dir()?;
             app.manage(state::AppState::new(config_dir));
+            pdf::use_bundled_pdfium(app.handle());
             mcp::restart(app.handle());
             Ok(())
         })
@@ -64,6 +66,12 @@ pub fn run() {
             commands::ai_status,
             commands::ai_set_language,
             commands::ai_undo,
+            pdf::pdf_page_count,
+            pdf::pdf_page_size,
+            pdf::pdf_thumbnails,
+            pdf::attach_pdf,
+            pdf::calibrate,
+            pdf::underlay_image,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Qiyas");

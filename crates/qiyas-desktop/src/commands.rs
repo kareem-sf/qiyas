@@ -23,7 +23,7 @@ use crate::settings::{self, Settings};
 use crate::state::AppState;
 
 /// Runs `f` on the open session, or fails with "No drawing is open".
-fn with_session<R>(
+pub(crate) fn with_session<R>(
     state: &AppState,
     f: impl FnOnce(&mut Session) -> Result<R, CoreError>,
 ) -> Result<R, String> {
@@ -635,7 +635,7 @@ mod tests {
     use std::time::Duration;
 
     use serde_json::{json, Value};
-    use tauri::ipc::{CallbackFn, InvokeBody};
+    use tauri::ipc::{CallbackFn, InvokeBody, InvokeResponseBody};
     use tauri::test::{get_ipc_response, mock_builder, mock_context, noop_assets, MockRuntime};
     use tauri::webview::InvokeRequest;
     use tauri::{App, Listener, WebviewWindow, WebviewWindowBuilder};
@@ -676,7 +676,13 @@ mod tests {
                     mcp_status,
                     snap,
                     get_drafting,
-                    set_drafting
+                    set_drafting,
+                    render_batch,
+                    crate::pdf::pdf_page_count,
+                    crate::pdf::pdf_thumbnails,
+                    crate::pdf::attach_pdf,
+                    crate::pdf::calibrate,
+                    crate::pdf::underlay_image
                 ])
                 .build(mock_context(noop_assets()))
                 .unwrap();
@@ -685,7 +691,7 @@ mod tests {
                 .build()
                 .unwrap();
             let (tx, events) = channel();
-            for name in ["ai:event", "ai:done", "ai:cleared"] {
+            for name in ["ai:event", "ai:done", "ai:cleared", crate::pdf::PROGRESS] {
                 let tx = tx.clone();
                 app.listen_any(name, move |e| {
                     let payload = serde_json::from_str(e.payload()).unwrap_or(Value::Null);
@@ -725,6 +731,29 @@ mod tests {
                 invoke_key: tauri::test::INVOKE_KEY.to_string(),
             };
             get_ipc_response(&self.webview, request).map(|b| b.deserialize().unwrap())
+        }
+
+        /// A command that answers raw bytes.
+        fn bytes(&self, cmd: &str, body: Value) -> Vec<u8> {
+            let request = InvokeRequest {
+                cmd: cmd.into(),
+                callback: CallbackFn(0),
+                error: CallbackFn(1),
+                url: if cfg!(windows) {
+                    "http://tauri.localhost"
+                } else {
+                    "tauri://localhost"
+                }
+                .parse()
+                .unwrap(),
+                body: InvokeBody::Json(body),
+                headers: Default::default(),
+                invoke_key: tauri::test::INVOKE_KEY.to_string(),
+            };
+            match get_ipc_response(&self.webview, request).unwrap() {
+                InvokeResponseBody::Raw(bytes) => bytes,
+                InvokeResponseBody::Json(json) => panic!("not bytes: {json}"),
+            }
         }
 
         fn next(&self) -> (String, Value) {
@@ -1012,5 +1041,95 @@ mod tests {
             std::thread::sleep(Duration::from_millis(50));
         }
         assert!(freed, "the server kept port {port}");
+    }
+
+    #[test]
+    fn a_pdf_page_attaches_as_an_underlay_and_its_picture_is_drawn() {
+        if !qiyas_pdf::available() {
+            eprintln!("skipped: needs pdfium (scripts/pdfium.sh)");
+            return;
+        }
+        let ipc = Ipc::open();
+        let pdf = qiyas_pdf::fixtures::write_wall(ipc._dir.path());
+        assert_eq!(
+            ipc.call("pdf_page_count", json!({ "path": pdf })),
+            Ok(json!(1))
+        );
+        let thumbs = ipc.bytes(
+            "pdf_thumbnails",
+            json!({ "path": pdf, "first": 1, "count": 20, "px": 64 }),
+        );
+        let u32_at = |b: &[u8], i: usize| u32::from_le_bytes(b[i..i + 4].try_into().unwrap());
+        assert_eq!(
+            [
+                u32_at(&thumbs, 0),
+                u32_at(&thumbs, 4),
+                u32_at(&thumbs, 8),
+                u32_at(&thumbs, 12)
+            ],
+            [1, 1, 64, 32]
+        );
+        assert_eq!(thumbs.len(), 16 + 64 * 32 * 4);
+
+        let attach = json!({
+            "path": pdf, "page": 1, "x": 0.0, "y": 0.0, "scale": 0.01, "mode": "underlay"
+        });
+        let handle = ipc.call("attach_pdf", attach).unwrap();
+        assert!(handle.as_u64().unwrap() > 0);
+        let batch = qiyas_render_batch(&ipc.bytes("render_batch", json!({})));
+        assert_eq!(batch, vec![(0, true)]);
+
+        // 2 units wide at 300 px per unit: a 1024 px picture (zoom rounded up to 512).
+        let picture = ipc.bytes("underlay_image", json!({ "id": 0, "pxPerUnit": 300.0 }));
+        let (w, h) = (u32_at(&picture, 0), u32_at(&picture, 4));
+        assert_eq!((w, h), (1024, 512));
+        assert_eq!(picture.len(), 8 + (w * h * 4) as usize);
+        let (name, last) = std::iter::from_fn(|| ipc.events.try_recv().ok())
+            .filter(|(n, _)| n == crate::pdf::PROGRESS)
+            .last()
+            .expect("progress was sent");
+        assert_eq!((name.as_str(), last), (crate::pdf::PROGRESS, json!(100)));
+        // The same zoom again comes from the cache.
+        assert_eq!(
+            ipc.bytes("underlay_image", json!({ "id": 0, "pxPerUnit": 290.0 })),
+            picture
+        );
+
+        let calibrate = json!({ "x1": 0.5, "y1": 0.5, "x2": 1.5, "y2": 0.5, "distance": 3.0 });
+        ipc.call("calibrate", calibrate).unwrap();
+        let outside = json!({ "x1": -5.0, "y1": -5.0, "x2": 1.0, "y2": 0.0, "distance": 3.0 });
+        assert_eq!(
+            ipc.call("calibrate", outside),
+            Err(json!("Pick the first point on a PDF underlay"))
+        );
+        assert_eq!(ipc.call("undo", json!({})), Ok(json!(true)));
+        assert_eq!(ipc.call("undo", json!({})), Ok(json!(true)));
+        let batch = qiyas_render_batch(&ipc.bytes("render_batch", json!({})));
+        assert!(batch.is_empty());
+    }
+
+    /// The image table of a batch (`Batch::to_bytes`, kind 11): (id, version below 2^53).
+    fn qiyas_render_batch(bytes: &[u8]) -> Vec<(u32, bool)> {
+        let u32_at = |i: usize| u32::from_le_bytes(bytes[i..i + 4].try_into().unwrap());
+        let k = u32_at(56) as usize;
+        (0..k)
+            .map(|i| {
+                (
+                    u32_at(60 + 12 * i),
+                    u32_at(64 + 12 * i) as usize,
+                    u32_at(68 + 12 * i) as usize,
+                )
+            })
+            .filter(|(kind, ..)| *kind == 11)
+            .flat_map(|(_, at, len)| {
+                (at..at + len).step_by(16).map(move |e| {
+                    let version = u64::from_le_bytes(bytes[e + 8..e + 16].try_into().unwrap());
+                    (
+                        u32::from_le_bytes(bytes[e..e + 4].try_into().unwrap()),
+                        version < 1 << 53,
+                    )
+                })
+            })
+            .collect()
     }
 }

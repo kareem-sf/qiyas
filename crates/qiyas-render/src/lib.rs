@@ -1,5 +1,5 @@
-//! Turns a sheet of the document into GPU buffers (line segments and glyph quads over a glyph
-//! atlas), and picks entities near a point.
+//! Turns a sheet of the document into GPU buffers (line segments, glyph quads over a glyph atlas,
+//! image quads), and picks entities near a point.
 
 mod atlas;
 mod batch;
@@ -11,8 +11,9 @@ mod visibility;
 
 pub use atlas::{Atlas, PageView, PAGE_SIZE};
 pub use batch::{
-    build_batch, build_batch_with_text, build_batch_with_xrefs, place_text, section, Batch, Range,
-    TextOptions, Visibility, MAGIC, NO_CHAIN, TEXT_BOX, VERSION,
+    add_images, build_batch, build_batch_with_text, build_batch_with_xrefs, place_text, section,
+    Batch, ImageEntry, ImagePlacement, ImageQuad, Range, TextOptions, Visibility, IMAGE_FADED,
+    IMAGE_MONOCHROME, MAGIC, NO_CHAIN, TEXT_BOX, VERSION,
 };
 pub use color::resolve_color;
 pub use fonts::{DEFAULT_CHAIN, NOTO_ARABIC, NOTO_SANS};

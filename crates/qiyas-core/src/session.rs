@@ -12,14 +12,15 @@ use qiyas_geom::{
     MAX_XREF_DEPTH,
 };
 use qiyas_render::{
-    build_batch_with_xrefs, layer_shown, place_text, Batch, PickIndex, TextEngine, TextOptions,
-    Visibility, TEXT_BOX,
+    add_images, build_batch_with_xrefs, layer_shown, place_text, Batch, PickIndex, TextEngine,
+    TextOptions, Visibility, TEXT_BOX,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::commands::Part;
 use crate::embed::{embed_measurements, read_embedded};
 use crate::project::{self, project_path, Project};
+use crate::underlay::Underlays;
 use crate::undo::{History, Parts, Snapshot};
 use crate::xref::{XrefInfo, XrefSet};
 use crate::{
@@ -70,6 +71,8 @@ pub struct Session {
     /// Fonts, glyph atlas and glyph cache, kept across batches so the atlas pages the window
     /// holds stay valid.
     text: RefCell<TextEngine>,
+    /// The PDF underlays' image ids, page sizes and problems.
+    pub(crate) underlays: RefCell<Underlays>,
 }
 
 struct Cached {
@@ -364,6 +367,7 @@ impl Session {
             document_revision: 0,
             cache: RefCell::new(None),
             text: RefCell::new(TextEngine::new()),
+            underlays: RefCell::new(Underlays::default()),
         })
     }
 
@@ -425,8 +429,7 @@ impl Session {
         project::write_with_backup(path, &bytes)?;
         self.drawing.doc = doc;
         // The embedded entities are part of the drawing now: draw and pick them too.
-        *self.cache.get_mut() = None;
-        self.document_revision += 1;
+        self.drawing_changed();
         self.drawing.path = path.to_path_buf();
         self.save_project().map_err(|e| {
             CoreError::Unwritable(format!(
@@ -444,6 +447,7 @@ impl Session {
         if self.with_cache(None, |c| c.batch.truncated) {
             problems.push(TRUNCATED.to_string());
         }
+        problems.extend(self.underlays.borrow().problems.iter().cloned());
         DrawingInfo {
             path: self.drawing.path.display().to_string(),
             sheets: self.drawing.sheets(),
@@ -532,8 +536,8 @@ impl Session {
     }
 
     /// Names what `batch` would give: it changes when the sheet, the hidden layers, the Arabic
-    /// setting, the drawing itself or its xrefs change, and not for take-off, BOQ or conflict
-    /// changes, undo or redo. Not for the zoom the glyphs are drawn for either: the window asks
+    /// setting, the drawing itself (PDF imports, underlays, their undo and redo) or its xrefs
+    /// change, and not for take-off, BOQ or conflict changes or their undo or redo. Not for the zoom the glyphs are drawn for either: the window asks
     /// for that. A 64-bit FNV-1a hash of the session, sheet, hidden layers (sorted, case-folded),
     /// Arabic setting, document revision and xrefs (name, file found, when it was last changed
     /// and its size, each), cut to 53 bits so it survives a trip through a JavaScript number.
@@ -691,28 +695,45 @@ impl Session {
             Part::Takeoff => Snapshot::Takeoff(self.takeoff.clone()),
             Part::Boq => Snapshot::Boq(self.boq.clone()),
             Part::Conflicts => Snapshot::Conflicts(self.conflicts.clone(), self.schedules.clone()),
+            Part::Document => Snapshot::Document(Box::new(self.drawing.doc.clone())),
         });
-        // No command changes the drawing's geometry yet, so none bumps `document_revision`. The
-        // first one that does (drawing and editing commands), and anything that changes
-        // underlays, must bump it here, or the window keeps showing the old batch. Xrefs change
-        // outside commands (`reload_xrefs`) and are part of `batch_version` themselves.
+        // A command that changes the drawing (PDF import, underlays, calibration) bumps
+        // `document_revision`, or the window keeps showing the old batch. Xrefs change outside
+        // commands (`reload_xrefs`) and are part of `batch_version` themselves.
         let outcome = self.execute(cmd, source)?;
         if let Some(before) = before {
             if !matches!(outcome, Outcome::Nothing) {
+                if matches!(before, Snapshot::Document(_)) {
+                    self.drawing_changed();
+                }
                 self.history.record(before, source);
             }
         }
         Ok(outcome)
     }
 
-    /// Undoes the last take-off, BOQ or conflicts change. False when there is nothing to undo.
+    /// Undoes the last take-off, BOQ, conflicts or drawing change. False when there is nothing to
+    /// undo.
     pub fn undo(&mut self) -> bool {
-        self.history.undo(Parts {
+        let mut doc_changed = false;
+        let undone = self.history.undo(Parts {
             takeoff: &mut self.takeoff,
             boq: &mut self.boq,
             conflicts: &mut self.conflicts,
             schedules: &mut self.schedules,
-        })
+            doc: &mut self.drawing.doc,
+            doc_changed: &mut doc_changed,
+        });
+        if doc_changed {
+            self.drawing_changed();
+        }
+        undone
+    }
+
+    /// The drawing itself changed: the batch is drawn again and its version moves on.
+    pub(crate) fn drawing_changed(&mut self) {
+        self.document_revision += 1;
+        *self.cache.get_mut() = None;
     }
 
     /// Undoes the last take-off or BOQ change only when `source` made it. False otherwise, with nothing
@@ -726,15 +747,22 @@ impl Session {
         self.history.top_source()
     }
 
-    /// Redoes the last undone take-off, BOQ or conflicts change. False when there is nothing to
-    /// redo.
+    /// Redoes the last undone take-off, BOQ, conflicts or drawing change. False when there is
+    /// nothing to redo.
     pub fn redo(&mut self) -> bool {
-        self.history.redo(Parts {
+        let mut doc_changed = false;
+        let redone = self.history.redo(Parts {
             takeoff: &mut self.takeoff,
             boq: &mut self.boq,
             conflicts: &mut self.conflicts,
             schedules: &mut self.schedules,
-        })
+            doc: &mut self.drawing.doc,
+            doc_changed: &mut doc_changed,
+        });
+        if doc_changed {
+            self.drawing_changed();
+        }
+        redone
     }
 
     pub fn can_undo(&self) -> bool {
@@ -782,7 +810,7 @@ impl Session {
                 arabic_reversed: self.arabic_reversed,
                 px_per_unit,
             };
-            let batch = build_batch_with_xrefs(
+            let mut batch = build_batch_with_xrefs(
                 &self.drawing.doc,
                 &self.xref_docs(),
                 &self.sheet,
@@ -791,6 +819,7 @@ impl Session {
                 &mut text,
                 options,
             );
+            add_images(&mut batch, &self.underlay_placements());
             let doc = &self.drawing.doc;
             let points = doc
                 .entities_in_block(&self.sheet)

@@ -179,6 +179,47 @@ export async function renderBatch(
 export const atlasPages = (sinceVersion?: number) =>
   invoke<ArrayBuffer>("atlas_pages", { sinceVersion });
 
+/** How `attachPdf` brings a page in: a picture under the drawing, kept in the DWG as a PDF underlay,
+ *  or its vectors and texts as entities. */
+export type AttachMode = "underlay" | "import";
+
+/** Event with the percent drawn (0 to 100) of the underlay picture pdfium is rendering. */
+export const PDF_PROGRESS = "pdf:progress";
+
+/** How many pages the PDF at `path` has. Fails with "PDF support is not installed: run
+ *  scripts/pdfium.sh" when pdfium is missing. */
+export const pdfPageCount = (path: string) => invoke<number>("pdf_page_count", { path });
+
+/** Width and height in points (1/72 inch) of page `page` (from 1), as shown. */
+export const pdfPageSize = (path: string, page: number) =>
+  invoke<[number, number]>("pdf_page_size", { path, page });
+
+/** Raw bytes of pages `first` to `first + count - 1` drawn to fit `px` x `px`; decode with
+ *  `parseThumbnails`. */
+export const pdfThumbnails = (path: string, first: number, count: number, px: number) =>
+  invoke<ArrayBuffer>("pdf_thumbnails", { path, first, count, px });
+
+/** Attaches page `page` of the PDF at `path` to the sheet on screen, its bottom-left corner at
+ *  `at`, `scale` drawing units per point. Resolves to the underlay's handle, or for an import the
+ *  number of entities added. One undo step. */
+export const attachPdf = (
+  path: string,
+  page: number,
+  at: [number, number],
+  scale: number,
+  mode: AttachMode,
+) => invoke<number>("attach_pdf", { path, page, x: at[0], y: at[1], scale, mode });
+
+/** Rescales the PDF underlay under `p1` about `p1` so that `p1` to `p2` is `distance` drawing
+ *  units. One undo step. */
+export const calibrate = (p1: [number, number], p2: [number, number], distance: number) =>
+  invoke<void>("calibrate", { x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1], distance });
+
+/** Raw bytes of underlay picture `id` (from the batch's image table) for a zoom of `pxPerUnit`
+ *  screen pixels per drawing unit; decode with `parsePicture`. */
+export const underlayImage = (id: number, pxPerUnit: number) =>
+  invoke<ArrayBuffer>("underlay_image", { id, pxPerUnit });
+
 /** The entity nearest to the drawing point (x, y) within `tol` drawing units, down to the entity
  *  inside any blocks. */
 export const pick = (x: number, y: number, tol: number) =>
@@ -374,12 +415,31 @@ export type Command =
   | { type: "set_boq_tolerance"; code: string; percent: number | null }
   /** Replaces the conflicts and schedules; `compare` runs this. */
   | { type: "set_conflicts"; conflicts: Conflict[]; schedules: Schedule[] }
-  | { type: "resolve_conflict"; id: string; status: ConflictStatus; note: string };
+  | { type: "resolve_conflict"; id: string; status: ConflictStatus; note: string }
+  /** `attachPdf` runs these two; `scale` is drawing units per PDF point. */
+  | { type: "import_pdf"; path: string; page: number; insert_at: [number, number]; scale: number }
+  | {
+      type: "attach_pdf_underlay";
+      path: string;
+      page: number;
+      insert_at: [number, number];
+      scale: number;
+    }
+  /** `calibrate` runs this. */
+  | {
+      type: "calibrate";
+      handle: number;
+      p1: [number, number];
+      p2: [number, number];
+      real_distance: number;
+    };
 
 export type Outcome =
   | { type: "measured"; measurement: Measurement }
   | { type: "removed"; id: string }
   | { type: "changed" }
+  /** Entities added to the drawing (PDF import or underlay). */
+  | { type: "added"; handles: number[] }
   | { type: "nothing" };
 
 export const runCommand = (cmd: Command) => invoke<Outcome>("run_command", { cmd });

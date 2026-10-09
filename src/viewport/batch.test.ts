@@ -1,10 +1,15 @@
 import { expect, test } from "vitest";
 import {
   glyphsNeedRedraw,
+  IMAGE_FADED,
+  IMAGE_MONOCHROME,
   matchingRanges,
   NO_CHAIN,
   parseAtlas,
   parseBatch,
+  parsePicture,
+  parseThumbnails,
+  pictureNeedsRedraw,
   rangeMatcher,
   TEXT_BOX,
 } from "./batch";
@@ -230,4 +235,73 @@ test("glyphs are drawn again when the zoom has more than doubled or halved", () 
   expect(glyphsNeedRedraw(10, 21)).toBe(true);
   expect(glyphsNeedRedraw(10, 4.9)).toBe(true);
   expect(glyphsNeedRedraw(0, 100)).toBe(false);
+});
+
+/** The bytes `Batch::to_bytes` writes for `image_sections_match_the_frontend_fixture`
+ *  (crates/qiyas-render/tests/batch.rs): no lines, one picture (id 3, faded and grey) whose corners
+ *  are (0, 10), (20, 10), (20, 0), (0, 0), version 2^53 - 1. */
+const IMAGES_FROM_RUST = [
+  "42594951020000000000000000000000000000000000000000000000000034400000000000002440",
+  "000000000000244000000000000014400900000003000000a80000000000000004000000a8000000",
+  "0000000005000000a80000000000000006000000a80000000000000007000000a800000000000000",
+  "08000000a80000001800000009000000c0000000000000000a000000c0000000280000000b000000",
+  "e800000010000000000000000000000000000000000000000000000000000000000020c10000a040",
+  "000020410000a040000020410000a0c0000020c10000a0c003000000030000000300000000000000",
+  "ffffffffffff1f00",
+].join("");
+
+test("parseBatch reads the image quads and the image table the Rust side writes", () => {
+  const b = parseBatch(fromHex(IMAGES_FROM_RUST));
+  expect(b.segments.length).toBe(0);
+  expect([b.bounds, b.origin]).toEqual([
+    [
+      [0, 0],
+      [20, 10],
+    ],
+    [10, 5],
+  ]);
+  expect(b.images.length).toBe(1);
+  expect(b.images.at(0)).toEqual({
+    corners: [-10, 5, 10, 5, 10, -5, -10, -5],
+    id: 3,
+    flags: IMAGE_FADED | IMAGE_MONOCHROME,
+  });
+  expect(b.imageTable).toEqual([{ id: 3, version: 2 ** 53 - 1 }]);
+  // A batch without them has none.
+  const plain = parseBatch(fromHex(FROM_RUST));
+  expect([plain.images.length, plain.imageTable]).toEqual([0, []]);
+});
+
+test("parseBatch rejects a picture missing from the image table", () => {
+  const buf = fromHex(IMAGES_FROM_RUST);
+  const v = new DataView(buf);
+  // Section table entry 7 is the image quads (kind 10); the id sits at +32 of the quad.
+  const entry = 60 + 12 * 7;
+  expect(v.getUint32(entry, true)).toBe(10);
+  v.setUint32(v.getUint32(entry + 4, true) + 32, 4, true);
+  expect(() => parseBatch(buf)).toThrow("not in section 11");
+});
+
+test("pictures and thumbnails decode, and a picture at its largest is not fetched again", () => {
+  const picture = new Uint8Array(8 + 2 * 1 * 4);
+  new DataView(picture.buffer).setUint32(0, 2, true);
+  new DataView(picture.buffer).setUint32(4, 1, true);
+  picture.fill(9, 8);
+  const p = parsePicture(picture.buffer);
+  expect([p.width, p.height, Array.from(p.data)]).toEqual([2, 1, [9, 9, 9, 9, 9, 9, 9, 9]]);
+  expect(() => parsePicture(picture.buffer.slice(0, 12))).toThrow("too short");
+
+  const thumbs = new Uint8Array(4 + 12 + 4);
+  const tv = new DataView(thumbs.buffer);
+  [1, 7, 1, 1].forEach((x, i) => tv.setUint32(4 * i, x, true));
+  thumbs.fill(5, 16);
+  expect(parseThumbnails(thumbs.buffer).map((t) => [t.page, t.width, t.height])).toEqual([[7, 1, 1]]);
+  expect(() => parseThumbnails(thumbs.buffer.slice(0, 18))).toThrow("too short");
+
+  const small = { width: 1024, height: 512, data: new Uint8Array() };
+  const largest = { width: 2048, height: 1024, data: new Uint8Array() };
+  expect(pictureNeedsRedraw(100, 150, small)).toBe(false);
+  expect(pictureNeedsRedraw(100, 250, small)).toBe(true);
+  expect(pictureNeedsRedraw(100, 250, largest)).toBe(false);
+  expect(pictureNeedsRedraw(100, 40, largest)).toBe(true);
 });

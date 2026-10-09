@@ -16,6 +16,7 @@ tauri-build = { workspace = true }
 qiyas-ai = { path = "../qiyas-ai" }
 qiyas-boq = { path = "../qiyas-boq" }
 qiyas-core = { path = "../qiyas-core" }
+qiyas-pdf = { path = "../qiyas-pdf" }
 qiyas-takeoff = { path = "../qiyas-takeoff" }
 tauri = { workspace = true }
 tauri-plugin-dialog = { workspace = true }
@@ -37,3 +38,4 @@ tempfile = { workspace = true }
 # The IPC tests run the commands on Tauri's mock runtime, on the sample drawing.
 tauri = { workspace = true, features = ["test"] }
 qiyas-core = { path = "../qiyas-core", features = ["fixtures"] }
+qiyas-pdf = { path = "../qiyas-pdf", features = ["fixtures"] }

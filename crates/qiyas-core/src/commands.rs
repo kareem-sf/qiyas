@@ -1,5 +1,5 @@
-//! The command bus: every change to the take-off, the BOQ or the conflicts goes through `Session::run` (the user) or
-//! `Session::run_as` (the AI, or an outside AI through MCP).
+//! The command bus: every change to the take-off, the BOQ, the conflicts or the drawing goes
+//! through `Session::run` (the user) or `Session::run_as` (the AI, or an outside AI through MCP).
 
 use opencadcodec::tables::normalize_name;
 use opencadcodec::EntityType;
@@ -119,6 +119,33 @@ pub enum Command {
         status: ConflictStatus,
         note: String,
     },
+    /// Adds page `page` (from 1) of the PDF at `path` to the sheet on screen as lines, polylines
+    /// and texts (`qiyas_pdf::extract_vectors`), `scale` drawing units per PDF point, the page's
+    /// bottom-left corner at `insert_at`. One undo step; `Outcome::Added` lists the new entities.
+    ImportPdf {
+        path: String,
+        page: u32,
+        insert_at: [f64; 2],
+        scale: f64,
+    },
+    /// Attaches page `page` of the PDF at `path` to the sheet on screen as a PDF underlay
+    /// (an `Underlay` entity and its `UnderlayDefinition`, as AutoCAD stores them), `scale`
+    /// drawing units per PDF point, bottom-left corner at `insert_at`. `Outcome::Added` holds the
+    /// underlay's handle.
+    AttachPdfUnderlay {
+        path: String,
+        page: u32,
+        insert_at: [f64; 2],
+        scale: f64,
+    },
+    /// Rescales the underlay or image `handle` about `p1` so that `p1` to `p2` (drawing
+    /// coordinates) becomes `real_distance` drawing units long.
+    Calibrate {
+        handle: u64,
+        p1: [f64; 2],
+        p2: [f64; 2],
+        real_distance: f64,
+    },
 }
 
 /// The part of the session a command changes, kept whole in its undo step.
@@ -127,6 +154,8 @@ pub(crate) enum Part {
     Boq,
     /// The conflicts and the schedules.
     Conflicts,
+    /// The drawing itself.
+    Document,
 }
 
 impl Command {
@@ -140,6 +169,9 @@ impl Command {
             | Command::SetDrafting { .. } => None,
             Command::SetBoq { .. } | Command::SetBoqTolerance { .. } => Some(Part::Boq),
             Command::SetConflicts { .. } | Command::ResolveConflict { .. } => Some(Part::Conflicts),
+            Command::ImportPdf { .. }
+            | Command::AttachPdfUnderlay { .. }
+            | Command::Calibrate { .. } => Some(Part::Document),
             _ => Some(Part::Takeoff),
         }
     }
@@ -155,6 +187,10 @@ pub enum Outcome {
         id: String,
     },
     Changed,
+    /// Entities added to the drawing, by handle.
+    Added {
+        handles: Vec<u64>,
+    },
     /// The command named a measurement or BOQ item that does not exist.
     Nothing,
 }
@@ -319,6 +355,35 @@ impl Session {
                     }
                     None => Outcome::Nothing,
                 });
+            }
+            Command::ImportPdf {
+                path,
+                page,
+                insert_at,
+                scale,
+            } => {
+                let handles = self.import_pdf(path.as_ref(), page, insert_at, scale)?;
+                return Ok(Outcome::Added { handles });
+            }
+            Command::AttachPdfUnderlay {
+                path,
+                page,
+                insert_at,
+                scale,
+            } => {
+                let handle = self.attach_underlay(path.as_ref(), page, insert_at, scale)?;
+                return Ok(Outcome::Added {
+                    handles: vec![handle],
+                });
+            }
+            Command::Calibrate {
+                handle,
+                p1,
+                p2,
+                real_distance,
+            } => {
+                self.rescale(handle, p1, p2, real_distance)?;
+                return Ok(Outcome::Changed);
             }
         };
         measurement.source = source.name().to_string();

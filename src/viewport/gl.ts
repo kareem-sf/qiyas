@@ -1,6 +1,7 @@
 /**
- * WebGL2 renderer for a `Batch`: its line segments, then its text as glyph quads textured from the
- * glyph atlas (one R8 texture per page; the texel is the glyph's coverage, drawn as alpha).
+ * WebGL2 renderer for a `Batch`: its underlay pictures (one RGBA texture per picture id), then its
+ * line segments, then its text as glyph quads textured from the glyph atlas (one R8 texture per
+ * page; the texel is the glyph's coverage, drawn as alpha).
  *
  * Precision: drawings can sit far from (0, 0) (survey grids in metres or millimetres), where f32
  * keeps only a few useful digits. So no absolute coordinate ever reaches the GPU. The segments arrive
@@ -8,7 +9,14 @@
  * in f64 on the JS side relative to that same origin (camera centre minus origin), and only that
  * small offset is passed to the shader as f32.
  */
-import { matchingRanges, TEXT_BOX, type AtlasPage, type Batch, type Target } from "./batch";
+import {
+  matchingRanges,
+  TEXT_BOX,
+  type AtlasPage,
+  type Batch,
+  type Picture,
+  type Target,
+} from "./batch";
 import type { Camera } from "./camera";
 import { GRID_MAJOR, gridLevels, offsetInPeriod } from "./grid";
 
@@ -21,6 +29,9 @@ export type Renderer = {
   /** Uploads atlas pages the textures don't hold yet (by page index; a page with other data is
    *  uploaded again). */
   setAtlas(pages: AtlasPage[]): void;
+  /** The underlay pictures by image id; one with other data is uploaded again, one left out is
+   *  dropped. */
+  setPictures(pictures: Map<number, Picture>): void;
   /** Draws these entities violet (see `Target`). */
   setHighlight(targets: Target[]): void;
   /** Violet segments `x0 y0 x1 y1` in absolute drawing coordinates, drawn on top; `null` for none. */
@@ -104,6 +115,37 @@ void main() {
   if (u_light && all(greaterThan(c, vec3(0.999)))) c = u_ink;
   if (!u_light && all(lessThan(c, vec3(0.001)))) c = u_paper;
   outColor = vec4(c, coverage);
+}`;
+
+const IMAGE_VERTEX = `#version 300 es
+in vec2 a_pos;
+in vec2 a_uv;
+uniform vec2 u_center;
+uniform vec2 u_toClip;
+out vec2 v_uv;
+void main() {
+  gl_Position = vec4((a_pos - u_center) * u_toClip, 0.0, 1.0);
+  v_uv = a_uv;
+}`;
+
+/** A PDF page under the drawing. Grey when monochrome (flags bit 0); on Ink its lightness is
+ *  turned over (white paper goes dark, black lines go light, colours keep their hue); half mixed
+ *  into the background when faded (bit 1). */
+const IMAGE_FRAGMENT = `#version 300 es
+precision mediump float;
+in vec2 v_uv;
+uniform sampler2D u_image;
+uniform int u_flags;
+uniform bool u_light;
+uniform vec3 u_background;
+out vec4 outColor;
+void main() {
+  vec3 c = texture(u_image, v_uv).rgb;
+  float luma = dot(c, vec3(0.299, 0.587, 0.114));
+  if ((u_flags & 1) != 0) c = vec3(luma);
+  if (!u_light) c = clamp(c + 1.0 - 2.0 * luma, 0.0, 1.0);
+  if ((u_flags & 2) != 0) c = mix(c, u_background, 0.5);
+  outColor = vec4(c, 1.0);
 }`;
 
 /** One triangle over the whole canvas; the grid's dots are worked out per pixel. */
@@ -284,6 +326,32 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
   /** Atlas page index to its texture and the bytes uploaded into it. */
   const textures = new Map<number, { texture: WebGLTexture; data: Uint8Array }>();
 
+  // Underlay pictures: positions and texels interleaved (x y u v per vertex), four vertices and
+  // six indices per quad, drawn a quad at a time with its picture's texture.
+  const imageProgram = link(gl, IMAGE_VERTEX, IMAGE_FRAGMENT);
+  const iu = (name: string) => gl.getUniformLocation(imageProgram, name);
+  const iCenter = iu("u_center");
+  const iToClip = iu("u_toClip");
+  const iImage = iu("u_image");
+  const iFlags = iu("u_flags");
+  const iLight = iu("u_light");
+  const iBackground = iu("u_background");
+  const imageVao = gl.createVertexArray();
+  const imageVertices = gl.createBuffer();
+  const imageIndices = gl.createBuffer();
+  gl.bindVertexArray(imageVao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, imageVertices);
+  const iaPos = gl.getAttribLocation(imageProgram, "a_pos");
+  const iaUv = gl.getAttribLocation(imageProgram, "a_uv");
+  gl.enableVertexAttribArray(iaPos);
+  gl.vertexAttribPointer(iaPos, 2, gl.FLOAT, false, 16, 0);
+  gl.enableVertexAttribArray(iaUv);
+  gl.vertexAttribPointer(iaUv, 2, gl.FLOAT, false, 16, 8);
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, imageIndices);
+  gl.bindVertexArray(null);
+  /** Picture id to its texture and the bytes uploaded into it. */
+  const pictures = new Map<number, { texture: WebGLTexture; data: Uint8Array }>();
+
   let batch: Batch | null = null;
   let vertexCount = 0;
   let highlight: Target[] = [];
@@ -380,6 +448,31 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
     gl.bindVertexArray(null);
   }
 
+  function uploadImages(b: Batch | null) {
+    const n = b?.images.length ?? 0;
+    const vertices = new Float32Array(16 * n);
+    const indices = new Uint32Array(6 * n);
+    // Texel corners in the order of the position corners: top-left, top-right, bottom-right,
+    // bottom-left; the picture's rows run from the top.
+    const uv = [0, 0, 1, 0, 1, 1, 0, 1];
+    for (let i = 0; i < n; i++) {
+      for (let k = 0; k < 4; k++) {
+        const at = 16 * i + 4 * k;
+        vertices[at] = b!.images.x(i, k);
+        vertices[at + 1] = b!.images.y(i, k);
+        vertices[at + 2] = uv[2 * k];
+        vertices[at + 3] = uv[2 * k + 1];
+      }
+      const v = 4 * i;
+      indices.set([v, v + 1, v + 2, v, v + 2, v + 3], 6 * i);
+    }
+    gl.bindVertexArray(imageVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, imageVertices);
+    gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+    gl.bindVertexArray(null);
+  }
+
   /** Draws the quads of `indices` from the bound text VAO, a page texture at a time. */
   function drawText(indices: PagedIndices, buffer: WebGLBuffer) {
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buffer);
@@ -397,6 +490,7 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       batch = b;
       if (!sameLines) uploadLines(b);
       uploadText(b);
+      uploadImages(b);
       uploadHighlight();
     },
 
@@ -423,6 +517,44 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
           page.data,
         );
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      }
+      gl.bindTexture(gl.TEXTURE_2D, null);
+    },
+
+    setPictures(next) {
+      for (const [id, held] of pictures) {
+        if (!next.has(id)) {
+          gl.deleteTexture(held.texture);
+          pictures.delete(id);
+        }
+      }
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+      for (const [id, picture] of next) {
+        let held = pictures.get(id);
+        if (held?.data === picture.data) continue;
+        if (!held) {
+          held = { texture: gl.createTexture(), data: picture.data };
+          pictures.set(id, held);
+        }
+        held.data = picture.data;
+        gl.bindTexture(gl.TEXTURE_2D, held.texture);
+        gl.texImage2D(
+          gl.TEXTURE_2D,
+          0,
+          gl.RGBA8,
+          picture.width,
+          picture.height,
+          0,
+          gl.RGBA,
+          gl.UNSIGNED_BYTE,
+          picture.data,
+        );
+        // Mipmaps: a page seen small keeps its thin lines instead of shimmering.
+        gl.generateMipmap(gl.TEXTURE_2D);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
@@ -471,6 +603,26 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
         gl.bindVertexArray(null);
       }
       if (!batch) return;
+
+      // Underlay pictures under everything else, a quad at a time.
+      if (batch.images.length > 0) {
+        gl.useProgram(imageProgram);
+        gl.bindVertexArray(imageVao);
+        gl.uniform2f(iCenter, camera.cx - batch.origin[0], camera.cy - batch.origin[1]);
+        gl.uniform2f(iToClip, 2 / (camera.width * camera.scale), 2 / (camera.height * camera.scale));
+        gl.uniform1i(iLight, light ? 1 : 0);
+        gl.uniform3f(iBackground, ...(light ? PAPER : INK));
+        gl.uniform1i(iImage, 0);
+        gl.activeTexture(gl.TEXTURE0);
+        for (let i = 0; i < batch.images.length; i++) {
+          const picture = pictures.get(batch.images.id(i));
+          if (!picture) continue;
+          gl.bindTexture(gl.TEXTURE_2D, picture.texture);
+          gl.uniform1i(iFlags, batch.images.flags(i));
+          gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_INT, 24 * i);
+        }
+        gl.bindVertexArray(null);
+      }
 
       gl.useProgram(program);
       gl.bindVertexArray(vao);
@@ -563,6 +715,12 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       gl.deleteProgram(gridProgram);
       for (const { texture } of textures.values()) gl.deleteTexture(texture);
       textures.clear();
+      gl.deleteBuffer(imageVertices);
+      gl.deleteBuffer(imageIndices);
+      gl.deleteVertexArray(imageVao);
+      gl.deleteProgram(imageProgram);
+      for (const { texture } of pictures.values()) gl.deleteTexture(texture);
+      pictures.clear();
     },
   };
 }

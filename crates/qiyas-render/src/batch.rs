@@ -24,6 +24,42 @@ pub mod section {
     pub const QUADS: u32 = 7;
     pub const ATLAS: u32 = 8;
     pub const TEXT_RANGES: u32 = 9;
+    pub const IMAGES: u32 = 10;
+    pub const IMAGE_TABLE: u32 = 11;
+}
+
+/// `ImageQuad::flags` bit: draw the image in grey.
+pub const IMAGE_MONOCHROME: u32 = 1;
+/// `ImageQuad::flags` bit: draw the image half faded into the background.
+pub const IMAGE_FADED: u32 = 2;
+
+/// A picture to draw under the lines (a PDF underlay's page): where its corners go in drawing
+/// coordinates, in the order top-left, top-right, bottom-right, bottom-left of the picture as it
+/// stands upright; `id` and `version` name its pixels, which the window asks for separately.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ImagePlacement {
+    pub id: u32,
+    pub version: u64,
+    pub corners: [[f64; 2]; 4],
+    /// `IMAGE_MONOCHROME`, `IMAGE_FADED`.
+    pub flags: u32,
+}
+
+/// An image quad for the GPU: `corners` x y relative to the batch origin, in `ImagePlacement`'s
+/// order.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ImageQuad {
+    pub corners: [f32; 8],
+    pub id: u32,
+    pub flags: u32,
+}
+
+/// The pixels an image quad needs: image `id` as of `version` (the window fetches it again when
+/// the version changes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImageEntry {
+    pub id: u32,
+    pub version: u64,
 }
 
 /// `Range::flags` bit: the segments are a text's box, picked and highlighted but not drawn (the
@@ -90,6 +126,9 @@ pub struct Batch {
     /// The texts laid out, to place their glyphs again at another zoom (`place_text`). Not part
     /// of `to_bytes`.
     pub texts: Vec<LaidText>,
+    /// Pictures drawn under the lines (see `add_images`), and the pixels they need.
+    pub images: Vec<ImageQuad>,
+    pub image_table: Vec<ImageEntry>,
 }
 
 /// What the user has hidden on top of the drawing's own layer state.
@@ -166,6 +205,50 @@ pub fn place_text(batch: &mut Batch, engine: &mut TextEngine, px_per_unit: f64) 
     batch.atlas_version = engine.atlas().version();
     batch.atlas_pages = engine.atlas().page_count();
     batch.px_per_unit = px_per_unit;
+}
+
+/// Adds pictures to draw under the lines: their quads, relative to the batch origin, and one
+/// table entry per image id. The bounds grow to hold them; a batch with nothing else in it takes
+/// their centre as its origin.
+pub fn add_images(batch: &mut Batch, images: &[ImagePlacement]) {
+    let corners = images.iter().flat_map(|i| i.corners);
+    let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+    for [x, y] in corners {
+        lo = [lo[0].min(x), lo[1].min(y)];
+        hi = [hi[0].max(x), hi[1].max(y)];
+    }
+    if !lo[0].is_finite() || !hi[0].is_finite() {
+        return;
+    }
+    if batch.segments.is_empty() && batch.quads.is_empty() && batch.images.is_empty() {
+        batch.bounds = [lo, hi];
+        batch.origin = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
+    } else {
+        let [b0, b1] = batch.bounds;
+        batch.bounds = [
+            [b0[0].min(lo[0]), b0[1].min(lo[1])],
+            [b1[0].max(hi[0]), b1[1].max(hi[1])],
+        ];
+    }
+    let origin = batch.origin;
+    for image in images {
+        let mut corners = [0f32; 8];
+        for (k, [x, y]) in image.corners.iter().enumerate() {
+            corners[2 * k] = (x - origin[0]) as f32;
+            corners[2 * k + 1] = (y - origin[1]) as f32;
+        }
+        batch.images.push(ImageQuad {
+            corners,
+            id: image.id,
+            flags: image.flags,
+        });
+        if !batch.image_table.iter().any(|e| e.id == image.id) {
+            batch.image_table.push(ImageEntry {
+                id: image.id,
+                version: image.version,
+            });
+        }
+    }
 }
 
 fn build(
@@ -374,7 +457,8 @@ impl Batch {
     }
 
     /// Encodes the batch for the frontend: layout version 2. Little-endian; every section
-    /// starts on an 8-byte boundary (zero padding before it). With k = sections (7 here):
+    /// starts on an 8-byte boundary (zero padding before it). With k = sections (7, or 9 with
+    /// images):
     ///
     /// | offset   | size  | contents                                                     |
     /// |----------|-------|--------------------------------------------------------------|
@@ -404,6 +488,16 @@ impl Batch {
     /// |      |                | `f64` the zoom the glyphs are drawn for (screen pixels per  |
     /// |      |                | drawing unit; 0 without texts)                              |
     /// | 9    | text ranges    | 32 bytes per text, as kind 3 but over the quads (flags 0)   |
+    /// | 10   | image quads    | 40 bytes per quad: `f32` x8 corners x y relative to origin  |
+    /// |      |                | (top-left, top-right, bottom-right, bottom-left of the      |
+    /// |      |                | picture), `u32` image id, `u32` flags (bit 0 monochrome,    |
+    /// |      |                | bit 1 faded by half); drawn under the lines                 |
+    /// | 11   | image table    | 16 bytes per image: `u32` id, 4 pad, `u64` version (below   |
+    /// |      |                | 2^53)                                                       |
+    ///
+    /// Kinds 10 and 11 are written only when the batch has images. Their pixels are not in the
+    /// batch either: the window asks for an image (IPC `underlay_image`) when it doesn't hold that
+    /// id at that version, or holds it drawn for a zoom more than twice off.
     ///
     /// Every segment belongs to exactly one range, so the ranges give each segment's handles;
     /// likewise every quad belongs to one text range. The atlas pages themselves are not in the
@@ -431,7 +525,7 @@ impl Batch {
         atlas.extend(self.atlas_pages.to_le_bytes());
         atlas.extend([0u8; 4]);
         atlas.extend(self.px_per_unit.to_le_bytes());
-        let sections: [(u32, Vec<u8>); 7] = [
+        let mut sections: Vec<(u32, Vec<u8>)> = vec![
             (section::RANGES, ranges_bytes(&self.ranges)),
             (section::CHAINS, chains),
             (
@@ -443,6 +537,22 @@ impl Batch {
             (section::ATLAS, atlas),
             (section::TEXT_RANGES, ranges_bytes(&self.text_ranges)),
         ];
+        if !self.images.is_empty() || !self.image_table.is_empty() {
+            let mut images = Vec::with_capacity(self.images.len() * 40);
+            for q in &self.images {
+                images.extend(le_bytes(&q.corners, f32::to_le_bytes));
+                images.extend(q.id.to_le_bytes());
+                images.extend(q.flags.to_le_bytes());
+            }
+            let mut table = Vec::with_capacity(self.image_table.len() * 16);
+            for e in &self.image_table {
+                table.extend(e.id.to_le_bytes());
+                table.extend([0u8; 4]);
+                table.extend(e.version.to_le_bytes());
+            }
+            sections.push((section::IMAGES, images));
+            sections.push((section::IMAGE_TABLE, table));
+        }
 
         let mut out = Vec::new();
         out.extend(MAGIC.to_le_bytes());

@@ -1,5 +1,12 @@
 import { useEffect, useImperativeHandle, useRef, useState, type PointerEvent, type Ref } from "react";
-import { glyphsNeedRedraw, type AtlasPage, type Batch, type Target } from "./batch";
+import {
+  glyphsNeedRedraw,
+  picturesToFetch,
+  type AtlasPage,
+  type Batch,
+  type HeldPicture,
+  type Target,
+} from "./batch";
 import {
   fitBounds,
   pan,
@@ -40,6 +47,11 @@ type Props = {
   /** The zoom has more than doubled or halved since the batch's glyphs were drawn: draw them
    *  again for `pxPerUnit` screen pixels per drawing unit. Called once the zoom settles. */
   onZoomHint?(pxPerUnit: number): void;
+  /** The underlay pictures held, by image id. */
+  pictures?: Map<number, HeldPicture>;
+  /** Some underlay picture of the batch is missing or was drawn for a zoom too far off: fetch
+   *  the pictures for `pxPerUnit`. Called once the zoom settles. */
+  onPictureHint?(pxPerUnit: number): void;
   ref?: Ref<ViewportHandle>;
 };
 
@@ -51,6 +63,7 @@ const DRAG_PX = 4;
 /** How long the zoom must rest before glyphs are asked for at the new size. */
 const ZOOM_SETTLE_MS = 200;
 const NO_PAGES: AtlasPage[] = [];
+const NO_PICTURES = new Map<number, HeldPicture>();
 
 type Drag = { kind: "pan" | "zoomWindow"; start: Point; last: Point };
 
@@ -67,6 +80,8 @@ export function Viewport({
   onClick,
   onMove,
   onZoomHint,
+  pictures = NO_PICTURES,
+  onPictureHint,
   ref,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -84,6 +99,11 @@ export function Viewport({
   const zoomTimer = useRef(0);
   const onZoomHintRef = useRef(onZoomHint);
   onZoomHintRef.current = onZoomHint;
+  const picturesRef = useRef(pictures);
+  picturesRef.current = pictures;
+  const pictureTimer = useRef(0);
+  const onPictureHintRef = useRef(onPictureHint);
+  onPictureHintRef.current = onPictureHint;
 
   const pxPerUnit = () => window.devicePixelRatio / camera.current.scale;
 
@@ -100,6 +120,18 @@ export function Viewport({
     }, ZOOM_SETTLE_MS);
   }
 
+  /** Asks for underlay pictures at the current zoom once it has rested, when some are missing or
+   *  were drawn for a zoom over 2x off. */
+  function checkPictures() {
+    const stale = () =>
+      picturesToFetch(batchRef.current, picturesRef.current, pxPerUnit()).length > 0;
+    if (!stale()) return;
+    clearTimeout(pictureTimer.current);
+    pictureTimer.current = window.setTimeout(() => {
+      if (stale()) onPictureHintRef.current?.(pxPerUnit());
+    }, ZOOM_SETTLE_MS);
+  }
+
   function requestDraw() {
     if (frame.current) return;
     frame.current = requestAnimationFrame(() => {
@@ -113,6 +145,7 @@ export function Viewport({
     if (!keepView) view.current = visibleBounds(c);
     requestDraw();
     checkGlyphs();
+    checkPictures();
   }
 
   function fitExtents() {
@@ -187,6 +220,7 @@ export function Viewport({
       cancelAnimationFrame(frame.current);
       frame.current = 0;
       clearTimeout(zoomTimer.current);
+      clearTimeout(pictureTimer.current);
       renderer.current?.dispose();
       renderer.current = null;
     };
@@ -204,7 +238,13 @@ export function Viewport({
     renderer.current!.setBatch(batch);
     requestDraw();
     checkGlyphs();
+    checkPictures();
   }, [batch]);
+
+  useEffect(() => {
+    renderer.current!.setPictures(pictures);
+    requestDraw();
+  }, [pictures]);
 
   useEffect(() => {
     themeRef.current = theme;

@@ -9,6 +9,7 @@ rust-version.workspace = true
 opencadcodec.workspace = true
 opencadkernel.workspace = true
 qiyas-geom = { path = "../qiyas-geom" }
+qiyas-pdf = { path = "../qiyas-pdf" }
 qiyas-render = { path = "../qiyas-render" }
 serde.workspace = true
 serde_json.workspace = true
@@ -20,6 +21,8 @@ uuid.workspace = true
 tempfile.workspace = true
 # Integration tests don't see the library's cfg(test), so they turn the fixtures on this way.
 qiyas-core = { path = ".", features = ["fixtures"] }
+qiyas-pdf = { path = "../qiyas-pdf", features = ["fixtures"] }
+qiyas-render = { path = "../qiyas-render" }
 
 [features]
 fixtures = []

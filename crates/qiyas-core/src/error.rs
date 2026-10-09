@@ -18,4 +18,13 @@ pub enum CoreError {
     /// The project file is not valid JSON for a project; the parser's own words.
     #[error("{0}")]
     Project(String),
+    /// A PDF could not be read, or PDF support is not installed (`qiyas_pdf::PdfError`).
+    #[error("{0}")]
+    Pdf(String),
+}
+
+impl From<qiyas_pdf::PdfError> for CoreError {
+    fn from(e: qiyas_pdf::PdfError) -> Self {
+        CoreError::Pdf(e.to_string())
+    }
 }

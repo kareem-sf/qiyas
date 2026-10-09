@@ -1,5 +1,6 @@
-/** Line segments and text glyph quads of one sheet, decoded from `render_batch` (`Batch::to_bytes`
- *  in qiyas-render), and the glyph atlas pages from `atlas_pages` (`Atlas::to_bytes`). */
+/** Line segments, text glyph quads and underlay image quads of one sheet, decoded from
+ *  `render_batch` (`Batch::to_bytes` in qiyas-render); the glyph atlas pages from `atlas_pages`
+ *  (`Atlas::to_bytes`); underlay pictures from `underlay_image`. */
 
 /** The segments (or glyph quads) of one drawn entity. Inside blocks, `top` is the outermost block
  *  reference on the sheet, `entity` the entity itself and `chain` an index into `Batch.chains`; at
@@ -111,6 +112,48 @@ export class Quads {
   }
 }
 
+/** `ImageQuads.flags`: draw the picture in grey. */
+export const IMAGE_MONOCHROME = 1;
+/** `ImageQuads.flags`: draw the picture half faded into the background. */
+export const IMAGE_FADED = 2;
+
+/** The image quads section read in place; quad `i` is the 40-byte record `i`: corners (top-left,
+ *  top-right, bottom-right, bottom-left of the picture) relative to the batch origin, image id,
+ *  flags. */
+export class ImageQuads {
+  /** The same bytes as f32 and u32 (10 per record). */
+  constructor(
+    readonly f32: Float32Array,
+    readonly u32: Uint32Array,
+  ) {}
+
+  get length() {
+    return this.f32.length / 10;
+  }
+  x(i: number, k: number) {
+    return this.f32[10 * i + 2 * k];
+  }
+  y(i: number, k: number) {
+    return this.f32[10 * i + 2 * k + 1];
+  }
+  id(i: number) {
+    return this.u32[10 * i + 8];
+  }
+  flags(i: number) {
+    return this.u32[10 * i + 9];
+  }
+  at(i: number) {
+    return {
+      corners: Array.from(this.f32.subarray(10 * i, 10 * i + 8)),
+      id: this.id(i),
+      flags: this.flags(i),
+    };
+  }
+}
+
+/** The pixels image quads need: picture `id` as of `version`. */
+export type ImageEntry = { id: number; version: number };
+
 export type Batch = {
   /** `x0 y0 x1 y1` per segment, relative to `origin`. */
   segments: Float32Array;
@@ -133,6 +176,10 @@ export type Batch = {
   atlasPages: number;
   /** The zoom the glyphs were drawn for, in screen pixels per drawing unit; 0 without texts. */
   pxPerUnit: number;
+  /** Underlay pictures, drawn under the lines. */
+  images: ImageQuads;
+  /** One per picture id the image quads use. */
+  imageTable: ImageEntry[];
 };
 
 /** Something drawn, to highlight or frame: an entity on the sheet by its handle (`chain` empty), or
@@ -151,12 +198,14 @@ const SECTION = {
   quads: 7,
   atlas: 8,
   textRanges: 9,
+  images: 10,
+  imageTable: 11,
 };
 
 /**
  * Decodes layout version 2 documented on `Batch::to_bytes` (crates/qiyas-render/src/batch.rs): a
  * header, then a table of sections found by kind; unknown kinds are skipped, and the text sections
- * (7, 8, 9) may be left out (no texts). The typed views share `buf` (every section is 8-byte
+ * (7, 8, 9) and the image sections (10, 11) may be left out (no texts, no underlays). The typed views share `buf` (every section is 8-byte
  * aligned) and read in platform byte order, which is little-endian on every desktop platform Qiyas
  * targets.
  */
@@ -247,6 +296,22 @@ export function parseBatch(buf: ArrayBuffer): Batch {
     pxPerUnit = v.getFloat64(a.at + 16, true);
   }
 
+  const im = sections.has(SECTION.images) ? section(SECTION.images, 40) : empty;
+  const images = new ImageQuads(
+    new Float32Array(buf, im.at, im.length / 4),
+    new Uint32Array(buf, im.at, im.length / 4),
+  );
+  const tb = sections.has(SECTION.imageTable) ? section(SECTION.imageTable, 16) : empty;
+  const imageTable: ImageEntry[] = [];
+  for (let at = tb.at; at < tb.at + tb.length; at += 16) {
+    imageTable.push({ id: v.getUint32(at, true), version: Number(v.getBigUint64(at + 8, true)) });
+  }
+  for (let i = 0; i < images.length; i++) {
+    if (!imageTable.some((e) => e.id === images.id(i))) {
+      throw new Error(`Render batch section ${SECTION.images} names a picture not in section ${SECTION.imageTable}`);
+    }
+  }
+
   return {
     bounds: [
       [f(0), f(1)],
@@ -262,6 +327,8 @@ export function parseBatch(buf: ArrayBuffer): Batch {
     atlasVersion,
     atlasPages,
     pxPerUnit,
+    images,
+    imageTable,
   };
 }
 
@@ -290,6 +357,66 @@ export function parseAtlas(buf: ArrayBuffer): AtlasUpdate {
     at += 16 + length;
   }
   return { version, pages };
+}
+
+/** An underlay picture: `width` x `height` RGBA bytes, rows from the top. */
+export type Picture = { width: number; height: number; data: Uint8Array };
+
+/** Decodes `underlay_image`: `u32` width, `u32` height, then the RGBA bytes. */
+export function parsePicture(buf: ArrayBuffer): Picture {
+  const v = new DataView(buf);
+  if (buf.byteLength < 8) throw new Error("Underlay picture too short");
+  const [width, height] = [v.getUint32(0, true), v.getUint32(4, true)];
+  if (buf.byteLength !== 8 + 4 * width * height) throw new Error("Underlay picture too short");
+  return { width, height, data: new Uint8Array(buf, 8) };
+}
+
+/** Decodes `pdf_thumbnails`: `u32` count, then per page `u32` page, width, height and the RGBA
+ *  bytes. */
+export function parseThumbnails(buf: ArrayBuffer): (Picture & { page: number })[] {
+  const v = new DataView(buf);
+  if (buf.byteLength < 4) throw new Error("Thumbnails too short");
+  const out = [];
+  let at = 4;
+  for (let i = 0, n = v.getUint32(0, true); i < n; i++) {
+    if (at + 12 > buf.byteLength) throw new Error("Thumbnails too short");
+    const [page, width, height] = [0, 4, 8].map((o) => v.getUint32(at + o, true));
+    const length = 4 * width * height;
+    if (at + 12 + length > buf.byteLength) throw new Error("Thumbnails too short");
+    out.push({ page, width, height, data: new Uint8Array(buf, at + 12, length) });
+    at += 12 + length;
+  }
+  return out;
+}
+
+/** An underlay picture the window holds: drawn as of `version`, for `pxPerUnit` screen pixels per
+ *  drawing unit. */
+export type HeldPicture = Picture & { version: number; pxPerUnit: number };
+
+/** The picture ids of `batch` the window should fetch for a zoom of `now`: not held, held at
+ *  another version, or held for a zoom too far off (`pictureNeedsRedraw`). */
+export function picturesToFetch(
+  batch: Batch | null,
+  held: Map<number, HeldPicture>,
+  now: number,
+): number[] {
+  return (batch?.imageTable ?? [])
+    .filter((e) => {
+      const p = held.get(e.id);
+      return !p || p.version !== e.version || pictureNeedsRedraw(p.pxPerUnit, now, p);
+    })
+    .map((e) => e.id);
+}
+
+/** The longest side the core draws an underlay picture at. */
+export const PICTURE_MAX_PX = 2048;
+
+/** Whether a picture drawn for `drawnFor` pixels per unit should be fetched again at `now`: the
+ *  zoom is more than twice off (as for glyphs), unless it is zoomed in on a picture already at its
+ *  largest. */
+export function pictureNeedsRedraw(drawnFor: number, now: number, picture: Picture): boolean {
+  if (!glyphsNeedRedraw(drawnFor, now)) return false;
+  return !(now > drawnFor && Math.max(picture.width, picture.height) >= PICTURE_MAX_PX);
 }
 
 /** Whether glyphs drawn for `drawnFor` screen pixels per drawing unit look poor at `now`: more than
