@@ -1,6 +1,8 @@
 import { expect, test } from "vitest";
 import type { EntityInfo, Picked } from "../api";
 import type { Point } from "../viewport/camera";
+import { mergeAliases } from "./aliases";
+import { parse, type ParseState } from "./commandParser";
 import {
   initialToolState,
   selectedTarget,
@@ -328,4 +330,31 @@ test("ID point names the point clicked and the snap that found it", () => {
   const loose = run("idPoint", [click([1.25, 2], 0)]);
   expect(loose.pendingCommand).toEqual({ type: "id_point", p: [1.25, 2], kind: null });
   expect(initialToolState("idPoint").hint).toBe("inquiry.clickPoint");
+});
+
+test("Z W takes two typed corners and zooms to the window between them", () => {
+  const line = (text: string, expect: ParseState["expect"]) =>
+    parse(text, { expect, last: null, aliases: mergeAliases() });
+  expect(line("Z W", "command")).toEqual({ type: "tool", tool: "zoomWindow" });
+  const corner = (text: string, time: number): ToolEvent => {
+    const a = line(text, "point");
+    if (a.type !== "point") throw new Error(`not a point: ${text}`);
+    const screen: Point = [Number.NaN, Number.NaN];
+    return { type: "click", world: a.p, screen, time, picked: null, info: null, snapped: true };
+  };
+
+  const first = run("zoomWindow", [corner("12,9", 0)]);
+  expect(first.corner).toEqual([12, 9]);
+  expect(first.hint).toBe("zoom.otherCorner");
+  expect(first.pendingZoom).toBeNull();
+
+  const both = toolReducer(first, corner("0,0", 10));
+  expect(both.pendingZoom).toEqual([
+    [0, 0],
+    [12, 9],
+  ]);
+  expect(both.corner).toBeNull();
+  expect(both.hint).toBe("zoom.firstCorner");
+  // The zoom is handed over once.
+  expect(toolReducer(both, { type: "escape" }).pendingZoom).toBeNull();
 });

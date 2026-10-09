@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { Command, Drafting, EntityInfo, Picked, Snap, SnapKind } from "../api";
 import type { Target } from "../viewport/batch";
-import type { Point } from "../viewport/camera";
+import type { Bounds, Point } from "../viewport/camera";
 import { markerSegments } from "../viewport/snapMarker";
 import type { Tool } from "../viewport/Viewport";
 import { coalesce } from "./coalesce";
@@ -35,6 +35,10 @@ export type ToolState = {
   /** `divide` and `measureAlong`: the entity clicked, waiting for the number of parts or the
    *  step to be typed. */
   asking: { kind: "divide" | "measureAlong"; target: Target } | null;
+  /** `zoomWindow`: the first corner typed, waiting for the other. */
+  corner: Point | null;
+  /** Set by the event that gave `zoomWindow` its second corner; the hook zooms to it. */
+  pendingZoom: Bounds | null;
 };
 
 export type ToolEvent =
@@ -65,7 +69,7 @@ const PROMPT: Record<Tool, string> = {
   distance: "measure.needTwo",
   area: "measure.needThree",
   count: "measure.clickBlock",
-  zoomWindow: "",
+  zoomWindow: "zoom.firstCorner",
   geometry: "inquiry.clickGeometry",
   divide: "inquiry.clickDivide",
   measureAlong: "inquiry.clickAlong",
@@ -90,6 +94,8 @@ export const initialToolState = (tool: Tool): ToolState => ({
   selected: null,
   lastClick: null,
   asking: null,
+  corner: null,
+  pendingZoom: null,
 });
 
 const samePick = (a: Picked, b: Picked) =>
@@ -130,8 +136,8 @@ function finish(s: ToolState): ToolState {
 }
 
 export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
-  // A command is pending for one state only: the hook sees it once.
-  const s = { ...state, pendingCommand: null };
+  // A command or a zoom is pending for one state only: the hook sees it once.
+  const s = { ...state, pendingCommand: null, pendingZoom: null };
   switch (event.type) {
     case "tool":
       return { ...initialToolState(event.tool), hint: PROMPT[event.tool] };
@@ -212,6 +218,17 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
           const hint = s.tool === "divide" ? "inquiry.askCount" : "inquiry.askStep";
           return { ...clicked, asking: { kind: s.tool, target }, hint };
         }
+        case "zoomWindow": {
+          // Typed corners (a drag zooms in the viewport itself), in any order.
+          const a = s.corner;
+          if (!a) return { ...clicked, corner: event.world, hint: "zoom.otherCorner" };
+          const b = event.world;
+          const pendingZoom: Bounds = [
+            [Math.min(a[0], b[0]), Math.min(a[1], b[1])],
+            [Math.max(a[0], b[0]), Math.max(a[1], b[1])],
+          ];
+          return { ...clicked, corner: null, hint: PROMPT.zoomWindow, pendingZoom };
+        }
         case "idPoint":
           return {
             ...clicked,
@@ -231,6 +248,8 @@ export type ToolApi = {
   entityInfo(handle: number, chain?: number[]): Promise<EntityInfo>;
   /** Applies a finished command. */
   run(cmd: Command): void;
+  /** Shows the window `zoomWindow` was given by two typed corners. */
+  zoomTo(bounds: Bounds): void;
   onError(e: unknown): void;
 };
 
@@ -278,6 +297,10 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
   useEffect(() => {
     if (state.pendingCommand) api.run(state.pendingCommand);
   }, [state.pendingCommand]);
+
+  useEffect(() => {
+    if (state.pendingZoom) api.zoomTo(state.pendingZoom);
+  }, [state.pendingZoom]);
 
   /** Where an unsnapped point goes: to the grid when grid snap is on. */
   const onGrid = (p: Point): Point =>
@@ -358,11 +381,14 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
     highlighted: selectedTarget(state.selected) ?? state.asking?.target ?? null,
     /** `divide` or `measureAlong` waits for its number: which one. */
     asking: state.asking?.kind ?? null,
+    /** `zoomWindow` has its first corner and waits for the other. */
+    corner: state.corner,
     /** Hands the typed number of parts or step (drawing units) to `divide` or `measureAlong`. */
     answer: (value: number) => dispatch({ type: "answer", value }),
     onClick,
-    /** A point typed on the command line, for `distance`, `area` and `idPoint`: placed as typed,
-     *  without snaps, grid, ortho or polar, and never half of a double click. */
+    /** A point typed on the command line, for `distance`, `area`, `idPoint` and the corners of
+     *  `zoomWindow`: placed as typed, without snaps, grid, ortho or polar, and never half of a
+     *  double click. */
     typePoint: (p: Point) =>
       dispatch({
         type: "click",

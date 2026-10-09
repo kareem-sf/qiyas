@@ -400,6 +400,7 @@ export default function App() {
       snap,
       entityInfo,
       run: apply,
+      zoomTo: (bounds) => viewport.current?.fitTo(bounds),
       onError: (e) => setError(String(e)),
     },
     drafting,
@@ -1606,6 +1607,9 @@ export default function App() {
   } else if (tool === "idPoint") {
     expect = "point";
     promptKey = "cmd.prompt.point";
+  } else if (tool === "zoomWindow") {
+    expect = "point";
+    promptKey = measure.corner ? "cmd.prompt.otherCorner" : "cmd.prompt.firstCorner";
   } else if (tool === "count" || tool === "geometry" || tool === "divide" || tool === "measureAlong") {
     promptKey = "cmd.prompt.select";
   }
