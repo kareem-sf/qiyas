@@ -28,7 +28,8 @@ qiyas/
 All the crates above exist; `qiyas-pdf` reads PDFs (import, underlays), PDF plot comes later.
 
 Pinned libraries (git revs in the workspace `Cargo.toml`): opencadcodec `a35f43e` (DWG/DXF) and
-opencadkernel `99b6b48` (`geom2d` only, for snaps). Both MPL-2.0. Licence texts of code we ship
+opencadkernel `99b6b48` (`geom2d` for snaps and edits, `offset` for polyline offsets: it brings
+cavalier_contours, MIT OR Apache-2.0). Both MPL-2.0. Licence texts of code we ship
 live in `LICENSES/` (opencadcodec, opencadkernel, pdfium); add one there for every new non-MIT
 library. Font licences sit beside the fonts in `crates/qiyas-render/fonts/`.
 
@@ -166,6 +167,14 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
   tool's pick, whole), else asks for one (clicks or a box, then Enter); stretch always asks for
   its crossing window. Home tab, Modify group; command line M, CO/CP, RO, SC, MI, S, AL, AR (R or
   P), X, E. Grips come later.
+- `Command::Edit(EditSpec)` (`qiyas-core/src/modify2.rs`, wire `{"type":"edit","kind":"trim",...}`):
+  trim, extend, break, join, lengthen, reverse, offset, fillet, chamfer, blend, pedit, overkill,
+  flatten; same targets, one undo step, the take-off follows. Lines, arcs, circles and flat
+  polylines are reshaped; anything drawn can cut or bound. Trim and break keep the handle on the
+  longest piece; join keeps the first's. Offset keeps exact arcs (kernel `offset_polyline`, sharp
+  straight corners). Fillet and chamfer: two lines or two straight sides of one polyline.
+  `Outcome::Edited { added, removed, left_alone }`. Modify's second row; command line TR, EX
+  (Shift+click swaps), BR, J, LEN, REVERSE, O, F, CHA, BLEND, PE, OVERKILL, FLATTEN.
 
 ## PDF
 
