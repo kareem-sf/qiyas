@@ -24,7 +24,7 @@ use crate::drawing::short_layer_name;
 use crate::embed::{embed_measurements, read_embedded};
 use crate::project::{self, project_path, Project};
 use crate::underlay::{rebase_links, Underlays};
-use crate::undo::{History, Parts, Snapshot};
+use crate::undo::{DocChange, History, Parts, Step, TablesSnapshot};
 use crate::xref::{XrefInfo, XrefSet};
 use crate::{
     Boq, Command, Conflict, CoreError, Drafting, Drawing, LayerInfo, Outcome, Schedule, Sheet,
@@ -594,7 +594,7 @@ impl Session {
     }
 
     /// Names what `batch` would give: it changes when the sheet, the hidden layers, the Arabic
-    /// setting, the drawing itself (PDF imports, underlays, their undo and redo) or its xrefs
+    /// setting, the drawing itself (every drawing command, its undo and its redo) or its xrefs
     /// change, and not for take-off, BOQ or conflict changes or their undo or redo. Not for the zoom the glyphs are drawn for either: the window asks
     /// for that. A 64-bit FNV-1a hash of the session, sheet, hidden layers (sorted, case-folded),
     /// Arabic setting, document revision and xrefs (name, file found, when it was last changed
@@ -803,29 +803,25 @@ impl Session {
         self.run_as(cmd, Source::User)
     }
 
-    /// Runs `cmd` for `source` and, when it changes the take-off, the BOQ or the conflicts, records
-    /// an undo step.
+    /// Runs `cmd` for `source` and, when it changes the take-off, the BOQ, the conflicts or the
+    /// drawing, records an undo step.
     /// New measurements are marked as made by `source`.
     pub fn run_as(&mut self, cmd: Command, source: Source) -> Result<Outcome, CoreError> {
-        let before = cmd.changes().map(|part| match part {
-            Part::Takeoff => Snapshot::Takeoff(self.takeoff.clone()),
-            Part::Boq => Snapshot::Boq(self.boq.clone()),
-            Part::Conflicts => Snapshot::Conflicts(self.conflicts.clone(), self.schedules.clone()),
-            Part::Document => {
-                Snapshot::Document(Box::new(self.drawing.doc.clone()), self.takeoff.clone())
+        let before = match cmd.changes() {
+            None => return self.execute(cmd, source),
+            Some(Part::Document { tables, takeoff }) => {
+                return self
+                    .record_document_change(source, tables, takeoff, |s| s.execute(cmd, source))
             }
-        });
-        // A command that changes the drawing (PDF import, underlays, calibration) bumps
-        // `document_revision`, or the window keeps showing the old batch. Xrefs change outside
-        // commands (`reload_xrefs`) and are part of `batch_version` themselves.
+            Some(Part::Takeoff) => Step::Takeoff(self.takeoff.clone()),
+            Some(Part::Boq) => Step::Boq(self.boq.clone()),
+            Some(Part::Conflicts) => {
+                Step::Conflicts(self.conflicts.clone(), self.schedules.clone())
+            }
+        };
         let outcome = self.execute(cmd, source)?;
-        if let Some(before) = before {
-            if !matches!(outcome, Outcome::Nothing) {
-                if matches!(before, Snapshot::Document(..)) {
-                    self.drawing_changed();
-                }
-                self.history.record(before, source);
-            }
+        if !matches!(outcome, Outcome::Nothing) {
+            self.history.record(before, source);
         }
         Ok(outcome)
     }
@@ -849,30 +845,46 @@ impl Session {
     }
 
     /// True when the drawing itself (not the take-off, which is saved after every command) has
-    /// changed since it was opened or last saved: PDF imports, underlays, calibrations, and their
-    /// undo and redo.
+    /// changed since it was opened or last saved: every drawing command (imports, underlays,
+    /// calibrations, deletions…), and their undo and redo.
     pub fn is_dirty(&self) -> bool {
         self.document_revision != self.saved_revision
     }
 
-    /// Runs `f`, a change to the drawing, as one undo step made by `source`; on failure the
-    /// drawing is put back as it was.
+    /// Runs `f`, a change to the drawing, as one undo step made by `source`. The step holds the
+    /// before images of the entities `f` touches (recorded by the drawing as it goes), with the
+    /// drawing's tables when `tables` and the take-off when `takeoff` (taken whole before `f`).
+    /// A change that leaves everything as it was is no step. Every step moves
+    /// `document_revision` on, so the window draws the batch again. On failure everything is put
+    /// back as it was.
     pub(crate) fn record_document_change<T>(
         &mut self,
         source: Source,
+        tables: bool,
+        takeoff: bool,
         f: impl FnOnce(&mut Self) -> Result<T, CoreError>,
     ) -> Result<T, CoreError> {
-        let before = self.drawing.doc.clone();
-        let takeoff = self.takeoff.clone();
-        match f(self) {
+        let tables = tables.then(|| TablesSnapshot::take(&self.drawing.doc));
+        let takeoff = takeoff.then(|| self.takeoff.clone());
+        let recorder = self.drawing.doc.begin_entity_change_recording();
+        let done = f(self);
+        self.drawing.doc.end_entity_change_recording();
+        let change = DocChange::from_before_images(
+            &self.drawing.doc,
+            recorder.take_before_images(),
+            tables,
+            takeoff,
+        );
+        match done {
             Ok(done) => {
-                self.drawing_changed();
-                self.history
-                    .record(Snapshot::Document(Box::new(before), takeoff), source);
+                if !change.is_empty(&self.drawing.doc) {
+                    self.drawing_changed();
+                    self.history.record(Step::Document(change), source);
+                }
                 Ok(done)
             }
             Err(e) => {
-                self.drawing.doc = before;
+                change.swap(&mut self.drawing.doc, &mut self.takeoff);
                 *self.cache.get_mut() = None;
                 Err(e)
             }
@@ -1084,4 +1096,44 @@ pub(crate) fn variant_name(entity: &EntityType) -> String {
     // The Err is our own early stop, not a failure.
     let _ = write!(name, "{entity:?}");
     name.0
+}
+
+#[cfg(test)]
+mod tests {
+    use opencadcodec::Line;
+
+    use super::*;
+
+    #[test]
+    fn a_failed_drawing_change_is_put_back_and_is_no_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = crate::fixtures::write_sample(dir.path(), "dxf");
+        let mut s = Session::open(&path).unwrap();
+        let count = |s: &Session| s.drawing.doc.entities_in_block("*Model_Space").count();
+        let (entities, version) = (count(&s), s.batch_version());
+        let first = s
+            .drawing
+            .doc
+            .entities_in_block("*Model_Space")
+            .next()
+            .unwrap();
+        let first = first.common().handle;
+        let err = s.record_document_change(Source::User, true, false, |s| {
+            s.ensure_layer("NEW", Color::Index(1));
+            s.drawing
+                .doc
+                .add_entity(EntityType::Line(Line::from_coords(
+                    0.0, 0.0, 0.0, 1.0, 1.0, 0.0,
+                )))
+                .unwrap();
+            s.drawing.doc.remove_entity_arc(first);
+            Err::<(), _>(CoreError::InvalidCommand("stop".into()))
+        });
+        assert!(err.is_err());
+        assert_eq!(count(&s), entities);
+        assert!(s.drawing.doc.get_entity(first).is_some());
+        assert!(!s.drawing.doc.layers.contains("NEW"));
+        assert!(!s.can_undo());
+        assert_eq!(s.batch_version(), version);
+    }
 }

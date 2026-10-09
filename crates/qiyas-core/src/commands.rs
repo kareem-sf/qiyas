@@ -1,8 +1,10 @@
 //! The command bus: every change to the take-off, the BOQ, the conflicts or the drawing goes
 //! through `Session::run` (the user) or `Session::run_as` (the AI, or an outside AI through MCP).
 
+use std::collections::HashSet;
+
 use opencadcodec::tables::normalize_name;
-use opencadcodec::EntityType;
+use opencadcodec::{EntityType, Handle};
 use qiyas_geom::{object_to_world, Path};
 use qiyas_render::layer_shown_with;
 use serde::{Deserialize, Serialize};
@@ -216,6 +218,12 @@ pub enum Command {
     DeleteView {
         name: String,
     },
+    /// Deletes the entities `handles` from the sheet on screen: one undo step. Each must be an
+    /// entity of the drawing itself on that sheet (not inside a block, not an xref's); otherwise
+    /// nothing is deleted.
+    DeleteEntities {
+        handles: Vec<u64>,
+    },
 }
 
 /// The part of the session a command changes, kept whole in its undo step.
@@ -224,8 +232,13 @@ pub(crate) enum Part {
     Boq,
     /// The conflicts and the schedules.
     Conflicts,
-    /// The drawing itself, kept with the take-off (divide and measure along change both).
-    Document,
+    /// The drawing itself: the entities the command touches are kept as they were (their
+    /// before images), with the drawing's tables when `tables` and the take-off when `takeoff`
+    /// (divide and measure along change both).
+    Document {
+        tables: bool,
+        takeoff: bool,
+    },
 }
 
 impl Command {
@@ -242,15 +255,27 @@ impl Command {
             | Command::ExtractData { .. } => None,
             Command::SetBoq { .. } | Command::SetBoqTolerance { .. } => Some(Part::Boq),
             Command::SetConflicts { .. } | Command::ResolveConflict { .. } => Some(Part::Conflicts),
+            // Entities only.
+            Command::Calibrate { .. }
+            | Command::SetImageDisplay { .. }
+            | Command::DeleteEntities { .. } => Some(Part::Document {
+                tables: false,
+                takeoff: false,
+            }),
+            // New layers, views, or underlay and image definitions too.
             Command::ImportPdf { .. }
             | Command::AttachPdfUnderlay { .. }
-            | Command::Calibrate { .. }
             | Command::AttachImage { .. }
-            | Command::SetImageDisplay { .. }
-            | Command::DivideAlong { .. }
-            | Command::MeasureAlong { .. }
             | Command::SaveView { .. }
-            | Command::DeleteView { .. } => Some(Part::Document),
+            | Command::DeleteView { .. } => Some(Part::Document {
+                tables: true,
+                takeoff: false,
+            }),
+            // Points on their own layer, and their count in the take-off.
+            Command::DivideAlong { .. } | Command::MeasureAlong { .. } => Some(Part::Document {
+                tables: true,
+                takeoff: true,
+            }),
             _ => Some(Part::Takeoff),
         }
     }
@@ -538,6 +563,10 @@ impl Session {
                     Outcome::Nothing
                 });
             }
+            Command::DeleteEntities { handles } => {
+                self.delete_entities(&handles)?;
+                return Ok(Outcome::Changed);
+            }
         };
         measurement.source = source.name().to_string();
         self.takeoff.add(measurement.clone());
@@ -775,6 +804,45 @@ impl Session {
         m.points = points;
         m.block_name = Some(block_name);
         m
+    }
+
+    /// Removes the entities `handles` from the sheet on screen, once every one is found there.
+    fn delete_entities(&mut self, handles: &[u64]) -> Result<(), CoreError> {
+        if handles.is_empty() {
+            return Err(invalid("Pick the entities to delete"));
+        }
+        let doc = &self.drawing.doc;
+        let on_sheet: HashSet<Handle> = doc
+            .block_records
+            .get(&self.sheet)
+            .map(|b| b.entity_handles.iter().copied().collect())
+            .unwrap_or_default();
+        for &h in handles {
+            let handle = Handle::new(h);
+            if doc.get_entity(handle).is_none() {
+                let xref = self.xrefs.entries.iter().find(|x| {
+                    x.drawing
+                        .as_ref()
+                        .is_some_and(|d| d.doc.get_entity(handle).is_some())
+                });
+                return Err(match xref {
+                    Some(x) => CoreError::InvalidCommand(format!(
+                        "Entity {h:X} belongs to the xref {}, which is read-only",
+                        x.name
+                    )),
+                    None => CoreError::NoSuchEntity(h),
+                });
+            }
+            if !on_sheet.contains(&handle) {
+                return Err(CoreError::InvalidCommand(format!(
+                    "Entity {h:X} is not on this sheet"
+                )));
+            }
+        }
+        for &h in handles {
+            self.drawing.doc.remove_entity_arc(Handle::new(h));
+        }
+        Ok(())
     }
 }
 

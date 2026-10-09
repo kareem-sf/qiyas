@@ -59,6 +59,22 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
 - The `.qiyas` project file is saved next to the drawing after every command.
 - Save keeps a `.bak` of the original drawing (e.g. `villa.dwg.bak`) before writing over it.
 
+## Undo
+
+- `qiyas-core/src/undo.rs`: one step per command, at most 200, each with its `Source`
+  (`undo_if` lets the AI undo only its own). Take-off, BOQ and conflict steps keep that part whole.
+- A drawing command (`Part::Document` in `Command::changes`) runs inside
+  `Session::record_document_change`: opencadcodec's entity change recorder keeps the before image
+  of each entity it adds, removes or edits (`DocChange`), never a copy of the whole drawing.
+  Commands that change layers, views, block records or underlay and image definitions also keep a
+  `TablesSnapshot`; divide and measure along keep the take-off too. A failed command is put back.
+- Undo removes added entities, restores removed ones under their own handles (a removal leaves
+  the handle in its block's list, so `restore_entity_arc` puts it back in place) and swaps edited
+  ones back. Every drawing step, undo and redo moves `document_revision` on (batch version, dirty
+  flag, tabs).
+- `Command::DeleteEntities { handles }`: the drawing's own entities on the sheet on screen only;
+  an xref's, a block's inside or another sheet's are refused and nothing is deleted.
+
 ## Drawing on screen
 
 - Picking reaches inside blocks: the first click picks the line inside the block, a slow second

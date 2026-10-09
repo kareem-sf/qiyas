@@ -547,7 +547,9 @@ impl Session {
         prepared: PreparedPdf,
         insert_at: [f64; 2],
     ) -> Result<Vec<u64>, CoreError> {
-        self.record_document_change(Source::User, |s| s.apply_prepared(prepared, insert_at))
+        self.record_document_change(Source::User, true, false, |s| {
+            s.apply_prepared(prepared, insert_at)
+        })
     }
 
     /// `apply_pdf` without the undo step (the command bus records it).

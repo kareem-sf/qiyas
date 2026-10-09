@@ -1,10 +1,18 @@
-//! Undo and redo for the take-off, the BOQ, the conflicts and the drawing itself, as whole
-//! snapshots: small enough at take-off sizes. A step keeps only the part its command changed, so
-//! editing the take-off never copies a long BOQ. A drawing snapshot shares the entities with the
-//! drawing (they are reference-counted), so it costs the tables and indexes, not the geometry.
-//! Each step remembers who made it, so the AI can undo only its own last change.
+//! Undo and redo. The take-off, the BOQ and the conflicts are kept whole: small enough at
+//! take-off sizes, and a step keeps only the part its command changed, so editing the take-off
+//! never copies a long BOQ. A drawing change keeps only what it touched: the before images of
+//! the entities it added, removed or changed (opencadcodec's entity change recorder), and the
+//! drawing's tables when the command changes them too. Each step remembers who made it, so the AI
+//! can undo only its own last change.
 
-use opencadcodec::CadDocument;
+use std::sync::Arc;
+
+use opencadcodec::classes::DxfClassCollection;
+use opencadcodec::objects::ObjectType;
+use opencadcodec::tables::{
+    AppId, BlockRecord, DimStyle, Layer, LineType, Table, TextStyle, Ucs, VPort, View,
+};
+use opencadcodec::{CadDocument, EntityType, Handle};
 
 use crate::{Boq, Conflict, Schedule, Source, Takeoff};
 
@@ -13,13 +21,157 @@ const MAX_STEPS: usize = 200;
 
 /// The part of the session a command changed, as it was before (or after, on the redo stack).
 #[derive(Debug)]
-pub(crate) enum Snapshot {
+pub(crate) enum Step {
     Takeoff(Takeoff),
     Boq(Option<Boq>),
     Conflicts(Vec<Conflict>, Vec<Schedule>),
-    /// The drawing (PDF import, underlays, calibration), with the take-off: dividing a path adds
-    /// points to the drawing and their count to the take-off in one step.
-    Document(Box<CadDocument>, Takeoff),
+    /// A change to the drawing (and to the take-off with it, for divide and measure along).
+    Document(DocChange),
+}
+
+/// One drawing change, held as what puts it back: undoing removes `added`, restores `removed`
+/// and puts back `replaced`, and swaps `tables` and `takeoff` in. Doing that gives the change
+/// that redoes it, and so on.
+#[derive(Debug, Default)]
+pub(crate) struct DocChange {
+    /// Entities the change added, by handle.
+    pub added: Vec<Handle>,
+    /// Entities the change removed, as they were.
+    pub removed: Vec<Arc<EntityType>>,
+    /// Entities the change edited, as they were before.
+    pub replaced: Vec<(Handle, Arc<EntityType>)>,
+    /// The drawing's tables and objects before the change, for a command that changes them
+    /// (layers, views, block records, underlay and image definitions).
+    pub tables: Option<Box<TablesSnapshot>>,
+    /// The take-off before the change, for a command that changes it too.
+    pub takeoff: Option<Takeoff>,
+}
+
+/// The parts of a drawing outside its entities that commands change.
+#[derive(Debug)]
+pub(crate) struct TablesSnapshot {
+    layers: Table<Layer>,
+    line_types: Table<LineType>,
+    text_styles: Table<TextStyle>,
+    block_records: Table<BlockRecord>,
+    dim_styles: Table<DimStyle>,
+    app_ids: Table<AppId>,
+    views: Table<View>,
+    vports: Table<VPort>,
+    ucss: Table<Ucs>,
+    classes: DxfClassCollection,
+    objects: std::collections::HashMap<Handle, ObjectType>,
+}
+
+impl TablesSnapshot {
+    pub(crate) fn take(doc: &CadDocument) -> Box<TablesSnapshot> {
+        Box::new(TablesSnapshot {
+            layers: doc.layers.clone(),
+            line_types: doc.line_types.clone(),
+            text_styles: doc.text_styles.clone(),
+            block_records: doc.block_records.clone(),
+            dim_styles: doc.dim_styles.clone(),
+            app_ids: doc.app_ids.clone(),
+            views: doc.views.clone(),
+            vports: doc.vports.clone(),
+            ucss: doc.ucss.clone(),
+            classes: doc.classes.clone(),
+            objects: doc.objects.clone(),
+        })
+    }
+
+    /// True when `doc` holds these tables still.
+    fn same_as(&self, doc: &CadDocument) -> bool {
+        self.layers == doc.layers
+            && self.line_types == doc.line_types
+            && self.text_styles == doc.text_styles
+            && self.block_records == doc.block_records
+            && self.dim_styles == doc.dim_styles
+            && self.app_ids == doc.app_ids
+            && self.views == doc.views
+            && self.vports == doc.vports
+            && self.ucss == doc.ucss
+            && self.classes == doc.classes
+            && self.objects == doc.objects
+    }
+
+    /// Puts these tables in `doc` and returns the ones they replaced.
+    fn swap(mut self: Box<Self>, doc: &mut CadDocument) -> Box<TablesSnapshot> {
+        use std::mem::swap;
+        swap(&mut self.layers, &mut doc.layers);
+        swap(&mut self.line_types, &mut doc.line_types);
+        swap(&mut self.text_styles, &mut doc.text_styles);
+        swap(&mut self.block_records, &mut doc.block_records);
+        swap(&mut self.dim_styles, &mut doc.dim_styles);
+        swap(&mut self.app_ids, &mut doc.app_ids);
+        swap(&mut self.views, &mut doc.views);
+        swap(&mut self.vports, &mut doc.vports);
+        swap(&mut self.ucss, &mut doc.ucss);
+        swap(&mut self.classes, &mut doc.classes);
+        swap(&mut self.objects, &mut doc.objects);
+        self
+    }
+}
+
+impl DocChange {
+    /// The change a command made, from the recorder's before images (`None`: added while
+    /// recording) and the drawing after it. An entity added and removed again is left out.
+    pub(crate) fn from_before_images(
+        doc: &CadDocument,
+        before: Vec<(Handle, Option<Arc<EntityType>>)>,
+        tables: Option<Box<TablesSnapshot>>,
+        takeoff: Option<Takeoff>,
+    ) -> DocChange {
+        let mut change = DocChange {
+            tables,
+            takeoff,
+            ..DocChange::default()
+        };
+        for (handle, image) in before {
+            let now = doc.get_entity(handle).is_some();
+            match (image, now) {
+                (None, true) => change.added.push(handle),
+                (None, false) => {}
+                (Some(image), true) => change.replaced.push((handle, image)),
+                (Some(image), false) => change.removed.push(image),
+            }
+        }
+        change
+    }
+
+    /// True when the change left the drawing (and the take-off) as they were.
+    pub(crate) fn is_empty(&self, doc: &CadDocument) -> bool {
+        self.added.is_empty()
+            && self.removed.is_empty()
+            && self.replaced.is_empty()
+            && self.takeoff.is_none()
+            && self.tables.as_ref().is_none_or(|t| t.same_as(doc))
+    }
+
+    /// Takes the change back in `doc` and `takeoff`, and returns the change that redoes it.
+    /// Removed entities come back under their own handles, into the block they were in (a
+    /// removal keeps the block's list of handles; see `CadDocument::remove_entity_arc`).
+    pub(crate) fn swap(self, doc: &mut CadDocument, takeoff: &mut Takeoff) -> DocChange {
+        let mut redo = DocChange::default();
+        for handle in self.added {
+            if let Some(entity) = doc.remove_entity_arc(handle) {
+                redo.removed.push(entity);
+            }
+        }
+        for entity in self.removed {
+            if let Some(handle) = doc.restore_entity_arc(entity) {
+                redo.added.push(handle);
+            }
+        }
+        for (handle, entity) in self.replaced {
+            if let Some(now) = doc.replace_entity_arc(handle, entity) {
+                redo.replaced.push((handle, now));
+            }
+        }
+        redo.tables = self.tables.map(|t| t.swap(doc));
+        redo.takeoff = self.takeoff.map(|t| std::mem::replace(takeoff, t));
+        redo
+    }
 }
 
 /// The parts of the session undo and redo put back.
@@ -33,22 +185,19 @@ pub(crate) struct Parts<'a> {
     pub doc_changed: &'a mut bool,
 }
 
-impl Snapshot {
-    /// Puts this snapshot in place and returns what it replaced.
-    fn swap(self, parts: Parts) -> Snapshot {
+impl Step {
+    /// Puts this step in place and returns what it replaced.
+    fn swap(self, parts: Parts) -> Step {
         match self {
-            Snapshot::Takeoff(t) => Snapshot::Takeoff(std::mem::replace(parts.takeoff, t)),
-            Snapshot::Boq(b) => Snapshot::Boq(std::mem::replace(parts.boq, b)),
-            Snapshot::Conflicts(c, s) => Snapshot::Conflicts(
+            Step::Takeoff(t) => Step::Takeoff(std::mem::replace(parts.takeoff, t)),
+            Step::Boq(b) => Step::Boq(std::mem::replace(parts.boq, b)),
+            Step::Conflicts(c, s) => Step::Conflicts(
                 std::mem::replace(parts.conflicts, c),
                 std::mem::replace(parts.schedules, s),
             ),
-            Snapshot::Document(d, t) => {
+            Step::Document(change) => {
                 *parts.doc_changed = true;
-                Snapshot::Document(
-                    Box::new(std::mem::replace(parts.doc, *d)),
-                    std::mem::replace(parts.takeoff, t),
-                )
+                Step::Document(change.swap(parts.doc, parts.takeoff))
             }
         }
     }
@@ -57,13 +206,13 @@ impl Snapshot {
 #[derive(Debug, Default)]
 pub(crate) struct History {
     /// The state before each change, and who made the change.
-    undo: Vec<(Snapshot, Source)>,
-    redo: Vec<(Snapshot, Source)>,
+    undo: Vec<(Step, Source)>,
+    redo: Vec<(Step, Source)>,
 }
 
 impl History {
     /// Records the state as it was before a command by `source`. Clears what could be redone.
-    pub(crate) fn record(&mut self, before: Snapshot, source: Source) {
+    pub(crate) fn record(&mut self, before: Step, source: Source) {
         self.redo.clear();
         push_capped(&mut self.undo, (before, source));
     }
@@ -73,8 +222,8 @@ impl History {
         self.undo.last().map(|(_, source)| *source)
     }
 
-    /// Puts the take-off, BOQ or conflicts back to their state before the last command. False
-    /// when there is none.
+    /// Puts the take-off, BOQ, conflicts or drawing back to their state before the last command.
+    /// False when there is none.
     pub(crate) fn undo(&mut self, parts: Parts) -> bool {
         let Some((before, source)) = self.undo.pop() else {
             return false;
@@ -101,7 +250,7 @@ impl History {
     }
 }
 
-fn push_capped(stack: &mut Vec<(Snapshot, Source)>, step: (Snapshot, Source)) {
+fn push_capped(stack: &mut Vec<(Step, Source)>, step: (Step, Source)) {
     if stack.len() == MAX_STEPS {
         stack.remove(0);
     }
@@ -118,8 +267,13 @@ mod tests {
         let (mut takeoff, mut boq, mut conflicts, mut schedules) =
             (Takeoff::default(), None, Vec::new(), Vec::new());
         let (mut doc, mut doc_changed) = (CadDocument::new(), false);
-        for _ in 0..MAX_STEPS + 5 {
-            history.record(Snapshot::Takeoff(Takeoff::default()), Source::User);
+        for i in 0..MAX_STEPS + 5 {
+            let step = if i % 2 == 0 {
+                Step::Takeoff(Takeoff::default())
+            } else {
+                Step::Document(DocChange::default())
+            };
+            history.record(step, Source::User);
         }
         let undone = std::iter::from_fn(|| {
             let parts = Parts {
