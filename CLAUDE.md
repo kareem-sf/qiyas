@@ -72,8 +72,10 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
   the handle in its block's list, so `restore_entity_arc` puts it back in place) and swaps edited
   ones back. Every drawing step, undo and redo moves `document_revision` on (batch version, dirty
   flag, tabs).
-- `Command::DeleteEntities { handles }`: the drawing's own entities on the sheet on screen only;
-  an xref's, a block's inside or another sheet's are refused and nothing is deleted.
+- `Command::DeleteEntities { targets }`: each `Target { handle, chain }` as picked (`Picked`). Only
+  the drawing's own entities at the top of the sheet on screen (empty chain, owned by the sheet);
+  a block's inside or an xref's (non-empty chain) or another sheet's are refused, and then nothing
+  is deleted.
 
 ## Drawing on screen
 

@@ -1,8 +1,6 @@
 //! The command bus: every change to the take-off, the BOQ, the conflicts or the drawing goes
 //! through `Session::run` (the user) or `Session::run_as` (the AI, or an outside AI through MCP).
 
-use std::collections::HashSet;
-
 use opencadcodec::tables::normalize_name;
 use opencadcodec::{EntityType, Handle};
 use qiyas_geom::{object_to_world, Path};
@@ -11,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::drawing::short_layer_name;
 use crate::inquiry::{Field, Spacing};
-use crate::session::{effective_block_name, locate, variant_name, Located};
+use crate::session::{effective_block_name, locate, variant_name, xref_of_chain, Located};
 use crate::takeoff::in_metres;
 use crate::{
     AttachMode, Boq, Conflict, ConflictStatus, CoreError, Drafting, EntityFilter, Kind,
@@ -218,12 +216,22 @@ pub enum Command {
     DeleteView {
         name: String,
     },
-    /// Deletes the entities `handles` from the sheet on screen: one undo step. Each must be an
-    /// entity of the drawing itself on that sheet (not inside a block, not an xref's); otherwise
-    /// nothing is deleted.
+    /// Deletes the entities `targets` from the sheet on screen: one undo step. Each must be an
+    /// entity of the drawing itself at the top of that sheet (an empty chain: not inside a block,
+    /// not an xref's); otherwise nothing is deleted.
     DeleteEntities {
-        handles: Vec<u64>,
+        targets: Vec<Target>,
     },
+}
+
+/// An entity as picked (see `Picked`): its handle and the block references it sits inside,
+/// outermost first (empty, the default, for an entity on the sheet). A chain ending in an xref
+/// reference names an entity of that xref.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Target {
+    pub handle: u64,
+    #[serde(default)]
+    pub chain: Vec<u64>,
 }
 
 /// The part of the session a command changes, kept whole in its undo step.
@@ -563,8 +571,8 @@ impl Session {
                     Outcome::Nothing
                 });
             }
-            Command::DeleteEntities { handles } => {
-                self.delete_entities(&handles)?;
+            Command::DeleteEntities { targets } => {
+                self.delete_entities(&targets)?;
                 return Ok(Outcome::Changed);
             }
         };
@@ -806,41 +814,36 @@ impl Session {
         m
     }
 
-    /// Removes the entities `handles` from the sheet on screen, once every one is found there.
-    fn delete_entities(&mut self, handles: &[u64]) -> Result<(), CoreError> {
-        if handles.is_empty() {
+    /// Removes the entities `targets` from the sheet on screen, once every one is found at its
+    /// top.
+    fn delete_entities(&mut self, targets: &[Target]) -> Result<(), CoreError> {
+        if targets.is_empty() {
             return Err(invalid("Pick the entities to delete"));
         }
         let doc = &self.drawing.doc;
-        let on_sheet: HashSet<Handle> = doc
-            .block_records
-            .get(&self.sheet)
-            .map(|b| b.entity_handles.iter().copied().collect())
-            .unwrap_or_default();
-        for &h in handles {
-            let handle = Handle::new(h);
-            if doc.get_entity(handle).is_none() {
-                let xref = self.xrefs.entries.iter().find(|x| {
-                    x.drawing
-                        .as_ref()
-                        .is_some_and(|d| d.doc.get_entity(handle).is_some())
-                });
-                return Err(match xref {
-                    Some(x) => CoreError::InvalidCommand(format!(
-                        "Entity {h:X} belongs to the xref {}, which is read-only",
-                        x.name
-                    )),
-                    None => CoreError::NoSuchEntity(h),
-                });
+        let sheet = self.sheet_owner();
+        for Target { handle: h, chain } in targets {
+            if !chain.is_empty() {
+                return Err(CoreError::InvalidCommand(match xref_of_chain(doc, chain) {
+                    Some(name) => {
+                        format!("Entity {h:X} belongs to the xref {name}, which is read-only")
+                    }
+                    None => format!(
+                        "Entity {h:X} is inside a block: pick the block reference to delete it"
+                    ),
+                }));
             }
-            if !on_sheet.contains(&handle) {
+            let entity = doc
+                .get_entity(Handle::new(*h))
+                .ok_or(CoreError::NoSuchEntity(*h))?;
+            if Some(entity.common().owner_handle) != sheet {
                 return Err(CoreError::InvalidCommand(format!(
                     "Entity {h:X} is not on this sheet"
                 )));
             }
         }
-        for &h in handles {
-            self.drawing.doc.remove_entity_arc(Handle::new(h));
+        for t in targets {
+            self.drawing.doc.remove_entity_arc(Handle::new(t.handle));
         }
         Ok(())
     }

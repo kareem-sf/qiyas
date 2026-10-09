@@ -4,7 +4,7 @@
 use opencadcodec::entities::Insert;
 use opencadcodec::{BlockRecord, CadDocument, EntityType, Handle, Line, Vector3};
 use qiyas_core::fixtures::{write_drawing, write_png, write_sample, write_xref_pair};
-use qiyas_core::{Command, CoreError, Outcome, Session, Source};
+use qiyas_core::{Command, CoreError, Outcome, Session, Source, Target};
 
 const MODEL: &str = "*Model_Space";
 
@@ -53,9 +53,25 @@ fn present(session: &Session, handle: u64) -> bool {
     in_doc
 }
 
+/// Deletes entities at the top of the sheet (no chain).
 fn delete(handles: &[u64]) -> Command {
+    let targets = handles
+        .iter()
+        .map(|&handle| Target {
+            handle,
+            chain: Vec::new(),
+        })
+        .collect();
+    Command::DeleteEntities { targets }
+}
+
+/// Deletes the entity `handle` inside the block references `chain`.
+fn delete_in(handle: u64, chain: &[u64]) -> Command {
     Command::DeleteEntities {
-        handles: handles.to_vec(),
+        targets: vec![Target {
+            handle,
+            chain: chain.to_vec(),
+        }],
     }
 }
 
@@ -83,13 +99,15 @@ fn deleting_two_entities_is_one_step_and_undo_brings_them_back_with_their_handle
     assert!(s.undo());
     assert!(present(&s, line) && present(&s, arc));
     // Restored, not duplicated: the sheet lists each handle once.
-    let listed = s
-        .drawing
-        .doc
-        .entities_in_block(MODEL)
-        .filter(|e| e.common().handle.value() == line)
-        .count();
-    assert_eq!(listed, 1);
+    for handle in [line, arc] {
+        let listed = s
+            .drawing
+            .doc
+            .entities_in_block(MODEL)
+            .filter(|e| e.common().handle.value() == handle)
+            .count();
+        assert_eq!(listed, 1, "{handle}");
+    }
 }
 
 #[test]
@@ -143,21 +161,52 @@ fn unknown_or_xref_handles_are_refused_and_nothing_changes() {
         .common()
         .handle
         .value();
-    // A handle of the xref drawing that the host does not have.
-    let xref_only = {
-        let xdoc = &s.xrefs.entries[0].drawing.as_ref().unwrap().doc;
-        xdoc.entities_in_block(MODEL)
-            .map(|e| e.common().handle.value())
-            .find(|h| s.drawing.doc.get_entity(Handle::new(*h)).is_none())
-            .expect("the xref has a handle the host lacks")
-    };
+    let reference = s
+        .drawing
+        .doc
+        .entities_in_block(MODEL)
+        .find(|e| matches!(e, EntityType::Insert(_)))
+        .unwrap()
+        .common()
+        .handle
+        .value();
+    // An entity of the xref, picked through its reference: the host has an entity under the
+    // same handle number (`own` or the reference itself), which must not be deleted for it.
+    let xref_handles: Vec<u64> = s.xrefs.entries[0]
+        .drawing
+        .as_ref()
+        .unwrap()
+        .doc
+        .entities_in_block(MODEL)
+        .map(|e| e.common().handle.value())
+        .collect();
+    let shared = [own, reference]
+        .into_iter()
+        .find(|h| xref_handles.contains(h))
+        .expect("the host and the xref share a handle number");
+    let picked = s
+        .pick([100.0, 5.0], 0.05)
+        .expect("the xref's line is picked");
+    assert_eq!(picked.xref.as_deref(), Some("plan-arch"));
     let version = s.batch_version();
 
-    let err = s.run(delete(&[own, xref_only])).unwrap_err();
-    assert!(
-        matches!(&err, CoreError::InvalidCommand(m) if m.contains("plan-arch")),
-        "{err:?}"
-    );
+    for (handle, chain) in [(shared, vec![reference]), (picked.entity, picked.chain)] {
+        let cmd = Command::DeleteEntities {
+            targets: vec![
+                Target {
+                    handle: own,
+                    chain: Vec::new(),
+                },
+                Target { handle, chain },
+            ],
+        };
+        let err = s.run(cmd).unwrap_err();
+        assert!(
+            matches!(&err, CoreError::InvalidCommand(m) if m.contains("plan-arch")),
+            "{err:?}"
+        );
+    }
+    assert!(present(&s, shared));
     let err = s.run(delete(&[own, 0xDEAD_BEEF])).unwrap_err();
     assert!(
         matches!(err, CoreError::NoSuchEntity(0xDEAD_BEEF)),
@@ -185,11 +234,13 @@ fn entities_inside_a_block_or_on_another_sheet_are_refused() {
     let mut inner = EntityType::Line(Line::from_coords(0.0, 0.0, 0.0, 1.0, 0.0, 0.0));
     inner.common_mut().owner_handle = doc.block_records.get("BOX").unwrap().handle;
     let inner = doc.add_entity(inner).unwrap().value();
-    doc.add_entity(EntityType::Insert(Insert::new(
-        "BOX",
-        Vector3::new(0.0, 0.0, 0.0),
-    )))
-    .unwrap();
+    let reference = doc
+        .add_entity(EntityType::Insert(Insert::new(
+            "BOX",
+            Vector3::new(0.0, 0.0, 0.0),
+        )))
+        .unwrap()
+        .value();
     let paper = doc
         .add_paper_space_entity(EntityType::Line(Line::from_coords(
             0.0, 0.0, 0.0, 2.0, 0.0, 0.0,
@@ -198,12 +249,21 @@ fn entities_inside_a_block_or_on_another_sheet_are_refused() {
         .value();
     let mut s = Session::open(&write_drawing(&doc, &dir.path().join("blocks.dxf"))).unwrap();
 
-    for handle in [inner, paper] {
-        let err = s.run(delete(&[handle])).unwrap_err();
+    // Inside the block, picked through its reference or named alone; on the paper sheet.
+    for cmd in [
+        delete_in(inner, &[reference]),
+        delete(&[inner]),
+        delete(&[paper]),
+    ] {
+        let err = s.run(cmd).unwrap_err();
         assert!(matches!(err, CoreError::InvalidCommand(_)), "{err:?}");
-        assert!(s.drawing.doc.get_entity(Handle::new(handle)).is_some());
     }
+    assert!(s.drawing.doc.get_entity(Handle::new(inner)).is_some());
+    assert!(s.drawing.doc.get_entity(Handle::new(paper)).is_some());
+    // The reference itself is on the sheet: deleting it works.
     assert!(!s.can_undo());
+    s.run(delete(&[reference])).unwrap();
+    assert!(s.drawing.doc.get_entity(Handle::new(reference)).is_none());
 }
 
 #[test]
