@@ -192,7 +192,7 @@ pub(crate) fn escape_mtext(text: &str) -> String {
 }
 
 /// Marks the text `common` belongs to as written by Qiyas in reading order.
-fn mark_logical(common: &mut EntityCommon) {
+pub(crate) fn mark_logical(common: &mut EntityCommon) {
     let mut record = ExtendedDataRecord::new(LOGICAL_TEXT_APP);
     record.add_value(XDataValue::Integer16(1));
     common.extended_data.upsert_record(record);
@@ -245,7 +245,7 @@ impl Session {
         !self.drawing.doc.app_ids.contains(LOGICAL_TEXT_APP)
     }
 
-    fn register_text_app(&mut self) {
+    pub(crate) fn register_text_app(&mut self) {
         if self.needs_text_app() {
             let doc = &mut self.drawing.doc;
             let mut app = AppId::new(LOGICAL_TEXT_APP);
@@ -524,13 +524,14 @@ impl Session {
 
     /// `Command::FindReplace`: replaces every match of `finder` in `scope` with `with`; how
     /// many, the entities changed, and how many entities were left as they were because the
-    /// result would not fit (a blank text, a line break in one line).
+    /// result would not fit (a blank text, a line break in one line). A dimension's block is
+    /// rebuilt with its new text.
     pub(crate) fn find_replace(
         &mut self,
         finder: &Finder,
         with: &str,
         scope: TextScope,
-    ) -> (usize, Vec<u64>, usize) {
+    ) -> Result<(usize, Vec<u64>, usize), CoreError> {
         let mut count = 0;
         let mut handles = Vec::new();
         let mut skipped = 0;
@@ -542,7 +543,12 @@ impl Session {
                 .expect("listed from the drawing");
             match Self::replaced(finder, e, Some(with)) {
                 Some(hit) if hit.fits => {
+                    let dimension = matches!(hit.entity, EntityType::Dimension(_));
                     *self.drawing.doc.get_entity_mut(h).expect("listed") = hit.entity;
+                    if dimension {
+                        // Its block shows the new text.
+                        self.rebuild_dimension(h)?;
+                    }
                     count += hit.count;
                     handles.push(h.value());
                 }
@@ -550,7 +556,7 @@ impl Session {
                 None => {}
             }
         }
-        (count, handles, skipped)
+        Ok((count, handles, skipped))
     }
 }
 

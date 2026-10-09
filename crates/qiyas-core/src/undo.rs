@@ -47,7 +47,8 @@ pub(crate) struct DocChange {
     pub takeoff: Option<Takeoff>,
 }
 
-/// The parts of a drawing outside its entities that commands change.
+/// The parts of a drawing outside its entities that commands change, with the header variables
+/// they set.
 #[derive(Debug)]
 pub(crate) struct TablesSnapshot {
     layers: Table<Layer>,
@@ -61,6 +62,60 @@ pub(crate) struct TablesSnapshot {
     ucss: Table<Ucs>,
     classes: DxfClassCollection,
     objects: std::collections::HashMap<Handle, ObjectType>,
+    header: HeaderBits,
+}
+
+/// The header variables commands change: the annotation scale and the current dimension style
+/// with the dimension variables it sets. Never the whole header, whose handle seed must only
+/// grow.
+#[derive(Debug, Clone, PartialEq)]
+struct HeaderBits {
+    annotation_scale: String,
+    annotation_scale_value: f64,
+    dimstyle_name: String,
+    dimstyle_handle: Handle,
+    dim: [f64; 7],
+    dim_decimal_places: i16,
+}
+
+impl HeaderBits {
+    fn take(doc: &CadDocument) -> HeaderBits {
+        let h = &doc.header;
+        HeaderBits {
+            annotation_scale: h.current_annotation_scale.clone(),
+            annotation_scale_value: h.annotation_scale_value,
+            dimstyle_name: h.current_dimstyle_name.clone(),
+            dimstyle_handle: h.current_dimstyle_handle,
+            dim: [
+                h.dim_scale,
+                h.dim_arrow_size,
+                h.dim_text_height,
+                h.dim_ext_line_offset,
+                h.dim_ext_line_extension,
+                h.dim_line_gap,
+                h.dim_linear_scale,
+            ],
+            dim_decimal_places: h.dim_decimal_places,
+        }
+    }
+
+    fn put(self, doc: &mut CadDocument) {
+        let h = &mut doc.header;
+        h.current_annotation_scale = self.annotation_scale;
+        h.annotation_scale_value = self.annotation_scale_value;
+        h.current_dimstyle_name = self.dimstyle_name;
+        h.current_dimstyle_handle = self.dimstyle_handle;
+        [
+            h.dim_scale,
+            h.dim_arrow_size,
+            h.dim_text_height,
+            h.dim_ext_line_offset,
+            h.dim_ext_line_extension,
+            h.dim_line_gap,
+            h.dim_linear_scale,
+        ] = self.dim;
+        h.dim_decimal_places = self.dim_decimal_places;
+    }
 }
 
 impl TablesSnapshot {
@@ -77,6 +132,7 @@ impl TablesSnapshot {
             ucss: doc.ucss.clone(),
             classes: doc.classes.clone(),
             objects: doc.objects.clone(),
+            header: HeaderBits::take(doc),
         })
     }
 
@@ -93,6 +149,7 @@ impl TablesSnapshot {
             && self.ucss == doc.ucss
             && self.classes == doc.classes
             && self.objects == doc.objects
+            && self.header == HeaderBits::take(doc)
     }
 
     /// Puts these tables in `doc` and returns the ones they replaced.
@@ -109,6 +166,8 @@ impl TablesSnapshot {
         swap(&mut self.ucss, &mut doc.ucss);
         swap(&mut self.classes, &mut doc.classes);
         swap(&mut self.objects, &mut doc.objects);
+        let now = HeaderBits::take(doc);
+        std::mem::replace(&mut self.header, now).put(doc);
         self
     }
 }

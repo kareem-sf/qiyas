@@ -1,10 +1,11 @@
 //! Qiyas core: the document, selection, undo and redo, command bus, PDF import and underlays,
 //! raster images, inquiry (geometry, divide and measure along, data extraction), drawing new
-//! entities and modifying them, text and find and replace.
+//! entities and modifying them, text and find and replace, dimensions, leaders and tolerances.
 
 mod boq;
 mod commands;
 mod conflict;
+mod dimension;
 mod draw;
 mod drawing;
 mod embed;
@@ -32,6 +33,7 @@ pub use self::image::{draw_picture, image_size, ImageDisplay, IMAGE_EXTENSIONS, 
 pub use boq::{Boq, BoqItem};
 pub use commands::{Command, Outcome, Target};
 pub use conflict::{Conflict, ConflictKind, ConflictStatus};
+pub use dimension::{DimEditOp, DimSpec, DimStyleFields, DimStyleInfo};
 pub use draw::{Boundary, Current, DrawSpec, HatchPattern, BOUNDARY_SEGMENTS};
 pub use drawing::{short_layer_name, Drawing, LayerInfo, Sheet};
 pub use embed::{embed_measurements, read_embedded};

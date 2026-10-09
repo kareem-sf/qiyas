@@ -14,9 +14,9 @@ use crate::session::{effective_block_name, locate, variant_name, xref_of_chain, 
 use crate::takeoff::in_metres;
 use crate::text::Finder;
 use crate::{
-    AttachMode, Boq, Conflict, ConflictStatus, CoreError, Current, Drafting, DrawSpec, EditSpec,
-    EntityFilter, Kind, Measurement, ModifySpec, PreparedPdf, Schedule, Session, SnapKind, Source,
-    TextMatch, TextScope,
+    AttachMode, Boq, Conflict, ConflictStatus, CoreError, Current, DimEditOp, DimSpec,
+    DimStyleFields, Drafting, DrawSpec, EditSpec, EntityFilter, Kind, Measurement, ModifySpec,
+    PreparedPdf, Schedule, Session, SnapKind, Source, TextMatch, TextScope,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -296,6 +296,64 @@ pub enum Command {
         #[serde(default)]
         whole_word: bool,
     },
+    /// Adds the dimensions `DimSpec` describes on the current layer in the current dimension
+    /// style, each with its `*D` block: one undo step, `Outcome::Added` (see `crate::dimension`).
+    Dimension(DimSpec),
+    /// Changes the dimension `target` (its text, its arrows, where its text sits) and rebuilds
+    /// its block: one undo step.
+    DimEdit {
+        target: Target,
+        op: DimEditOp,
+    },
+    /// Breaks the dimension `target`'s lines where the entity `cutter` crosses them.
+    DimBreak {
+        target: Target,
+        cutter: Target,
+    },
+    /// Spaces the linear dimensions `targets`, parallel to `base`, `spacing` drawing units apart
+    /// going out from it (none: twice the text height).
+    DimSpace {
+        base: Target,
+        targets: Vec<Target>,
+        #[serde(default)]
+        spacing: Option<f64>,
+    },
+    /// A jog in the linear dimension `target`'s line, nearest `at`.
+    DimJogLine {
+        target: Target,
+        at: [f64; 2],
+    },
+    /// A leader through `points` (arrowhead at the first) with `text` beside the last as an
+    /// MText: `Outcome::Added` with the leader, then the text.
+    Leader {
+        points: Vec<[f64; 2]>,
+        text: String,
+    },
+    /// A leader with a short landing before its text (Qiyas writes a multileader as a leader and
+    /// an MText).
+    #[serde(rename = "mleader")]
+    MLeader {
+        points: Vec<[f64; 2]>,
+        text: String,
+    },
+    /// A feature control frame: `frame` in AutoCAD's codes, its left middle at `at`.
+    Tolerance {
+        at: [f64; 2],
+        frame: String,
+    },
+    /// The annotation scale (CANNOSCALE), "paper:drawing" such as "1:50": new dimensions,
+    /// leaders and tolerances are drawn that many times their style's size.
+    AnnotationScale {
+        name: String,
+    },
+    /// The dimension style `name` (made from the current one when new) takes `fields`; with
+    /// `current`, new dimensions take it.
+    SetDimStyle {
+        name: String,
+        fields: DimStyleFields,
+        #[serde(default)]
+        current: bool,
+    },
 }
 
 /// An entity as picked (see `Picked`): its handle and the block references it sits inside,
@@ -344,9 +402,24 @@ impl Command {
             | Command::SetImageDisplay { .. }
             | Command::DeleteEntities { .. }
             | Command::Modify(_)
-            | Command::Edit(_)
-            | Command::FindReplace { .. } => Some(Part::Document {
+            | Command::Edit(_) => Some(Part::Document {
                 tables: false,
+                takeoff: false,
+            }),
+            // A dimension's block, its list of entities, the text mark's application, the
+            // header's annotation scale and dimension style.
+            Command::FindReplace { .. }
+            | Command::Dimension(_)
+            | Command::DimEdit { .. }
+            | Command::DimBreak { .. }
+            | Command::DimSpace { .. }
+            | Command::DimJogLine { .. }
+            | Command::Leader { .. }
+            | Command::MLeader { .. }
+            | Command::Tolerance { .. }
+            | Command::AnnotationScale { .. }
+            | Command::SetDimStyle { .. } => Some(Part::Document {
+                tables: true,
                 takeoff: false,
             }),
             // The text mark's application, when the drawing has none yet (`document_extras`).
@@ -738,7 +811,7 @@ impl Session {
                 whole_word,
             } => {
                 let finder = Finder::new(&find, match_case, whole_word)?;
-                let (count, handles, skipped) = self.find_replace(&finder, &replace, scope);
+                let (count, handles, skipped) = self.find_replace(&finder, &replace, scope)?;
                 return Ok(Outcome::Replaced {
                     count,
                     handles,
@@ -754,6 +827,54 @@ impl Session {
                 let finder = Finder::new(&find, match_case, whole_word)?;
                 let (count, matches) = self.find_text(&finder, scope);
                 return Ok(Outcome::Found { count, matches });
+            }
+            Command::Dimension(spec) => {
+                let handles = self.add_dimensions(spec)?;
+                return Ok(Outcome::Added { handles });
+            }
+            Command::DimEdit { target, op } => {
+                self.dim_edit(&target, &op)?;
+                return Ok(Outcome::Changed);
+            }
+            Command::DimBreak { target, cutter } => {
+                self.dim_break(&target, &cutter)?;
+                return Ok(Outcome::Changed);
+            }
+            Command::DimSpace {
+                base,
+                targets,
+                spacing,
+            } => {
+                self.dim_space(&base, &targets, spacing)?;
+                return Ok(Outcome::Changed);
+            }
+            Command::DimJogLine { target, at } => {
+                self.dim_jog_line(&target, at)?;
+                return Ok(Outcome::Changed);
+            }
+            Command::Leader { points, text } => {
+                let handles = self.add_leader(&points, &text, false)?;
+                return Ok(Outcome::Added { handles });
+            }
+            Command::MLeader { points, text } => {
+                let handles = self.add_leader(&points, &text, true)?;
+                return Ok(Outcome::Added { handles });
+            }
+            Command::Tolerance { at, frame } => {
+                let h = self.add_tolerance(at, &frame)?;
+                return Ok(Outcome::Added { handles: vec![h] });
+            }
+            Command::AnnotationScale { name } => {
+                self.set_annotation_scale(&name)?;
+                return Ok(Outcome::Changed);
+            }
+            Command::SetDimStyle {
+                name,
+                fields,
+                current,
+            } => {
+                self.set_dim_style(&name, &fields, current)?;
+                return Ok(Outcome::Changed);
             }
         };
         measurement.source = source.name().to_string();

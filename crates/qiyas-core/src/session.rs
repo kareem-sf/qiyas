@@ -10,8 +10,8 @@ use opencadcodec::tables::normalize_name;
 use opencadcodec::{CadDocument, Color, DwgWriter, DxfWriter, EntityType, Handle};
 use opencadkernel::geom2d::Curve;
 use qiyas_geom::{
-    drawn_style, exact_area, exact_length, flatten_with, insert_instances, is_xref_block,
-    snap_shapes, Xform, XrefDocs, MAX_XREF_DEPTH,
+    dimension_text, drawn_style, exact_area, exact_length, flatten_with, insert_instances,
+    is_xref_block, snap_shapes, DimLook, Xform, XrefDocs, MAX_XREF_DEPTH,
 };
 use qiyas_render::{
     add_images, add_pick_outlines, build_batch_with_xrefs, layer_shown, place_text, resolve_color,
@@ -27,8 +27,8 @@ use crate::underlay::{rebase_links, Underlays};
 use crate::undo::{DocChange, History, Parts, Step, TablesSnapshot};
 use crate::xref::{XrefInfo, XrefSet};
 use crate::{
-    Boq, Command, Conflict, CoreError, Current, Drafting, Drawing, LayerInfo, Outcome, Schedule,
-    Sheet, Source, Takeoff, Units,
+    Boq, Command, Conflict, CoreError, Current, DimStyleInfo, Drafting, Drawing, LayerInfo,
+    Outcome, Schedule, Sheet, Source, Takeoff, Units,
 };
 
 /// Flatten tolerance for drawing on screen, in drawing units.
@@ -127,6 +127,15 @@ pub struct DrawingInfo {
     pub text_styles: Vec<String>,
     /// The style new text takes (`Session::text_style`).
     pub text_style: String,
+    /// The drawing's own dimension styles, sorted (`Session::dim_styles`).
+    pub dim_styles: Vec<DimStyleInfo>,
+    /// The style new dimensions take (`Session::dim_style`).
+    pub dim_style: String,
+    /// The annotation scale (CANNOSCALE), e.g. "1:50".
+    pub annotation_scale: String,
+    /// Drawing units per paper unit it gives (50 for "1:50"): new annotations are that many
+    /// times their paper size.
+    pub annotation_factor: f64,
 }
 
 /// An entity by its handle and the block references it sits inside (outermost first).
@@ -537,6 +546,7 @@ impl Session {
             problems.push(TRUNCATED.to_string());
         }
         problems.extend(self.underlays.borrow().problems.iter().cloned());
+        let annotation_scale = self.annotation_scale();
         DrawingInfo {
             path: self.drawing.path.display().to_string(),
             sheets: self.drawing.sheets(),
@@ -550,6 +560,10 @@ impl Session {
             current: self.current.clone(),
             text_styles: self.text_styles(),
             text_style: self.text_style(),
+            dim_styles: self.dim_styles(),
+            dim_style: self.dim_style(),
+            annotation_scale: annotation_scale.0,
+            annotation_factor: annotation_scale.1,
         }
     }
 
@@ -871,6 +885,9 @@ impl Session {
             EntityType::Insert(insert) => (Some(effective_block_name(located.doc, insert)), None),
             EntityType::Text(t) => (None, Some(t.value.clone())),
             EntityType::MText(t) => (None, Some(t.value.clone())),
+            EntityType::Dimension(d) => {
+                (None, Some(dimension_text(d, &DimLook::of(located.doc, d))))
+            }
             _ => (None, None),
         };
         let plain_text = match entity {
@@ -882,6 +899,7 @@ impl Session {
         let (height, style) = match entity {
             EntityType::Text(t) => (Some(t.height), Some(t.style.clone())),
             EntityType::MText(t) => (Some(t.height), Some(t.style.clone())),
+            EntityType::Dimension(d) => (None, Some(d.base().style_name.clone())),
             _ => (None, None),
         };
         let attributes = match entity {
@@ -1111,6 +1129,17 @@ impl Session {
     /// exact for lines, arcs, circles, full ellipses and (bulged) polylines under a uniform scale;
     /// otherwise the length of all its flattened paths and the area of the closed ones.
     pub(crate) fn extent(&self, doc: &CadDocument, entity: &EntityType, xf: &Xform) -> Extent {
+        // A dimension measures what it says (an angle measures no length), not its lines.
+        if let EntityType::Dimension(d) = entity {
+            let [x0, y0] = xf.apply([0.0, 0.0]);
+            let [x1, y1] = xf.apply([1.0, 0.0]);
+            let m = d.measurement() * (x1 - x0).hypot(y1 - y0);
+            return Extent {
+                length: (!d.base().is_angular() && m.is_finite()).then_some(m),
+                area: None,
+                self_intersecting: false,
+            };
+        }
         let xrefs = self.xref_docs();
         let paths = flatten_with(doc, &xrefs, entity, xf, MEASURE_TOL).into_paths();
         let closed: Vec<_> = paths.iter().filter(|p| p.closed).collect();
