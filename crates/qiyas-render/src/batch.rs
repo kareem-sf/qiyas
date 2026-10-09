@@ -32,6 +32,17 @@ pub mod section {
 pub const IMAGE_MONOCHROME: u32 = 1;
 /// `ImageQuad::flags` bit: draw the image half faded into the background.
 pub const IMAGE_FADED: u32 = 2;
+/// `ImageQuad::flags` bit: the upper bytes hold the image's own brightness (bits 8 to 15),
+/// contrast (16 to 23) and fade (24 to 31), each 0 to 100 as AutoCAD keeps them (50, 50 and 0
+/// leave the picture as it is); the fade then replaces `IMAGE_FADED`'s half.
+pub const IMAGE_ADJUSTED: u32 = 4;
+
+/// The `ImageQuad::flags` of a raster image with AutoCAD's `brightness`, `contrast` and `fade`
+/// (each cut to 0..100).
+pub fn image_flags(brightness: u8, contrast: u8, fade: u8) -> u32 {
+    let [b, c, f] = [brightness, contrast, fade].map(|v| u32::from(v.min(100)));
+    IMAGE_ADJUSTED | b << 8 | c << 16 | f << 24
+}
 
 /// A picture to draw under the lines (a PDF underlay's page): where its corners go in drawing
 /// coordinates, in the order top-left, top-right, bottom-right, bottom-left of the picture as it
@@ -41,7 +52,7 @@ pub struct ImagePlacement {
     pub id: u32,
     pub version: u64,
     pub corners: [[f64; 2]; 4],
-    /// `IMAGE_MONOCHROME`, `IMAGE_FADED`.
+    /// `IMAGE_MONOCHROME`, `IMAGE_FADED`, or `image_flags`.
     pub flags: u32,
 }
 
@@ -248,6 +259,35 @@ pub fn add_images(batch: &mut Batch, images: &[ImagePlacement]) {
                 version: image.version,
             });
         }
+    }
+}
+
+/// Makes pictures pickable: per `(handle, corners)` (drawing coordinates, any order around), the
+/// picture's outline as four segments in a range of its own flagged `TEXT_BOX` (picked and
+/// highlighted, never drawn), after the segments already there. Call after `add_images`, which
+/// sets the origin of a batch with nothing else in it.
+pub fn add_pick_outlines(batch: &mut Batch, outlines: &[(u64, [[f64; 2]; 4])]) {
+    let origin = batch.origin;
+    for (handle, corners) in outlines {
+        let first = (batch.segments.len() / 4) as u32;
+        for k in 0..4 {
+            let [a, b] = [corners[k], corners[(k + 1) % 4]];
+            batch.segments.extend([
+                (a[0] - origin[0]) as f32,
+                (a[1] - origin[1]) as f32,
+                (b[0] - origin[0]) as f32,
+                (b[1] - origin[1]) as f32,
+            ]);
+            batch.colors.push(0x80_80_80);
+        }
+        batch.ranges.push(Range {
+            top: *handle,
+            entity: *handle,
+            chain: NO_CHAIN,
+            first,
+            count: 4,
+            flags: TEXT_BOX,
+        });
     }
 }
 
@@ -491,7 +531,8 @@ impl Batch {
     /// | 10   | image quads    | 40 bytes per quad: `f32` x8 corners x y relative to origin  |
     /// |      |                | (top-left, top-right, bottom-right, bottom-left of the      |
     /// |      |                | picture), `u32` image id, `u32` flags (bit 0 monochrome,    |
-    /// |      |                | bit 1 faded by half); drawn under the lines                 |
+    /// |      |                | bit 1 faded by half, bit 2 adjusted: bits 8-15 brightness,  |
+    /// |      |                | 16-23 contrast, 24-31 fade, each 0-100); under the lines    |
     /// | 11   | image table    | 16 bytes per image: `u32` id, 4 pad, `u64` version (below   |
     /// |      |                | 2^53)                                                       |
     ///

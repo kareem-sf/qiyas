@@ -49,47 +49,73 @@ pub(crate) struct Underlays {
     pub problems: Vec<String>,
 }
 
-/// What to draw for one underlay picture (IPC `underlay_image`): page `page` of `path` at `dpi`.
+/// What to draw for one picture of the batch (IPC `underlay_image`): a page of a PDF or a raster
+/// image file, at a resolution for the zoom asked for (`draw_picture` draws it).
 #[derive(Debug, Clone, PartialEq)]
 pub struct UnderlayImage {
     pub path: PathBuf,
-    pub page: u32,
-    pub dpi: f64,
     /// As in the batch's image table.
     pub version: u64,
+    pub source: PictureSource,
 }
 
-/// One underlay as drawn: its file and page, and how it sits on the sheet.
-struct Placed {
-    handle: u64,
-    file: PathBuf,
-    page: u32,
-    /// Page size in points.
-    size: (f64, f64),
-    /// Page to drawing: drawing units per point along x and y (signed), rotation, insertion.
-    sx: f64,
-    sy: f64,
-    rotation: f64,
-    at: [f64; 2],
-    flags: u32,
+/// Which pixels an `UnderlayImage` is.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PictureSource {
+    /// Page `page` (from 1) of a PDF, rendered at `dpi`.
+    Pdf { page: u32, dpi: f64 },
+    /// A raster image (png, jpg, tif, bmp, webp): the part `crop` (left, top, right, bottom as
+    /// shares 0..1 of the image as shown, from its top-left corner; `None` for all of it), its
+    /// long side `long_px` pixels or the file's own when smaller.
+    Raster {
+        crop: Option<[f64; 4]>,
+        long_px: u32,
+    },
+}
+
+impl UnderlayImage {
+    /// Tells two resolutions of the same picture apart, for a cache key.
+    pub fn resolution(&self) -> u64 {
+        match self.source {
+            PictureSource::Pdf { dpi, .. } => dpi.to_bits(),
+            PictureSource::Raster { long_px, .. } => u64::from(long_px),
+        }
+    }
+}
+
+/// A pickable picture's handle and corners.
+pub(crate) type Outline = (u64, [[f64; 2]; 4]);
+
+/// One picture as drawn on the sheet: a PDF underlay's page or a raster image.
+pub(crate) struct Placed {
+    pub handle: u64,
+    pub file: PathBuf,
+    pub picture: Picture,
+    /// Top-left, top-right, bottom-right, bottom-left of the picture as it stands upright.
+    pub corners: [[f64; 2]; 4],
+    pub flags: u32,
+    /// A raster image, picked by its outline (PDF underlays are not).
+    pub pickable: bool,
+}
+
+/// What a `Placed` shows.
+pub(crate) enum Picture {
+    /// Page `page` of `size` points.
+    Pdf { page: u32, size: (f64, f64) },
+    /// See `PictureSource::Raster`.
+    Raster { crop: Option<[f64; 4]> },
 }
 
 impl Placed {
-    fn corners(&self) -> [[f64; 2]; 4] {
-        let (w, h) = self.size;
-        let (sin, cos) = self.rotation.sin_cos();
-        let place = |x: f64, y: f64| {
-            let (x, y) = (x * self.sx, y * self.sy);
-            [
-                self.at[0] + x * cos - y * sin,
-                self.at[1] + x * sin + y * cos,
-            ]
-        };
-        [place(0.0, h), place(w, h), place(w, 0.0), place(0.0, 0.0)]
+    /// The picture's longer side on the sheet, in drawing units.
+    fn long_units(&self) -> f64 {
+        let [tl, tr, _, bl] = self.corners;
+        let side = |a: [f64; 2], b: [f64; 2]| (b[0] - a[0]).hypot(b[1] - a[1]);
+        side(tl, tr).max(side(tl, bl))
     }
 
-    /// Names the picture: file, page, the file's date and size, and the scale (a rescaled
-    /// underlay needs another resolution). Cut to 53 bits for JavaScript.
+    /// Names the picture: file, page or crop, the file's date and size, and the size on the
+    /// sheet (a rescaled picture needs another resolution). Cut to 53 bits for JavaScript.
     fn version(&self) -> u64 {
         let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
         let mut write = |bytes: &[u8]| {
@@ -98,7 +124,14 @@ impl Placed {
             }
         };
         write(self.file.as_os_str().as_encoded_bytes());
-        write(&self.page.to_le_bytes());
+        match &self.picture {
+            Picture::Pdf { page, .. } => write(&page.to_le_bytes()),
+            Picture::Raster { crop } => {
+                for v in crop.iter().flatten() {
+                    write(&v.to_le_bytes());
+                }
+            }
+        }
         if let Ok(meta) = std::fs::metadata(&self.file) {
             write(&meta.len().to_le_bytes());
             let modified = meta
@@ -108,7 +141,7 @@ impl Placed {
                 .map_or(0, |d| d.as_nanos());
             write(&modified.to_le_bytes());
         }
-        write(&self.sx.abs().max(self.sy.abs()).to_le_bytes());
+        write(&self.long_units().to_le_bytes());
         hash & ((1 << 53) - 1)
     }
 }
@@ -210,7 +243,7 @@ impl PreparedPdf {
 
 /// The file a stored link (an underlay's or image's definition) names, for a drawing at
 /// `drawing`: as written when that file exists, else relative to the drawing's folder, else by
-/// its file name in the drawing's folder.
+/// its file name in the drawing's folder, else by its file name in an `images` folder there.
 pub(crate) fn resolve_link(drawing: &Path, stored: &str) -> Option<PathBuf> {
     let normalized = if cfg!(windows) {
         stored.to_string()
@@ -227,6 +260,7 @@ pub(crate) fn resolve_link(drawing: &Path, stored: &str) -> Option<PathBuf> {
     }
     if let Some(name) = as_written.file_name() {
         tries.push(folder.join(name));
+        tries.push(folder.join("images").join(name));
     }
     tries.into_iter().find(|p| p.is_file())
 }
@@ -312,49 +346,59 @@ impl Session {
         .map(|_| ())
     }
 
-    /// The topmost underlay drawn on the sheet on screen whose page covers `p`.
+    /// The topmost PDF underlay or raster image drawn on the sheet on screen that covers `p`.
     pub fn underlay_at(&self, p: [f64; 2]) -> Option<u64> {
-        let placed = self.placed_underlays();
+        let placed = self.placed_pictures();
         placed
             .iter()
             .rev()
-            .find(|u| inside(&u.corners(), p))
+            .find(|u| inside(&u.corners, p))
             .map(|u| u.handle)
     }
 
     /// What to draw for image `id` of the batch at a zoom of `px_per_unit` screen pixels per
     /// drawing unit: the zoom is rounded up to a power of two (so a picture serves zooms up to
-    /// twice apart) and the picture's long side kept between 64 and 2048 pixels.
+    /// twice apart) and the picture's long side kept between 64 and 2048 pixels (a raster image
+    /// never beyond its own pixels).
     pub fn underlay_image(&self, id: u32, px_per_unit: f64) -> Result<UnderlayImage, CoreError> {
         let handle = self.underlays.borrow().ids.get(id as usize).copied();
         let missing = || CoreError::InvalidCommand(format!("No underlay picture {id}"));
         let handle = handle.ok_or_else(missing)?;
-        let placed = self.placed_underlays();
+        let placed = self.placed_pictures();
         let u = placed
             .iter()
             .find(|u| u.handle == handle)
             .ok_or_else(missing)?;
-        let (w, h) = u.size;
-        let long_units = (w * u.sx.abs()).max(h * u.sy.abs());
+        let long_units = u.long_units();
         let bucket = if px_per_unit > 0.0 && px_per_unit.is_finite() {
             2f64.powf(px_per_unit.log2().ceil())
         } else {
             1024.0 / long_units
         };
         let long_px = (long_units * bucket).clamp(MIN_IMAGE_PX, MAX_IMAGE_PX);
+        let source = match &u.picture {
+            Picture::Pdf { page, size: (w, h) } => PictureSource::Pdf {
+                page: *page,
+                dpi: long_px / (w.max(*h) / 72.0),
+            },
+            Picture::Raster { crop } => PictureSource::Raster {
+                crop: *crop,
+                long_px: long_px.round() as u32,
+            },
+        };
         Ok(UnderlayImage {
             path: u.file.clone(),
-            page: u.page,
-            dpi: long_px / (w.max(h) / 72.0),
             version: u.version(),
+            source,
         })
     }
 
-    /// Where the underlays on the sheet on screen are drawn, by image id; notes their problems.
-    pub(crate) fn underlay_placements(&self) -> Vec<ImagePlacement> {
-        let placed = self.placed_underlays();
+    /// Where the pictures (PDF underlays and raster images) on the sheet on screen are drawn, by
+    /// image id, and the raster images' outlines to pick them by; notes their problems.
+    pub(crate) fn underlay_placements(&self) -> (Vec<ImagePlacement>, Vec<Outline>) {
+        let placed = self.placed_pictures();
         let mut underlays = self.underlays.borrow_mut();
-        placed
+        let placements = placed
             .iter()
             .map(|u| {
                 let id = match underlays.ids.iter().position(|h| *h == u.handle) {
@@ -367,22 +411,42 @@ impl Session {
                 ImagePlacement {
                     id: id as u32,
                     version: u.version(),
-                    corners: u.corners(),
+                    corners: u.corners,
                     flags: u.flags,
                 }
             })
-            .collect()
+            .collect();
+        let outlines = placed
+            .iter()
+            .filter(|u| u.pickable)
+            .map(|u| (u.handle, u.corners))
+            .collect();
+        (placements, outlines)
     }
 
-    /// The PDF underlays on the sheet on screen that are drawn: visible, on, on a shown layer, with
-    /// their file and page found. The others are listed in `Underlays::problems`.
-    fn placed_underlays(&self) -> Vec<Placed> {
+    /// The PDF underlays and raster images on the sheet on screen that are drawn: visible, on, on
+    /// a shown layer, with their file (and page) found. The others are listed in
+    /// `Underlays::problems`.
+    pub(crate) fn placed_pictures(&self) -> Vec<Placed> {
         let doc = &self.drawing.doc;
         let per_point = units_per_point(self.drawing.units);
         let mut underlays = self.underlays.borrow_mut();
         underlays.problems.clear();
         let mut out = Vec::new();
         for entity in doc.entities_in_block(&self.sheet) {
+            if let EntityType::RasterImage(image) = entity {
+                match crate::image::placed_raster(doc, &self.drawing.path, &self.visibility, image)
+                {
+                    Ok(Some(placed)) => out.push(placed),
+                    Ok(None) => {}
+                    Err(problem) => {
+                        if !underlays.problems.contains(&problem) {
+                            underlays.problems.push(problem);
+                        }
+                    }
+                }
+                continue;
+            }
             let EntityType::Underlay(u) = entity else {
                 continue;
             };
@@ -434,23 +498,28 @@ impl Session {
             if u.fade > 0 {
                 flags |= IMAGE_FADED;
             }
+            let (sx, sy) = (u.x_scale * per_point, u.y_scale * per_point);
+            let (sin, cos) = u.rotation.sin_cos();
+            let at = [u.insertion_point.x, u.insertion_point.y];
+            let place = |x: f64, y: f64| {
+                let (x, y) = (x * sx, y * sy);
+                [at[0] + x * cos - y * sin, at[1] + x * sin + y * cos]
+            };
+            let (w, h) = size;
             out.push(Placed {
                 handle: u.common.handle.value(),
                 file,
-                page,
-                size,
-                sx: u.x_scale * per_point,
-                sy: u.y_scale * per_point,
-                rotation: u.rotation,
-                at: [u.insertion_point.x, u.insertion_point.y],
+                picture: Picture::Pdf { page, size },
+                corners: [place(0.0, h), place(w, h), place(w, 0.0), place(0.0, 0.0)],
                 flags,
+                pickable: false,
             });
         }
         out
     }
 
     /// The handle of the sheet on screen's block record.
-    fn sheet_owner(&self) -> Option<Handle> {
+    pub(crate) fn sheet_owner(&self) -> Option<Handle> {
         self.drawing
             .doc
             .block_records
@@ -459,7 +528,7 @@ impl Session {
     }
 
     /// Adds the layer `name` with `color` when the drawing has none of that name.
-    fn ensure_layer(&mut self, name: &str, color: Color) {
+    pub(crate) fn ensure_layer(&mut self, name: &str, color: Color) {
         let doc = &mut self.drawing.doc;
         if !doc.layers.contains(name) {
             let mut layer = Layer::new(name);
@@ -547,7 +616,7 @@ impl Session {
         let doc = &mut self.drawing.doc;
         // PDFUNDERLAY and PDFDEFINITION need their classes for the DWG writer.
         doc.classes.update_defaults();
-        let dictionary = definitions_dictionary(doc);
+        let dictionary = named_dictionary(doc, DEFINITIONS);
         let existing = match doc.objects.get(&dictionary) {
             Some(ObjectType::Dictionary(d)) => {
                 d.entries
@@ -648,11 +717,12 @@ impl Session {
     }
 }
 
-/// The `ACAD_PDFDEFINITIONS` dictionary, added to the named-object dictionary when missing.
-fn definitions_dictionary(doc: &mut opencadcodec::CadDocument) -> Handle {
+/// The named-object dictionary entry `name` (`ACAD_PDFDEFINITIONS`, `ACAD_IMAGE_DICT`), a
+/// dictionary, added when missing.
+pub(crate) fn named_dictionary(doc: &mut opencadcodec::CadDocument, name: &str) -> Handle {
     let root = doc.header.named_objects_dict_handle;
     if let Some(ObjectType::Dictionary(d)) = doc.objects.get(&root) {
-        if let Some(h) = d.get(DEFINITIONS) {
+        if let Some(h) = d.get(name) {
             if matches!(doc.objects.get(&h), Some(ObjectType::Dictionary(_))) {
                 return h;
             }
@@ -664,14 +734,18 @@ fn definitions_dictionary(doc: &mut opencadcodec::CadDocument) -> Handle {
     let h = dictionary.handle;
     doc.objects.insert(h, ObjectType::Dictionary(dictionary));
     if let Some(ObjectType::Dictionary(d)) = doc.objects.get_mut(&root) {
-        d.entries.retain(|(k, _)| k != DEFINITIONS);
-        d.add_entry(DEFINITIONS, h);
+        d.entries.retain(|(k, _)| k != name);
+        d.add_entry(name, h);
     }
     h
 }
 
 /// `name`, or `name (2)`, `name (3)`... when the dictionary has it already.
-fn unique_entry(doc: &opencadcodec::CadDocument, dictionary: Handle, name: &str) -> String {
+pub(crate) fn unique_entry(
+    doc: &opencadcodec::CadDocument,
+    dictionary: Handle,
+    name: &str,
+) -> String {
     let taken = |n: &str| match doc.objects.get(&dictionary) {
         Some(ObjectType::Dictionary(d)) => d.get(n).is_some(),
         _ => false,

@@ -70,6 +70,21 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
   links for the new folder. Opening another drawing or closing the window with unsaved drawing
   changes asks "Save changes to the drawing?".
 
+## Images
+
+- View tab: "Attach image…" (png, jpg, tif, bmp, webp; width in drawing units, default a tenth of
+  the sheet; insert point typed or clicked), then "Calibrate" as for PDFs. Images are kept as
+  AutoCAD images (`RasterImage` + `ImageDefinition` in `ACAD_IMAGE_DICT` + reactor) on layer
+  `IMAGE-UNDERLAY`, linked relative to the drawing when inside its folder.
+- Images already in a DWG/DXF are drawn when their file is found (as stored, beside the drawing,
+  in its `images/` folder); otherwise the problems list says "Image <file> not found".
+  Rectangular clips crop; polygonal and inverted clips draw the whole image for now; images
+  inside blocks are not drawn.
+- Files are decoded once (cut to 4096 px, EXIF orientation applied) with the `image` crate; the
+  window gets a picture per zoom (64 to 2048 px) through the same `underlay_image` IPC as PDFs.
+- Picking an image (Select tool, click its frame) shows brightness, contrast and fade sliders
+  (`set_image_display`, one undo step per release).
+
 ## AI assistant and settings
 
 - Settings live in `settings.json` in the app's config folder (Linux:

@@ -146,6 +146,23 @@ pub enum Command {
         p2: [f64; 2],
         real_distance: f64,
     },
+    /// Attaches the raster image at `path` (png, jpg, tif, bmp, webp) to the sheet on screen as
+    /// an AutoCAD image (a `RasterImage` and its `ImageDefinition`) on layer `IMAGE-UNDERLAY`,
+    /// bottom-left corner at `insert_at`, `width_units` drawing units wide. `Outcome::Added` holds
+    /// the image's handle.
+    AttachImage {
+        path: String,
+        insert_at: [f64; 2],
+        width_units: f64,
+    },
+    /// Sets the brightness, contrast and fade (0 to 100 each; 50, 50 and 0 show the image as it
+    /// is) of the image `handle`.
+    SetImageDisplay {
+        handle: u64,
+        brightness: u8,
+        contrast: u8,
+        fade: u8,
+    },
 }
 
 /// The part of the session a command changes, kept whole in its undo step.
@@ -171,7 +188,9 @@ impl Command {
             Command::SetConflicts { .. } | Command::ResolveConflict { .. } => Some(Part::Conflicts),
             Command::ImportPdf { .. }
             | Command::AttachPdfUnderlay { .. }
-            | Command::Calibrate { .. } => Some(Part::Document),
+            | Command::Calibrate { .. }
+            | Command::AttachImage { .. }
+            | Command::SetImageDisplay { .. } => Some(Part::Document),
             _ => Some(Part::Takeoff),
         }
     }
@@ -383,6 +402,30 @@ impl Session {
                 real_distance,
             } => {
                 self.rescale(handle, p1, p2, real_distance)?;
+                return Ok(Outcome::Changed);
+            }
+            Command::AttachImage {
+                path,
+                insert_at,
+                width_units,
+            } => {
+                let handle = self.add_image(path.as_ref(), insert_at, width_units)?;
+                return Ok(Outcome::Added {
+                    handles: vec![handle],
+                });
+            }
+            Command::SetImageDisplay {
+                handle,
+                brightness,
+                contrast,
+                fade,
+            } => {
+                let display = crate::ImageDisplay {
+                    brightness,
+                    contrast,
+                    fade,
+                };
+                self.apply_image_display(handle, display)?;
                 return Ok(Outcome::Changed);
             }
         };

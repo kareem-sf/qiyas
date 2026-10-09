@@ -73,6 +73,9 @@ pub fn run() {
             pdf::is_dirty,
             pdf::calibrate,
             pdf::underlay_image,
+            pdf::image_size,
+            pdf::attach_image,
+            pdf::image_display,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Qiyas");

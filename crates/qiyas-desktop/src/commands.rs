@@ -683,7 +683,10 @@ mod tests {
                     crate::pdf::attach_pdf,
                     crate::pdf::is_dirty,
                     crate::pdf::calibrate,
-                    crate::pdf::underlay_image
+                    crate::pdf::underlay_image,
+                    crate::pdf::image_size,
+                    crate::pdf::attach_image,
+                    crate::pdf::image_display
                 ])
                 .build(mock_context(noop_assets()))
                 .unwrap();
@@ -1103,12 +1106,64 @@ mod tests {
         let outside = json!({ "x1": -5.0, "y1": -5.0, "x2": 1.0, "y2": 0.0, "distance": 3.0 });
         assert_eq!(
             ipc.call("calibrate", outside),
-            Err(json!("Pick the first point on a PDF underlay"))
+            Err(json!("Pick the first point on a PDF underlay or an image"))
         );
         assert_eq!(ipc.call("undo", json!({})), Ok(json!(true)));
         assert_eq!(ipc.call("undo", json!({})), Ok(json!(true)));
         let batch = qiyas_render_batch(&ipc.bytes("render_batch", json!({})));
         assert!(batch.is_empty());
+    }
+
+    #[test]
+    fn an_image_attaches_draws_calibrates_and_takes_its_display_settings() {
+        let ipc = Ipc::open();
+        let png = qiyas_core::fixtures::write_png(ipc._dir.path(), "pic.png");
+        assert_eq!(
+            ipc.call("image_size", json!({ "path": png })),
+            Ok(json!([200, 100]))
+        );
+        let attach = json!({ "path": png, "x": 5.0, "y": 5.0, "width": 20.0 });
+        let handle = ipc.call("attach_image", attach).unwrap().as_u64().unwrap();
+        assert_eq!(ipc.call("is_dirty", json!({})), Ok(json!(true)));
+        let batch = qiyas_render_batch(&ipc.bytes("render_batch", json!({})));
+        assert_eq!(batch, vec![(0, true)]);
+
+        // 20 units at 5 px per unit, rounded up to 8: 160 x 80.
+        let u32_at = |b: &[u8], i: usize| u32::from_le_bytes(b[i..i + 4].try_into().unwrap());
+        let picture = ipc.bytes("underlay_image", json!({ "id": 0, "pxPerUnit": 5.0 }));
+        assert_eq!((u32_at(&picture, 0), u32_at(&picture, 4)), (160, 80));
+        assert_eq!(picture.len(), 8 + 160 * 80 * 4);
+        assert_eq!(&picture[8..12], &[255, 0, 0, 255]);
+
+        assert_eq!(
+            ipc.call("image_display", json!({ "handle": handle })),
+            Ok(json!({ "brightness": 50, "contrast": 50, "fade": 0 }))
+        );
+        let cmd = json!({
+            "type": "set_image_display", "handle": handle, "brightness": 60, "contrast": 45, "fade": 20
+        });
+        assert_eq!(
+            ipc.call("run_command", json!({ "cmd": cmd })),
+            Ok(json!({ "type": "changed" }))
+        );
+        assert_eq!(
+            ipc.call("image_display", json!({ "handle": handle })),
+            Ok(json!({ "brightness": 60, "contrast": 45, "fade": 20 }))
+        );
+        assert_eq!(
+            ipc.call("image_display", json!({ "handle": 1 })),
+            Ok(json!(null))
+        );
+
+        // Calibrated by a point on it: 20 units become 10.
+        let calibrate = json!({ "x1": 5.0, "y1": 5.0, "x2": 25.0, "y2": 5.0, "distance": 10.0 });
+        ipc.call("calibrate", calibrate).unwrap();
+        let picture = ipc.bytes("underlay_image", json!({ "id": 0, "pxPerUnit": 5.0 }));
+        assert_eq!((u32_at(&picture, 0), u32_at(&picture, 4)), (80, 40));
+        for _ in 0..3 {
+            assert_eq!(ipc.call("undo", json!({})), Ok(json!(true)));
+        }
+        assert!(qiyas_render_batch(&ipc.bytes("render_batch", json!({}))).is_empty());
     }
 
     /// The image table of a batch (`Batch::to_bytes`, kind 11): (id, version below 2^53).

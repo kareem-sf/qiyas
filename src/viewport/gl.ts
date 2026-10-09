@@ -10,6 +10,7 @@
  * small offset is passed to the shader as f32.
  */
 import {
+  imageUniforms,
   matchingRanges,
   TEXT_BOX,
   type AtlasPage,
@@ -128,23 +129,28 @@ void main() {
   v_uv = a_uv;
 }`;
 
-/** A PDF page under the drawing. Grey when monochrome (flags bit 0); on Ink its lightness is
- *  turned over (white paper goes dark, black lines go light, colours keep their hue); half mixed
- *  into the background when faded (bit 1). */
+/** A PDF page or an image under the drawing (uniforms from `imageUniforms`). Grey when
+ *  monochrome; then contrast about mid grey and brightness added; on Ink its lightness is turned
+ *  over (white paper goes dark, black lines go light, colours keep their hue); then mixed into the
+ *  background by the fade. */
 const IMAGE_FRAGMENT = `#version 300 es
 precision mediump float;
 in vec2 v_uv;
 uniform sampler2D u_image;
-uniform int u_flags;
+uniform bool u_mono;
+uniform float u_brightness;
+uniform float u_contrast;
+uniform float u_fade;
 uniform bool u_light;
 uniform vec3 u_background;
 out vec4 outColor;
 void main() {
   vec3 c = texture(u_image, v_uv).rgb;
+  if (u_mono) c = vec3(dot(c, vec3(0.299, 0.587, 0.114)));
+  c = clamp((c - 0.5) * u_contrast + 0.5 + u_brightness, 0.0, 1.0);
   float luma = dot(c, vec3(0.299, 0.587, 0.114));
-  if ((u_flags & 1) != 0) c = vec3(luma);
   if (!u_light) c = clamp(c + 1.0 - 2.0 * luma, 0.0, 1.0);
-  if ((u_flags & 2) != 0) c = mix(c, u_background, 0.5);
+  c = mix(c, u_background, u_fade);
   outColor = vec4(c, 1.0);
 }`;
 
@@ -333,7 +339,10 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
   const iCenter = iu("u_center");
   const iToClip = iu("u_toClip");
   const iImage = iu("u_image");
-  const iFlags = iu("u_flags");
+  const iMono = iu("u_mono");
+  const iBrightness = iu("u_brightness");
+  const iContrast = iu("u_contrast");
+  const iFade = iu("u_fade");
   const iLight = iu("u_light");
   const iBackground = iu("u_background");
   const imageVao = gl.createVertexArray();
@@ -618,7 +627,11 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
           const picture = pictures.get(batch.images.id(i));
           if (!picture) continue;
           gl.bindTexture(gl.TEXTURE_2D, picture.texture);
-          gl.uniform1i(iFlags, batch.images.flags(i));
+          const look = imageUniforms(batch.images.flags(i));
+          gl.uniform1i(iMono, look.monochrome ? 1 : 0);
+          gl.uniform1f(iBrightness, look.brightness);
+          gl.uniform1f(iContrast, look.contrast);
+          gl.uniform1f(iFade, look.fade);
           gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_INT, 24 * i);
         }
         gl.bindVertexArray(null);

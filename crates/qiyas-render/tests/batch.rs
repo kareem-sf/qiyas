@@ -4,8 +4,9 @@ use opencadcodec::entities::Insert;
 use opencadcodec::{BlockRecord, CadDocument, Color, EntityType, Layer, Line, Vector3};
 use qiyas_core::fixtures::sample_doc;
 use qiyas_render::{
-    add_images, build_batch, resolve_color, section, Batch, ImageEntry, ImagePlacement, PickIndex,
-    Quad, Range, Visibility, IMAGE_FADED, IMAGE_MONOCHROME, MAGIC, NO_CHAIN, TEXT_BOX, VERSION,
+    add_images, add_pick_outlines, build_batch, image_flags, resolve_color, section, Batch,
+    ImageEntry, ImagePlacement, PickIndex, Quad, Range, Visibility, IMAGE_ADJUSTED, IMAGE_FADED,
+    IMAGE_MONOCHROME, MAGIC, NO_CHAIN, TEXT_BOX, VERSION,
 };
 
 const MODEL: &str = "*Model_Space";
@@ -573,3 +574,48 @@ const IMAGES_FIXTURE: &str = concat!(
     "000020410000a040000020410000a0c0000020c10000a0c003000000030000000300000000000000",
     "ffffffffffff1f00",
 );
+
+#[test]
+fn pick_outlines_are_picked_but_never_drawn() {
+    let mut batch = Batch::default();
+    let corners = [[0.0, 10.0], [20.0, 10.0], [20.0, 0.0], [0.0, 0.0]];
+    add_images(
+        &mut batch,
+        &[ImagePlacement {
+            id: 0,
+            version: 1,
+            corners,
+            flags: image_flags(50, 50, 0),
+        }],
+    );
+    add_pick_outlines(&mut batch, &[(0x2A, corners)]);
+    assert_eq!(batch.segments.len(), 16);
+    assert_eq!(batch.colors.len(), 4);
+    assert_eq!(
+        batch.ranges,
+        vec![Range {
+            top: 0x2A,
+            entity: 0x2A,
+            chain: NO_CHAIN,
+            first: 0,
+            count: 4,
+            flags: TEXT_BOX,
+        }]
+    );
+    // Relative to the origin the images set: the top edge runs from (-10, 5) to (10, 5).
+    assert_eq!(&batch.segments[..4], &[-10.0, 5.0, 10.0, 5.0]);
+    let index = PickIndex::new(&batch);
+    let hit = index.pick([20.0, 5.0], 0.1).unwrap();
+    assert_eq!(batch.range_of(hit).unwrap().entity, 0x2A);
+}
+
+#[test]
+fn image_flags_pack_brightness_contrast_and_fade() {
+    assert_eq!(image_flags(50, 50, 0), IMAGE_ADJUSTED | 50 << 8 | 50 << 16);
+    assert_eq!(
+        image_flags(100, 0, 100),
+        IMAGE_ADJUSTED | 100 << 8 | 100 << 24
+    );
+    // Cut to 100.
+    assert_eq!(image_flags(255, 200, 101), image_flags(100, 100, 100));
+}

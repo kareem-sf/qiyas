@@ -21,6 +21,9 @@ pub enum CoreError {
     /// A PDF could not be read, or PDF support is not installed (`qiyas_pdf::PdfError`).
     #[error("{0}")]
     Pdf(String),
+    /// A raster image could not be read; says which and why.
+    #[error("{0}")]
+    Image(String),
 }
 
 impl From<qiyas_pdf::PdfError> for CoreError {

@@ -214,15 +214,33 @@ export const attachPdf = (
  *  the take-off is saved in the project file after every command. */
 export const isDirty = () => invoke<boolean>("is_dirty");
 
-/** Rescales the PDF underlay under `p1` about `p1` so that `p1` to `p2` is `distance` drawing
- *  units. One undo step. */
+/** Rescales the PDF underlay or image under `p1` about `p1` so that `p1` to `p2` is `distance`
+ *  drawing units. One undo step. */
 export const calibrate = (p1: [number, number], p2: [number, number], distance: number) =>
   invoke<void>("calibrate", { x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1], distance });
 
-/** Raw bytes of underlay picture `id` (from the batch's image table) for a zoom of `pxPerUnit`
- *  screen pixels per drawing unit; decode with `parsePicture`. */
+/** Raw bytes of picture `id` (from the batch's image table: a PDF underlay or an image) for a zoom
+ *  of `pxPerUnit` screen pixels per drawing unit; decode with `parsePicture`. */
 export const underlayImage = (id: number, pxPerUnit: number) =>
   invoke<ArrayBuffer>("underlay_image", { id, pxPerUnit });
+
+/** The raster image types Attach image offers. */
+export const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "tif", "tiff", "bmp", "webp"];
+
+/** Width and height in pixels of the image at `path`, as shown (its EXIF orientation applied). */
+export const imageSize = (path: string) => invoke<[number, number]>("image_size", { path });
+
+/** Attaches the image at `path` to the sheet on screen, bottom-left corner at `at`, `width` drawing
+ *  units wide. Resolves to its handle. One undo step. */
+export const attachImage = (path: string, at: [number, number], width: number) =>
+  invoke<number>("attach_image", { path, x: at[0], y: at[1], width });
+
+/** An image's brightness, contrast and fade, 0 to 100 each (50, 50 and 0: as it is). */
+export type ImageDisplay = { brightness: number; contrast: number; fade: number };
+
+/** The brightness, contrast and fade of the image `handle`; null when it is not an image. */
+export const imageDisplay = (handle: number) =>
+  invoke<ImageDisplay | null>("image_display", { handle });
 
 /** The entity nearest to the drawing point (x, y) within `tol` drawing units, down to the entity
  *  inside any blocks. */
@@ -436,6 +454,16 @@ export type Command =
       p1: [number, number];
       p2: [number, number];
       real_distance: number;
+    }
+  /** `attachImage` runs this; `width_units` is the image's width in drawing units. */
+  | { type: "attach_image"; path: string; insert_at: [number, number]; width_units: number }
+  /** 0 to 100 each; one undo step. */
+  | {
+      type: "set_image_display";
+      handle: number;
+      brightness: number;
+      contrast: number;
+      fade: number;
     };
 
 export type Outcome =

@@ -1438,3 +1438,46 @@ button.link {
   white-space: nowrap;
   border: 0;
 }
+
+/* The chosen image's brightness, contrast and fade, over the drawing's top corner. */
+.viewport {
+  position: relative;
+}
+.image-display {
+  position: absolute;
+  inset-block-start: 10px;
+  inset-inline-end: 10px;
+  width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgb(14 15 18 / 0.15);
+}
+.image-display h2 {
+  margin: 0;
+  font-size: 14px;
+}
+.image-display label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.image-display label > span {
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+}
+.image-display .value {
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+.image-display .buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}

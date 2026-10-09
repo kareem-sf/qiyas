@@ -1,10 +1,13 @@
 import { expect, test } from "vitest";
 import {
   glyphsNeedRedraw,
+  IMAGE_ADJUSTED,
   IMAGE_FADED,
+  imageUniforms,
   IMAGE_MONOCHROME,
   matchingRanges,
   NO_CHAIN,
+  packImageFlags,
   parseAtlas,
   parseBatch,
   parsePicture,
@@ -15,6 +18,7 @@ import {
   rangeMatcher,
   type HeldPicture,
   TEXT_BOX,
+  unpackImageFlags,
 } from "./batch";
 
 /** A version 2 batch, laid out as `Batch::to_bytes` does: two segments, the first of a line at the
@@ -331,4 +335,49 @@ test("only pictures in view (with a quarter margin) are fetched, and those out o
   expect(picturesToRelease(b, held, [[0, 0], [20, 10]])).toEqual([]);
   expect(picturesToRelease(b, held, [[100, 100], [110, 110]])).toEqual([3]);
   expect(picturesToRelease(null, held, [[0, 0], [20, 10]])).toEqual([3]);
+});
+
+test("image flags pack and unpack brightness, contrast and fade", () => {
+  const flags = packImageFlags(70, 40, 30);
+  // The same bits the core packs (`image_flags` in qiyas-render).
+  expect(flags).toBe((IMAGE_ADJUSTED | (70 << 8) | (40 << 16) | (30 << 24)) >>> 0);
+  expect(unpackImageFlags(flags)).toEqual({ monochrome: false, brightness: 70, contrast: 40, fade: 30 });
+  // Cut to 0..100, rounded.
+  expect(unpackImageFlags(packImageFlags(250, -5, 100.4))).toEqual({
+    monochrome: false,
+    brightness: 100,
+    contrast: 0,
+    fade: 100,
+  });
+  // A PDF underlay's flags: neutral, half faded when IMAGE_FADED.
+  expect(unpackImageFlags(IMAGE_FADED | IMAGE_MONOCHROME)).toEqual({
+    monochrome: true,
+    brightness: 50,
+    contrast: 50,
+    fade: 50,
+  });
+  expect(unpackImageFlags(0)).toEqual({ monochrome: false, brightness: 50, contrast: 50, fade: 0 });
+});
+
+test("the shader is given neutral values for 50, 50, 0 and the extremes past them", () => {
+  expect(imageUniforms(packImageFlags(50, 50, 0))).toEqual({
+    monochrome: false,
+    brightness: 0,
+    contrast: 1,
+    fade: 0,
+  });
+  expect(imageUniforms(packImageFlags(0, 100, 100))).toEqual({
+    monochrome: false,
+    brightness: -1,
+    contrast: 2,
+    fade: 1,
+  });
+  expect(imageUniforms(packImageFlags(75, 0, 25))).toEqual({
+    monochrome: false,
+    brightness: 0.5,
+    contrast: 0,
+    fade: 0.25,
+  });
+  // A faded PDF underlay keeps its half fade and is otherwise as it is.
+  expect(imageUniforms(IMAGE_FADED)).toEqual({ monochrome: false, brightness: 0, contrast: 1, fade: 0.5 });
 });

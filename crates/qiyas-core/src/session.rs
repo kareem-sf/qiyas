@@ -12,8 +12,8 @@ use qiyas_geom::{
     MAX_XREF_DEPTH,
 };
 use qiyas_render::{
-    add_images, build_batch_with_xrefs, layer_shown, place_text, Batch, PickIndex, TextEngine,
-    TextOptions, Visibility, TEXT_BOX,
+    add_images, add_pick_outlines, build_batch_with_xrefs, layer_shown, place_text, Batch,
+    PickIndex, TextEngine, TextOptions, Visibility, TEXT_BOX,
 };
 use serde::{Deserialize, Serialize};
 
@@ -74,7 +74,7 @@ pub struct Session {
     /// Fonts, glyph atlas and glyph cache, kept across batches so the atlas pages the window
     /// holds stay valid.
     text: RefCell<TextEngine>,
-    /// The PDF underlays' image ids, page sizes and problems.
+    /// The pictures' (PDF underlays and raster images) image ids, PDF page sizes and problems.
     pub(crate) underlays: RefCell<Underlays>,
 }
 
@@ -856,7 +856,9 @@ impl Session {
                 &mut text,
                 options,
             );
-            add_images(&mut batch, &self.underlay_placements());
+            let (pictures, outlines) = self.underlay_placements();
+            add_images(&mut batch, &pictures);
+            add_pick_outlines(&mut batch, &outlines);
             let doc = &self.drawing.doc;
             let points = doc
                 .entities_in_block(&self.sheet)

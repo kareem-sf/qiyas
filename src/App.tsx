@@ -4,8 +4,12 @@ import { ask, message as messageDialog, open, save } from "@tauri-apps/plugin-di
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   aiUndo,
+  attachImage,
   attachPdf,
   calibrate,
+  IMAGE_EXTENSIONS,
+  imageDisplay,
+  imageSize,
   isDirty,
   PDF_PROGRESS,
   pdfPageCount,
@@ -48,6 +52,7 @@ import {
   type Conflict,
   type Drafting,
   type DrawingInfo,
+  type ImageDisplay,
   type Measurement,
   type Total,
 } from "./api";
@@ -59,6 +64,12 @@ import { ConflictsPanel, type ResolveCommand } from "./boq/ConflictsPanel";
 import { openCount } from "./boq/conflictsMath";
 import { useLanguage, useT } from "./i18n";
 import { About } from "./shell/About";
+import {
+  AttachImageDialog,
+  defaultImageWidth,
+  ImageDisplayPanel,
+  type AttachImageRequest,
+} from "./shell/AttachImageDialog";
 import { AttachPdfDialog, CalibrateDialog, type AttachRequest } from "./shell/AttachPdfDialog";
 import { DraftingSettings } from "./shell/DraftingSettings";
 import { LayersPanel } from "./shell/LayersPanel";
@@ -104,8 +115,8 @@ const TOGGLED: Record<DraftingToggle, "osnap" | "grid" | "ortho" | "polar"> = {
 };
 
 /** A click in the drawing the window is waiting for instead of the tool's: the insert point of a
- *  PDF page, or the two points of a calibration. */
-type Pending = { kind: "insert" } | { kind: "calibrate"; first: Point | null };
+ *  PDF page or an image, or the two points of a calibration. */
+type Pending = { kind: "insert"; of: "pdf" | "image" } | { kind: "calibrate"; first: Point | null };
 
 /** Focus is in a text field: keys are typing, not shortcuts. */
 const typing = (e: KeyboardEvent) =>
@@ -164,6 +175,11 @@ export default function App() {
   /** Percent drawn of the PDF page pdfium is rendering; null when none is. */
   const [renderProgress, setRenderProgress] = useState<number | null>(null);
   const [attachOpen, setAttachOpen] = useState(false);
+  const [attachImageOpen, setAttachImageOpen] = useState(false);
+  /** The image the select tool has chosen, and its brightness, contrast and fade. */
+  const [imageChosen, setImageChosen] = useState<{ handle: number; display: ImageDisplay } | null>(
+    null,
+  );
   /** A click the window waits for (see `Pending`), the insert point it gave, and the two
    *  calibration points once both are picked. */
   const [pending, setPending] = useState<Pending | null>(null);
@@ -813,8 +829,23 @@ export default function App() {
     }
   }
 
-  /** A click in the drawing: the one a PDF insert point or a calibration waits for, else the
-   *  tool's. */
+  /** Attaches an image from the dialog, then draws it with its picture. Errors go to the dialog. */
+  async function attachImageFile(r: AttachImageRequest) {
+    await attachImage(r.path, r.at, r.width);
+    setInfo(await drawingInfo());
+    await redraw();
+    const view = viewport.current;
+    if (view) await syncPictures(batchHeld.current, view.pxPerUnit(), view.visible());
+  }
+
+  /** Sets the chosen image's brightness, contrast and fade (one undo step), then draws it. */
+  async function setChosenDisplay(handle: number, display: ImageDisplay) {
+    await runCommand({ type: "set_image_display", handle, ...display });
+    await redraw();
+  }
+
+  /** A click in the drawing: the one a PDF or image insert point or a calibration waits for, else
+   *  the tool's. */
   function clickDrawing(world: Point, screen: Point, worldPerPixel: number) {
     if (pending?.kind === "insert") {
       setPickedInsert(world);
@@ -961,6 +992,24 @@ export default function App() {
     [],
   );
 
+  // An image chosen with the select tool shows its brightness, contrast and fade; read again when
+  // the batch changes (a set, an undo or a redo).
+  const chosen = measure.highlighted;
+  const chosenHandle = chosen && chosen.chain.length === 0 ? chosen.handle : null;
+  useEffect(() => {
+    if (chosenHandle === null) {
+      setImageChosen(null);
+      return;
+    }
+    let gone = false;
+    imageDisplay(chosenHandle)
+      .then((display) => !gone && setImageChosen(display ? { handle: chosenHandle, display } : null))
+      .catch(() => !gone && setImageChosen(null));
+    return () => {
+      gone = true;
+    };
+  }, [chosenHandle, batch]);
+
   const highlight = useMemo(() => {
     const rows = [...(selected ? [selected] : []), ...boqLinked, ...conflictLinked];
     const targets: Target[] = [
@@ -1005,7 +1054,9 @@ export default function App() {
     : pending
       ? t(
           pending.kind === "insert"
-            ? "attachPdf.pickHint"
+            ? pending.of === "image"
+              ? "attachImage.pickHint"
+              : "attachPdf.pickHint"
             : pending.first
               ? "calibrate.second"
               : "calibrate.first",
@@ -1043,6 +1094,14 @@ export default function App() {
               ? () => {
                   setPickedInsert(null);
                   setAttachOpen(true);
+                }
+              : undefined
+          }
+          onAttachImage={
+            info
+              ? () => {
+                  setPickedInsert(null);
+                  setAttachImageOpen(true);
                 }
               : undefined
           }
@@ -1110,7 +1169,7 @@ export default function App() {
         <AttachPdfDialog
           units={info.units}
           picked={pickedInsert}
-          picking={pending?.kind === "insert"}
+          picking={pending?.kind === "insert" && pending.of === "pdf"}
           progress={renderProgress}
           chooseFile={async () => {
             const path = await open({ filters: [{ name: "PDF", extensions: ["pdf"] }] });
@@ -1121,10 +1180,31 @@ export default function App() {
           thumbnails={async (path, first, count) =>
             parseThumbnails(await pdfThumbnails(path, first, count, 96))
           }
-          onPickPoint={() => setPending({ kind: "insert" })}
+          onPickPoint={() => setPending({ kind: "insert", of: "pdf" })}
           onAttach={attachPdfPage}
           onClose={() => {
             setAttachOpen(false);
+            setPending(null);
+          }}
+        />
+      )}
+      {attachImageOpen && info && (
+        <AttachImageDialog
+          units={info.units}
+          defaultWidth={defaultImageWidth(batch?.bounds ?? null)}
+          picked={pickedInsert}
+          picking={pending?.kind === "insert" && pending.of === "image"}
+          chooseFile={async () => {
+            const path = await open({
+              filters: [{ name: t("attachImage.file"), extensions: IMAGE_EXTENSIONS }],
+            });
+            return typeof path === "string" ? path : null;
+          }}
+          imageSize={imageSize}
+          onPickPoint={() => setPending({ kind: "insert", of: "image" })}
+          onAttach={attachImageFile}
+          onClose={() => {
+            setAttachImageOpen(false);
             setPending(null);
           }}
         />
@@ -1180,6 +1260,13 @@ export default function App() {
               grid={drafting?.grid ? drafting.grid_spacing : null}
               onMove={measure.onMove}
             />
+            {imageChosen && (
+              <ImageDisplayPanel
+                value={imageChosen.display}
+                onCommit={(display) => setChosenDisplay(imageChosen.handle, display)}
+                onClose={() => setImageChosen(null)}
+              />
+            )}
           </div>
           {error && (
             <div className="error" role="alert">

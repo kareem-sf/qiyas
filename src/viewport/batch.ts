@@ -116,6 +116,10 @@ export class Quads {
 export const IMAGE_MONOCHROME = 1;
 /** `ImageQuads.flags`: draw the picture half faded into the background. */
 export const IMAGE_FADED = 2;
+/** `ImageQuads.flags`: the upper bytes hold an image's brightness (bits 8 to 15), contrast (16 to
+ *  23) and fade (24 to 31), 0 to 100 each, as AutoCAD keeps them; the fade replaces
+ *  `IMAGE_FADED`'s half. */
+export const IMAGE_ADJUSTED = 4;
 
 /** The image quads section read in place; quad `i` is the 40-byte record `i`: corners (top-left,
  *  top-right, bottom-right, bottom-left of the picture) relative to the batch origin, image id,
@@ -357,6 +361,47 @@ export function parseAtlas(buf: ArrayBuffer): AtlasUpdate {
     at += 16 + length;
   }
   return { version, pages };
+}
+
+/** The parts of an image quad's flags. Without `IMAGE_ADJUSTED` (a PDF underlay) brightness and
+ *  contrast are neutral (50) and the fade is 50 when `IMAGE_FADED`, else 0. */
+export function unpackImageFlags(flags: number): {
+  monochrome: boolean;
+  brightness: number;
+  contrast: number;
+  fade: number;
+} {
+  const monochrome = (flags & IMAGE_MONOCHROME) !== 0;
+  if (!(flags & IMAGE_ADJUSTED)) {
+    return { monochrome, brightness: 50, contrast: 50, fade: flags & IMAGE_FADED ? 50 : 0 };
+  }
+  const byte = (shift: number) => Math.min(100, (flags >>> shift) & 255);
+  return { monochrome, brightness: byte(8), contrast: byte(16), fade: byte(24) };
+}
+
+/** Image quad flags for an image's brightness, contrast and fade (each cut to 0..100), as the core
+ *  packs them. */
+export function packImageFlags(brightness: number, contrast: number, fade: number): number {
+  const byte = (v: number) => Math.max(0, Math.min(100, Math.round(v)));
+  return (IMAGE_ADJUSTED | (byte(brightness) << 8) | (byte(contrast) << 16) | (byte(fade) << 24)) >>> 0;
+}
+
+/** What the image shader is given for a quad's flags: `brightness` is added to each colour channel
+ *  (-1 at 0, 0 at 50, +1 at 100), `contrast` scales it about mid grey (0 at 0, 1 at 50, 2 at 100),
+ *  and `fade` mixes it into the background (0 to 1). An approximation of AutoCAD's image adjust. */
+export function imageUniforms(flags: number): {
+  monochrome: boolean;
+  brightness: number;
+  contrast: number;
+  fade: number;
+} {
+  const f = unpackImageFlags(flags);
+  return {
+    monochrome: f.monochrome,
+    brightness: (f.brightness - 50) / 50,
+    contrast: f.contrast / 50,
+    fade: f.fade / 100,
+  };
 }
 
 /** An underlay picture: `width` x `height` RGBA bytes, rows from the top. */

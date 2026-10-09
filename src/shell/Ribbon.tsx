@@ -20,7 +20,9 @@ type Props = {
   onXrefs?(): void;
   /** Opens the Attach PDF dialog. */
   onAttachPdf?(): void;
-  /** Starts calibrating a PDF underlay: two points, then their real distance. */
+  /** Opens the Attach image dialog. */
+  onAttachImage?(): void;
+  /** Starts calibrating a PDF underlay or image: two points, then their real distance. */
   onCalibrate?(): void;
   onUndo?(): void;
   onRedo?(): void;
@@ -105,6 +107,7 @@ export function Ribbon(props: Props) {
           tool("zoomWindow"),
           action("xrefs", props.onXrefs),
           action("attachPdf", props.onAttachPdf),
+          action("attachImage", props.onAttachImage),
           action("calibrate", props.onCalibrate),
           <span key="sep" className="sep" />,
           <label key="arabicReversed" className="ribbon-check">

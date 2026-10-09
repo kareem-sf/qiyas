@@ -1,5 +1,6 @@
-//! IPC for PDFs: page count and size, thumbnails, attaching a page (underlay or import),
-//! calibrating an underlay, and an underlay's picture. pdfium runs on its own thread
+//! IPC for PDFs and raster images: page count and size, thumbnails, attaching a page (underlay or
+//! import) or an image, calibrating either, an image's brightness, contrast and fade, and the
+//! pictures the window draws them with. pdfium runs on its own thread
 //! (`qiyas_pdf`); reading a PDF here never holds the session lock: a page is read first, then the
 //! session is locked briefly to add it. Without pdfium every command answers "PDF support is not installed: run
 //! scripts/pdfium.sh".
@@ -8,7 +9,7 @@ use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, PoisonError};
 
-use qiyas_core::{AttachMode, CoreError, PreparedPdf, UnderlayImage};
+use qiyas_core::{AttachMode, CoreError, ImageDisplay, PreparedPdf};
 use tauri::ipc::Response;
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
@@ -47,7 +48,7 @@ impl PictureCache {
     }
 }
 
-/// Image id, version, and the resolution (`f64::to_bits` of the dpi).
+/// Image id, version, and the resolution (`UnderlayImage::resolution`).
 type PictureKey = (u32, u64, u64);
 
 /// Where the bundled pdfium is: `resources/pdfium/` in the app's resources (next to the program
@@ -148,8 +149,9 @@ pub async fn is_dirty(state: State<'_, AppState>) -> Result<bool, String> {
     with_session(&state, |s| Ok(s.is_dirty()))
 }
 
-/// Rescales an underlay (or image) about the first point so that the two points are `distance`
-/// drawing units apart. `handle` left out: the underlay under the first point. One undo step.
+/// Rescales an underlay or image about the first point so that the two points are `distance`
+/// drawing units apart. `handle` left out: the underlay or image under the first point. One undo
+/// step.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn calibrate(
@@ -165,16 +167,19 @@ pub async fn calibrate(
         let handle = match handle {
             Some(h) => h,
             None => s.underlay_at([x1, y1]).ok_or_else(|| {
-                CoreError::InvalidCommand("Pick the first point on a PDF underlay".to_string())
+                CoreError::InvalidCommand(
+                    "Pick the first point on a PDF underlay or an image".to_string(),
+                )
             })?,
         };
         s.calibrate(handle, [x1, y1], [x2, y2], distance)
     })
 }
 
-/// The picture of underlay image `id` (from the batch's image table) for a zoom of
-/// `px_per_unit` screen pixels per drawing unit: `u32` width, `u32` height, then width x height
-/// x 4 RGBA bytes, rows from the top. Sends `pdf:progress` (0 to 100) while pdfium draws it.
+/// The picture of image `id` (from the batch's image table: a PDF underlay or a raster image) for
+/// a zoom of `px_per_unit` screen pixels per drawing unit: `u32` width, `u32` height, then width
+/// x height x 4 RGBA bytes, rows from the top. Sends `pdf:progress` (0 to 100) while pdfium draws
+/// a PDF page.
 #[tauri::command]
 pub async fn underlay_image<R: Runtime>(
     id: u32,
@@ -182,19 +187,14 @@ pub async fn underlay_image<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> Result<Response, String> {
-    let UnderlayImage {
-        path,
-        page,
-        dpi,
-        version,
-    } = with_session(&state, |s| s.underlay_image(id, px_per_unit))?;
-    let key = (id, version, dpi.to_bits());
+    let picture = with_session(&state, |s| s.underlay_image(id, px_per_unit))?;
+    let key = (id, picture.version, picture.resolution());
     if let Some(bytes) = pictures(&state).get(key) {
         return Ok(Response::new(bytes.as_ref().clone()));
     }
     let emitter = app.clone();
     let bytes = blocking(move || {
-        let image = qiyas_pdf::render_page(&path, page, dpi, |p| {
+        let image = qiyas_core::draw_picture(&picture, |p| {
             let _ = emitter.emit(PROGRESS, p);
         })
         .map_err(|e| e.to_string())?;
@@ -208,6 +208,34 @@ pub async fn underlay_image<R: Runtime>(
     let bytes = Arc::new(bytes);
     pictures(&app.state::<AppState>()).put(key, bytes.clone());
     Ok(Response::new(bytes.as_ref().clone()))
+}
+
+/// Width and height in pixels of the raster image at `path`, as shown (EXIF orientation applied).
+#[tauri::command]
+pub async fn image_size(path: String) -> Result<(u32, u32), String> {
+    blocking(move || qiyas_core::image_size(Path::new(&path)).map_err(|e| e.to_string())).await
+}
+
+/// Attaches the raster image at `path` to the sheet on screen, bottom-left corner at (`x`, `y`),
+/// `width` drawing units wide. Its handle. One undo step.
+#[tauri::command]
+pub async fn attach_image(
+    path: String,
+    x: f64,
+    y: f64,
+    width: f64,
+    state: State<'_, AppState>,
+) -> Result<u64, String> {
+    with_session(&state, |s| s.attach_image(Path::new(&path), [x, y], width))
+}
+
+/// The brightness, contrast and fade of the raster image `handle`; null when it is not one.
+#[tauri::command]
+pub async fn image_display(
+    handle: u64,
+    state: State<'_, AppState>,
+) -> Result<Option<ImageDisplay>, String> {
+    with_session(&state, |s| Ok(s.image_display(handle)))
 }
 
 fn pictures(state: &AppState) -> std::sync::MutexGuard<'_, PictureCache> {

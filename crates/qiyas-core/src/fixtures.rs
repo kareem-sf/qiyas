@@ -246,3 +246,17 @@ fn write_doc(doc: &CadDocument, path: &Path) -> PathBuf {
     }
     path.to_path_buf()
 }
+
+/// Writes `dir/name`, a 200 x 100 pixel PNG: red on the left half, blue on the right.
+pub fn write_png(dir: &Path, name: &str) -> PathBuf {
+    let path = dir.join(name);
+    let image = ::image::RgbaImage::from_fn(200, 100, |x, _| {
+        if x < 100 {
+            ::image::Rgba([255, 0, 0, 255])
+        } else {
+            ::image::Rgba([0, 0, 255, 255])
+        }
+    });
+    image.save(&path).expect("the PNG is written");
+    path
+}

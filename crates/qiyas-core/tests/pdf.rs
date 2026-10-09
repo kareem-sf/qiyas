@@ -7,7 +7,7 @@ use opencadcodec::entities::Underlay;
 use opencadcodec::objects::ObjectType;
 use opencadcodec::EntityType;
 use qiyas_core::fixtures::write_sample;
-use qiyas_core::{AttachMode, CoreError, PreparedPdf, Session};
+use qiyas_core::{AttachMode, CoreError, PictureSource, PreparedPdf, Session};
 use qiyas_pdf::fixtures::{write_many, write_wall, PAGE_PT, RECT_PT};
 use qiyas_render::Batch;
 
@@ -135,22 +135,20 @@ fn an_underlay_is_drawn_and_survives_a_dxf_save() {
     let image = session
         .underlay_image(batch.image_table[0].id, 300.0)
         .unwrap();
-    assert_eq!(image.page, 1);
-    assert!(
-        (image.dpi - 1024.0 / (200.0 / 72.0)).abs() < 1e-2,
-        "{}",
-        image.dpi
-    );
+    let PictureSource::Pdf { page, dpi } = image.source else {
+        panic!("a PDF page: {image:?}");
+    };
+    assert_eq!(page, 1);
+    assert!((dpi - 1024.0 / (200.0 / 72.0)).abs() < 1e-2, "{dpi}");
     assert_eq!(image.version, batch.image_table[0].version);
     // Zoomed far in, the picture stops at 2048 px.
     let big = session
         .underlay_image(batch.image_table[0].id, 1e6)
         .unwrap();
-    assert!(
-        (big.dpi - 2048.0 / (200.0 / 72.0)).abs() < 1e-2,
-        "{}",
-        big.dpi
-    );
+    let PictureSource::Pdf { dpi, .. } = big.source else {
+        panic!("a PDF page: {big:?}");
+    };
+    assert!((dpi - 2048.0 / (200.0 / 72.0)).abs() < 1e-2, "{dpi}");
 
     // Hiding its layer hides it.
     session.set_layer_hidden(qiyas_core::UNDERLAY_LAYER, true);
@@ -404,8 +402,11 @@ fn page_1999_of_a_2000_page_pdf_attaches_as_an_underlay() {
     let image = session
         .underlay_image(batch.image_table[0].id, 500.0)
         .unwrap();
-    assert_eq!(image.page, 1999);
-    let pixels = qiyas_pdf::render_page(&image.path, image.page, image.dpi, |_| {}).unwrap();
+    assert!(matches!(
+        image.source,
+        PictureSource::Pdf { page: 1999, .. }
+    ));
+    let pixels = qiyas_core::draw_picture(&image, |_| {}).unwrap();
     assert_eq!(pixels.width(), 1024);
     let rss = resident_bytes();
     assert!(rss < 300 << 20, "{} MB resident", rss >> 20);
