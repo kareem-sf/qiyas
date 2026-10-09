@@ -29,9 +29,16 @@ pub struct Sheet {
 pub struct LayerInfo {
     pub name: String,
     pub color: [u8; 3],
+    /// Its colour as the palette writes one: "ACI n" or "#rrggbb".
+    pub color_name: String,
     pub off: bool,
     pub frozen: bool,
     pub locked: bool,
+    pub linetype: String,
+    /// Hundredths of a millimetre; -3 Default.
+    pub lineweight: i16,
+    /// Plotted (AutoCAD's plot setting).
+    pub plot: bool,
 }
 
 impl Drawing {
@@ -122,9 +129,13 @@ impl Drawing {
                     .rgb()
                     .map(|(r, g, b)| [r, g, b])
                     .unwrap_or([255, 255, 255]),
+                color_name: crate::session::color_name(&l.color),
                 off: l.flags.off,
                 frozen: l.flags.frozen,
                 locked: l.flags.locked,
+                linetype: l.line_type.clone(),
+                lineweight: l.line_weight.value(),
+                plot: l.is_plottable,
             })
             .collect();
         layers.sort_by(|a, b| a.name.cmp(&b.name));

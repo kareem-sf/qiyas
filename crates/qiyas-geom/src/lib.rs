@@ -10,8 +10,8 @@ mod table;
 mod transform;
 
 pub use dimension::{
-    dimension_entities, dimension_text, dimscale, format_measure, leader_entities, set_dimscale,
-    style_named, tolerance_entities, DimGeometry, DimLook,
+    dimension_entities, dimension_text, dimscale, dimtxt, format_measure, leader_entities,
+    set_dimscale, set_dimtxt, style_named, tolerance_entities, DimGeometry, DimLook,
 };
 pub use exact::{exact_area, exact_length};
 pub use flatten::{

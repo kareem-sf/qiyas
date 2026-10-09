@@ -26,6 +26,8 @@ use opencadkernel::geom2d::{linear_dimension_leader, Line as Segment};
 const ACAD: &str = "ACAD";
 /// DIMSCALE's DXF group code, as a `DSTYLE` override names it.
 const DIMSCALE_CODE: i16 = 40;
+/// DIMTXT's DXF group code.
+const DIMTXT_CODE: i16 = 140;
 
 /// The sizes and number format a dimension, leader or tolerance is drawn with: its style's
 /// values times its scale, in drawing units.
@@ -110,6 +112,15 @@ impl DimLook {
         let style = style_named(doc, name);
         let scale = dimscale(common).unwrap_or(style.dimscale);
         let mut look = DimLook::new(&style, scale);
+        // Its own text height (a DIMTXT override), at the same scale.
+        if let Some(height) = dimtxt(common) {
+            let k = if scale > 0.0 && scale.is_finite() {
+                scale
+            } else {
+                1.0
+            };
+            look.text_height = height * k;
+        }
         // The text style is held by handle in a DWG.
         if !style.dimtxsty_handle.is_null() {
             if let Some(s) = doc
@@ -135,6 +146,16 @@ pub fn style_named(doc: &CadDocument, name: &str) -> DimStyle {
 
 /// The DIMSCALE an annotation overrides its style's with (`ACAD` `DSTYLE` xdata), if any.
 pub fn dimscale(common: &EntityCommon) -> Option<f64> {
+    dstyle_value(common, DIMSCALE_CODE)
+}
+
+/// The DIMTXT (text height, before DIMSCALE) a dimension overrides its style's with, if any.
+pub fn dimtxt(common: &EntityCommon) -> Option<f64> {
+    dstyle_value(common, DIMTXT_CODE)
+}
+
+/// The positive number the `DSTYLE` override `code` gives, if any.
+fn dstyle_value(common: &EntityCommon, code: i16) -> Option<f64> {
     let values = &common.extended_data.get_record(ACAD)?.values;
     let at = values
         .iter()
@@ -143,7 +164,7 @@ pub fn dimscale(common: &EntityCommon) -> Option<f64> {
     while let Some(v) = rest.next() {
         match v {
             XDataValue::ControlString(s) if s == "}" => break,
-            XDataValue::Integer16(DIMSCALE_CODE) => {
+            XDataValue::Integer16(c) if *c == code => {
                 return match rest.next() {
                     Some(
                         XDataValue::Real(r) | XDataValue::Distance(r) | XDataValue::ScaleFactor(r),
@@ -170,6 +191,41 @@ pub fn set_dimscale(common: &mut EntityCommon, scale: f64) {
     ] {
         record.add_value(v);
     }
+    common.extended_data.upsert_record(record);
+}
+
+/// Gives a dimension its own DIMTXT (text height before DIMSCALE), keeping its other `DSTYLE`
+/// overrides.
+pub fn set_dimtxt(common: &mut EntityCommon, height: f64) {
+    let mut pairs: Vec<(i16, XDataValue)> = Vec::new();
+    if let Some(record) = common.extended_data.get_record(ACAD) {
+        let values = &record.values;
+        let at = values
+            .iter()
+            .position(|v| matches!(v, XDataValue::String(s) if s.eq_ignore_ascii_case("DSTYLE")));
+        let mut rest = values[at.map_or(values.len(), |a| a + 1)..].iter();
+        while let Some(v) = rest.next() {
+            match v {
+                XDataValue::ControlString(s) if s == "}" => break,
+                XDataValue::Integer16(c) => {
+                    if let Some(value) = rest.next() {
+                        pairs.push((*c, value.clone()));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    pairs.retain(|(c, _)| *c != DIMTXT_CODE);
+    pairs.push((DIMTXT_CODE, XDataValue::Real(height)));
+    let mut record = ExtendedDataRecord::new(ACAD);
+    record.add_value(XDataValue::String("DSTYLE".to_string()));
+    record.add_value(XDataValue::ControlString("{".to_string()));
+    for (code, value) in pairs {
+        record.add_value(XDataValue::Integer16(code));
+        record.add_value(value);
+    }
+    record.add_value(XDataValue::ControlString("}".to_string()));
     common.extended_data.upsert_record(record);
 }
 

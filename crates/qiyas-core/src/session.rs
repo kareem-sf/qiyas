@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -78,6 +78,8 @@ pub struct Session {
     /// The layer, colour, linetype and lineweight new entities take. Saved in the project file;
     /// not an undo step.
     pub current: Current,
+    /// The hidden layers kept with each layer state, by state name. Saved in the project file.
+    pub(crate) state_hidden: BTreeMap<String, Vec<String>>,
     pub(crate) history: History,
     /// The block being edited in place, if one is (see `crate::blocks`).
     pub(crate) block_edit: Option<BlockEdit>,
@@ -144,6 +146,14 @@ pub struct DrawingInfo {
     pub annotation_factor: f64,
     /// The block being edited in place (`Command::EditBlockInPlace`), if one is.
     pub block_edit: Option<String>,
+    /// The drawing's linetypes, sorted.
+    pub linetypes: Vec<String>,
+    /// The drawing's layer states, as stored.
+    pub layer_states: Vec<String>,
+    /// The drawing's groups.
+    pub groups: Vec<crate::GroupInfo>,
+    /// The paper-space viewports of the sheet on screen, with the layers each freezes.
+    pub viewports: Vec<crate::ViewportInfo>,
 }
 
 /// An entity by its handle and the block references it sits inside (outermost first).
@@ -359,7 +369,7 @@ fn check_inside(doc: &CadDocument, handle: u64, block: Option<&str>) -> Result<(
 }
 
 /// An entity's own colour as the properties palette shows it.
-fn color_name(color: &Color) -> String {
+pub(crate) fn color_name(color: &Color) -> String {
     match color {
         Color::ByLayer => "ByLayer".into(),
         Color::ByBlock => "ByBlock".into(),
@@ -404,6 +414,7 @@ impl Session {
         let mut drafting = Drafting::default();
         let mut xref_overrides = HashMap::new();
         let mut current = Current::default();
+        let mut state_hidden = BTreeMap::new();
         let project_file = project_path(path);
         if project_file.exists() {
             match project::load(&project_file) {
@@ -423,6 +434,7 @@ impl Session {
                     arabic_reversed = project.arabic_reversed;
                     drafting = project.drafting.clamped();
                     xref_overrides = project.xref_overrides;
+                    state_hidden = project.qiyas_hidden;
                     // A layer gone from the drawing since: back to layer "0".
                     if drawing.doc.layers.contains(&project.current.layer) {
                         current = project.current;
@@ -461,6 +473,7 @@ impl Session {
             xrefs,
             xref_overrides,
             current,
+            state_hidden,
             history: History::default(),
             block_edit: None,
             epoch: NEXT_EPOCH.fetch_add(1, Ordering::Relaxed),
@@ -488,6 +501,7 @@ impl Session {
             drafting: self.drafting.clone(),
             xref_overrides: self.xref_overrides.clone(),
             current: self.current.clone(),
+            qiyas_hidden: self.state_hidden.clone(),
         };
         project::save(&path, &project)?;
         Ok(path)
@@ -581,6 +595,10 @@ impl Session {
             annotation_scale: annotation_scale.0,
             annotation_factor: annotation_scale.1,
             block_edit: self.block_edit_name(),
+            linetypes: self.linetypes(),
+            layer_states: self.layer_state_names(),
+            groups: self.groups(),
+            viewports: self.viewports(),
         }
     }
 
@@ -942,7 +960,10 @@ impl Session {
         let (height, style) = match entity {
             EntityType::Text(t) => (Some(t.height), Some(t.style.clone())),
             EntityType::MText(t) => (Some(t.height), Some(t.style.clone())),
-            EntityType::Dimension(d) => (None, Some(d.base().style_name.clone())),
+            EntityType::Dimension(d) => (
+                Some(crate::props::dimension_text_height(located.doc, d)),
+                Some(d.base().style_name.clone()),
+            ),
             _ => (None, None),
         };
         let attributes = match entity {
@@ -1023,6 +1044,9 @@ impl Session {
     /// New measurements are marked as made by `source`.
     pub fn run_as(&mut self, cmd: Command, source: Source) -> Result<Outcome, CoreError> {
         self.check_block_edit(&cmd)?;
+        if matches!(cmd, Command::SaveLayerState { .. }) {
+            self.prepare_layer_states();
+        }
         let before = match cmd.changes() {
             None => return self.execute(cmd, source),
             Some(Part::Document { tables, takeoff }) => {

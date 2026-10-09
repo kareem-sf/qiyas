@@ -32,7 +32,7 @@ use crate::undo::{DocChange, TablesSnapshot};
 use crate::{Command, CoreError, Outcome, Session, Target};
 
 /// Characters AutoCAD refuses in a block name.
-const BAD_NAME_CHARS: &[char] = &[
+pub(crate) const BAD_NAME_CHARS: &[char] = &[
     '<', '>', '/', '\\', '"', ':', ';', '?', '*', '|', ',', '=', '`',
 ];
 

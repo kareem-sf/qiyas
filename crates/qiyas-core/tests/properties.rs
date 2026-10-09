@@ -1,0 +1,407 @@
+//! Editing an entity's properties (the properties palette) and matching one entity's properties
+//! onto others. One undo step each; the take-off follows a change of shape.
+
+use opencadcodec::entities::{Circle, Dimension};
+use opencadcodec::{CadDocument, Color, EntityType, Handle, LineType};
+use qiyas_core::fixtures::{sample_doc, write_drawing, write_xref_pair};
+use qiyas_core::{
+    Command, CoreError, DimSpec, DrawSpec, EntityProp, MatchProp, Outcome, Session, Target,
+};
+use serde_json::{json, Value};
+
+const MODEL: &str = "*Model_Space";
+
+fn open(doc: &CadDocument) -> (tempfile::TempDir, Session) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_drawing(doc, &dir.path().join("plan.dxf"));
+    let s = Session::open(&path).unwrap();
+    (dir, s)
+}
+
+fn t(handle: u64) -> Target {
+    Target {
+        handle,
+        chain: Vec::new(),
+    }
+}
+
+fn entity(s: &Session, h: u64) -> EntityType {
+    s.drawing.doc.get_entity(Handle::new(h)).cloned().unwrap()
+}
+
+fn set(s: &mut Session, h: u64, prop: EntityProp, value: Value) {
+    s.run(Command::SetProperty {
+        target: t(h),
+        prop,
+        value,
+    })
+    .unwrap();
+}
+
+fn refused(s: &mut Session, cmd: Command) -> String {
+    let undo = s.can_undo();
+    let err = s.run(cmd).unwrap_err();
+    assert_eq!(s.can_undo(), undo, "a refused command is no step");
+    match err {
+        CoreError::InvalidCommand(why) => why,
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+}
+
+/// The first model space entity of `kind` ("Line", "Arc"…).
+fn first(s: &Session, kind: &str) -> u64 {
+    s.drawing
+        .doc
+        .entities_in_block(MODEL)
+        .find(|e| format!("{e:?}").starts_with(kind))
+        .unwrap()
+        .common()
+        .handle
+        .value()
+}
+
+fn added(outcome: Outcome) -> u64 {
+    match outcome {
+        Outcome::Added { handles } => handles[0],
+        other => panic!("{other:?}"),
+    }
+}
+
+fn circle(s: &mut Session) -> u64 {
+    added(
+        s.run(Command::Draw(DrawSpec::Circle {
+            centre: [50.0, 50.0],
+            radius: 2.0,
+        }))
+        .unwrap(),
+    )
+}
+
+/// The batch's extent of what entity `h` draws.
+fn drawn_width(s: &Session, h: u64) -> f64 {
+    let batch = s.batch();
+    let mut xs = Vec::new();
+    for r in batch.ranges.iter().filter(|r| r.top == h) {
+        for i in r.first..r.first + r.count {
+            let seg = &batch.segments[4 * i as usize..4 * i as usize + 4];
+            xs.push(f64::from(seg[0]));
+            xs.push(f64::from(seg[2]));
+        }
+    }
+    let lo = xs.iter().copied().fold(f64::INFINITY, f64::min);
+    let hi = xs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    hi - lo
+}
+
+#[test]
+fn set_radius_changes_the_circle_the_batch_and_the_takeoff() {
+    let (_dir, mut s) = open(&sample_doc());
+    let c = circle(&mut s);
+    s.run(Command::MeasureEntity {
+        handle: c,
+        chain: vec![],
+    })
+    .unwrap();
+    let before = s.takeoff.items[0].value;
+    assert!((drawn_width(&s, c) - 4.0).abs() < 0.1);
+
+    set(&mut s, c, EntityProp::Radius, json!(3.0));
+    match entity(&s, c) {
+        EntityType::Circle(Circle { radius, .. }) => assert_eq!(radius, 3.0),
+        other => panic!("{other:?}"),
+    }
+    assert!((drawn_width(&s, c) - 6.0).abs() < 0.1);
+    let after = s.takeoff.items[0].value;
+    assert!(
+        (after / before - 9.0 / 4.0).abs() < 1e-6,
+        "{before} {after}"
+    );
+
+    refused(
+        &mut s,
+        Command::SetProperty {
+            target: t(c),
+            prop: EntityProp::Radius,
+            value: json!(0),
+        },
+    );
+    // A line has no radius.
+    let line = first(&s, "Line");
+    refused(
+        &mut s,
+        Command::SetProperty {
+            target: t(line),
+            prop: EntityProp::Radius,
+            value: json!(1),
+        },
+    );
+    assert!(s.undo());
+    assert_eq!(s.takeoff.items[0].value, before);
+}
+
+#[test]
+fn the_general_properties_of_a_line() {
+    let mut doc = sample_doc();
+    let mut dashed = LineType::new("DASHED");
+    dashed.handle = doc.allocate_handle();
+    doc.line_types.add(dashed).unwrap();
+    let (_dir, mut s) = open(&doc);
+    let line = first(&s, "Line");
+    s.run(Command::MeasureEntity {
+        handle: line,
+        chain: vec![],
+    })
+    .unwrap();
+
+    set(&mut s, line, EntityProp::Layer, json!("a-door"));
+    set(&mut s, line, EntityProp::Color, json!("ACI 3"));
+    set(&mut s, line, EntityProp::Linetype, json!("dashed"));
+    set(&mut s, line, EntityProp::Lineweight, json!(25));
+    let c = entity(&s, line);
+    let common = c.common();
+    assert_eq!(common.layer, "A-DOOR");
+    assert_eq!(common.color, Color::Index(3));
+    assert_eq!(common.linetype, "DASHED");
+    assert_eq!(common.line_weight.value(), 25);
+    // The row measuring the line says where it is now.
+    assert_eq!(s.takeoff.items[0].layer, "A-DOOR");
+    let info = s.entity_info(line, &[]).unwrap();
+    assert_eq!(info.color, "ACI 3");
+
+    set(&mut s, line, EntityProp::Linetype, json!("ByLayer"));
+    assert_eq!(entity(&s, line).common().linetype, "");
+    for (prop, value) in [
+        (EntityProp::Layer, json!("NOPE")),
+        (EntityProp::Color, json!("blue")),
+        (EntityProp::Lineweight, json!(3)),
+        (EntityProp::Text, json!("x")),
+    ] {
+        refused(
+            &mut s,
+            Command::SetProperty {
+                target: t(line),
+                prop,
+                value,
+            },
+        );
+    }
+    for _ in 0..5 {
+        assert!(s.undo());
+    }
+    assert_eq!(entity(&s, line).common().layer, "A-WALL");
+    assert_eq!(s.takeoff.items[0].layer, "A-WALL");
+}
+
+#[test]
+fn texts_polylines_and_block_references() {
+    let (_dir, mut s) = open(&sample_doc());
+    let text = first(&s, "Text");
+    set(&mut s, text, EntityProp::Text, json!("FIRST FLOOR"));
+    set(&mut s, text, EntityProp::TextHeight, json!(0.75));
+    set(&mut s, text, EntityProp::TextRotation, json!(90));
+    match entity(&s, text) {
+        EntityType::Text(t) => {
+            assert_eq!(t.value, "FIRST FLOOR");
+            assert_eq!(t.height, 0.75);
+            assert!((t.rotation - std::f64::consts::FRAC_PI_2).abs() < 1e-12);
+        }
+        other => panic!("{other:?}"),
+    }
+
+    // Opening the rectangle: its area row can't be measured any more and keeps its value.
+    let rect = first(&s, "LwPolyline");
+    s.run(Command::MeasureEntity {
+        handle: rect,
+        chain: vec![],
+    })
+    .unwrap();
+    set(&mut s, rect, EntityProp::Closed, json!(false));
+    set(&mut s, rect, EntityProp::GlobalWidth, json!(0.2));
+    match entity(&s, rect) {
+        EntityType::LwPolyline(p) => {
+            assert!(!p.is_closed);
+            assert_eq!(p.constant_width, 0.2);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(s.takeoff.items[0].handles.is_empty(), "unlinked");
+    assert_eq!(s.takeoff.items[0].value, 12.0);
+
+    let door = first(&s, "Insert");
+    set(&mut s, door, EntityProp::InsertScale, json!(3));
+    set(&mut s, door, EntityProp::InsertRotation, json!(45));
+    match entity(&s, door) {
+        EntityType::Insert(i) => {
+            assert_eq!(i.x_scale(), 3.0);
+            assert_eq!(i.y_scale(), 3.0);
+            assert!((i.rotation - std::f64::consts::FRAC_PI_4).abs() < 1e-12);
+        }
+        other => panic!("{other:?}"),
+    }
+    refused(
+        &mut s,
+        Command::SetProperty {
+            target: t(door),
+            prop: EntityProp::InsertScale,
+            value: json!(-1),
+        },
+    );
+}
+
+#[test]
+fn a_dimensions_text_height_draws_its_block_again() {
+    let (_dir, mut s) = open(&sample_doc());
+    let dim = added(
+        s.run(Command::Dimension(DimSpec::Linear {
+            p1: [0.0, 0.0],
+            p2: [10.0, 0.0],
+            line_point: [5.0, 2.0],
+            rotation: None,
+        }))
+        .unwrap(),
+    );
+    let block_text_height = |s: &Session| {
+        let EntityType::Dimension(d) = entity(s, dim) else {
+            panic!("a dimension")
+        };
+        let name = d.base().block_name.clone();
+        s.drawing
+            .doc
+            .entities_in_block(&name)
+            .find_map(|e| match e {
+                EntityType::Text(t) => Some(t.height),
+                _ => None,
+            })
+            .unwrap()
+    };
+    let before = block_text_height(&s);
+    set(&mut s, dim, EntityProp::TextHeight, json!(before * 4.0));
+    assert!((block_text_height(&s) - before * 4.0).abs() < 1e-9);
+    assert_eq!(
+        s.entity_info(dim, &[]).unwrap().height,
+        Some(before * 4.0),
+        "the palette shows it"
+    );
+    assert!(matches!(
+        entity(&s, dim),
+        EntityType::Dimension(Dimension::Linear(_))
+    ));
+    assert!(s.undo());
+    assert!((block_text_height(&s) - before).abs() < 1e-9);
+}
+
+#[test]
+fn match_properties_copies_layer_and_colour() {
+    let (_dir, mut s) = open(&sample_doc());
+    let door = first(&s, "Insert");
+    let line = first(&s, "Line");
+    let arc = first(&s, "Arc");
+    set(&mut s, door, EntityProp::Color, json!("#ff8000"));
+    s.run(Command::MatchProperties {
+        source: t(door),
+        targets: vec![t(line), t(arc)],
+        props: vec![MatchProp::Layer, MatchProp::Color],
+    })
+    .unwrap();
+    for h in [line, arc] {
+        let e = entity(&s, h);
+        assert_eq!(e.common().layer, "A-DOOR");
+        assert_eq!(
+            e.common().color,
+            Color::Rgb {
+                r: 0xff,
+                g: 0x80,
+                b: 0
+            }
+        );
+    }
+    // One step.
+    assert!(s.undo());
+    assert_eq!(entity(&s, line).common().layer, "A-WALL");
+    assert_eq!(entity(&s, arc).common().layer, "A-WALL");
+
+    // Text height goes text to text only; a line takes the layer and leaves the rest.
+    let text = first(&s, "Text");
+    let other = added(
+        s.run(Command::Text {
+            at: [0.0, 20.0],
+            height: 2.0,
+            rotation: 0.0,
+            value: "B".into(),
+            style: None,
+        })
+        .unwrap(),
+    );
+    s.run(Command::MatchProperties {
+        source: t(text),
+        targets: vec![t(other), t(line)],
+        props: vec![MatchProp::TextHeight, MatchProp::Layer],
+    })
+    .unwrap();
+    match entity(&s, other) {
+        EntityType::Text(t) => assert_eq!(t.height, 0.5),
+        e => panic!("{e:?}"),
+    }
+    assert_eq!(entity(&s, line).common().layer, "0");
+    refused(
+        &mut s,
+        Command::MatchProperties {
+            source: t(text),
+            targets: vec![],
+            props: vec![MatchProp::Layer],
+        },
+    );
+}
+
+#[test]
+fn an_xrefs_entity_is_never_edited_from_the_palette() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = write_xref_pair(dir.path());
+    let mut s = Session::open(&host).unwrap();
+    let xref = s
+        .drawing
+        .doc
+        .entities_in_block(MODEL)
+        .find(|e| matches!(e, EntityType::Insert(_)))
+        .unwrap()
+        .common()
+        .handle
+        .value();
+    let inside = s.xrefs.entries[0]
+        .drawing
+        .as_ref()
+        .unwrap()
+        .doc
+        .entities_in_block(MODEL)
+        .next()
+        .unwrap()
+        .common()
+        .handle
+        .value();
+    let why = refused(
+        &mut s,
+        Command::SetProperty {
+            target: Target {
+                handle: inside,
+                chain: vec![xref],
+            },
+            prop: EntityProp::Color,
+            value: json!("ACI 1"),
+        },
+    );
+    assert!(why.contains("read-only"), "{why}");
+    // Nor can one be matched onto.
+    let own = first(&s, "Line");
+    let why = refused(
+        &mut s,
+        Command::MatchProperties {
+            source: t(own),
+            targets: vec![Target {
+                handle: inside,
+                chain: vec![xref],
+            }],
+            props: vec![MatchProp::Color],
+        },
+    );
+    assert!(why.contains("read-only"), "{why}");
+}

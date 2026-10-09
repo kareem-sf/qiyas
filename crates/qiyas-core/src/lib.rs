@@ -1,7 +1,8 @@
 //! Qiyas core: the document, selection, undo and redo, command bus, PDF import and underlays,
 //! raster images, inquiry (geometry, divide and measure along, data extraction), drawing new
 //! entities and modifying them, text and find and replace, dimensions, leaders and tolerances,
-//! tables and fields, blocks and attributes.
+//! tables and fields, blocks and attributes, layer properties, layer states and the layer
+//! translator, groups, and editing and matching entity properties.
 
 mod blocks;
 mod boq;
@@ -15,11 +16,14 @@ mod error;
 mod field;
 #[cfg(any(test, feature = "fixtures"))]
 pub mod fixtures;
+mod groups;
 mod image;
 mod inquiry;
+mod layers;
 mod modify;
 mod modify2;
 mod project;
+mod props;
 mod query;
 mod session;
 mod snap;
@@ -44,10 +48,13 @@ pub use drawing::{short_layer_name, Drawing, LayerInfo, Sheet};
 pub use embed::{embed_measurements, read_embedded};
 pub use error::CoreError;
 pub use field::{field_code, FieldKind, FIELD_APP};
+pub use groups::GroupInfo;
 pub use inquiry::{Field, POINT_LAYER};
+pub use layers::{drawing_layers, LayerMapping, LayerProp, ViewportInfo};
 pub use modify::ModifySpec;
 pub use modify2::{EditSpec, LengthenBy, PEditOp};
 pub use project::{project_path, Project};
+pub use props::{EntityProp, MatchProp};
 pub use query::{BlockCount, DimRow, EntityFilter, EntityRow, Page, TextRow};
 pub use session::{DrawingInfo, EntityInfo, Picked, Session, BATCH_TOL, EMPTY_MODEL};
 pub use snap::{Drafting, Snap, SnapKind, SnapModes};

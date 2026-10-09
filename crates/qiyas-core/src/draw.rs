@@ -50,7 +50,7 @@ impl Default for Current {
 }
 
 /// A colour as `Current::color` writes it; `None` when it is none of those forms.
-fn parse_color(text: &str) -> Option<Color> {
+pub(crate) fn parse_color(text: &str) -> Option<Color> {
     let t = text.trim();
     if t.eq_ignore_ascii_case("ByLayer") {
         return Some(Color::ByLayer);
@@ -403,7 +403,7 @@ fn ring_path(points: &[[f64; 2]], bulges: &[f64]) -> BoundaryPath {
 }
 
 /// AutoCAD's lineweights, in hundredths of a millimetre.
-const LINEWEIGHTS: [i16; 24] = [
+pub(crate) const LINEWEIGHTS: [i16; 24] = [
     0, 5, 9, 13, 15, 18, 20, 25, 30, 35, 40, 50, 53, 60, 70, 80, 90, 100, 106, 120, 140, 158, 200,
     211,
 ];

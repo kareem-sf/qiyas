@@ -1,7 +1,7 @@
 //! The `.qiyas` project file: the take-off, the BOQ, the conflicts and the schedules, saved as
 //! JSON next to the drawing.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -39,6 +39,10 @@ pub struct Project {
     /// The layer, colour, linetype and lineweight new entities take (`Session::current`).
     #[serde(default)]
     pub current: Current,
+    /// The layers the user had hidden when each layer state was saved, by state name: a layer
+    /// state keeps the drawing's layer settings in the drawing, and Qiyas's hidden layers here.
+    #[serde(default)]
+    pub qiyas_hidden: BTreeMap<String, Vec<String>>,
 }
 
 /// The project file of `drawing`: same folder, same stem, extension `qiyas`.
@@ -141,6 +145,7 @@ mod tests {
             drafting: Drafting::default(),
             xref_overrides: HashMap::new(),
             current: Current::default(),
+            qiyas_hidden: Default::default(),
         };
         assert!(save(&path, &project).is_err());
         assert!(!dir.path().join("villa.qiyas.tmp").exists());

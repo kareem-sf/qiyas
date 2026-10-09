@@ -1078,6 +1078,14 @@ impl Session {
             Command::CreateBlock { targets, .. } => (targets.as_slice(), false, false),
             // Rows measuring a reference to the block are measured again.
             Command::RedefineBlock { .. } => return (false, true),
+            // A dimension's or a table's block drawn again, typed text marked; rows on a target
+            // follow its layer and shape.
+            Command::SetProperty { target, prop, .. } => {
+                let typed = *prop == crate::EntityProp::Text && self.needs_text_app();
+                let (tables, takeoff) = self.annotation_extras(std::slice::from_ref(target));
+                return (tables || typed, takeoff);
+            }
+            Command::MatchProperties { targets, .. } => return self.annotation_extras(targets),
             _ => return (false, false),
         };
         let doc = &self.drawing.doc;
@@ -1090,6 +1098,24 @@ impl Session {
             })
             // A table's field reading an entity draws the table's block again.
             || self.tables_follow_fields();
+        let takeoff = targets
+            .iter()
+            .any(|t| self.takeoff.items.iter().any(|m| measures(m, t.handle)));
+        (tables, takeoff)
+    }
+
+    /// For an edit of `targets`' properties: the tables when one is a dimension or a table
+    /// (its block is drawn again) or a table's field reads an entity, the take-off when a row
+    /// measures one.
+    fn annotation_extras(&self, targets: &[Target]) -> (bool, bool) {
+        let doc = &self.drawing.doc;
+        let tables = self.tables_follow_fields()
+            || targets.iter().any(|t| {
+                matches!(
+                    doc.get_entity(Handle::new(t.handle)),
+                    Some(EntityType::Dimension(_) | EntityType::Table(_))
+                )
+            });
         let takeoff = targets
             .iter()
             .any(|t| self.takeoff.items.iter().any(|m| measures(m, t.handle)));

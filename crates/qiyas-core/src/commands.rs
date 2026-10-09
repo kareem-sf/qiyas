@@ -17,8 +17,9 @@ use crate::takeoff::in_metres;
 use crate::text::Finder;
 use crate::{
     AttachMode, Boq, Conflict, ConflictStatus, CoreError, Current, DimEditOp, DimSpec,
-    DimStyleFields, Drafting, DrawSpec, EditSpec, EntityFilter, FieldKind, Kind, Measurement,
-    ModifySpec, PreparedPdf, Schedule, Session, SnapKind, Source, TextMatch, TextScope,
+    DimStyleFields, Drafting, DrawSpec, EditSpec, EntityFilter, EntityProp, FieldKind, Kind,
+    LayerMapping, LayerProp, MatchProp, Measurement, ModifySpec, PreparedPdf, Schedule, Session,
+    SnapKind, Source, TextMatch, TextScope,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -493,6 +494,93 @@ pub enum Command {
         name: String,
         from_path: String,
     },
+    /// Every layer's on, frozen, locked, plot, colour, linetype and lineweight, kept in the
+    /// drawing as the layer state `name` (AutoCAD's Layer States Manager sees it; one of that
+    /// name is replaced), with the hidden layers kept beside it in the project file.
+    SaveLayerState {
+        name: String,
+    },
+    /// The layers take what the state `name` kept; the hidden layers come back too.
+    RestoreLayerState {
+        name: String,
+    },
+    DeleteLayerState {
+        name: String,
+    },
+    RenameLayerState {
+        from: String,
+        to: String,
+    },
+    /// One property of the drawing's layer `name` (see `LayerProp` for the values).
+    SetLayer {
+        name: String,
+        prop: LayerProp,
+        value: serde_json::Value,
+    },
+    /// A new layer, white and Continuous.
+    NewLayer {
+        name: String,
+    },
+    /// Deletes an empty layer: never 0, Defpoints or the current layer.
+    DeleteLayer {
+        name: String,
+    },
+    /// Renames a layer; its entities, the take-off rows on it, the current and hidden layers
+    /// follow. A name another layer has is refused (`TranslateLayers` merges).
+    RenameLayer {
+        from: String,
+        to: String,
+    },
+    /// Renames, merges (when `to` exists) and recolours layers in one step; with `from_path`
+    /// each layer then takes the colour, linetype, lineweight and plot setting of that drawing's
+    /// layer of its new name (opened read-only).
+    TranslateLayers {
+        #[serde(default)]
+        from_path: Option<String>,
+        mappings: Vec<LayerMapping>,
+    },
+    /// The paper-space viewport `viewport` (on the sheet on screen) freezes `layer` inside it,
+    /// or thaws it.
+    SetViewportFrozen {
+        viewport: Target,
+        layer: String,
+        frozen: bool,
+    },
+    /// A new group `name` of the entities `targets` at the top of the sheet.
+    CreateGroup {
+        name: String,
+        targets: Vec<Target>,
+    },
+    AddToGroup {
+        name: String,
+        targets: Vec<Target>,
+    },
+    RemoveFromGroup {
+        name: String,
+        targets: Vec<Target>,
+    },
+    /// The group goes; its entities stay (AutoCAD's explode of a group).
+    DeleteGroup {
+        name: String,
+    },
+    /// Every group holding one of `targets` goes; the entities stay.
+    Ungroup {
+        targets: Vec<Target>,
+    },
+    /// Each of `targets` takes the `props` of `source` (which may be inside a block or an
+    /// xref) where it has them.
+    MatchProperties {
+        source: Target,
+        targets: Vec<Target>,
+        props: Vec<MatchProp>,
+    },
+    /// The palette's edit: one property of the entity `target` at the top of the sheet (see
+    /// `EntityProp` for the values).
+    SetProperty {
+        target: Target,
+        prop: EntityProp,
+        value: serde_json::Value,
+    },
 }
 
 /// `InsertBlock`'s scale when none is given.
@@ -609,6 +697,36 @@ impl Command {
             | Command::SaveView { .. }
             | Command::DeleteView { .. } => Some(Part::Document {
                 tables: true,
+                takeoff: false,
+            }),
+            // The layer table, layer states (objects) and groups (objects); a layer's entities.
+            Command::SaveLayerState { .. }
+            | Command::RestoreLayerState { .. }
+            | Command::DeleteLayerState { .. }
+            | Command::RenameLayerState { .. }
+            | Command::SetLayer { .. }
+            | Command::NewLayer { .. }
+            | Command::DeleteLayer { .. }
+            | Command::CreateGroup { .. }
+            | Command::AddToGroup { .. }
+            | Command::RemoveFromGroup { .. }
+            | Command::DeleteGroup { .. }
+            | Command::Ungroup { .. } => Some(Part::Document {
+                tables: true,
+                takeoff: false,
+            }),
+            // The take-off rows on a renamed or merged layer take its new name.
+            Command::RenameLayer { .. } | Command::TranslateLayers { .. } => {
+                Some(Part::Document {
+                    tables: true,
+                    takeoff: true,
+                })
+            }
+            // The tables and take-off when a target needs them (`document_extras`).
+            Command::SetViewportFrozen { .. }
+            | Command::MatchProperties { .. }
+            | Command::SetProperty { .. } => Some(Part::Document {
+                tables: false,
                 takeoff: false,
             }),
             // Points on their own layer, and their count in the take-off.
@@ -1170,6 +1288,88 @@ impl Session {
             }
             Command::RedefineBlock { name, from_path } => {
                 self.redefine_block(&name, &from_path)?;
+                return Ok(Outcome::Changed);
+            }
+            Command::SaveLayerState { name } => {
+                return self.save_layer_state(&name).map(|()| Outcome::Changed)
+            }
+            Command::RestoreLayerState { name } => {
+                return self.restore_layer_state(&name).map(|()| Outcome::Changed)
+            }
+            Command::DeleteLayerState { name } => {
+                return self.delete_layer_state(&name).map(|()| Outcome::Changed)
+            }
+            Command::RenameLayerState { from, to } => {
+                return self
+                    .rename_layer_state(&from, &to)
+                    .map(|()| Outcome::Changed)
+            }
+            Command::SetLayer { name, prop, value } => {
+                return self
+                    .set_layer_prop(&name, prop, &value)
+                    .map(|()| Outcome::Changed)
+            }
+            Command::NewLayer { name } => return self.new_layer(&name).map(|()| Outcome::Changed),
+            Command::DeleteLayer { name } => {
+                return self.delete_layer(&name).map(|()| Outcome::Changed)
+            }
+            Command::RenameLayer { from, to } => {
+                return self.rename_layer(&from, &to).map(|()| Outcome::Changed)
+            }
+            Command::TranslateLayers {
+                from_path,
+                mappings,
+            } => {
+                return self
+                    .translate_layers(from_path.as_deref(), &mappings)
+                    .map(|()| Outcome::Changed)
+            }
+            Command::SetViewportFrozen {
+                viewport,
+                layer,
+                frozen,
+            } => {
+                return self
+                    .set_viewport_frozen(&viewport, &layer, frozen)
+                    .map(|()| Outcome::Changed)
+            }
+            Command::CreateGroup { name, targets } => {
+                return self
+                    .create_group(&name, &targets)
+                    .map(|()| Outcome::Changed)
+            }
+            Command::AddToGroup { name, targets } => {
+                return self
+                    .add_to_group(&name, &targets)
+                    .map(|()| Outcome::Changed)
+            }
+            Command::RemoveFromGroup { name, targets } => {
+                return self
+                    .remove_from_group(&name, &targets)
+                    .map(|()| Outcome::Changed)
+            }
+            Command::DeleteGroup { name } => {
+                return self.delete_group(&name).map(|()| Outcome::Changed)
+            }
+            Command::Ungroup { targets } => {
+                return self.ungroup(&targets).map(|()| Outcome::Changed)
+            }
+            Command::MatchProperties {
+                source,
+                targets,
+                props,
+            } => {
+                self.match_properties(&source, &targets, &props)?;
+                self.follow_fields()?;
+                return Ok(Outcome::Changed);
+            }
+            Command::SetProperty {
+                target,
+                prop,
+                value,
+            } => {
+                self.set_property(&target, prop, &value)?;
+                self.follow_fields()?;
                 return Ok(Outcome::Changed);
             }
         };
