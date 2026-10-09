@@ -1,7 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use opencadcodec::{CadDocument, Color, Handle};
-use qiyas_geom::{flatten_within, Path, Xform, XrefDocs};
+use opencadkernel::geom2d::triangulate_rings;
+use qiyas_geom::{flatten_within, Paint, Path, Xform, XrefDocs};
 
 use crate::color::resolve_color;
 use crate::text::{LaidText, Quad, TextEngine};
@@ -31,7 +32,12 @@ pub mod section {
     pub const TEXT_RANGES: u32 = 9;
     pub const IMAGES: u32 = 10;
     pub const IMAGE_TABLE: u32 = 11;
+    pub const FILLS: u32 = 12;
+    pub const FILL_RANGES: u32 = 13;
 }
+
+/// `Batch::fill_colors` bit: fill with the background colour (a wipeout), not the RGB below it.
+pub const FILL_BACKGROUND: u32 = 0x0100_0000;
 
 /// `ImageQuad::flags` bit: draw the image in grey.
 pub const IMAGE_MONOCHROME: u32 = 1;
@@ -126,7 +132,8 @@ pub struct Batch {
     pub ranges: Vec<Range>,
     /// The block-reference handles leading to each nested entity, outermost first.
     pub chains: Vec<Vec<u64>>,
-    /// `[[min_x, min_y], [max_x, max_y]]` of all segments in drawing coordinates; zeros when empty.
+    /// `[[min_x, min_y], [max_x, max_y]]` of all segments and fills in drawing coordinates (rays'
+    /// and construction lines' left out: they cross it); zeros when empty.
     pub bounds: [[f64; 2]; 2],
     /// Centre of `bounds`; zeros when empty.
     pub origin: [f64; 2],
@@ -148,6 +155,13 @@ pub struct Batch {
     /// Pictures drawn under the lines (see `add_images`), and the pixels they need.
     pub images: Vec<ImageQuad>,
     pub image_table: Vec<ImageEntry>,
+    /// Filled triangles (solid hatches, 2D solids, traces, wipeouts), drawn under the lines:
+    /// `x0 y0 x1 y1 x2 y2` per triangle, relative to `origin`.
+    pub fills: Vec<f32>,
+    /// `0xRRGGBB` per triangle, or `FILL_BACKGROUND` for the background colour.
+    pub fill_colors: Vec<u32>,
+    /// One per filled entity, over the triangles, in triangle order (flags 0).
+    pub fill_ranges: Vec<Range>,
 }
 
 /// What the user has hidden on top of the drawing's own layer state.
@@ -239,7 +253,11 @@ pub fn add_images(batch: &mut Batch, images: &[ImagePlacement]) {
     if !lo[0].is_finite() || !hi[0].is_finite() {
         return;
     }
-    if batch.segments.is_empty() && batch.quads.is_empty() && batch.images.is_empty() {
+    let empty = batch.segments.is_empty()
+        && batch.quads.is_empty()
+        && batch.images.is_empty()
+        && batch.fills.is_empty();
+    if empty {
         batch.bounds = [lo, hi];
         batch.origin = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
     } else {
@@ -299,6 +317,48 @@ pub fn add_pick_outlines(batch: &mut Batch, outlines: &[(u64, [[f64; 2]; 4])]) {
     }
 }
 
+/// A ray or construction line met while building, drawn once the sheet's bounds are known.
+struct Infinite {
+    base: [f64; 2],
+    dir: [f64; 2],
+    both_ways: bool,
+    rgb: u32,
+    top: u64,
+    entity: u64,
+    chain: u32,
+}
+
+/// The index of `chain` in `chains`, adding it when new; `NO_CHAIN` for an empty one.
+fn chain_id(chains: &mut Vec<Vec<u64>>, index: &mut HashMap<Vec<u64>, u32>, chain: &[u64]) -> u32 {
+    if chain.is_empty() {
+        return NO_CHAIN;
+    }
+    if let Some(&i) = index.get(chain) {
+        return i;
+    }
+    let i = chains.len() as u32;
+    index.insert(chain.to_vec(), i);
+    chains.push(chain.to_vec());
+    i
+}
+
+/// Adds `count` records at `first` for an entity to `ranges`, extending the last range when it
+/// is the same entity's and ends at `first`.
+fn extend_ranges(ranges: &mut Vec<Range>, at: Range) {
+    match ranges.last_mut() {
+        Some(last)
+            if last.top == at.top
+                && last.entity == at.entity
+                && last.chain == at.chain
+                && last.flags == at.flags
+                && last.first + last.count == at.first =>
+        {
+            last.count += at.count;
+        }
+        _ => ranges.push(at),
+    }
+}
+
 fn build(
     doc: &CadDocument,
     xrefs: &XrefDocs,
@@ -320,8 +380,11 @@ fn build(
     let mut batch = Batch::default();
     let mut chain_index: HashMap<Vec<u64>, u32> = HashMap::new();
     let mut chain_shown: HashMap<Vec<u64>, bool> = HashMap::new();
-    // Absolute `x0 y0 x1 y1` per segment; made relative once the bounds are known.
+    // Absolute `x0 y0 x1 y1` per segment and `x0 y0 x1 y1 x2 y2` per fill triangle; made
+    // relative once the bounds are known.
     let mut absolute: Vec<[f64; 4]> = Vec::new();
+    let mut triangles: Vec<[f64; 6]> = Vec::new();
+    let mut infinite: Vec<Infinite> = Vec::new();
     // One budget for the whole sheet, so a big block inserted many times stops too.
     let mut budget = MAX_SHEET_WORK;
     for entity in doc.entities_in_block(sheet_block) {
@@ -354,6 +417,59 @@ fn build(
             }
             let [r, g, b] = resolve_color(&flat.color, &Color::ByLayer);
             let rgb = u32::from_be_bytes([0, r, g, b]);
+            match &flat.paint {
+                Paint::Fill(fill) => {
+                    // Ear clipping slows down with the square of the corners: a fill that big
+                    // keeps its outline only.
+                    if fill.rings.iter().map(Vec::len).sum::<usize>() > MAX_FILL_CORNERS {
+                        continue;
+                    }
+                    let (points, tris) = triangulate_rings(&fill.rings);
+                    if tris.is_empty() {
+                        continue;
+                    }
+                    let first = triangles.len() as u32;
+                    for [i, j, k] in &tris {
+                        let (a, b, c) = (points[*i], points[*j], points[*k]);
+                        triangles.push([a[0], a[1], b[0], b[1], c[0], c[1]]);
+                    }
+                    let color = if fill.background {
+                        FILL_BACKGROUND
+                    } else {
+                        rgb
+                    };
+                    batch
+                        .fill_colors
+                        .extend(std::iter::repeat_n(color, tris.len()));
+                    let chain = chain_id(&mut batch.chains, &mut chain_index, &flat.chain);
+                    extend_ranges(
+                        &mut batch.fill_ranges,
+                        Range {
+                            top,
+                            entity: flat.entity,
+                            chain,
+                            first,
+                            count: tris.len() as u32,
+                            flags: 0,
+                        },
+                    );
+                    continue;
+                }
+                Paint::Infinite { both_ways } => {
+                    let [a, b] = [flat.path.points[0], flat.path.points[1]];
+                    infinite.push(Infinite {
+                        base: a,
+                        dir: [b[0] - a[0], b[1] - a[1]],
+                        both_ways: *both_ways,
+                        rgb,
+                        top,
+                        entity: flat.entity,
+                        chain: chain_id(&mut batch.chains, &mut chain_index, &flat.chain),
+                    });
+                    continue;
+                }
+                Paint::Outline | Paint::Pattern => {}
+            }
             // A laid-out text's box is the box of what it draws.
             let laid = match (&flat.text, text.as_mut()) {
                 (Some(t), Some((engine, options))) => {
@@ -381,16 +497,7 @@ fn build(
             if count == 0 {
                 continue;
             }
-            let chain = if flat.chain.is_empty() {
-                NO_CHAIN
-            } else if let Some(&i) = chain_index.get(flat.chain.as_slice()) {
-                i
-            } else {
-                let i = batch.chains.len() as u32;
-                chain_index.insert(flat.chain.clone(), i);
-                batch.chains.push(flat.chain.clone());
-                i
-            };
+            let chain = chain_id(&mut batch.chains, &mut chain_index, &flat.chain);
             if let Some((xf, glyphs, _)) = laid {
                 let along = xf.m[0][0].hypot(xf.m[1][0]);
                 let up = xf.m[0][1].hypot(xf.m[1][1]);
@@ -404,37 +511,61 @@ fn build(
                     glyphs,
                 });
             }
-            let flags = if flat.text.is_some() { TEXT_BOX } else { 0 };
+            let flags = if flat.text.is_some() {
+                TEXT_BOX
+            } else if flat.paint == Paint::Pattern {
+                PATTERN
+            } else {
+                0
+            };
             // A path of the same entity right after its last one extends that range.
-            match batch.ranges.last_mut() {
-                Some(last)
-                    if last.top == top
-                        && last.entity == flat.entity
-                        && last.chain == chain
-                        && last.flags == flags
-                        && (last.first + last.count) as usize == first =>
-                {
-                    last.count += count as u32;
-                }
-                _ => batch.ranges.push(Range {
+            extend_ranges(
+                &mut batch.ranges,
+                Range {
                     top,
                     entity: flat.entity,
                     chain,
                     first: first as u32,
                     count: count as u32,
                     flags,
-                }),
-            }
+                },
+            );
         }
     }
-    if absolute.is_empty() {
+    if absolute.is_empty() && triangles.is_empty() && infinite.is_empty() {
         return batch;
     }
-    let mut lo = [f64::INFINITY; 2];
-    let mut hi = [f64::NEG_INFINITY; 2];
+    let mut bounds = [[f64::INFINITY; 2], [f64::NEG_INFINITY; 2]];
+    let grow = |bounds: &mut [[f64; 2]; 2], x: f64, y: f64| {
+        let [lo, hi] = bounds;
+        *lo = [lo[0].min(x), lo[1].min(y)];
+        *hi = [hi[0].max(x), hi[1].max(y)];
+    };
     for s in &absolute {
-        lo = [lo[0].min(s[0]).min(s[2]), lo[1].min(s[1]).min(s[3])];
-        hi = [hi[0].max(s[0]).max(s[2]), hi[1].max(s[1]).max(s[3])];
+        grow(&mut bounds, s[0], s[1]);
+        grow(&mut bounds, s[2], s[3]);
+    }
+    for t in &triangles {
+        grow(&mut bounds, t[0], t[1]);
+        grow(&mut bounds, t[2], t[3]);
+        grow(&mut bounds, t[4], t[5]);
+    }
+    if !bounds[0][0].is_finite() {
+        // Only rays and construction lines: the sheet is around their base points.
+        for line in &infinite {
+            grow(&mut bounds, line.base[0], line.base[1]);
+        }
+    }
+    let [mut lo, mut hi] = bounds;
+    let side = (hi[0] - lo[0]).max(hi[1] - lo[1]);
+    let side = if side > 1e-9 { side } else { INFINITE_REACH };
+    if !infinite.is_empty() {
+        add_infinite(&mut batch, &mut absolute, &infinite, [lo, hi], side);
+        if absolute.len() == infinite.len() && triangles.is_empty() {
+            // Nothing else on the sheet: show the lines as drawn.
+            lo = [lo[0] - side, lo[1] - side];
+            hi = [hi[0] + side, hi[1] + side];
+        }
     }
     let origin = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
     batch.segments = absolute
@@ -449,9 +580,86 @@ fn build(
             .map(|v| v as f32)
         })
         .collect();
+    batch.fills = triangles
+        .iter()
+        .flat_map(|t| {
+            [
+                t[0] - origin[0],
+                t[1] - origin[1],
+                t[2] - origin[0],
+                t[3] - origin[1],
+                t[4] - origin[0],
+                t[5] - origin[1],
+            ]
+            .map(|v| v as f32)
+        })
+        .collect();
     batch.bounds = [lo, hi];
     batch.origin = origin;
     batch
+}
+
+/// Most corners one fill is triangulated with; a bigger one is drawn as its outline only.
+const MAX_FILL_CORNERS: usize = 20_000;
+
+/// How far rays and construction lines reach past an empty sheet, in drawing units.
+const INFINITE_REACH: f64 = 100.0;
+
+/// Draws the rays and construction lines across the box `bounds` widened by `side` each way
+/// (and around their base points), one segment each, after the segments already there.
+fn add_infinite(
+    batch: &mut Batch,
+    absolute: &mut Vec<[f64; 4]>,
+    lines: &[Infinite],
+    bounds: [[f64; 2]; 2],
+    side: f64,
+) {
+    let [lo, hi] = bounds;
+    for line in lines {
+        let (b, d) = (line.base, line.dir);
+        let lo = [lo[0].min(b[0]) - side, lo[1].min(b[1]) - side];
+        let hi = [hi[0].max(b[0]) + side, hi[1].max(b[1]) + side];
+        // Liang-Barsky: the stretch of `b + t d` inside the box.
+        let (mut t0, mut t1) = (
+            if line.both_ways {
+                f64::NEG_INFINITY
+            } else {
+                0.0
+            },
+            f64::INFINITY,
+        );
+        for axis in 0..2 {
+            if d[axis].abs() < 1e-15 {
+                continue;
+            }
+            let a = (lo[axis] - b[axis]) / d[axis];
+            let z = (hi[axis] - b[axis]) / d[axis];
+            t0 = t0.max(a.min(z));
+            t1 = t1.min(a.max(z));
+        }
+        if !(t0.is_finite() && t1.is_finite() && t1 > t0) {
+            continue;
+        }
+        let first = absolute.len() as u32;
+        absolute.push([
+            b[0] + t0 * d[0],
+            b[1] + t0 * d[1],
+            b[0] + t1 * d[0],
+            b[1] + t1 * d[1],
+        ]);
+        batch.colors.push(line.rgb);
+        extend_ranges(
+            &mut batch.ranges,
+            Range {
+                top: line.top,
+                entity: line.entity,
+                chain: line.chain,
+                first,
+                count: 1,
+                flags: 0,
+            },
+        );
+    }
 }
 
 /// Whether every block reference of `chain` after the first (the top-level one, already checked)
@@ -507,8 +715,8 @@ impl Batch {
     }
 
     /// Encodes the batch for the frontend: layout version 2. Little-endian; every section
-    /// starts on an 8-byte boundary (zero padding before it). With k = sections (7, or 9 with
-    /// images):
+    /// starts on an 8-byte boundary (zero padding before it). With k = sections (7, plus 2 with
+    /// images, plus 2 with fills):
     ///
     /// | offset   | size  | contents                                                     |
     /// |----------|-------|--------------------------------------------------------------|
@@ -525,7 +733,8 @@ impl Batch {
     /// |------|----------------|-------------------------------------------------------------|
     /// | 3    | ranges         | 32 bytes per range: `u64` top, `u64` entity, `u32` chain    |
     /// |      |                | index (`0xFFFFFFFF` = none), `u32` first, `u32` count,      |
-    /// |      |                | `u32` flags (bit 0 `TEXT_BOX`: picked, not drawn)           |
+    /// |      |                | `u32` flags (bit 0 `TEXT_BOX`: picked, not drawn; bit 1     |
+    /// |      |                | `PATTERN`: a hatch's pattern lines)                         |
     /// | 4    | chains         | per chain: `u32` length m, then m `u64` handles, outermost  |
     /// |      |                | first; chains are numbered from 0 in order                  |
     /// | 5    | segments       | `f32` x0 y0 x1 y1 per segment, relative to origin           |
@@ -545,6 +754,14 @@ impl Batch {
     /// |      |                | 16-23 contrast, 24-31 fade, each 0-100); under the lines    |
     /// | 11   | image table    | 16 bytes per image: `u32` id, 4 pad, `u64` version (below   |
     /// |      |                | 2^53)                                                       |
+    /// | 12   | fill triangles | 28 bytes per triangle: `f32` x6 corners x y relative to     |
+    /// |      |                | origin, `u32` 0xRRGGBB (bit 24 `FILL_BACKGROUND`: the       |
+    /// |      |                | background colour instead); under the lines                 |
+    /// | 13   | fill ranges    | 32 bytes per filled entity, as kind 3 but over the          |
+    /// |      |                | triangles (flags 0)                                         |
+    ///
+    /// Kinds 12 and 13 are written only when the batch has fills, after the images'. Range flags
+    /// bit 1 (`PATTERN`) marks a hatch's pattern lines.
     ///
     /// Kinds 10 and 11 are written only when the batch has images. Their pixels are not in the
     /// batch either: the window asks for an image (IPC `underlay_image`) when it doesn't hold that
@@ -603,6 +820,15 @@ impl Batch {
             }
             sections.push((section::IMAGES, images));
             sections.push((section::IMAGE_TABLE, table));
+        }
+        if !self.fill_colors.is_empty() {
+            let mut fills = Vec::with_capacity(self.fill_colors.len() * 28);
+            for (t, color) in self.fills.as_chunks::<6>().0.iter().zip(&self.fill_colors) {
+                fills.extend(le_bytes(t, f32::to_le_bytes));
+                fills.extend(color.to_le_bytes());
+            }
+            sections.push((section::FILLS, fills));
+            sections.push((section::FILL_RANGES, ranges_bytes(&self.fill_ranges)));
         }
 
         let mut out = Vec::new();

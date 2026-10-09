@@ -9,6 +9,7 @@ use opencadcodec::tables::normalize_name;
 use opencadcodec::types::Matrix3;
 use opencadcodec::{CadDocument, Color, Layer, Vector3};
 
+use crate::paint::{mline_paths, pattern_spans, solid_outline, wipeout_outline, FlatFill, Paint};
 use crate::path::same_point;
 use crate::{Path, Xform};
 
@@ -89,6 +90,9 @@ pub struct FlatPath {
     pub xref_insert_layers: Vec<String>,
     /// For a text's box (picked, not drawn): what the text draws.
     pub text: Option<Box<FlatText>>,
+    /// What the path draws: an outline, or (from `flatten_within`, for the batch) a hatch's
+    /// pattern line, a fill or a ray.
+    pub paint: Paint,
 }
 
 /// What a text (TEXT, MTEXT, or an attribute) draws, for the text renderer.
@@ -161,9 +165,13 @@ pub struct FlattenOutcome {
 }
 
 impl FlattenOutcome {
-    /// The bare paths, for measuring.
+    /// The bare outlines, for measuring.
     pub fn into_paths(self) -> Vec<Path> {
-        self.paths.into_iter().map(|f| f.path).collect()
+        self.paths
+            .into_iter()
+            .filter(|f| f.paint == Paint::Outline)
+            .map(|f| f.path)
+            .collect()
     }
 }
 
@@ -187,11 +195,13 @@ pub fn flatten_with(
     xf: &Xform,
     tol: f64,
 ) -> FlattenOutcome {
-    flatten_within(doc, xrefs, entity, xf, tol, &mut MAX_WORK.clone())
+    walk(doc, xrefs, entity, xf, tol, &mut MAX_WORK.clone(), false)
 }
 
-/// `flatten_with`, spending `budget` (block instances plus paths) and leaving what is left in
-/// it, so a caller flattening many entities (a whole sheet) stops at one budget for all.
+/// `flatten_with` for drawing a sheet: spends `budget` (block instances plus paths) and leaves
+/// what is left in it, so a caller flattening many entities stops at one budget for all; and
+/// paints besides the outlines (see `Paint`): hatch fills (solid hatches) and pattern lines,
+/// 2D solid and trace fills, wipeouts (filled with the background), rays and construction lines.
 pub fn flatten_within(
     doc: &CadDocument,
     xrefs: &XrefDocs,
@@ -200,11 +210,24 @@ pub fn flatten_within(
     tol: f64,
     budget: &mut usize,
 ) -> FlattenOutcome {
+    walk(doc, xrefs, entity, xf, tol, budget, true)
+}
+
+fn walk(
+    doc: &CadDocument,
+    xrefs: &XrefDocs,
+    entity: &EntityType,
+    xf: &Xform,
+    tol: f64,
+    budget: &mut usize,
+    paint: bool,
+) -> FlattenOutcome {
     let mut walk = Walk {
         host: doc,
         xrefs,
         doc,
         tol,
+        paint,
         out: Vec::new(),
         budget: *budget,
         truncated: false,
@@ -239,6 +262,7 @@ pub fn drawn_style(
         xrefs,
         doc,
         tol: 0.0,
+        paint: false,
         out: Vec::new(),
         budget: 0,
         truncated: false,
@@ -272,6 +296,8 @@ struct Walk<'a> {
     /// The drawing whose blocks are being walked: the host, or an xref inside it.
     doc: &'a CadDocument,
     tol: f64,
+    /// Paint fills, pattern lines and rays too (see `Paint`), not only outlines.
+    paint: bool,
     out: Vec<FlatPath>,
     /// Block instances plus paths still allowed.
     budget: usize,
@@ -389,12 +415,66 @@ impl Walk<'_> {
                 (defining.iter().map(xy).collect(), e.flags.closed)
             }
             EntityType::Hatch(e) => {
+                let mut rings = Vec::with_capacity(e.paths.len());
                 for path in &e.paths {
                     let mut ring = Vec::new();
                     for edge in &path.edges {
                         extend_ring(&mut ring, edge_points(edge, local_tol));
                     }
-                    self.push(ring, true, xf, style, handle);
+                    if ring.len() > 1 && same_point(ring[0], ring[ring.len() - 1]) {
+                        ring.pop();
+                    }
+                    self.push(ring.clone(), true, xf, style, handle);
+                    rings.push(ring);
+                }
+                if !self.paint {
+                    return;
+                }
+                if e.is_solid && !e.gradient_color.is_enabled() {
+                    self.push_fill(rings, false, xf, style, handle);
+                } else if !e.is_solid {
+                    for [a, b] in pattern_spans(&e.pattern.lines, &rings) {
+                        self.push_with(vec![a, b], false, xf, style, handle, None, Paint::Pattern);
+                    }
+                }
+                return;
+            }
+            EntityType::Solid(e) => {
+                let outline = solid_outline(e);
+                if self.paint {
+                    self.push_fill(vec![outline.clone()], false, xf, style, handle);
+                }
+                (outline, true)
+            }
+            EntityType::Wipeout(e) => {
+                let outline = wipeout_outline(e);
+                if self.paint {
+                    self.push_fill(vec![outline.clone()], true, xf, style, handle);
+                }
+                (outline, true)
+            }
+            EntityType::MLine(e) => {
+                let (lines, closed) = mline_paths(self.doc, e);
+                for line in lines {
+                    self.push(line, closed, xf, style, handle);
+                }
+                return;
+            }
+            EntityType::Ray(e) => {
+                if self.paint {
+                    let (b, d) = (xy(&e.base_point), xy(&e.direction));
+                    let points = vec![b, [b[0] + d[0], b[1] + d[1]]];
+                    let paint = Paint::Infinite { both_ways: false };
+                    self.push_with(points, false, xf, style, handle, None, paint);
+                }
+                return;
+            }
+            EntityType::XLine(e) => {
+                if self.paint {
+                    let (b, d) = (xy(&e.base_point), xy(&e.direction));
+                    let points = vec![b, [b[0] + d[0], b[1] + d[1]]];
+                    let paint = Paint::Infinite { both_ways: true };
+                    self.push_with(points, false, xf, style, handle, None, paint);
                 }
                 return;
             }
@@ -538,7 +618,8 @@ impl Walk<'_> {
         if let Some(xref) = self.xref_stack.last() {
             text.style = format!("{xref}|{}", text.style);
         }
-        self.push_with(points, true, xf, style, entity, Some(Box::new(text)));
+        let text = Some(Box::new(text));
+        self.push_with(points, true, xf, style, entity, text, Paint::Outline);
     }
 
     /// Maps `points` through `xf` and appends them as a path, spending one unit of the budget;
@@ -551,9 +632,48 @@ impl Walk<'_> {
         style: &Style,
         entity: u64,
     ) {
-        self.push_with(points, closed, xf, style, entity, None);
+        self.push_with(points, closed, xf, style, entity, None, Paint::Outline);
     }
 
+    /// Appends a fill of `rings` (even-odd) mapped through `xf`, spending one unit of the budget.
+    fn push_fill(
+        &mut self,
+        rings: Vec<Vec<[f64; 2]>>,
+        background: bool,
+        xf: &Xform,
+        style: &Style,
+        entity: u64,
+    ) {
+        let rings: Vec<Vec<[f64; 2]>> = rings
+            .into_iter()
+            .filter(|r| r.len() >= 3)
+            .map(|r| r.into_iter().map(|p| xf.apply(p)).collect())
+            .collect();
+        if rings.is_empty() {
+            return;
+        }
+        if self.budget == 0 {
+            self.truncated = true;
+            return;
+        }
+        self.budget -= 1;
+        self.out.push(FlatPath {
+            path: Path {
+                points: Vec::new(),
+                closed: true,
+            },
+            layer: style.layer.clone(),
+            color: style.color,
+            chain: self.chain.clone(),
+            entity: self.xref_entity.unwrap_or(entity),
+            xref: self.xref_stack.first().cloned(),
+            xref_insert_layers: self.xref_insert_layers.clone(),
+            text: None,
+            paint: Paint::Fill(Box::new(FlatFill { rings, background })),
+        });
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn push_with(
         &mut self,
         mut points: Vec<[f64; 2]>,
@@ -562,6 +682,7 @@ impl Walk<'_> {
         style: &Style,
         entity: u64,
         text: Option<Box<FlatText>>,
+        paint: Paint,
     ) {
         if points.is_empty() {
             return;
@@ -586,6 +707,7 @@ impl Walk<'_> {
             xref: self.xref_stack.first().cloned(),
             xref_insert_layers: self.xref_insert_layers.clone(),
             text,
+            paint,
         });
     }
 }
@@ -633,6 +755,7 @@ pub(crate) fn ocs_of(entity: &EntityType) -> Option<Xform> {
         EntityType::LwPolyline(e) => ocs(&e.normal, e.elevation),
         EntityType::Polyline2D(e) => ocs(&e.normal, e.elevation),
         EntityType::Hatch(e) => ocs(&e.normal, e.elevation),
+        EntityType::Solid(e) => ocs(&e.normal, e.first_corner.z),
         EntityType::Text(e) => ocs(&e.normal, e.insertion_point.z),
         _ => None,
     }

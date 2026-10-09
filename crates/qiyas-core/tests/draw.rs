@@ -1069,3 +1069,44 @@ fn the_wire_form_is_the_command_type_with_the_draw_kind_beside_it() {
     .unwrap();
     assert!(matches!(set, Command::SetCurrent { .. }));
 }
+
+#[test]
+fn drawn_hatches_solids_and_wipeouts_fill_in_the_batch() {
+    let (_dir, mut s) = sample_session();
+    let ring = vec![[30.0, 0.0], [34.0, 0.0], [34.0, 3.0], [30.0, 3.0]];
+    let hatch = draw(
+        &mut s,
+        DrawSpec::Hatch {
+            boundary_handles: Vec::new(),
+            points: ring.clone(),
+            pattern: HatchPattern::Solid,
+        },
+    )[0];
+    let wipeout = draw(&mut s, DrawSpec::Wipeout { points: ring })[0];
+    let pattern = draw(
+        &mut s,
+        DrawSpec::Hatch {
+            boundary_handles: Vec::new(),
+            points: vec![[40.0, 0.0], [50.0, 0.0], [50.0, 10.0], [40.0, 10.0]],
+            pattern: HatchPattern::Ansi31,
+        },
+    )[0];
+    let batch = s.batch();
+    let filled = |h: u64| batch.fill_ranges.iter().any(|r| r.entity == h);
+    assert!(filled(hatch) && filled(wipeout) && !filled(pattern));
+    let wipe = batch
+        .fill_ranges
+        .iter()
+        .find(|r| r.entity == wipeout)
+        .unwrap();
+    assert!(batch.fill_colors[wipe.first as usize] & qiyas_render::FILL_BACKGROUND != 0);
+    assert!(batch
+        .ranges
+        .iter()
+        .any(|r| r.entity == pattern && r.flags & qiyas_render::PATTERN != 0));
+    // The pattern lines don't break the boundary search inside the hatched room.
+    let ring = s.boundary_at([45.0, 5.0], 20.0).unwrap();
+    assert!(close(signed_area(&ring).abs(), 100.0), "{ring:?}");
+    assert!(s.undo() && s.undo() && s.undo());
+    assert!(s.batch().fills.is_empty());
+}
