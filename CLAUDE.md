@@ -41,6 +41,9 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
 - Window title and product name: `Qiyas`. Arabic name: `قياس`. Bundle identifier: `com.qsmind.qiyas`.
 - This repo is its own git repo. Commit inside it. Never push or release without the founder's yes.
 - Only MPL-2.0, Apache-2.0, MIT, BSD, ISC or OFL dependencies (ISC: `ring`, `rustls-webpki`, `untrusted`). No code copied from Open CAD Studio (GPL).
+  `arboard` (the system clipboard, MIT OR Apache-2.0) is allowed; it is built without its Wayland
+  feature (that brings a Zlib crate), and on Windows it uses `clipboard-win` and `error-code`
+  (BSL-1.0, permissive: founder's check).
 - Thmanyah font files are never committed. `scripts/fonts.sh` copies them from `~/Downloads/Thmanyah-Font-Family/thmanyah typeface` into the git-ignored `src/fonts/thmanyah/`. Instrument Sans (OFL) is committed. The viewport draws drawing text with Noto Sans and Noto Sans Arabic (OFL, unhinted Regular, with their licences in `crates/qiyas-render/fonts/`), behind the drawing's own TrueType font when the computer has it.
 - English text says "Qiyas" and "QS Mind"; Arabic text says "قياس" and "كيو إس مايند". Arabic uses Thmanyah Sans; headings use `font-feature-settings: "swsh"`.
 - Measured values are stored in drawing units and displayed in metres, square metres and pieces. Unit factor comes from the drawing header (`insertion_units`): 1 = inches, 2 = feet, 4 = mm, 5 = cm, 6 = m, 0 or unknown = treat as mm and show a warning in the status bar.
@@ -59,6 +62,8 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
 - Run the app: `pnpm tauri dev --config crates/qiyas-desktop/tauri.conf.json`.
 - The `.qiyas` project file is saved next to the drawing after every command.
 - Save keeps a `.bak` of the original drawing (e.g. `villa.dwg.bak`) before writing over it.
+- Autosave writes `<name>.sv$` and `<name>.sv$.qiyas` beside a drawing with unsaved changes (see
+  Clipboard, viewports, UCS, sheet sets and recovery); a save deletes them.
 
 ## Undo
 
@@ -329,10 +334,10 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
   mappings: [{ from, to, color }] }`: renames, or merges into an existing `to` (entities move,
   viewports' freezes follow, the old layer goes), then the standard's layer properties (another
   drawing, read-only; IPC `drawing_layers`) and the mapping's colour. `SetViewportFrozen {
-  viewport, layer, frozen }` edits a paper-space `Viewport.frozen_layers`; paper space draws no
-  viewport contents yet, so it shows in the Layers panel's VP freeze column only (the
-  per-viewport render is Task 10's). `DrawingInfo` has `linetypes`, `layer_states`, `groups`,
-  `viewports` (the sheet on screen's, not number 1).
+  viewport, layer, frozen }` edits a paper-space `Viewport.frozen_layers` (the Layers panel's VP
+  freeze column, VPLAYER). `DrawingInfo` has `linetypes`, `layer_states`, `groups`,
+  `viewports` (the sheet on screen's, not number 1). The window draws each viewport's model space
+  without its frozen layers (see Clipboard, viewports, UCS, sheet sets and recovery).
 - `qiyas-core/src/groups.rs`: `CreateGroup { name, targets }`, `AddToGroup`, `RemoveFromGroup`,
   `DeleteGroup` (AutoCAD's explode of a group: the entities stay), `Ungroup { targets }` (every
   group holding one): `GROUP` objects in `ACAD_GROUP`, members carry the group as a reactor; sheet
@@ -356,6 +361,56 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
   what new entities are drawn with. Home tab, Layers group; command line LAYER (LA: the panel),
   LAYSTATE (LAS), LAYTRANS, VPLAYER (the VP freeze column), GROUP (G: pick, Enter, name),
   UNGROUP, MATCHPROP (MA: source, then targets, Enter), PROPERTIES (PR, CH: the palette).
+
+## Clipboard, viewports, UCS, sheet sets and recovery
+
+- Clipboard (`qiyas-core/src/clipboard.rs`): `CopyToClipboard { targets, base }` (base null: the
+  lower left of what they draw) makes a small DXF drawing of the sheet entities with the layers,
+  linetypes, styles and blocks they use, marked `CLIPBOARD_MARK` (a `999` comment), coordinates
+  from the base; not an undo step, `Outcome::Clipboard`. `PasteFromClipboard { at, text, as_block,
+  height }` reads it through the block `Importer` (new handles; a missing layer comes with its
+  colour, a block or style of that name already there is kept), base at `at`, one step; as a
+  block (PASTEBLOCK) a new `A$Cnnnnnnnn` block under one reference; plain text becomes a Text
+  (MText for several lines) 2.5 mm at the annotation scale. The desktop `run_command` fills `text`
+  from the system clipboard (`arboard`) and puts a copy's text on it. Home tab, Clipboard group;
+  Ctrl+C (COPYCLIP), Ctrl+Shift+C (COPYBASE), Ctrl+V (PASTECLIP), Ctrl+Shift+V (PASTEBLOCK); Ctrl+C
+  with text selected in a panel copies the text.
+- Paper-space viewports (`qiyas-core/src/viewports.rs`): `MView { corner1, corner2 }` (wire
+  `mview`; layouts only) adds a `Viewport` on the current layer showing model extents
+  (`set_scale`). Its frame draws (flatten's Viewport arm, never number 1); a click inside one with
+  nothing of the layout near picks it. `paper_views()` gives each viewport's frame, model centre,
+  scale and, when it freezes layers, the spans of the model batch it draws; the window fetches
+  model space once (`sheet_batch("*Model_Space")`, `Session::with_sheet` keeps two sheets beside
+  the one on screen) and `gl.ts` draws it per viewport with its own camera and a scissor box
+  (`src/viewport/inset.ts`): fills, lines, text (wipeouts there hide no lines; pictures and
+  twisted views are not drawn yet). The palette sets `viewport_scale` and `viewport_centre`.
+  View tab, Viewports group; MVIEW (MV).
+- Split view: VPORTS (VPORTS 1 / 2, or View, Two viewports) shows `SplitPane` beside the main
+  view on the drawing on screen: own camera and sheet, the main batch shared on the same sheet,
+  view only (tools work in the main view). Two drawings side by side wait for a multi-session
+  window (founder's ruling).
+- UCS (`qiyas-core/src/ucs.rs`): `Ucs { origin, x_axis }` (`UcsObject { target }`: a line's,
+  polyline's, arc's, circle's, text's or block reference's), view state (no undo step) in
+  `Session::ucs`, `DrawingInfo::ucs` and the project file; saving writes the header (UCSORG,
+  UCSXDIR, UCSYDIR) and a `QIYAS` UCS table entry; a drawing without a project file takes its
+  header's. The status bar shows "UCS x, y", typed points (`x,y`, `@dx,dy`, `@d<a`), ortho, polar
+  and the grid run along it (`src/tools/ucs.ts`). UCS (origin, axis point), UCS OB, UCS W.
+- Sheet sets (`qiyas-core/src/sheetset.rs`, `src/shell/SheetSetManager.tsx`): a `.qss` JSON `{ name,
+  drawings: [{ path, layouts }] }`, paths relative with `/` and inside its folder (others refused,
+  on save and on load); only the `.qss` is written. New from open drawings, open, add, remove,
+  open all; Print all waits for plotting (Phase 4). SHEETSET or View, Sheet set….
+- Autosave (`qiyas-core/src/autosave.rs`): every `autosave_minutes` (settings.json and the
+  Settings dialog, 5 by default, 0 off) `autosave_drawings` writes each tab with unsaved changes
+  (not during an edit in place) to `<name>.sv$` (a whole DWG) and `<name>.sv$.qiyas`, each to a
+  temp file renamed over. On launch (the recent drawings) and before an open, `RecoveryDialog`
+  offers each autosave newer than its drawing: Recover opens it in a new tab as
+  `<name> (recovered).<ext>` with its take-off, unsaved, then Save As; Discard deletes it; Later
+  opens the drawing itself. A save deletes the drawing's autosave. Lock files and the panic hook
+  are Phase 4's.
+- RECOVER (Home tab, Recover…): opens a damaged drawing through the failsafe reader (as every open
+  does) and `RecoverReportDialog` lists what it read and dropped by kind (`ReadReport`: DWG object
+  types by number, else the reader's code). A truncated DWG loses its file header and does not
+  open at all. AUDIT is Phase 4's.
 
 ## PDF
 
