@@ -164,6 +164,8 @@ pub struct DrawingInfo {
     pub groups: Vec<crate::GroupInfo>,
     /// The paper-space viewports of the sheet on screen, with the layers each freezes.
     pub viewports: Vec<crate::ViewportInfo>,
+    /// The user coordinate system (`Session::ucs`).
+    pub ucs: Ucs,
 }
 
 /// An entity by its handle and the block references it sits inside (outermost first).
@@ -641,6 +643,7 @@ impl Session {
             layer_states: self.layer_state_names(),
             groups: self.groups(),
             viewports: self.viewports(),
+            ucs: self.ucs,
         }
     }
 

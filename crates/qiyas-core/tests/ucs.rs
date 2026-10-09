@@ -21,6 +21,7 @@ fn a_ucs_is_kept_in_the_project_and_written_to_the_drawing_on_save() {
         x_axis: [0.0, 2.0],
     })
     .unwrap();
+    assert_eq!(s.info().ucs, s.ucs);
     // A turn of a quarter, the axis made a unit vector.
     assert!(close(s.ucs.x_axis, [0.0, 1.0]));
     assert!(close(s.ucs.to_ucs([10.0, 6.0]), [1.0, 0.0]));
