@@ -28,6 +28,7 @@ use serde::Serialize;
 use crate::drawing::Drawing;
 use crate::modify::{add_fresh_to, place, Placing};
 use crate::text::mark_logical;
+use crate::undo::{DocChange, TablesSnapshot};
 use crate::{Command, CoreError, Outcome, Session, Target};
 
 /// Characters AutoCAD refuses in a block name.
@@ -499,7 +500,8 @@ impl Session {
     }
 
     /// Refuses what can't be done while a block is edited in place: making or writing a block,
-    /// another edit in place, and inserting the block into itself (or into something it holds).
+    /// another edit in place, redefining the block (or a block holding it), and inserting the
+    /// block into itself (or into something it holds).
     /// Everything else goes on as usual.
     pub(crate) fn check_block_edit(&self, cmd: &Command) -> Result<(), CoreError> {
         let Some(edit) = &self.block_edit else {
@@ -511,9 +513,16 @@ impl Session {
             };
         };
         match cmd {
+            Command::RedefineBlock { name, .. }
+                if !(name.trim().eq_ignore_ascii_case(&edit.name)
+                    || uses(&self.drawing.doc, name.trim(), &edit.name, 0)) =>
+            {
+                Ok(())
+            }
             Command::EditBlockInPlace { .. }
             | Command::CreateBlock { .. }
-            | Command::WriteBlock { .. } => Err(invalid(format!(
+            | Command::WriteBlock { .. }
+            | Command::RedefineBlock { .. } => Err(invalid(format!(
                 "Block {} is being edited in place: save or discard the edit first (REFCLOSE)",
                 edit.name
             ))),
@@ -802,11 +811,12 @@ impl Session {
     /// changed copy replaces its block entity under that entity's handle, an unchanged one leaves
     /// it as it is, a block entity whose copy went is removed, anything new is added. Discarding
     /// keeps the block as it is. Either way those entities leave the sheet, the reference shows
-    /// again, and nothing else done while editing is put back. Not an undo step: the steps made
-    /// while editing leave the history, with every earlier drawing step that changed the
-    /// drawing's tables or the block's entities (undoing one would put the block back under its
-    /// references). Take-off rows on the entities that left lose their link; rows on the
-    /// references are measured again.
+    /// again, and nothing else done while editing is put back. Not an undo step, and none before
+    /// it can be undone after it (an earlier step would put back a take-off or a block that no
+    /// longer match): saving clears the whole history, and so does discarding unless every step
+    /// made while editing was undone (then only those steps' redo goes). Take-off rows on the
+    /// entities that left lose their link; rows on the references are measured again. A failed
+    /// save leaves the edit open, its copies as they were.
     pub(crate) fn close_block_edit(&mut self, save: bool) -> Result<Outcome, CoreError> {
         let edit = self
             .block_edit
@@ -828,15 +838,24 @@ impl Session {
                     .any(|&h| crate::modify::measures(m, h.value()))
             })
             .count();
-        let originals: HashSet<Handle> = self
-            .drawing
-            .doc
-            .block_records
-            .get(&edit.name)
-            .map(|r| r.entity_handles.iter().copied().collect())
-            .unwrap_or_default();
         if save {
-            self.write_back(&edit, &working)?;
+            // All or nothing: a failure puts back what it wrote and leaves the edit open.
+            let tables = TablesSnapshot::take(&self.drawing.doc);
+            let recorder = self.drawing.doc.begin_entity_change_recording();
+            let done = self.write_back(&edit, &working);
+            self.drawing.doc.end_entity_change_recording();
+            if let Err(e) = done {
+                let doc = &self.drawing.doc;
+                DocChange::from_before_images(
+                    doc,
+                    recorder.take_before_images(),
+                    Some(tables),
+                    None,
+                )
+                .swap(&mut self.drawing.doc, &mut self.takeoff);
+                self.block_edit = Some(edit);
+                return Err(e);
+            }
         }
         let doc = &mut self.drawing.doc;
         for &h in &working {
@@ -855,7 +874,7 @@ impl Session {
             unlinked += self.follow_takeoff(&references, &[]);
         }
         let quiet = self.history.edit_was_quiet();
-        let dropped = self.history.close_edit(|step| step.puts_back(&originals));
+        let dropped = self.history.close_edit(!save && quiet);
         self.drawing_changed();
         // A discarded edit that did nothing leaves the drawing as clean as it was.
         if !save && quiet && edit.was_clean {

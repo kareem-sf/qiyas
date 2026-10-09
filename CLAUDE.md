@@ -286,14 +286,15 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
   reference (no step), the reference hidden, the rest faded (`blocks::fade`), locked
   (`sheet_targets`) and left out of `pick` and `pick_window`; new entities on that sheet join the
   block. Commands are steps as usual, but undo stops at the edit's start (`History` floor, which
-  follows the 200-step cap); only CreateBlock, WriteBlock, another edit in place and inserting the
-  block into itself wait; Save waits too. Closing is by snapshot, never by undo:
+  follows the 200-step cap); only CreateBlock, WriteBlock, another edit in place, redefining the
+  block (or one holding it) and inserting it into itself wait; Save waits too. Closing is by snapshot, never by undo:
   `SaveBlockEdits` makes the sheet's new entities the block's contents (a changed copy replaces
   its entity under the same handle, an unchanged one leaves it, gone ones go, a dimension's `*D`
   block is taken back too), `DiscardBlockEdits` drops them; everything else done meanwhile stays.
-  Neither is an undo step: the edit's steps leave the history, with any earlier drawing step that
-  holds tables or the block's entities (`History::close_edit`); `Outcome::BlockEditClosed` says
-  how many, and how many take-off rows lost their link. `DrawingInfo::block_edit` names the block.
+  Neither is an undo step, and nothing before it can be undone after it: Save clears the whole
+  history, Discard too unless every step made while editing was undone (`History::close_edit`); a
+  failed Save puts back what it wrote and leaves the edit open. `Outcome::BlockEditClosed` says how
+  many steps went, and how many take-off rows lost their link. `DrawingInfo::block_edit` names the block.
 - Insert tab, Block group: Create block (B: pick, base point, name dialog), Insert… and Write
   block… (`BlockPalette`: thumbnails from `block_thumbnail` through `render_png`), Edit in place
   (REFEDIT/BEDIT; the bar saves or discards; REFCLOSE saves), Define attribute (ATT), Edit

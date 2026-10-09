@@ -972,10 +972,82 @@ fn an_edit_begun_on_a_full_undo_stack_saves_without_duplicates() {
         );
         assert!((m.value - 1.8 * scale).abs() < 1e-9, "{}", m.value);
     }
-    // The steps from before the edit that are left still undo.
-    let rows = session.takeoff.items.len();
-    assert!(session.undo());
-    assert_eq!(session.takeoff.items.len(), rows - 1);
+    // Saving clears the history: the measurements just made are all there is to undo.
+    for _ in 0..3 {
+        assert!(session.undo());
+    }
+    assert!(!session.undo());
+}
+
+#[test]
+fn undo_after_saving_an_edit_never_brings_back_an_old_take_off() {
+    let (_dir, mut session) = sample_session();
+    let ([plain, rotated, _], leaf) = doors(&session);
+    let row = measure(
+        &mut session,
+        Command::MeasureEntity {
+            handle: leaf,
+            chain: vec![plain],
+        },
+    );
+    let wall = session
+        .drawing
+        .entities_in("*Model_Space")
+        .find(|e| matches!(e, EntityType::Line(_)))
+        .unwrap()
+        .common()
+        .handle
+        .value();
+    measure(
+        &mut session,
+        Command::MeasureEntity {
+            handle: wall,
+            chain: Vec::new(),
+        },
+    );
+    let temps = added(
+        session
+            .run(Command::EditBlockInPlace {
+                target: top(rotated),
+            })
+            .unwrap(),
+    );
+    session
+        .run(Command::Modify(ModifySpec::Scale {
+            targets: vec![top(temps[0])],
+            base: [5.0, 1.0],
+            factor: 2.0,
+            copy: false,
+        }))
+        .unwrap();
+    session.run(Command::SaveBlockEdits).unwrap();
+    assert!((session.takeoff.get(&row.id).unwrap().value - 1.8).abs() < 1e-9);
+    assert!(!session.can_undo());
+    assert!(!session.undo());
+    assert!((session.takeoff.get(&row.id).unwrap().value - 1.8).abs() < 1e-9);
+}
+
+#[test]
+fn the_edited_block_cannot_be_redefined_meanwhile() {
+    let (dir, mut session) = sample_session();
+    let other = other_drawing(dir.path());
+    let ([_, rotated, _], _) = doors(&session);
+    session
+        .run(Command::EditBlockInPlace {
+            target: top(rotated),
+        })
+        .unwrap();
+    let refused = session.run(Command::RedefineBlock {
+        name: "door".to_string(),
+        from_path: other.display().to_string(),
+    });
+    assert!(
+        matches!(refused, Err(CoreError::InvalidCommand(_))),
+        "{refused:?}"
+    );
+    assert_eq!(session.drawing.entities_in("DOOR").count(), 1);
+    session.run(Command::SaveBlockEdits).unwrap();
+    assert_eq!(session.drawing.entities_in("DOOR").count(), 1);
 }
 
 #[test]
