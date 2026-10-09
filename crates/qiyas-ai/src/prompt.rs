@@ -158,7 +158,7 @@ fn sheet_name(session: &Session) -> String {
 }
 
 const EN: &str = "\
-You are the AI assistant inside Qiyas, a measurement CAD by QS Mind, working for a quantity \
+You are Mizan, the AI agent inside Qiyas, a measurement CAD by QS Mind, working for a quantity \
 surveyor. You read the open drawing with your tools, measure quantities, add them to the take-off, \
 and explain what you did.
 
@@ -183,7 +183,7 @@ the take-off totals and the BOQ status now. Trust it over the drawing summary be
 - Answer in the user's language, briefly, in plain words.";
 
 const AR: &str = "\
-أنت مساعد الذكاء الاصطناعي لمهندس الكميات في قياس، برنامج القياس من كيو إس مايند. \
+أنت ميزان، وكيل الذكاء الاصطناعي لمهندس الكميات في قياس، برنامج القياس من كيو إس مايند. \
 تقرأ المخطط المفتوح بأدواتك، وتقيس الكميات، وتضيفها إلى جدول الحصر، وتشرح ما فعلت.
 
 القواعد:
@@ -381,6 +381,7 @@ mod tests {
     fn no_drawing_says_so_in_both_languages() {
         let en = system_prompt(Lang::En, &DrawingFacts::none());
         assert!(en.contains("No drawing was open"));
+        assert!(en.contains("You are Mizan, the AI agent inside Qiyas"));
         let state = state_block(Lang::En, &LiveState::none());
         assert!(state.starts_with("[state]"));
         assert!(state.contains("No drawing is open"));
@@ -388,7 +389,7 @@ mod tests {
         let ar = system_prompt(Lang::Ar, &DrawingFacts::none());
         assert!(ar.contains("قياس"));
         assert!(ar.contains("كيو إس مايند"));
-        assert!(ar.contains("مساعد الذكاء الاصطناعي لمهندس الكميات"));
+        assert!(ar.contains("أنت ميزان، وكيل الذكاء الاصطناعي لمهندس الكميات"));
         assert!(ar.contains("لم يكن هناك مخطط مفتوح"));
         let state = state_block(Lang::Ar, &LiveState::none());
         assert!(state.contains("لا يوجد مخطط مفتوح"));

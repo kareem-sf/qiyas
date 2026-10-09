@@ -197,8 +197,13 @@ pub enum AiError {
     Auth,
     #[error("The AI service is busy or the rate limit was reached; try again shortly")]
     RateLimited { retry_after: Option<u64> },
+    /// `body` is the service's whole answer (scrubbed, clipped), for the log.
     #[error("The AI service answered {status}: {message}")]
-    Api { status: u16, message: String },
+    Api {
+        status: u16,
+        message: String,
+        body: String,
+    },
     #[error("Could not reach the AI service: {0}")]
     Network(String),
     /// The stream broke off or carried an error event.
@@ -213,9 +218,14 @@ impl AiError {
     /// The same error with every copy of `secret` blanked out of its text.
     pub(crate) fn scrubbed(self, secret: &str) -> AiError {
         match self {
-            AiError::Api { status, message } => AiError::Api {
+            AiError::Api {
+                status,
+                message,
+                body,
+            } => AiError::Api {
                 status,
                 message: scrub(&message, secret),
+                body: scrub(&body, secret),
             },
             AiError::Network(m) => AiError::Network(scrub(&m, secret)),
             AiError::Stream(m) => AiError::Stream(scrub(&m, secret)),
@@ -293,6 +303,7 @@ pub(crate) async fn send(
         return Err(AiError::Api {
             status,
             message: error_message(&body),
+            body: crate::log::clip(&body),
         });
     }
 }
@@ -310,11 +321,19 @@ pub(crate) fn network(e: reqwest::Error) -> AiError {
     AiError::Network(e.without_url().to_string())
 }
 
-/// `error.message` from an error body, or the start of the body when it has none.
+/// `error.message` from an error body (Gemini sends `[{"error": ...}]`), or the start of the
+/// body when it has none.
 fn error_message(body: &str) -> String {
     serde_json::from_str::<Value>(body)
         .ok()
-        .and_then(|v| v["error"]["message"].as_str().map(str::to_string))
+        .and_then(|v| {
+            let error = if v.is_array() {
+                &v[0]["error"]
+            } else {
+                &v["error"]
+            };
+            error["message"].as_str().map(str::to_string)
+        })
         .unwrap_or_else(|| body.chars().take(300).collect())
 }
 
@@ -398,6 +417,9 @@ mod tests {
     fn error_message_reads_the_api_shape() {
         let body = r#"{"type":"error","error":{"type":"invalid_request_error","message":"bad"}}"#;
         assert_eq!(error_message(body), "bad");
+        let gemini =
+            r#"[{"error":{"code":400,"message":"Invalid tool call","status":"INVALID_ARGUMENT"}}]"#;
+        assert_eq!(error_message(gemini), "Invalid tool call");
         assert_eq!(error_message("oops"), "oops");
     }
 }

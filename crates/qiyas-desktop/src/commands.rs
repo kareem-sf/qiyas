@@ -7,7 +7,7 @@ use std::path::Path;
 use std::sync::{MutexGuard, PoisonError};
 
 use qiyas_ai::prompt::Lang;
-use qiyas_ai::{Agent, AgentEvent};
+use qiyas_ai::{Agent, AgentEvent, AgentLog};
 use qiyas_core::{
     Boq, Command, Conflict, CoreError, Drafting, DrawingInfo, EntityInfo, Measurement, NamedView,
     Outcome, Picked, Session, Snap, Source, Total,
@@ -617,8 +617,8 @@ async fn new_agent(state: &AppState, settings: &Settings, language: Lang) -> Res
             ai::agent_settings(settings, language),
         ));
     }
-    let provider = match ai::mock_provider(&state.session) {
-        Some(mock) => mock,
+    let (provider, name) = match ai::mock_provider(&state.session) {
+        Some(mock) => (mock, "mock"),
         None => {
             let name = settings.provider.name();
             let key = match keychain(move || secrets::get_api_key(name)).await {
@@ -627,14 +627,20 @@ async fn new_agent(state: &AppState, settings: &Settings, language: Lang) -> Res
                 Err(_) if settings.provider == settings::Provider::OpenaiCompatible => None,
                 Err(e) => return Err(e),
             };
-            ai::build_provider(settings, key)?
+            (ai::build_provider(settings, key)?, name)
         }
     };
+    let log = AgentLog::new(ai::log_path(&state.config_dir));
+    log.write(
+        "NEW CONVERSATION",
+        &ai::conversation_entry(name, settings, language),
+    );
     Ok(Agent::new(
         provider,
         state.session.clone(),
         ai::agent_settings(settings, language),
-    ))
+    )
+    .with_log(log))
 }
 
 /// Runs one turn, forwarding its events to the window while its conversation is current.
@@ -718,6 +724,23 @@ pub async fn ai_set_language<R: Runtime>(
         let _ = app.emit("ai:cleared", ());
     }
     Ok(())
+}
+
+/// The end of the agent log, and where the whole of it is.
+#[derive(Serialize)]
+pub struct AiLog {
+    path: String,
+    text: String,
+}
+
+/// The newest part of the agent log (empty before the first conversation).
+#[tauri::command]
+pub async fn ai_log(state: State<'_, AppState>) -> Result<AiLog, String> {
+    let path = ai::log_path(&state.config_dir);
+    Ok(AiLog {
+        text: ai::log_tail(&path).map_err(|e| e.to_string())?,
+        path: path.display().to_string(),
+    })
 }
 
 #[derive(Serialize)]
@@ -815,6 +838,7 @@ mod tests {
                     ai_cancel,
                     ai_clear,
                     ai_status,
+                    ai_log,
                     get_settings,
                     set_settings,
                     mcp_status,
@@ -957,6 +981,27 @@ mod tests {
         assert_eq!(ipc.next().0, "ai:cleared");
         let status = ipc.call("ai_status", json!({})).unwrap();
         assert_eq!(status["message_count"], 0);
+    }
+
+    #[test]
+    fn the_agent_log_tells_the_turn() {
+        let ipc = Ipc::open();
+        assert_eq!(ipc.call("ai_log", json!({})).unwrap()["text"], "");
+        ipc.call("ai_send", json!({ "text": "Measure the wall" }))
+            .unwrap();
+        ipc.turn();
+        let log = ipc.call("ai_log", json!({})).unwrap();
+        assert!(log["path"].as_str().unwrap().ends_with("agent.log"));
+        let text = log["text"].as_str().unwrap();
+        for part in [
+            "NEW CONVERSATION\n    provider: mock",
+            "USER\n    Measure the wall",
+            "REQUEST 1",
+            "TOOL measure_area (",
+            "DONE",
+        ] {
+            assert!(text.contains(part), "the log lacks {part:?}:\n{text}");
+        }
     }
 
     /// Panics in its first turn (counted across the providers it makes), then answers "ok".

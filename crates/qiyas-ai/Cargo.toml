@@ -21,6 +21,8 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 tokio = { version = "1", features = ["macros", "sync", "time", "rt", "net"] }
 tokio-util = "0.7"
 base64 = "0.22"
+# Local time for the agent log (MIT OR Apache-2.0).
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # The MCP server: rmcp (Apache-2.0) over Streamable HTTP, served by axum (MIT) on 127.0.0.1.
 rmcp = { version = "3.5", default-features = false, features = ["server", "transport-streamable-http-server"] }
 axum = { version = "0.8", default-features = false, features = ["tokio", "http1"] }

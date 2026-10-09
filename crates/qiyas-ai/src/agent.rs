@@ -2,6 +2,7 @@
 //! the results back, and repeat until the model ends its turn.
 
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Instant;
 
 use qiyas_core::{Session, Source};
 use serde::Serialize;
@@ -9,6 +10,7 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use crate::log::{clip, AgentLog};
 use crate::prompt::{state_block, system_prompt, DrawingFacts, Lang, LiveState};
 use crate::provider::{
     png_base64, AiError, ContentBlock, Message, Provider, ResultPart, Role, StopReason,
@@ -107,6 +109,7 @@ pub struct Agent {
     /// Base64 bytes of the pictures in `history`, and the most it may hold.
     image_bytes: usize,
     image_budget: usize,
+    log: Option<AgentLog>,
 }
 
 /// What the tool calls of one user turn have used so far.
@@ -153,6 +156,20 @@ impl Agent {
             history: Vec::new(),
             image_bytes: 0,
             image_budget: IMAGE_BUDGET,
+            log: None,
+        }
+    }
+
+    /// The agent writing every turn, request, answer, tool run and error to `log`.
+    pub fn with_log(mut self, log: AgentLog) -> Agent {
+        self.log = Some(log);
+        self
+    }
+
+    /// Adds an entry to the log, if there is one; `body` is only made then.
+    fn log(&self, title: &str, body: impl FnOnce() -> String) {
+        if let Some(log) = &self.log {
+            log.write(title, &body());
         }
     }
 
@@ -187,8 +204,9 @@ impl Agent {
         events: mpsc::Sender<AgentEvent>,
         cancel: CancellationToken,
     ) -> Result<(), AiError> {
+        self.log("USER", || user_text.clone());
         if self.history.len() >= MAX_MESSAGES {
-            return stopped(&events, TOO_LONG).await;
+            return self.stop(&events, TOO_LONG).await;
         }
         let system = match &self.system {
             Some(s) => s.clone(),
@@ -206,12 +224,13 @@ impl Agent {
         let tools = catalogue();
         let mut counts = TurnCounts::default();
         let mut usage = Usage::default();
+        let mut requests = 0;
         loop {
             if cancel.is_cancelled() {
-                return stopped(&events, "cancelled").await;
+                return self.stop(&events, "cancelled").await;
             }
             if self.history.len() > MAX_MESSAGES {
-                return stopped(&events, TOO_LONG).await;
+                return self.stop(&events, TOO_LONG).await;
             }
             let req = TurnRequest {
                 system: system.clone(),
@@ -221,15 +240,48 @@ impl Agent {
                 effort: self.settings.effort.clone(),
                 max_tokens: self.settings.max_tokens,
             };
+            requests += 1;
+            self.log(&format!("REQUEST {requests}"), || {
+                format!(
+                    "{} messages, {} tools, model {}, effort {}",
+                    req.messages.len(),
+                    req.tools.len(),
+                    req.model,
+                    req.effort
+                )
+            });
+            let started = Instant::now();
             let Some(turn) = self.stream(req, &events, &cancel).await else {
                 // The partial answer is dropped; the next user message joins this turn's.
-                return stopped(&events, "cancelled").await;
+                return self.stop(&events, "cancelled").await;
             };
-            let turn = turn?;
+            let turn = match turn {
+                Ok(turn) => turn,
+                Err(e) => {
+                    self.log("ERROR", || match &e {
+                        AiError::Api { body, .. } => format!("{e}\nThe service's answer: {body}"),
+                        _ => e.to_string(),
+                    });
+                    return Err(e);
+                }
+            };
+            self.log(
+                &format!(
+                    "ANSWER {requests} ({:.1} s)",
+                    started.elapsed().as_secs_f64()
+                ),
+                || answer_entry(&turn),
+            );
             usage.add(turn.usage);
             match turn.stop_reason {
                 StopReason::Refusal { category, text } => {
                     // A refusal can cut a tool call off; nothing of it is kept or run.
+                    self.log("REFUSED", || {
+                        format!(
+                            "category: {}\n{text}",
+                            category.as_deref().unwrap_or("none")
+                        )
+                    });
                     let _ = events.send(AgentEvent::Refused { category, text }).await;
                     return Ok(());
                 }
@@ -243,8 +295,8 @@ impl Agent {
                     self.history.push(assistant);
                     self.history.push(Message::user(results));
                     if counts.calls >= MAX_TOOL_CALLS {
-                        return stopped(&events, &format!("stopped after {MAX_TOOL_CALLS} steps"))
-                            .await;
+                        let why = format!("stopped after {MAX_TOOL_CALLS} steps");
+                        return self.stop(&events, &why).await;
                     }
                 }
                 reason => {
@@ -263,16 +315,23 @@ impl Agent {
                     }
                     return match reason {
                         StopReason::EndTurn | StopReason::ToolUse => {
+                            self.log("DONE", || tokens(&usage));
                             let _ = events.send(AgentEvent::Done { usage }).await;
                             Ok(())
                         }
-                        StopReason::MaxTokens => stopped(&events, "max_tokens").await,
-                        StopReason::Other(r) => stopped(&events, &r).await,
+                        StopReason::MaxTokens => self.stop(&events, "max_tokens").await,
+                        StopReason::Other(r) => self.stop(&events, &r).await,
                         _ => Ok(()),
                     };
                 }
             }
         }
+    }
+
+    /// Ends the turn early for `reason`, in the log too.
+    async fn stop(&self, events: &mpsc::Sender<AgentEvent>, reason: &str) -> Result<(), AiError> {
+        self.log("STOPPED", || reason.to_string());
+        stopped(events, reason).await
     }
 
     /// Streams one turn, forwarding text and thinking as they arrive. `None` when cancelled:
@@ -330,6 +389,7 @@ impl Agent {
                     mutating: tools.iter().any(|t| t.name == name && t.mutating),
                 })
                 .await;
+            let started = Instant::now();
             // Every answered call counts, bad input included.
             let (block, event) = if cancel.is_cancelled() {
                 (error_result(id, CANCELLED), error_event(id, CANCELLED))
@@ -349,6 +409,10 @@ impl Agent {
                 counts.calls += 1;
                 self.run_tool(id, name, input, cancel, epoch).await
             };
+            self.log(
+                &format!("TOOL {name} ({} ms)", started.elapsed().as_millis()),
+                || tool_entry(id, input, &block),
+            );
             results.push(block);
             let _ = events.send(event).await;
         }
@@ -491,6 +555,59 @@ async fn stopped(events: &mpsc::Sender<AgentEvent>, reason: &str) -> Result<(), 
         })
         .await;
     Ok(())
+}
+
+/// The log entry of one answer: why it stopped, its tokens, its text and the calls it made.
+fn answer_entry(turn: &crate::provider::TurnResult) -> String {
+    let mut lines = vec![format!("stop: {:?}", turn.stop_reason), tokens(&turn.usage)];
+    for block in &turn.content {
+        match block {
+            ContentBlock::Text { text } => lines.push(format!("text: {}", clip(text))),
+            ContentBlock::Thinking { thinking, .. } => {
+                lines.push(format!("thinking: {}", clip(thinking)));
+            }
+            ContentBlock::ToolUse { id, name, input } => match input {
+                Value::String(raw) => lines.push(format!(
+                    "call {name} ({id}), input not valid JSON: {}",
+                    clip(raw)
+                )),
+                v => lines.push(format!("call {name} ({id}): {}", clip(&v.to_string()))),
+            },
+            _ => {}
+        }
+    }
+    lines.join("\n")
+}
+
+/// The log entry of one tool call: its input and what it gave back.
+fn tool_entry(id: &str, input: &Value, block: &ContentBlock) -> String {
+    let mut lines = vec![
+        format!("id: {id}"),
+        format!("input: {}", clip(&input.to_string())),
+    ];
+    if let ContentBlock::ToolResult {
+        content, is_error, ..
+    } = block
+    {
+        let label = if *is_error { "error" } else { "result" };
+        for part in content {
+            lines.push(match part {
+                ResultPart::Text(t) => format!("{label}: {}", clip(t)),
+                ResultPart::Png(data) => format!("{label}: a picture, {} KB", data.len() / 1024),
+            });
+        }
+    }
+    lines.join("\n")
+}
+
+fn tokens(usage: &Usage) -> String {
+    format!(
+        "tokens: {} in, {} out, {} cache read, {} cache written",
+        usage.input_tokens,
+        usage.output_tokens,
+        usage.cache_read_input_tokens,
+        usage.cache_creation_input_tokens
+    )
 }
 
 fn error_result(id: &str, why: &str) -> ContentBlock {

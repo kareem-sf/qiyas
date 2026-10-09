@@ -234,6 +234,17 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
   sentence, measures the first polyline on layer A-WALL and answers. No key, no network. Release
   builds leave it out.
 - AI measurements are marked `ai`; the card's Undo only undoes when the last step is the AI's.
+- The in-app agent is called Mizan (ميزان): the side tab, the panel and the system prompt use the
+  name; code keeps `assistant` / `useAssistant`.
+- Agent log: `logs/agent.log` beside `settings.json` (mode 0600, moved to `agent.log.1` past
+  5 MB). Each conversation's provider, model and address, then every user message, request,
+  answer (text, calls, tokens, time), tool run (input, result) and error with the service's
+  whole answer; texts clipped at 4,000 characters, never the key. The panel's Log button shows
+  its newest 256 KB (`ai_log`); an error offers "Show log".
+- OpenAI-compatible streams: Gemini (also behind Runware) sends parallel calls whole, all at
+  index 0 or with none, so a new id, or a second name, starts a new call (`openai.rs`, `slot`).
+  Input that was not valid JSON goes back as `{}`, as for Claude, so one bad call can't make
+  every later request fail.
 
 ## MCP
 

@@ -6,12 +6,15 @@
 //! one `Provider` trait, the system prompt (`prompt`), and the loop that runs the model's tool
 //! calls on the shared session (`agent`).
 //!
+//! The agent's log file (`log`).
+//!
 //! The MCP server for outside AI apps (`mcp`).
 
 pub mod agent;
 pub mod anthropic;
 mod execute;
 mod image;
+pub mod log;
 pub mod mcp;
 pub mod openai;
 pub mod prompt;
@@ -21,6 +24,7 @@ mod tools;
 pub use agent::{Agent, AgentEvent, AgentSettings};
 pub use execute::{execute, ToolError, ToolOutput};
 pub use image::render_png;
+pub use log::AgentLog;
 pub use provider::{
     AiError, ContentBlock, Message, Provider, ResultPart, Role, StopReason, StreamEvent,
     TurnRequest, TurnResult, Usage,

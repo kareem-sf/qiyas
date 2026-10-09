@@ -75,6 +75,7 @@ pub fn run() {
             commands::ai_cancel,
             commands::ai_clear,
             commands::ai_status,
+            commands::ai_log,
             commands::ai_set_language,
             commands::ai_undo,
             pdf::pdf_page_count,

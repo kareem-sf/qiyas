@@ -745,7 +745,7 @@ async fn api_key_absent_from_logs_and_errors() {
     }
     assert_eq!(errors[0], AiError::Auth);
     assert!(
-        matches!(&errors[1], AiError::Api { status: 400, message } if message.contains("bad key"))
+        matches!(&errors[1], AiError::Api { status: 400, message, .. } if message.contains("bad key"))
     );
     assert!(matches!(
         errors[2],
@@ -847,6 +847,82 @@ async fn openai_compatible_streams_text_and_tool_calls() {
     assert_eq!(second[2]["tool_calls"][0]["id"], "call_1");
     assert_eq!(second[3]["role"], "tool");
     assert_eq!(second[3]["tool_call_id"], "call_1");
+}
+
+#[tokio::test]
+async fn gemini_parallel_calls_run_apart_and_the_log_tells_the_whole_turn() {
+    // Gemini behind an OpenAI-compatible gateway: each parallel call whole, all at index 0.
+    let call = |id: &str, name: &str| {
+        json!({"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":id,
+            "type":"function","function":{"name":name,"arguments":"{}"}}]}}]})
+        .to_string()
+    };
+    let first = vec![
+        call("f1", "list_layers"),
+        call("f2", "list_sheets"),
+        call("f3", "list_takeoff"),
+        json!({"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}).to_string(),
+        "[DONE]".into(),
+    ];
+    let mock = serve(move |n| match n {
+        0 => Reply::Data(first.clone()),
+        1 => Reply::Data(vec![
+            json!({"choices":[{"index":0,"delta":{"content":"Done."},"finish_reason":"stop"}]})
+                .to_string(),
+            "[DONE]".into(),
+        ]),
+        _ => Reply::Status(
+            400,
+            vec![],
+            r#"[{"error":{"code":400,"message":"The request was rejected","status":"INVALID_ARGUMENT"}}]"#.into(),
+        ),
+    })
+    .await;
+    let (dir, session) = sample();
+    let log = qiyas_ai::AgentLog::new(dir.path().join("logs").join("agent.log"));
+    let provider = OpenAiCompatible::new(&mock.base, Some(KEY.into()));
+    let mut agent = Agent::new(Box::new(provider), session, AgentSettings::default()).with_log(log);
+    let (result, events) = turn(&mut agent, "What is in the drawing?").await;
+    result.unwrap();
+    let ran: Vec<&str> = events
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::ToolCall { name, .. } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ran, ["list_layers", "list_sheets", "list_takeoff"]);
+    assert!(events
+        .iter()
+        .all(|e| !matches!(e, AgentEvent::ToolResult { is_error: true, .. })));
+    let second = &mock.requests()[1].body["messages"];
+    let calls = second[2]["tool_calls"].as_array().unwrap();
+    assert_eq!(calls.len(), 3);
+    assert_eq!(calls[2]["function"]["name"], "list_takeoff");
+    assert_eq!(second[5]["tool_call_id"], "f3");
+
+    let (result, _) = turn(&mut agent, "Again").await;
+    assert!(
+        matches!(result, Err(AiError::Api { status: 400, ref message, .. })
+        if message == "The request was rejected")
+    );
+
+    let text = std::fs::read_to_string(dir.path().join("logs").join("agent.log")).unwrap();
+    for part in [
+        "USER\n    What is in the drawing?",
+        "REQUEST 1\n",
+        "ANSWER 1 (",
+        "call list_sheets (f2): {}",
+        "TOOL list_takeoff (",
+        "TOOL list_layers (",
+        "text: Done.",
+        "DONE\n",
+        "ERROR\n    The AI service answered 400: The request was rejected",
+        "INVALID_ARGUMENT",
+    ] {
+        assert!(text.contains(part), "the log lacks {part:?}:\n{text}");
+    }
+    assert!(!text.contains(KEY));
 }
 
 const SLAB: &str = r#"{"points": [[0, 0], [10, 0], [10, 10], [0, 10]]}"#;

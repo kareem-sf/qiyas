@@ -4,6 +4,7 @@
 //! A new conversation (Clear, another drawing, another language, other AI settings or key) drops
 //! the agent, so the next message builds a fresh one with a new system prompt and the current key.
 
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 /// Why `ai_send` refused a turn when a new conversation began while it was starting; the window
@@ -156,6 +157,54 @@ pub fn agent_settings(s: &Settings, language: Lang) -> AgentSettings {
     }
 }
 
+/// The agent log, beside `settings.json`: `logs/agent.log` in the app's config folder.
+pub fn log_path(config_dir: &Path) -> PathBuf {
+    config_dir.join("logs").join("agent.log")
+}
+
+/// Most of the log the window is sent: its newest part.
+const LOG_TAIL: u64 = 256 * 1024;
+
+/// The last `LOG_TAIL` bytes of the log at `path`, from the start of an entry where one begins in
+/// them; empty when there is no log yet.
+pub fn log_tail(path: &Path) -> std::io::Result<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(String::new()),
+        Err(e) => return Err(e),
+    };
+    let len = file.metadata()?.len();
+    let start = len.saturating_sub(LOG_TAIL);
+    file.seek(SeekFrom::Start(start))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    if start == 0 {
+        return Ok(text);
+    }
+    // Entries start at a line that is not indented.
+    let first = text
+        .match_indices('\n')
+        .map(|(i, _)| i + 1)
+        .find(|&i| text[i..].chars().next().is_some_and(|c| c != ' '));
+    Ok(first.map_or(text.clone(), |i| text[i..].to_string()))
+}
+
+/// The first log entry of a conversation: who answers it. Never the key.
+pub fn conversation_entry(provider: &str, s: &Settings, language: Lang) -> String {
+    let mut lines = vec![
+        format!("provider: {provider}"),
+        format!("model: {}", s.model),
+    ];
+    if let (settings::Provider::OpenaiCompatible, Some(url)) = (s.provider, &s.base_url) {
+        lines.push(format!("address: {url}"));
+    }
+    lines.push(format!("effort: {}", s.effort));
+    lines.push(format!("language: {language:?}"));
+    lines.join("\n")
+}
+
 /// Whether going from `old` to `new` changes who answers (provider, address or model), which needs
 /// a new conversation. Effort changes apply to the next message.
 pub fn answerer_changed(old: &Settings, new: &Settings) -> bool {
@@ -196,6 +245,32 @@ pub fn mock_provider(session: &Arc<Mutex<Option<Session>>>) -> Option<Box<dyn Pr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_log_tail_starts_at_an_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent.log");
+        assert_eq!(log_tail(&path).unwrap(), "", "no log yet");
+        let entry = "2026-10-09 12:00:00.000  TOOL x\n    result: done\n";
+        std::fs::write(&path, entry.repeat(LOG_TAIL as usize / entry.len() + 10)).unwrap();
+        let tail = log_tail(&path).unwrap();
+        assert!(tail.starts_with("2026-10-09"), "{}", &tail[..40]);
+        assert!(tail.len() as u64 <= LOG_TAIL);
+    }
+
+    #[test]
+    fn a_conversation_entry_names_who_answers_and_never_the_key() {
+        let s = Settings {
+            provider: settings::Provider::OpenaiCompatible,
+            base_url: Some("https://api.runware.ai/v1".into()),
+            model: "google:gemini@3.8-flash".into(),
+            ..Settings::default()
+        };
+        let entry = conversation_entry("openai_compatible", &s, Lang::Ar);
+        assert!(entry.contains("model: google:gemini@3.8-flash"));
+        assert!(entry.contains("address: https://api.runware.ai/v1"));
+        assert!(entry.contains("language: Ar"));
+    }
 
     fn agent() -> Agent {
         let provider = build_provider(&Settings::default(), Some("k".into())).unwrap();

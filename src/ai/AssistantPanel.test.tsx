@@ -2,6 +2,9 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { AssistantPanel } from "./AssistantPanel";
+
+const aiLog = vi.fn();
+vi.mock("../api", async (original) => ({ ...(await original<object>()), aiLog: () => aiLog() }));
 import { EMPTY, type ToolCardItem, type Transcript } from "./messages";
 
 afterEach(cleanup);
@@ -94,7 +97,7 @@ test("after an undo the card before it can be undone; a stale card says why", ()
 
 test("a crash says so and offers a new conversation; the status line announces the end", () => {
   const { assistant } = setup({ items: [{ kind: "user", text: "hi" }] }, false, "crashed");
-  expect(screen.getByRole("alert").textContent).toBe("The assistant crashed; start a new conversation.");
+  expect(screen.getByRole("alert").textContent).toBe("Mizan crashed; start a new conversation.Show log");
   fireEvent.click(screen.getByText("Start a new conversation"));
   expect(assistant.clear).toHaveBeenCalled();
   expect(screen.getByRole("status").textContent).toBe("");
@@ -118,4 +121,23 @@ test("a refusal shows its card and a button for a new conversation", () => {
   expect(screen.getByText("Request declined")).toBeTruthy();
   fireEvent.click(screen.getByText("Start a new conversation"));
   expect(assistant.clear).toHaveBeenCalled();
+});
+
+test("Log shows the agent log in place of the conversation; an error offers it", async () => {
+  aiLog.mockResolvedValue({ path: "/cfg/logs/agent.log", text: "12:00  ERROR\n    The AI service answered 400" });
+  setup(EMPTY, false, "The AI service answered 400: The request was rejected");
+  fireEvent.click(screen.getByText("Show log"));
+  await waitFor(() => expect(screen.getByText(/ERROR/)).toBeTruthy());
+  expect(screen.getByText("/cfg/logs/agent.log")).toBeTruthy();
+  expect(screen.queryByText("Show log")).toBeNull();
+  expect(screen.getByText("Log").getAttribute("aria-pressed")).toBe("true");
+  fireEvent.click(screen.getByText("Log"));
+  expect(screen.getAllByRole("listitem")).toHaveLength(3);
+});
+
+test("an empty log says so", async () => {
+  aiLog.mockResolvedValue({ path: "/cfg/logs/agent.log", text: "" });
+  setup();
+  fireEvent.click(screen.getByText("Log"));
+  await waitFor(() => expect(screen.getByText("Nothing in the log yet. Send Mizan a message.")).toBeTruthy());
 });

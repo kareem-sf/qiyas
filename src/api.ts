@@ -838,6 +838,11 @@ export const aiClear = () => invoke<void>("ai_clear");
 
 export const aiStatus = () => invoke<AiStatus>("ai_status");
 
+/** The agent log: where the file is and its newest part (empty before the first conversation). */
+export type AiLog = { path: string; text: string };
+
+export const aiLog = () => invoke<AiLog>("ai_log");
+
 /** Undoes the assistant's newest change, only while it is still the newest change to the
  *  take-off; false when it is not (the user changed the take-off since). */
 export const aiUndo = () => invoke<boolean>("ai_undo");

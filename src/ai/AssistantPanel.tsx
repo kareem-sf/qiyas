@@ -1,4 +1,5 @@
-import { memo, useEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { aiLog, type AiLog } from "../api";
 import { useT } from "../i18n";
 import { Markdown } from "./Markdown";
 import { startNewOffered, TOO_LONG, undoableCard, type Item, type ToolCardItem } from "./messages";
@@ -17,8 +18,8 @@ type Props = {
 
 const EXAMPLES = ["ai.example1", "ai.example2", "ai.example3"];
 
-/** The in-app assistant: the conversation, the tools it ran, and a box to write in. Memoised: the
- *  app re-renders on every pointer move. */
+/** The in-app agent, Mizan: the conversation, the tools it ran, and a box to write in; or its log.
+ *  Memoised: the app re-renders on every pointer move. */
 export const AssistantPanel = memo(function AssistantPanel({ assistant, onShow, onUndo, onSettings }: Props) {
   const t = useT();
   const { transcript, busy, error, status } = assistant;
@@ -26,10 +27,27 @@ export const AssistantPanel = memo(function AssistantPanel({ assistant, onShow, 
   const log = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLTextAreaElement>(null);
 
+  // The agent log, in place of the conversation while it is shown.
+  const [showLog, setShowLog] = useState(false);
+  const [agentLog, setAgentLog] = useState<AiLog | null>(null);
+  const logText = useRef<HTMLPreElement>(null);
+  const loadLog = useCallback(() => {
+    aiLog()
+      .then(setAgentLog)
+      .catch((e) => setAgentLog({ path: "", text: String(e) }));
+  }, []);
+  // Read again at each new step of a turn and when it ends.
+  useEffect(() => {
+    if (showLog) loadLog();
+  }, [showLog, busy, transcript.items.length, loadLog]);
+  useEffect(() => {
+    logText.current?.scrollTo?.({ top: logText.current.scrollHeight });
+  }, [agentLog]);
+
   // Keep the newest message in view.
   useEffect(() => {
     log.current?.scrollTo?.({ top: log.current.scrollHeight });
-  }, [transcript, busy]);
+  }, [transcript, busy, showLog]);
 
   async function submit() {
     const text = draft.trim();
@@ -126,6 +144,9 @@ export const AssistantPanel = memo(function AssistantPanel({ assistant, onShow, 
             {status.model}
           </span>
         )}
+        <button type="button" aria-pressed={showLog} onClick={() => setShowLog((on) => !on)}>
+          {t("ai.log")}
+        </button>
         <button
           type="button"
           className="icon gear"
@@ -144,44 +165,65 @@ export const AssistantPanel = memo(function AssistantPanel({ assistant, onShow, 
       <p className="sr-only" role="status" aria-live="polite">
         {announce}
       </p>
-      <div className="assistant-log" ref={log}>
-        {empty ? (
-          <div className="assistant-empty">
-            <p>{t("ai.emptyTitle")}</p>
-            <ul>
-              {EXAMPLES.map((key) => (
-                <li key={key}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setDraft(t(key));
-                      box.current?.focus();
-                    }}
-                  >
-                    {t(key)}
-                  </button>
-                </li>
-              ))}
-            </ul>
+      {showLog ? (
+        <div className="agent-log">
+          <div className="agent-log-bar">
+            <span className="agent-log-path" dir="ltr" title={agentLog?.path}>
+              {agentLog?.path}
+            </span>
+            <button type="button" className="link" onClick={loadLog}>
+              {t("ai.logRefresh")}
+            </button>
           </div>
-        ) : (
-          transcript.items.map(show)
-        )}
-        {busy && (
-          <p className="working">
-            <span className="spinner" aria-hidden="true" />
-            {t("ai.working")}
-          </p>
-        )}
-        {!busy && (startNewOffered(transcript) || error === "crashed") && (
-          <button type="button" className="primary new-conversation" onClick={assistant.clear}>
-            {t("ai.newConversation")}
-          </button>
-        )}
-      </div>
+          <pre className="agent-log-text" dir="ltr" ref={logText} tabIndex={0} aria-label={t("ai.log")}>
+            {agentLog === null ? "" : agentLog.text || t("ai.logEmpty")}
+          </pre>
+        </div>
+      ) : (
+        <div className="assistant-log" ref={log}>
+          {empty ? (
+            <div className="assistant-empty">
+              <p>{t("ai.emptyTitle")}</p>
+              <ul>
+                {EXAMPLES.map((key) => (
+                  <li key={key}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDraft(t(key));
+                        box.current?.focus();
+                      }}
+                    >
+                      {t(key)}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : (
+            transcript.items.map(show)
+          )}
+          {busy && (
+            <p className="working">
+              <span className="spinner" aria-hidden="true" />
+              {t("ai.working")}
+            </p>
+          )}
+          {!busy && (startNewOffered(transcript) || error === "crashed") && (
+            <button type="button" className="primary new-conversation" onClick={assistant.clear}>
+              {t("ai.newConversation")}
+            </button>
+          )}
+        </div>
+      )}
       {error && (
         <div className="error" role="alert">
           {errorText(error)}
+          {!showLog && (
+            <button type="button" className="link" onClick={() => setShowLog(true)}>
+              {t("ai.showLog")}
+            </button>
+          )}
         </div>
       )}
       <form
