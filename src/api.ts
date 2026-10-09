@@ -44,7 +44,14 @@ export type DrawingInfo = {
   arabic_reversed: boolean;
   /** Its xrefs and those inside them, in load order. */
   xrefs: XrefInfo[];
+  /** Block name of the sheet on screen. */
+  sheet: string;
+  /** The layers the user has hidden, sorted. */
+  hidden_layers: string[];
 };
+
+/** In `problems` when the drawing opened with nothing in model space (`qiyas_core::EMPTY_MODEL`). */
+export const EMPTY_MODEL = "This drawing has no geometry in Model";
 
 export type EntityInfo = {
   handle: number;
@@ -165,7 +172,38 @@ export type Schedule = {
 /** References of one block on one layer; `attributes` are their distinct attribute values. */
 export type BlockCount = { block_name: string; layer: string; count: number; attributes: string[] };
 
+/** Opens the drawing in a new tab, or shows its tab when it is open already. */
 export const openDrawing = (path: string) => invoke<DrawingInfo>("open_drawing", { path });
+
+/** One file tab (`qiyas_desktop::tabs::TabInfo`). */
+export type TabInfo = { id: number; path: string; title: string; dirty: boolean };
+
+/** Every open drawing's tab, in order, and the one on screen (null when none is open). */
+export type Tabs = { tabs: TabInfo[]; active: number | null };
+
+export const tabs = () => invoke<Tabs>("tabs");
+
+/** Shows the drawing of tab `id`; its info. The assistant starts a new conversation. */
+export const activateTab = (id: number) => invoke<DrawingInfo>("activate_tab", { id });
+
+/** What `closeTab` refuses with for a drawing with unsaved changes, without `force`. */
+export const UNSAVED = "unsaved";
+
+/** Closes tab `id`; the tabs left. */
+export const closeTab = (id: number, force = false) => invoke<Tabs>("close_tab", { id, force });
+
+/** A drawing opened or saved lately. */
+export type Recent = { path: string; name: string; folder: string; missing: boolean };
+
+/** The recent drawings, most recent first (at most 10). */
+export const recents = () => invoke<Recent[]>("recents");
+
+export const clearRecents = () => invoke<void>("clear_recents");
+
+/** A named view of model space: its name and the box it shows on the drawing. */
+export type NamedView = { name: string; bounds: [[number, number], [number, number]] };
+
+export const views = () => invoke<NamedView[]>("views");
 
 export const drawingInfo = () => invoke<DrawingInfo>("drawing_info");
 
@@ -504,7 +542,11 @@ export type Command =
   /** Where `p` is, in metres, and the snap that found it, as an `info` outcome. */
   | { type: "id_point"; p: [number, number]; kind: SnapKind | null }
   /** A `table` outcome: one row of `fields` per entity `filter` finds (up to 5,000). */
-  | { type: "extract_data"; filter: EntityFilter; fields: Field[] };
+  | { type: "extract_data"; filter: EntityFilter; fields: Field[] }
+  /** Saves the named view `name` (replacing one of that name) showing `bounds`; Model sheet only. */
+  | { type: "save_view"; name: string; bounds: [[number, number], [number, number]] }
+  /** Removes the named view `name`; `nothing` when there is none. */
+  | { type: "delete_view"; name: string };
 
 export type Outcome =
   | { type: "measured"; measurement: Measurement }

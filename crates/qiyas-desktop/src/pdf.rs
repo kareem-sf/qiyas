@@ -38,6 +38,11 @@ impl PictureCache {
         Some(bytes)
     }
 
+    /// Lets go of every picture: another drawing is on screen, and its image ids are its own.
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+
     /// Keeps `bytes` under `key`, letting go of the least recently used beyond `KEPT`.
     fn put(&mut self, key: PictureKey, bytes: Arc<Vec<u8>>) {
         self.0.retain(|(k, _)| *k != key);
@@ -238,7 +243,7 @@ pub async fn image_display(
     with_session(&state, |s| Ok(s.image_display(handle)))
 }
 
-fn pictures(state: &AppState) -> std::sync::MutexGuard<'_, PictureCache> {
+pub(crate) fn pictures(state: &AppState) -> std::sync::MutexGuard<'_, PictureCache> {
     state
         .pictures
         .lock()

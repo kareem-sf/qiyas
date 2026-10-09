@@ -103,12 +103,19 @@ pub struct DrawingInfo {
     pub arabic_reversed: bool,
     /// The drawing's xrefs (and those inside them), in load order.
     pub xrefs: Vec<XrefInfo>,
+    /// Block name of the sheet on screen.
+    pub sheet: String,
+    /// The layers the user has hidden, sorted.
+    pub hidden_layers: Vec<String>,
 }
 
 /// An entity by its handle and the block references it sits inside (outermost first).
 pub(crate) type EntityAt = (u64, Vec<u64>);
 /// A point entity: where it is, and its handle.
 pub(crate) type PointAt = ([f64; 2], u64);
+
+/// In the problems of a drawing that opens with nothing in model space.
+pub const EMPTY_MODEL: &str = "This drawing has no geometry in Model";
 
 /// Shown when some block content was too deep or too large to draw.
 const TRUNCATED: &str = "Drawing too complex, some block content not drawn";
@@ -341,6 +348,9 @@ impl Session {
     /// Measurements embedded inside xrefs are never read.
     pub fn open(path: &Path) -> Result<Session, CoreError> {
         let mut drawing = Drawing::open(path)?;
+        if drawing.entities_in("*Model_Space").next().is_none() {
+            drawing.problems.push(EMPTY_MODEL.to_string());
+        }
         let sheet = drawing.sheets()[0].block.clone();
         let mut takeoff = Takeoff::default();
         let mut boq = None;
@@ -476,7 +486,7 @@ impl Session {
         Ok(())
     }
 
-    /// The drawing's sheets, layers and units, and what went wrong reading it or drawing the
+    /// The drawing's sheets, layers and units, the sheet on screen and the layers hidden, and what went wrong reading it or drawing the
     /// current sheet (builds the sheet's batch when it is not cached yet).
     pub fn info(&self) -> DrawingInfo {
         let mut problems = self.drawing.problems.clone();
@@ -493,6 +503,8 @@ impl Session {
             problems,
             arabic_reversed: self.arabic_reversed,
             xrefs: self.xrefs.info(&self.xref_overrides),
+            sheet: self.sheet.clone(),
+            hidden_layers: self.hidden_layers(),
         }
     }
 

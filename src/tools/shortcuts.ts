@@ -12,7 +12,10 @@ export type Shortcut =
   | "save"
   | "escape"
   | "finish"
-  | "commandLine";
+  | "commandLine"
+  | "nextTab"
+  | "prevTab"
+  | "closeTab";
 
 export type Keys = Pick<KeyboardEvent, "code" | "key" | "ctrlKey" | "metaKey" | "shiftKey" | "altKey">;
 
@@ -40,6 +43,9 @@ export function shortcutFor(e: Keys): Shortcut | null {
     if (e.code === "KeyS" && !e.shiftKey) return "save";
     // Shows and hides the command line, as in AutoCAD.
     if (e.code === "Digit9" && !e.shiftKey) return "commandLine";
+    // The file tabs, as in a browser.
+    if (e.code === "Tab") return e.shiftKey ? "prevTab" : "nextTab";
+    if (e.code === "KeyW" && !e.shiftKey) return "closeTab";
     return null;
   }
   if (e.code === "Escape") return "escape";

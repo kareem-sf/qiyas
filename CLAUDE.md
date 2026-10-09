@@ -97,6 +97,22 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
 - The same five are AI tools: `measure_geometry`, `divide_along`, `measure_along` (step in
   metres), `id_point`, `extract_data` (paged under 40 KB).
 
+## Drawings, tabs, recents and views
+
+- Several drawings open at once, one file tab each above the drawing (title, "•" while the drawing
+  has unsaved changes, × or a middle click closes; Ctrl+Tab / Ctrl+Shift+Tab / Ctrl+W). The tab on
+  screen is `AppState::session`, so every IPC command, the assistant and MCP act on it; the others
+  are parked (`AppState::parked`) and swapped in by `activate_tab`. Lock order: `tabs`, `session`,
+  `parked`. Switching or closing the tab on screen starts a new assistant conversation. Opening a
+  file that is open already shows its tab. Closing (or quitting) with unsaved drawing changes asks.
+- Recent drawings: `recents` in `settings.json` (10 at most, newest first, kept by the app on every
+  open and Save As; the Settings dialog never changes them); the arrow beside Open lists them,
+  greyed "(missing)" when the file is gone, then Clear recents.
+- Named views: the drawing's `VIEW` table (model space only). View tab, Views: choose one to zoom
+  to it, Save current view… (Model sheet only) or × to delete; both are undoable drawing changes.
+- A drawing that opens with nothing in model space says "This drawing has no geometry in Model"
+  in the status bar.
+
 ## AI assistant and settings
 
 - Settings live in `settings.json` in the app's config folder (Linux:

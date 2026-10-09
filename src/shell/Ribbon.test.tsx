@@ -42,3 +42,31 @@ test("the Measure tab has the inquiry tools and Extract data", () => {
   fireEvent.click(screen.getByRole("button", { name: "Extract data" }));
   expect(onExtract).toHaveBeenCalled();
 });
+
+test("Open has the recent drawings beside it, and View has the named views", async () => {
+  const loadViews = vi.fn(async () => []);
+  render(
+    <Ribbon
+      {...props}
+      loadRecents={async () => []}
+      onOpenRecent={() => {}}
+      onClearRecents={async () => {}}
+      loadViews={loadViews}
+      onGoToView={() => {}}
+      onSaveView={async () => {}}
+      onDeleteView={async () => {}}
+    />,
+  );
+  expect(screen.getByRole("button", { name: "Open…" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Recent drawings" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("tab", { name: "View" }));
+  fireEvent.click(screen.getByRole("button", { name: /Views/ }));
+  expect(await screen.findByRole("menu", { name: "Views" })).toBeTruthy();
+  expect(loadViews).toHaveBeenCalled();
+});
+
+test("without a drawing on the Model sheet, Views is disabled", () => {
+  render(<Ribbon {...props} />);
+  fireEvent.click(screen.getByRole("tab", { name: "View" }));
+  expect((screen.getByRole("button", { name: "Views" }) as HTMLButtonElement).disabled).toBe(true);
+});

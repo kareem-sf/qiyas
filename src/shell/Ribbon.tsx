@@ -1,6 +1,9 @@
 import { useState, type KeyboardEvent } from "react";
+import type { NamedView, Recent } from "../api";
 import { useT } from "../i18n";
 import type { Tool } from "../viewport/Viewport";
+import { RecentsMenu } from "./RecentsMenu";
+import { ViewsMenu } from "./ViewsMenu";
 
 export type { Tool };
 
@@ -9,6 +12,10 @@ type Props = {
   active: Tool;
   onTool(t: Tool): void;
   onOpen(): void;
+  /** The recent drawings beside Open (see `RecentsMenu`); without them Open is a plain button. */
+  loadRecents?(): Promise<Recent[]>;
+  onOpenRecent?(path: string): void;
+  onClearRecents?(): Promise<void>;
   onSave?(): void;
   onSaveAs?(): void;
   onExport?(): void;
@@ -31,6 +38,11 @@ type Props = {
   /** The drawing holds its Arabic text backwards; the checkbox is disabled without a handler. */
   arabicReversed?: boolean;
   onArabicReversed?(on: boolean): void;
+  /** The View tab's named views (see `ViewsMenu`); without them Views is disabled. */
+  loadViews?(): Promise<NamedView[]>;
+  onGoToView?(view: NamedView): void;
+  onSaveView?(name: string): Promise<void>;
+  onDeleteView?(name: string): Promise<void>;
 };
 
 type Tab = "home" | "measure" | "view";
@@ -92,7 +104,18 @@ export function Ribbon(props: Props) {
       </div>
       <div className="ribbon-panel" role="tabpanel">
         {tab === "home" && [
-          action("open", props.onOpen),
+          props.loadRecents && props.onOpenRecent && props.onClearRecents ? (
+            <RecentsMenu
+              key="open"
+              onOpen={props.onOpen}
+              load={props.loadRecents}
+              onOpenRecent={props.onOpenRecent}
+              onClear={props.onClearRecents}
+              onKey={ignoreSpace}
+            />
+          ) : (
+            action("open", props.onOpen)
+          ),
           action("save", props.onSave),
           action("saveAs", props.onSaveAs),
           action("exportTakeoff", props.onExport),
@@ -112,6 +135,18 @@ export function Ribbon(props: Props) {
         {tab === "view" && [
           action("zoomExtents", props.onZoomExtents),
           tool("zoomWindow"),
+          props.loadViews && props.onGoToView && props.onSaveView && props.onDeleteView ? (
+            <ViewsMenu
+              key="views"
+              load={props.loadViews}
+              onGo={props.onGoToView}
+              onSave={props.onSaveView}
+              onDelete={props.onDeleteView}
+              onKey={ignoreSpace}
+            />
+          ) : (
+            action("views")
+          ),
           action("xrefs", props.onXrefs),
           action("attachPdf", props.onAttachPdf),
           action("attachImage", props.onAttachImage),

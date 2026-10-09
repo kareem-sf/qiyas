@@ -12,6 +12,9 @@ use serde::{Deserialize, Serialize};
 
 const FILE: &str = "settings.json";
 
+/// Drawings kept in the Open menu's recent list.
+pub const MAX_RECENTS: usize = 10;
+
 pub const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 
 /// Who answers the in-app assistant.
@@ -62,6 +65,18 @@ pub struct Settings {
     /// The user's command line aliases, alias to command (e.g. "L" to "LAYOFF"), over the
     /// built-in ones.
     pub aliases: BTreeMap<String, String>,
+    /// Drawings opened or saved lately, most recent first, at most `MAX_RECENTS`. Kept by the app
+    /// itself: the Settings dialog never changes it.
+    pub recents: Vec<String>,
+}
+
+impl Settings {
+    /// Puts `path` first in the recent list, once, and keeps the newest `MAX_RECENTS`.
+    pub fn push_recent(&mut self, path: &str) {
+        self.recents.retain(|p| p != path);
+        self.recents.insert(0, path.to_string());
+        self.recents.truncate(MAX_RECENTS);
+    }
 }
 
 impl Default for Settings {
@@ -77,6 +92,7 @@ impl Default for Settings {
             language: "en".into(),
             theme: "system".into(),
             aliases: BTreeMap::new(),
+            recents: Vec::new(),
         }
     }
 }

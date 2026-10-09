@@ -206,3 +206,23 @@ fn load_makes_old_files_private() {
     assert_eq!(mode(&file), 0o600);
     assert_eq!(mode(&bak), 0o600);
 }
+
+#[test]
+fn recents_are_ordered_deduplicated_and_capped() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = settings::load(dir.path());
+    assert!(s.recents.is_empty());
+    for i in 0..12 {
+        s.push_recent(&format!("/plans/{i}.dwg"));
+    }
+    assert_eq!(s.recents.len(), settings::MAX_RECENTS);
+    assert_eq!(s.recents[0], "/plans/11.dwg");
+    assert_eq!(s.recents[9], "/plans/2.dwg");
+    // Opening one again moves it to the top, once.
+    s.push_recent("/plans/5.dwg");
+    assert_eq!(s.recents[0], "/plans/5.dwg");
+    assert_eq!(s.recents.iter().filter(|p| *p == "/plans/5.dwg").count(), 1);
+    assert_eq!(s.recents.len(), settings::MAX_RECENTS);
+    settings::save(dir.path(), &s).unwrap();
+    assert_eq!(settings::load(dir.path()).recents, s.recents);
+}

@@ -1,0 +1,125 @@
+import { useState, type FormEvent, type KeyboardEvent } from "react";
+import type { NamedView } from "../api";
+import { useT } from "../i18n";
+import { useMenu } from "./useMenu";
+
+type Props = {
+  /** Reads the drawing's named views, each time the menu opens. */
+  load(): Promise<NamedView[]>;
+  onGo(view: NamedView): void;
+  /** Saves the view on screen as `name`. */
+  onSave(name: string): Promise<void>;
+  onDelete(name: string): Promise<void>;
+  onKey?(e: KeyboardEvent): void;
+};
+
+/** The View tab's Views drop-down: the drawing's named views (choose one to show it, × to delete
+ *  it), and Save current view… with a name. */
+export function ViewsMenu({ load, onGo, onSave, onDelete, onKey }: Props) {
+  const t = useT();
+  const menu = useMenu<HTMLDivElement>();
+  const [list, setList] = useState<NamedView[]>([]);
+  const [naming, setNaming] = useState(false);
+  const [name, setName] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  async function toggle() {
+    if (menu.open) {
+      menu.setOpen(false);
+      return;
+    }
+    setNaming(false);
+    setError(null);
+    setList(await load().catch(() => []));
+    menu.setOpen(true);
+  }
+
+  async function save(e: FormEvent) {
+    e.preventDefault();
+    if (!name.trim()) return;
+    try {
+      await onSave(name.trim());
+      setName("");
+      menu.setOpen(false);
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  async function remove(view: string) {
+    try {
+      await onDelete(view);
+      setList(await load());
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  return (
+    <div className="split" ref={menu.ref}>
+      <button
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={menu.open}
+        onClick={toggle}
+        onKeyDown={onKey}
+        onKeyUp={onKey}
+      >
+        {t("views")} ▾
+      </button>
+      {menu.open && (
+        <div className="menu" role="menu" aria-label={t("views")}>
+          {list.length === 0 && <div className="menu-note">{t("views.none")}</div>}
+          {list.map((v) => (
+            <div key={v.name} className="menu-row">
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  menu.setOpen(false);
+                  onGo(v);
+                }}
+              >
+                {v.name}
+              </button>
+              <button
+                type="button"
+                className="close"
+                aria-label={t("views.deleteNamed", { name: v.name })}
+                title={t("views.delete")}
+                onClick={() => remove(v.name)}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+          <hr />
+          {naming ? (
+            <form className="menu-form" onSubmit={save}>
+              <label>
+                {t("views.name")}
+                <input
+                  autoFocus
+                  value={name}
+                  onChange={(e) => setName(e.currentTarget.value)}
+                />
+              </label>
+              <button type="submit" disabled={!name.trim()}>
+                {t("save")}
+              </button>
+            </form>
+          ) : (
+            <button type="button" role="menuitem" onClick={() => setNaming(true)}>
+              {t("views.save")}
+            </button>
+          )}
+          {error && (
+            <div className="menu-note error-text" role="alert">
+              {error}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}

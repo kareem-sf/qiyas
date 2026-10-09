@@ -7,6 +7,7 @@ mod pdf;
 pub mod secrets;
 pub mod settings;
 mod state;
+mod tabs;
 
 use tauri::Manager;
 
@@ -26,6 +27,12 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::open_drawing,
+            commands::recents,
+            commands::clear_recents,
+            commands::views,
+            tabs::tabs,
+            tabs::activate_tab,
+            tabs::close_tab,
             commands::drawing_info,
             commands::set_sheet,
             commands::set_layer_hidden,

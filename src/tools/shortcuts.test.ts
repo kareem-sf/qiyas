@@ -52,3 +52,14 @@ test("F3, F7, F8 and F10 switch snaps, grid, ortho and polar", () => {
   expect(shortcutFor(keys("F8", { ctrlKey: true }))).toBeNull();
   expect(shortcutFor(keys("F9"))).toBeNull();
 });
+
+test("Ctrl+Tab, Ctrl+Shift+Tab and Ctrl+W go through and close the file tabs", () => {
+  expect(shortcutFor(keys("Tab", { ctrlKey: true }))).toBe("nextTab");
+  expect(shortcutFor(keys("Tab", { ctrlKey: true, shiftKey: true }))).toBe("prevTab");
+  expect(shortcutFor(keys("KeyW", { ctrlKey: true }))).toBe("closeTab");
+  // By the physical key, so an Arabic layout closes too.
+  expect(shortcutFor(keys("KeyW", { key: "ص", ctrlKey: true }))).toBe("closeTab");
+  expect(shortcutFor(keys("Tab"))).toBeNull();
+  expect(shortcutFor(keys("KeyW"))).toBeNull();
+  expect(shortcutFor(keys("KeyW", { ctrlKey: true, shiftKey: true }))).toBeNull();
+});

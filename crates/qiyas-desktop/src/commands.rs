@@ -9,8 +9,8 @@ use std::sync::{MutexGuard, PoisonError};
 use qiyas_ai::prompt::Lang;
 use qiyas_ai::{Agent, AgentEvent};
 use qiyas_core::{
-    Boq, Command, Conflict, CoreError, Drafting, DrawingInfo, EntityInfo, Measurement, Outcome,
-    Picked, Session, Snap, Source, Total,
+    Boq, Command, Conflict, CoreError, Drafting, DrawingInfo, EntityInfo, Measurement, NamedView,
+    Outcome, Picked, Session, Snap, Source, Total,
 };
 use serde::Serialize;
 use tauri::ipc::Response;
@@ -22,6 +22,7 @@ use crate::mcp::{self, McpStatus};
 use crate::secrets;
 use crate::settings::{self, Settings};
 use crate::state::AppState;
+use crate::tabs;
 
 /// Runs `f` on the open session, or fails with "No drawing is open".
 pub(crate) fn with_session<R>(
@@ -34,20 +35,99 @@ pub(crate) fn with_session<R>(
     f(session).map_err(|e| e.to_string())
 }
 
-/// Opens a drawing; the assistant starts a new conversation about it.
+/// Opens a drawing in a new tab, or shows its tab when the file is open already; the assistant
+/// starts a new conversation about it. The file goes first in the recent list.
 #[tauri::command]
 pub async fn open_drawing<R: Runtime>(
     path: String,
     app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> Result<DrawingInfo, String> {
+    if let Some(id) = tabs::find_path(&state, Path::new(&path)) {
+        tabs::activate(&app, &state, id)?;
+        remember_recent(&state, &path);
+        return with_session(&state, |s| Ok(s.info()));
+    }
     // Read the file before taking the lock, so a slow open doesn't block other commands.
     let session = Session::open(Path::new(&path)).map_err(|e| e.to_string())?;
     let info = session.info();
     // Stop a running turn first, so it can't run another tool on the new drawing.
     new_conversation(&app, &state);
-    *state.session.lock().unwrap_or_else(PoisonError::into_inner) = Some(session);
+    tabs::add(&state, session);
+    remember_recent(&state, &path);
     Ok(info)
+}
+
+/// Puts `path` first in the recent list and writes the settings; a failed write is only logged.
+fn remember_recent(state: &AppState, path: &str) {
+    let mut settings = state
+        .settings
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    settings.push_recent(path);
+    if let Err(e) = settings::save(&state.config_dir, &settings) {
+        eprintln!("The recent drawings could not be saved: {e}");
+    }
+}
+
+/// One drawing of the recent list.
+#[derive(Serialize)]
+pub struct Recent {
+    path: String,
+    /// The file name, and the folder it is in.
+    name: String,
+    folder: String,
+    /// The file is not there any more.
+    missing: bool,
+}
+
+/// The drawings opened or saved lately, most recent first.
+#[tauri::command]
+pub async fn recents(state: State<'_, AppState>) -> Result<Vec<Recent>, String> {
+    let paths = state
+        .settings
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .recents
+        .clone();
+    Ok(paths
+        .into_iter()
+        .map(|path| {
+            let p = Path::new(&path);
+            Recent {
+                name: p
+                    .file_name()
+                    .map_or_else(|| path.clone(), |n| n.to_string_lossy().into_owned()),
+                folder: p
+                    .parent()
+                    .map(|f| f.display().to_string())
+                    .unwrap_or_default(),
+                missing: std::fs::metadata(p).is_err(),
+                path,
+            }
+        })
+        .collect())
+}
+
+/// Empties the recent list.
+#[tauri::command]
+pub async fn clear_recents(state: State<'_, AppState>) -> Result<(), String> {
+    let mut settings = state
+        .settings
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    let mut next = settings.clone();
+    next.recents.clear();
+    settings::save(&state.config_dir, &next)
+        .map_err(|e| format!("The settings could not be saved: {e}"))?;
+    *settings = next;
+    Ok(())
+}
+
+/// The drawing's named views of model space.
+#[tauri::command]
+pub async fn views(state: State<'_, AppState>) -> Result<Vec<NamedView>, String> {
+    with_session(&state, |s| Ok(s.views()))
 }
 
 #[tauri::command]
@@ -234,10 +314,12 @@ pub async fn save_drawing(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 /// Saves the drawing to `path` (.dwg or .dxf), measurements embedded, with its project file next
-/// to it; the session then works on the new file.
+/// to it; the session then works on the new file, which goes first in the recent list.
 #[tauri::command]
 pub async fn save_drawing_as(path: String, state: State<'_, AppState>) -> Result<(), String> {
-    with_session(&state, |s| s.save_as(Path::new(&path)))
+    with_session(&state, |s| s.save_as(Path::new(&path)))?;
+    remember_recent(&state, &path);
+    Ok(())
 }
 
 /// Writes the take-off and its totals to an Excel workbook at `path`.
@@ -333,10 +415,11 @@ pub async fn aliases(state: State<'_, AppState>) -> Result<BTreeMap<String, Stri
 
 /// Checks and keeps new settings: written to disk first, then cached. Another provider, address
 /// or model starts a new assistant conversation; MCP turned on or off, or another port or token,
-/// restarts the MCP server.
+/// restarts the MCP server. The recent list stays as the app has it: the dialog's copy may be
+/// older.
 #[tauri::command]
 pub async fn set_settings<R: Runtime>(
-    settings: Settings,
+    mut settings: Settings,
     app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
@@ -346,6 +429,7 @@ pub async fn set_settings<R: Runtime>(
             .settings
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
+        settings.recents = cached.recents.clone();
         settings::save(&state.config_dir, &settings)
             .map_err(|e| format!("The settings could not be saved: {e}"))?;
         let changed = ai::answerer_changed(&cached, &settings);
@@ -429,7 +513,7 @@ fn ai_run(state: &AppState) -> MutexGuard<'_, AiRun> {
 
 /// Forgets the assistant's conversation (cancelling a running turn) and tells the window, which
 /// clears its transcript on `ai:cleared`.
-fn new_conversation<R: Runtime>(app: &AppHandle<R>, state: &AppState) {
+pub(crate) fn new_conversation<R: Runtime>(app: &AppHandle<R>, state: &AppState) {
     ai_run(state).new_conversation();
     let _ = app.emit("ai:cleared", ());
 }
@@ -682,6 +766,15 @@ mod tests {
             let app = mock_builder()
                 .invoke_handler(tauri::generate_handler![
                     open_drawing,
+                    drawing_info,
+                    recents,
+                    clear_recents,
+                    views,
+                    save_drawing,
+                    save_drawing_as,
+                    crate::tabs::tabs,
+                    crate::tabs::activate_tab,
+                    crate::tabs::close_tab,
                     takeoff,
                     run_command,
                     undo,
@@ -1187,6 +1280,169 @@ mod tests {
             assert_eq!(ipc.call("undo", json!({})), Ok(json!(true)));
         }
         assert!(qiyas_render_batch(&ipc.bytes("render_batch", json!({}))).is_empty());
+    }
+
+    #[test]
+    fn two_sessions_have_independent_takeoffs() {
+        let ipc = Ipc::open();
+        let first = ipc.call("drawing_info", json!({})).unwrap()["path"].clone();
+        let second = qiyas_core::fixtures::write_sample(ipc._dir.path(), "dwg");
+        let info = ipc.call("open_drawing", json!({ "path": second })).unwrap();
+        assert_eq!(info["path"], json!(second));
+        assert_eq!(ipc.next().0, "ai:cleared");
+        let tabs = ipc.call("tabs", json!({})).unwrap();
+        let list = tabs["tabs"].as_array().unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0]["path"], first);
+        assert_eq!(list[1]["title"], "sample.dwg");
+        assert_eq!(tabs["active"], list[1]["id"]);
+        let (id1, id2) = (list[0]["id"].clone(), list[1]["id"].clone());
+
+        // Measure on the second drawing only.
+        let cmd = json!({ "type": "measure_distance", "points": [[0.0, 0.0], [3.0, 0.0]] });
+        ipc.call("run_command", json!({ "cmd": cmd })).unwrap();
+        let count = |ipc: &Ipc| {
+            ipc.call("takeoff", json!({}))
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len()
+        };
+        assert_eq!(count(&ipc), 1);
+
+        let info = ipc.call("activate_tab", json!({ "id": id1 })).unwrap();
+        assert_eq!(info["path"], first);
+        assert_eq!(
+            ipc.next().0,
+            "ai:cleared",
+            "another drawing, a new conversation"
+        );
+        assert_eq!(ipc.call("drawing_info", json!({})).unwrap()["path"], first);
+        assert_eq!(count(&ipc), 0, "the first drawing has its own take-off");
+        assert_eq!(ipc.call("tabs", json!({})).unwrap()["active"], id1);
+
+        ipc.call("activate_tab", json!({ "id": id2 })).unwrap();
+        assert_eq!(count(&ipc), 1);
+        assert!(ipc.call("activate_tab", json!({ "id": 99 })).is_err());
+    }
+
+    #[test]
+    fn the_same_file_twice_shows_its_tab() {
+        let ipc = Ipc::open();
+        let first = ipc.call("drawing_info", json!({})).unwrap()["path"].clone();
+        let second = qiyas_core::fixtures::write_sample(ipc._dir.path(), "dwg");
+        ipc.call("open_drawing", json!({ "path": second })).unwrap();
+        let info = ipc.call("open_drawing", json!({ "path": first })).unwrap();
+        assert_eq!(info["path"], first);
+        let tabs = ipc.call("tabs", json!({})).unwrap();
+        assert_eq!(
+            tabs["tabs"].as_array().unwrap().len(),
+            2,
+            "not opened twice"
+        );
+        assert_eq!(tabs["active"], tabs["tabs"][0]["id"]);
+    }
+
+    #[test]
+    fn a_dirty_tab_closes_only_when_forced() {
+        let ipc = Ipc::open();
+        let second = qiyas_core::fixtures::write_sample(ipc._dir.path(), "dwg");
+        ipc.call("open_drawing", json!({ "path": second })).unwrap();
+        let tabs = ipc.call("tabs", json!({})).unwrap();
+        let (id1, id2) = (tabs["tabs"][0]["id"].clone(), tabs["tabs"][1]["id"].clone());
+        let cmd =
+            json!({ "type": "save_view", "name": "Hall", "bounds": [[0.0, 0.0], [4.0, 3.0]] });
+        ipc.call("run_command", json!({ "cmd": cmd })).unwrap();
+        assert_eq!(
+            ipc.call("views", json!({})).unwrap(),
+            json!([{ "name": "Hall", "bounds": [[0.0, 0.0], [4.0, 3.0]] }])
+        );
+        assert_eq!(
+            ipc.call("tabs", json!({})).unwrap()["tabs"][1]["dirty"],
+            true
+        );
+
+        // Parked or on screen, a dirty tab needs force.
+        ipc.call("activate_tab", json!({ "id": id1 })).unwrap();
+        assert_eq!(
+            ipc.call("close_tab", json!({ "id": id2 })),
+            Err(json!(crate::tabs::UNSAVED))
+        );
+        ipc.call("activate_tab", json!({ "id": id2 })).unwrap();
+        assert_eq!(
+            ipc.call("close_tab", json!({ "id": id2, "force": false })),
+            Err(json!(crate::tabs::UNSAVED))
+        );
+        let left = ipc
+            .call("close_tab", json!({ "id": id2, "force": true }))
+            .unwrap();
+        assert_eq!(left["tabs"].as_array().unwrap().len(), 1);
+        assert_eq!(left["active"], id1, "the tab left is shown");
+        assert_eq!(ipc.call("takeoff", json!({})), Ok(json!([])));
+
+        // A clean tab closes at once; then no drawing is open.
+        let left = ipc.call("close_tab", json!({ "id": id1 })).unwrap();
+        assert_eq!(left, json!({ "tabs": [], "active": null }));
+        assert_eq!(
+            ipc.call("drawing_info", json!({})),
+            Err(json!("No drawing is open"))
+        );
+    }
+
+    #[test]
+    fn opening_and_saving_fill_the_recent_list() {
+        let ipc = Ipc::open();
+        let first = ipc.call("drawing_info", json!({})).unwrap()["path"].clone();
+        let second = qiyas_core::fixtures::write_sample(ipc._dir.path(), "dwg");
+        ipc.call("open_drawing", json!({ "path": second })).unwrap();
+        ipc.call("open_drawing", json!({ "path": first })).unwrap();
+        let list = ipc.call("recents", json!({})).unwrap();
+        let paths: Vec<&Value> = list
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| &r["path"])
+            .collect();
+        assert_eq!(
+            paths,
+            vec![&first, &json!(second)],
+            "most recent first, once each"
+        );
+        assert_eq!(list[0]["name"], "sample.dxf");
+        assert_eq!(list[0]["folder"], json!(ipc._dir.path()));
+        assert_eq!(list[0]["missing"], false);
+
+        // The Settings dialog's older copy never drops them.
+        let mut settings = ipc.call("get_settings", json!({})).unwrap();
+        settings["recents"] = json!([]);
+        ipc.call("set_settings", json!({ "settings": settings }))
+            .unwrap();
+        assert_eq!(
+            ipc.call("recents", json!({}))
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+
+        let copy = ipc._dir.path().join("copy.dxf");
+        ipc.call("save_drawing_as", json!({ "path": copy }))
+            .unwrap();
+        assert_eq!(
+            ipc.call("recents", json!({})).unwrap()[0]["path"],
+            json!(copy)
+        );
+        let tabs = ipc.call("tabs", json!({})).unwrap();
+        assert_eq!(
+            tabs["tabs"][0]["title"], "copy.dxf",
+            "the tab follows Save As"
+        );
+
+        std::fs::remove_file(&second).unwrap();
+        assert_eq!(ipc.call("recents", json!({})).unwrap()[2]["missing"], true);
+        ipc.call("clear_recents", json!({})).unwrap();
+        assert_eq!(ipc.call("recents", json!({})), Ok(json!([])));
     }
 
     /// The image table of a batch (`Batch::to_bytes`, kind 11): (id, version below 2^53).

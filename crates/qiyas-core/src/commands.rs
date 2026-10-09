@@ -204,6 +204,17 @@ pub enum Command {
         filter: EntityFilter,
         fields: Vec<Field>,
     },
+    /// Writes the named view `name` (replacing one of that name) showing `bounds`,
+    /// `[[min_x, min_y], [max_x, max_y]]` in drawing coordinates, to the drawing's view table.
+    /// Model sheet only.
+    SaveView {
+        name: String,
+        bounds: [[f64; 2]; 2],
+    },
+    /// Removes the named view `name`; `Outcome::Nothing` when there is none.
+    DeleteView {
+        name: String,
+    },
 }
 
 /// The part of the session a command changes, kept whole in its undo step.
@@ -236,7 +247,9 @@ impl Command {
             | Command::AttachImage { .. }
             | Command::SetImageDisplay { .. }
             | Command::DivideAlong { .. }
-            | Command::MeasureAlong { .. } => Some(Part::Document),
+            | Command::MeasureAlong { .. }
+            | Command::SaveView { .. }
+            | Command::DeleteView { .. } => Some(Part::Document),
             _ => Some(Part::Takeoff),
         }
     }
@@ -512,6 +525,17 @@ impl Session {
             Command::ExtractData { filter, fields } => {
                 let (columns, rows) = self.extract(&filter, &fields)?;
                 return Ok(Outcome::Table { columns, rows });
+            }
+            Command::SaveView { name, bounds } => {
+                self.save_view(&name, bounds)?;
+                return Ok(Outcome::Changed);
+            }
+            Command::DeleteView { name } => {
+                return Ok(if self.delete_view(&name) {
+                    Outcome::Changed
+                } else {
+                    Outcome::Nothing
+                });
             }
         };
         measurement.source = source.name().to_string();

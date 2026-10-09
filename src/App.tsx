@@ -3,8 +3,15 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ask, message as messageDialog, open, save } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  activateTab,
   aiUndo,
   aliases as readAliases,
+  clearRecents,
+  closeTab,
+  EMPTY_MODEL,
+  recents as readRecents,
+  tabs as readTabs,
+  views as readViews,
   attachImage,
   attachPdf,
   calibrate,
@@ -59,6 +66,8 @@ import {
   type Field,
   type ImageDisplay,
   type Measurement,
+  type NamedView,
+  type TabInfo,
   type Total,
 } from "./api";
 import { AssistantPanel } from "./ai/AssistantPanel";
@@ -84,6 +93,7 @@ import {
 import { CommandLine } from "./shell/CommandLine";
 import { DraftingSettings } from "./shell/DraftingSettings";
 import { ExtractDialog } from "./shell/ExtractDialog";
+import { cycleTab, FileTabs } from "./shell/FileTabs";
 import { AlongPrompt, InfoCard, type Info } from "./shell/InfoCard";
 import { LayersPanel } from "./shell/LayersPanel";
 import { PropertiesPanel } from "./shell/PropertiesPanel";
@@ -141,6 +151,9 @@ const typing = (e: KeyboardEvent) =>
   e.target instanceof HTMLElement &&
   (e.target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName));
 
+/** The drawing's reading problems: all but the empty-model warning, which is said on its own. */
+const readProblems = (info: DrawingInfo) => info.problems.filter((p) => p !== EMPTY_MODEL);
+
 /** The box around the measurements' bounds on the drawing, or null when none has bounds. */
 function unionBounds(ms: Measurement[], batch: Batch | null): Bounds | null {
   let box: Bounds | null = null;
@@ -173,6 +186,9 @@ export default function App() {
   const { lang, setLang } = useLanguage();
   const [theme, setTheme] = useState<Theme>(initialTheme);
   const [info, setInfo] = useState<DrawingInfo | null>(null);
+  /** The open drawings' file tabs, and the one on screen. */
+  const [fileTabs, setFileTabs] = useState<TabInfo[]>([]);
+  const [activeTab, setActiveTab] = useState<number | null>(null);
   const [batch, setBatch] = useState<Batch | null>(null);
   /** The batch in hand and the core's version of it (`batchVersion`), so a redraw that changed
    *  nothing on the sheet doesn't fetch the whole batch again. */
@@ -398,6 +414,17 @@ export default function App() {
     if (changed) await autosave();
   }
 
+  /** Reads the file tabs again (titles, unsaved dots, the active one). */
+  async function refreshTabs() {
+    try {
+      const next = await readTabs();
+      setFileTabs(next.tabs);
+      setActiveTab(next.active);
+    } catch {
+      // The tabs keep what they showed; the next refresh tries again.
+    }
+  }
+
   /** Fetches the atlas pages `next` needs that the window doesn't hold yet. */
   async function syncAtlas(next: Batch) {
     if (next.atlasVersion === 0 || next.atlasVersion === atlasVersionRef.current) return;
@@ -411,7 +438,8 @@ export default function App() {
    *  were at the last draw, the batch in hand stays and only the fit (if asked) happens. A fit draws
    *  the glyphs for the core's own guess at the zoom; otherwise for the zoom on screen. */
   async function redraw(fit = false) {
-    const version = await batchVersion();
+    // A drawing change, its undo or a save may have changed the tab's unsaved dot.
+    const [version] = await Promise.all([batchVersion(), refreshTabs()]);
     if (version === batchVersionRef.current && batchHeld.current) {
       // Nothing to send; the effect below still fits the view once the window has rendered.
       if (fit) {
@@ -612,8 +640,18 @@ export default function App() {
       save: saveDrawing,
     });
   }
-  const leaveRef = useRef(leaveOpenDrawing);
-  leaveRef.current = leaveOpenDrawing;
+  /** Before the window closes: asks about each open drawing with unsaved changes in turn, showing
+   *  it first. False when the user cancels one. */
+  async function leaveAllDrawings(): Promise<boolean> {
+    const { tabs: open } = await readTabs();
+    for (const tab of open.filter((f) => f.dirty)) {
+      if (!(await switchTab(tab.id))) return false;
+      if (!(await leaveOpenDrawing())) return false;
+    }
+    return true;
+  }
+  const leaveRef = useRef(leaveAllDrawings);
+  leaveRef.current = leaveAllDrawings;
 
   // Closing the window with unsaved drawing changes asks first; a failed save keeps it open.
   useEffect(() => {
@@ -636,46 +674,107 @@ export default function App() {
     };
   }, []);
 
+  /** Forgets everything the window holds about the drawing on screen: the batch, the glyph atlas
+   *  and the pictures (all per drawing), the selection, the tool's points, prompts and dialogs. */
+  function resetDrawingView() {
+    batchVersionRef.current = null;
+    batchHeld.current = null;
+    atlasVersionRef.current = null;
+    atlasHeld.current = new Map();
+    setAtlas([]);
+    picturesHeld.current = new Map();
+    setPictures(new Map());
+    autosaveOff.current = false;
+    setSelectedId(null);
+    setBoqCode(null);
+    setAiHighlight([]);
+    setConflictIds([]);
+    setCompared(false);
+    setInfoCard(null);
+    setPending(null);
+    setPickedInsert(null);
+    setCalibration(null);
+    setAttachOpen(false);
+    setAttachImageOpen(false);
+    setXrefsOpen(false);
+    setExtractOpen(false);
+    preset.current = null;
+    measure.escape();
+    lastPoint.current = null;
+  }
+
+  /** Shows the drawing the core has on screen now (just opened, or its tab chosen) as its session
+   *  keeps it: its sheet, hidden layers, take-off, BOQ and conflicts. */
+  async function showDrawing(next: DrawingInfo) {
+    resetDrawingView();
+    setArabicReversed(next.arabic_reversed);
+    setDraftingState(await getDrafting());
+    setInfo(next);
+    setSheetBlock(next.sheet);
+    setHidden(new Set(next.hidden_layers));
+    await refreshTakeoffAndBoq();
+    await redraw(true);
+  }
+
+  /** After the last tab closed: an empty window. */
+  function showNoDrawing() {
+    resetDrawingView();
+    setBatch(null);
+    setInfo(null);
+    setDraftingState(null);
+    setSheetBlock("");
+    setHidden(new Set());
+    setItems([]);
+    setItemTotals([]);
+    setBill(null);
+    setConflicts([]);
+  }
+
+  /** Opens the drawing at `path` in a new tab (or shows its tab when it is open already). */
+  async function openPath(path: string) {
+    setOpening(true);
+    await run(async () => {
+      await showDrawing(await openDrawing(path));
+    });
+    setOpening(false);
+  }
+
   async function openFile() {
+    const path = await open({ filters: [{ name: "Drawings", extensions: ["dwg", "dxf"] }] });
+    if (typeof path !== "string") return;
+    await openPath(path);
+  }
+
+  /** Shows the drawing of tab `id`; false when that failed (the error shows). */
+  async function switchTab(id: number): Promise<boolean> {
+    let ok = false;
+    await run(async () => {
+      await showDrawing(await activateTab(id));
+      ok = true;
+    });
+    return ok;
+  }
+
+  /** Closes tab `id`. A drawing with unsaved changes is shown first and asks "Save changes to the
+   *  drawing?"; Cancel keeps it open. */
+  async function closeFileTab(id: number) {
+    const tab = fileTabs.find((f) => f.id === id);
+    if (!tab) return;
     try {
-      if (!(await leaveOpenDrawing())) return;
+      if (tab.dirty && (!(await switchTab(id)) || !(await leaveOpenDrawing()))) return;
     } catch (e) {
       setError(t("save.failed", { error: String(e) }));
       return;
     }
-    const path = await open({ filters: [{ name: "Drawings", extensions: ["dwg", "dxf"] }] });
-    if (typeof path !== "string") return;
-    setOpening(true);
     await run(async () => {
-      const next = await openDrawing(path);
-      batchVersionRef.current = null;
-      batchHeld.current = null;
-      // A new drawing has a new atlas.
-      atlasVersionRef.current = null;
-      atlasHeld.current = new Map();
-      setAtlas([]);
-      // And no underlay pictures yet.
-      picturesHeld.current = new Map();
-      setPictures(new Map());
-      setArabicReversed(next.arabic_reversed);
-      setDraftingState(await getDrafting());
-      autosaveOff.current = false;
-      setInfo(next);
-      // The core opens a drawing on its first sheet.
-      setSheetBlock(next.sheets[0]?.block ?? "");
-      setHidden(new Set());
-      setSelectedId(null);
-      setBoqCode(null);
-      setAiHighlight([]);
-      setConflictIds([]);
-      setCompared(false);
-      setInfoCard(null);
-      measure.escape();
-      lastPoint.current = null;
-      await refreshTakeoffAndBoq();
-      await redraw(true);
+      // Shown before the close when it had unsaved changes.
+      const shown = tab.dirty ? id : activeTab;
+      const left = await closeTab(id, tab.dirty);
+      setFileTabs(left.tabs);
+      setActiveTab(left.active);
+      if (left.active === null) showNoDrawing();
+      else if (left.active !== shown) await showDrawing(await drawingInfo());
     });
-    setOpening(false);
   }
 
   /** Writes the drawing with `write`, then shows its new layers and entities. */
@@ -703,13 +802,28 @@ export default function App() {
   async function saveFile() {
     if (!info) return;
     if (
-      // An xref's problems are not the drawing's own: saving never touches the xref.
-      info.problems.length > info.xrefs.reduce((n, x) => n + x.problems.length, 0) &&
+      // An xref's problems are not the drawing's own: saving never touches the xref. Nor is an
+      // empty model something the reader lost.
+      readProblems(info).length > info.xrefs.reduce((n, x) => n + x.problems.length, 0) &&
       !(await ask(t("save.confirmRecovered"), { title: t("appName"), kind: "warning" }))
     ) {
       return;
     }
     await saveWith(saveDrawing);
+  }
+
+  /** Saves the view on screen as the named view `name` (a drawing change). Errors go to the menu. */
+  async function saveView(name: string) {
+    const box = viewport.current?.visible();
+    if (!box) return;
+    await runCommand({ type: "save_view", name, bounds: box });
+    await redraw();
+  }
+
+  /** Removes the named view `name` (a drawing change). Errors go to the menu. */
+  async function deleteView(name: string) {
+    await runCommand({ type: "delete_view", name });
+    await redraw();
   }
 
   /** Shows the xrefs as the core now has them (their layers, problems and drawing) and saves the
@@ -1144,6 +1258,18 @@ export default function App() {
         setCommandLineOn(!commandLineOn);
         return;
       }
+      // The file tabs, from anywhere: Ctrl+Tab and Ctrl+W type nothing.
+      if (action === "nextTab" || action === "prevTab" || action === "closeTab") {
+        e.preventDefault();
+        if (e.repeat) return;
+        if (action === "closeTab") {
+          if (activeTab !== null) closeFileTab(activeTab);
+          return;
+        }
+        const next = cycleTab(fileTabs, activeTab, action === "nextTab" ? 1 : -1);
+        if (next !== null && next !== activeTab) switchTab(next);
+        return;
+      }
       if (typing(e)) return;
       if (action === "osnap" || action === "grid" || action === "ortho" || action === "polar") {
         // F7 and F10 also mean something to the web view; not here.
@@ -1340,6 +1466,9 @@ export default function App() {
 
   const openConflicts = openCount(conflicts);
   const fileName = info?.path.split(/[\\/]/).pop() ?? "";
+  // An empty model is said next to the file name, not counted as a reading problem.
+  const problems = info ? readProblems(info) : [];
+  const emptyModel = info?.problems.includes(EMPTY_MODEL) ?? false;
   const message = opening
     ? t("opening")
     : pending
@@ -1356,7 +1485,12 @@ export default function App() {
         ? t("pdf.drawing", { n: renderProgress })
         : measure.hint
       ? t(measure.hint, measure.hintArgs ?? undefined)
-      : (notice ?? (info ? fileName : t("noDrawing")));
+      : (notice ??
+        (info
+          ? emptyModel
+            ? `${fileName} — ${t("problem.emptyModel")}`
+            : fileName
+          : t("noDrawing")));
   // What the command line waits for, and its prompt.
   let expect: Expect = "command";
   let promptKey = "cmd.prompt.command";
@@ -1385,8 +1519,10 @@ export default function App() {
     last: measure.points[measure.points.length - 1] ?? lastPoint.current,
     aliases: commandAliases,
   };
-  const sheetName =
-    info?.sheets.find((s) => s.block.toLowerCase() === sheet.toLowerCase())?.name ?? sheet;
+  const sheetShown = info?.sheets.find((s) => s.block.toLowerCase() === sheet.toLowerCase());
+  const sheetName = sheetShown?.name ?? sheet;
+  // Named views are of model space.
+  const onModel = sheetShown?.is_model ?? false;
   // Unknown units are measured as millimetres; the status bar says so.
   const units = info ? t(`unit.${info.units === "unknown" ? "millimetres" : info.units}`) : "";
 
@@ -1397,6 +1533,9 @@ export default function App() {
           active={tool}
           onTool={chooseTool}
           onOpen={openFile}
+          loadRecents={readRecents}
+          onOpenRecent={openPath}
+          onClearRecents={clearRecents}
           onSave={info ? saveFile : undefined}
           onSaveAs={info ? saveFileAs : undefined}
           onExport={info ? exportFile : undefined}
@@ -1438,6 +1577,15 @@ export default function App() {
           onExtract={info ? () => setExtractOpen(true) : undefined}
           arabicReversed={arabicReversed}
           onArabicReversed={info ? chooseArabicReversed : undefined}
+          {...(onModel && {
+            loadViews: readViews,
+            onGoToView: (v: NamedView) => {
+              viewport.current?.fitTo(v.bounds);
+              focusDrawing();
+            },
+            onSaveView: saveView,
+            onDeleteView: deleteView,
+          })}
         />
         <div className="prefs">
           <div role="group" aria-label={t("language")}>
@@ -1583,6 +1731,12 @@ export default function App() {
           />
         </div>
         <main className="work">
+          <FileTabs
+            tabs={fileTabs}
+            active={activeTab}
+            onSelect={(id) => id !== activeTab && switchTab(id)}
+            onClose={closeFileTab}
+          />
           <div className="viewport" ref={viewportBox} tabIndex={0}>
             <Viewport
               ref={viewport}
@@ -1767,8 +1921,8 @@ export default function App() {
         onDraftingSettings={() => setDraftingOpen(true)}
         units={units}
         unitsWarning={info?.units === "unknown"}
-        problems={info?.problems.length ?? 0}
-        problemsText={info?.problems.join("\n") ?? ""}
+        problems={problems.length}
+        problemsText={problems.join("\n")}
         message={message}
       />
     </div>
