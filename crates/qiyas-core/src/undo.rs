@@ -245,6 +245,20 @@ pub(crate) struct Parts<'a> {
 }
 
 impl Step {
+    /// Undoing this step would put back the drawing's tables or one of the entities `handles`.
+    pub(crate) fn puts_back(&self, handles: &std::collections::HashSet<Handle>) -> bool {
+        let Step::Document(change) = self else {
+            return false;
+        };
+        change.tables.is_some()
+            || change.added.iter().any(|h| handles.contains(h))
+            || change
+                .removed
+                .iter()
+                .any(|e| handles.contains(&e.common().handle))
+            || change.replaced.iter().any(|(h, _)| handles.contains(h))
+    }
+
     /// Puts this step in place and returns what it replaced.
     fn swap(self, parts: Parts) -> Step {
         match self {
@@ -297,9 +311,24 @@ impl History {
         self.floor = floor;
     }
 
-    /// Forgets what could be redone.
-    pub(crate) fn clear_redo(&mut self) {
+    /// Every step made since the floor was set has been undone: the drawing is as it was then
+    /// (what could be redone changes nothing).
+    pub(crate) fn edit_was_quiet(&self) -> bool {
+        self.undo.len() == self.floor
+    }
+
+    /// Ends an edit in place: drops the steps above the floor and everything that could be
+    /// redone; if any step left below it `stale` (undoing it would no longer give back what it
+    /// took), drops them all. Clears the floor. How many undo steps went.
+    pub(crate) fn close_edit(&mut self, stale: impl Fn(&Step) -> bool) -> usize {
+        let before = self.undo.len();
+        self.undo.truncate(self.floor);
+        if self.undo.iter().any(|(step, _)| stale(step)) {
+            self.undo.clear();
+        }
         self.redo.clear();
+        self.floor = 0;
+        before - self.undo.len()
     }
 
     /// Who made the change that `undo` would take back.

@@ -592,6 +592,7 @@ fn inserting_a_block_with_attributes_takes_the_values_given_for_its_tags() {
         (a.tag.as_str(), a.prompt.as_str(), a.default.as_str()),
         ("MARK", "Door mark", "D1")
     );
+    assert!(!a.constant);
     assert!(
         session
             .drawing
@@ -880,7 +881,21 @@ fn editing_a_block_in_place_changes_all_three_doors() {
             copy: false,
         }))
         .unwrap();
-    session.run(Command::SaveBlockEdits).unwrap();
+    let closed = session.run(Command::SaveBlockEdits).unwrap();
+    // The close is no undo step: the edit's own steps go with it, and the outcome says so.
+    assert!(
+        matches!(
+            closed,
+            Outcome::BlockEditClosed {
+                saved: true,
+                dropped: 1,
+                unlinked: 0,
+                ..
+            }
+        ),
+        "{closed:?}"
+    );
+    assert!(!session.can_undo());
     assert_eq!(session.info().block_edit, None);
     assert_eq!(sheet_handles(&session), before);
     // The block's own leaf changed, under its own handle: every door draws it longer.
@@ -898,12 +913,349 @@ fn editing_a_block_in_place_changes_all_three_doors() {
     }
     // The plain door's leaf now reaches (2.8, 1).
     assert_eq!(session.pick([2.6, 1.0], 0.05).map(|p| p.top), Some(plain));
-    // The whole edit is one undo step (after the three measurements).
-    for _ in 0..4 {
+    // Undo takes back the measurements only; the saved block stays.
+    for _ in 0..3 {
         assert!(session.undo());
     }
+    assert!(!session.undo());
     let [_, b] = line_ends(&session, leaf);
-    assert!(near(b, [0.9, 0.0]));
+    assert!(near(b, [1.8, 0.0]));
+}
+
+#[test]
+fn an_edit_begun_on_a_full_undo_stack_saves_without_duplicates() {
+    let (_dir, mut session) = sample_session();
+    let ([plain, rotated, scaled], leaf) = doors(&session);
+    // 200 steps already: the oldest drop as the edit adds its own.
+    for i in 0..200 {
+        let x = f64::from(i);
+        session
+            .run(Command::MeasureDistance {
+                points: vec![[x, 50.0], [x + 1.0, 50.0]],
+            })
+            .unwrap();
+    }
+    let before = sheet_handles(&session);
+    let temps = added(
+        session
+            .run(Command::EditBlockInPlace {
+                target: top(rotated),
+            })
+            .unwrap(),
+    );
+    for _ in 0..3 {
+        session
+            .run(Command::Modify(ModifySpec::Move {
+                targets: vec![top(temps[0])],
+                delta: [0.0, 0.0],
+            }))
+            .unwrap();
+    }
+    session
+        .run(Command::Modify(ModifySpec::Scale {
+            targets: vec![top(temps[0])],
+            base: [5.0, 1.0],
+            factor: 2.0,
+            copy: false,
+        }))
+        .unwrap();
+    session.run(Command::SaveBlockEdits).unwrap();
+    assert_eq!(sheet_handles(&session), before);
+    assert_eq!(session.drawing.entities_in("DOOR").count(), 1);
+    for (door, scale) in [(plain, 1.0), (rotated, 1.0), (scaled, 2.0)] {
+        let m = measure(
+            &mut session,
+            Command::MeasureEntity {
+                handle: leaf,
+                chain: vec![door],
+            },
+        );
+        assert!((m.value - 1.8 * scale).abs() < 1e-9, "{}", m.value);
+    }
+    // The steps from before the edit that are left still undo.
+    let rows = session.takeoff.items.len();
+    assert!(session.undo());
+    assert_eq!(session.takeoff.items.len(), rows - 1);
+}
+
+#[test]
+fn discarding_drops_what_was_added_and_keeps_work_outside_the_block() {
+    let (_dir, mut session) = sample_session();
+    let ([_, rotated, _], leaf) = doors(&session);
+    let before = sheet_handles(&session);
+    let temps = added(
+        session
+            .run(Command::EditBlockInPlace {
+                target: top(rotated),
+            })
+            .unwrap(),
+    );
+    session
+        .run(Command::DeleteEntities {
+            targets: vec![top(temps[0])],
+        })
+        .unwrap();
+    draw(
+        &mut session,
+        DrawSpec::Line {
+            a: [0.0, 50.0],
+            b: [1.0, 50.0],
+        },
+    );
+    // Find and replace reaches the title, outside the block.
+    session
+        .run(Command::FindReplace {
+            find: "GROUND".to_string(),
+            replace: "FIRST".to_string(),
+            scope: qiyas_core::TextScope::Sheet,
+            match_case: true,
+            whole_word: false,
+        })
+        .unwrap();
+    let closed = session.run(Command::DiscardBlockEdits).unwrap();
+    assert!(
+        matches!(closed, Outcome::BlockEditClosed { saved: false, .. }),
+        "{closed:?}"
+    );
+    assert_eq!(sheet_handles(&session), before);
+    assert_eq!(session.drawing.entities_in("DOOR").count(), 1);
+    assert!(session.drawing.doc.get_entity(Handle::new(leaf)).is_some());
+    let title = session
+        .drawing
+        .entities_in("*Model_Space")
+        .find_map(|e| match e {
+            EntityType::Text(t) => Some(t.value.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(title, "FIRST FLOOR PLAN");
+}
+
+#[test]
+fn a_dimension_drawn_in_place_keeps_its_block_after_saving() {
+    let (_dir, mut session) = sample_session();
+    let ([plain, ..], _) = doors(&session);
+    session
+        .run(Command::EditBlockInPlace { target: top(plain) })
+        .unwrap();
+    let dim = added(
+        session
+            .run(Command::Dimension(qiyas_core::DimSpec::Linear {
+                p1: [1.0, 1.0],
+                p2: [1.9, 1.0],
+                line_point: [1.5, 1.5],
+                rotation: None,
+            }))
+            .unwrap(),
+    )[0];
+    let block = match session.drawing.doc.get_entity(Handle::new(dim)) {
+        Some(EntityType::Dimension(d)) => d.base().block_name.clone(),
+        other => panic!("{other:?}"),
+    };
+    session.run(Command::SaveBlockEdits).unwrap();
+    assert!(
+        session.drawing.doc.block_records.get(&block).is_some(),
+        "{block}"
+    );
+    let saved = session
+        .drawing
+        .entities_in("DOOR")
+        .find_map(|e| match e {
+            EntityType::Dimension(d) => Some(d.base().block_name.clone()),
+            _ => None,
+        })
+        .expect("the dimension went into the block");
+    assert_eq!(saved, block);
+}
+
+#[test]
+fn picking_while_editing_in_place_sees_only_the_block() {
+    let (_dir, mut session) = sample_session();
+    let ([_, rotated, _], _) = doors(&session);
+    let temps = added(
+        session
+            .run(Command::EditBlockInPlace {
+                target: top(rotated),
+            })
+            .unwrap(),
+    );
+    // The wall line along y 0 is locked: not picked.
+    assert_eq!(session.pick([7.0, 0.0], 0.05), None);
+    assert_eq!(
+        session.pick([5.0, 1.5], 0.05).map(|p| p.top),
+        Some(temps[0])
+    );
+    let window = session.pick_window([[-100.0, -100.0], [100.0, 100.0]], false);
+    assert_eq!(window.iter().map(|p| p.top).collect::<Vec<_>>(), temps);
+    let crossing = session.pick_window([[-100.0, -100.0], [100.0, 100.0]], true);
+    assert_eq!(crossing.iter().map(|p| p.top).collect::<Vec<_>>(), temps);
+}
+
+#[test]
+fn saving_reports_the_rows_that_lose_their_link() {
+    let (_dir, mut session) = sample_session();
+    let ([_, rotated, _], _) = doors(&session);
+    let temps = added(
+        session
+            .run(Command::EditBlockInPlace {
+                target: top(rotated),
+            })
+            .unwrap(),
+    );
+    // Take-off works on the copies while editing; the copy goes when the edit closes.
+    measure(
+        &mut session,
+        Command::MeasureEntity {
+            handle: temps[0],
+            chain: Vec::new(),
+        },
+    );
+    let closed = session.run(Command::SaveBlockEdits).unwrap();
+    assert!(
+        matches!(closed, Outcome::BlockEditClosed { unlinked: 1, .. }),
+        "{closed:?}"
+    );
+}
+
+#[test]
+fn only_block_making_commands_wait_for_the_edit() {
+    let (dir, mut session) = sample_session();
+    let ([plain, rotated, _], _) = doors(&session);
+    let line = draw(
+        &mut session,
+        DrawSpec::Line {
+            a: [0.0, 60.0],
+            b: [1.0, 60.0],
+        },
+    );
+    session
+        .run(Command::EditBlockInPlace {
+            target: top(rotated),
+        })
+        .unwrap();
+    for cmd in [
+        Command::EditBlockInPlace { target: top(plain) },
+        Command::CreateBlock {
+            name: "NEW".to_string(),
+            base: [0.0, 0.0],
+            targets: vec![top(line)],
+            convert_to_insert: false,
+        },
+        Command::WriteBlock {
+            name: "DOOR".to_string(),
+            path: dir.path().join("d.dwg").display().to_string(),
+        },
+        Command::InsertBlock {
+            name: "door".to_string(),
+            at: [0.0, 0.0],
+            scale: 1.0,
+            rotation: 0.0,
+            attribute_values: BTreeMap::new(),
+            from_path: None,
+        },
+    ] {
+        assert!(matches!(
+            session.run(cmd),
+            Err(CoreError::InvalidCommand(_))
+        ));
+    }
+    // The take-off and the sheets are not held up.
+    session
+        .run(Command::MeasureDistance {
+            points: vec![[0.0, 0.0], [1.0, 0.0]],
+        })
+        .unwrap();
+    session
+        .run(Command::SetSheet {
+            block: "*Model_Space".to_string(),
+        })
+        .unwrap();
+}
+
+#[test]
+fn blocks_attribute_definitions_and_values_survive_save_and_reopen() {
+    for ext in ["dwg", "dxf"] {
+        let (dir, mut session) = sample_session();
+        tagged_block(&mut session);
+        let wall = draw(
+            &mut session,
+            DrawSpec::Line {
+                a: [5.0, 5.0],
+                b: [6.0, 5.0],
+            },
+        );
+        session
+            .run(Command::CreateBlock {
+                name: "W".to_string(),
+                base: [5.0, 5.0],
+                targets: vec![top(wall)],
+                convert_to_insert: true,
+            })
+            .unwrap();
+        session
+            .run(Command::InsertBlock {
+                name: "TAGGED".to_string(),
+                at: [40.0, 40.0],
+                scale: 1.0,
+                rotation: 0.0,
+                attribute_values: values(&[("MARK", "D7")]),
+                from_path: None,
+            })
+            .unwrap();
+        let out = dir.path().join(format!("out.{ext}"));
+        session.save_as(&out).unwrap();
+        let back = Session::open(&out).unwrap();
+        let blocks = back.blocks();
+        let w = blocks.iter().find(|b| b.name == "W").expect(ext);
+        assert!(w.attdefs.is_empty());
+        assert_eq!(back.drawing.entities_in("W").count(), 1, "{ext}");
+        let tagged = blocks.iter().find(|b| b.name == "TAGGED").expect(ext);
+        let a = &tagged.attdefs[0];
+        let read = (a.tag.as_str(), a.prompt.as_str(), a.default.as_str());
+        assert_eq!(read, ("MARK", "Door mark", "D1"), "{ext}");
+        let insert = back
+            .drawing
+            .entities_in("*Model_Space")
+            .find_map(|e| match e {
+                EntityType::Insert(i) if i.block_name == "TAGGED" => Some(i.clone()),
+                _ => None,
+            })
+            .expect(ext);
+        let attributes: Vec<(&str, &str)> = insert
+            .attributes
+            .iter()
+            .map(|a| (a.tag.as_str(), a.value.as_str()))
+            .collect();
+        assert_eq!(attributes, [("MARK", "D7")], "{ext}");
+        assert!(back
+            .drawing
+            .entities_in("*Model_Space")
+            .any(|e| matches!(e, EntityType::Insert(i) if i.block_name == "W")));
+    }
+}
+
+#[test]
+fn a_block_is_never_written_over_the_drawing_or_an_existing_file() {
+    let (dir, mut session) = sample_session();
+    let copy = dir.path().join("sample.dwg");
+    session.save_as(&copy).unwrap();
+    // The drawing itself, by the command and by the Save dialog's path.
+    let refused = session.run(Command::WriteBlock {
+        name: "DOOR".to_string(),
+        path: copy.display().to_string(),
+    });
+    assert!(
+        matches!(refused, Err(CoreError::InvalidCommand(_))),
+        "{refused:?}"
+    );
+    assert!(session.write_block("DOOR", &copy).is_err());
+    // Any file there already, through the command.
+    std::fs::copy(&copy, dir.path().join("other.dwg")).unwrap();
+    let refused = session.run(Command::WriteBlock {
+        name: "DOOR".to_string(),
+        path: "other.dwg".to_string(),
+    });
+    assert!(matches!(refused, Err(CoreError::InvalidCommand(_))));
 }
 
 #[test]
@@ -970,7 +1322,8 @@ fn a_block_redefined_from_another_drawing_changes_every_reference() {
     let (dir, mut session) = sample_session();
     let other = other_drawing(dir.path());
     let blocks = qiyas_core::drawing_blocks(&other).unwrap();
-    assert_eq!(blocks, ["DOOR", "WIN"]);
+    let names: Vec<&str> = blocks.iter().map(|b| b.name.as_str()).collect();
+    assert_eq!(names, ["DOOR", "WIN"]);
     session
         .run(Command::RedefineBlock {
             name: "DOOR".to_string(),

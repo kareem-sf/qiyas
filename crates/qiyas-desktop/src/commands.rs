@@ -978,7 +978,7 @@ mod tests {
         let names = ipc
             .call("drawing_blocks", json!({ "path": sample }))
             .unwrap();
-        assert_eq!(names, json!(["DOOR"]));
+        assert_eq!(names, json!([{ "name": "DOOR", "attdefs": [] }]));
 
         // A block written where the Save dialog chose, even outside the drawing's folder.
         let elsewhere = tempfile::tempdir().unwrap();

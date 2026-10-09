@@ -39,9 +39,10 @@ pub async fn block_thumbnail(
     Ok(Response::new(qiyas_ai::render_png(&batch, &[], bounds, px)))
 }
 
-/// The named blocks of the drawing at `path`, opened read-only (the Design Center).
+/// The named blocks of the drawing at `path`, opened read-only, with their attribute
+/// definitions (the Design Center).
 #[tauri::command]
-pub async fn drawing_blocks(path: String) -> Result<Vec<String>, String> {
+pub async fn drawing_blocks(path: String) -> Result<Vec<BlockInfo>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         qiyas_core::drawing_blocks(Path::new(&path)).map_err(|e| e.to_string())
     })

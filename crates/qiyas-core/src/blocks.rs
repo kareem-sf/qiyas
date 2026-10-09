@@ -6,14 +6,17 @@
 //!
 //! Editing in place is a mode of the session (`Session::block_edit`): the block's entities are
 //! copied onto the sheet where the reference draws them (temporary entities, never an undo step
-//! of their own), the reference is hidden, everything else is drawn faded and can't be changed.
-//! The usual commands then work on the copies, each one undo step that can't reach back before
-//! the edit began. Saving writes what is on the sheet beyond what was there before back into the
-//! block, through the reference's inverse transform, as one undo step: every reference changes.
-//! Discarding undoes the steps made while editing and removes the copies.
+//! of their own), the reference is hidden, everything else is drawn faded and can't be picked or
+//! changed. The usual commands then work on the copies, each one undo step that can't reach back
+//! before the edit began. Closing never undoes anything: saving makes what is on the sheet beyond
+//! what was there before the block's new contents, through the reference's inverse transform
+//! (every reference changes); discarding drops it. Either way the copies leave the sheet, and the
+//! steps made while editing leave the history (with any earlier step that could put the block's
+//! records back under it), as AutoCAD's REFCLOSE does; the outcome says how many.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use opencadcodec::entities::{AttributeDefinition, AttributeEntity, Insert};
 use opencadcodec::types::{Matrix3, Matrix4, Transform};
@@ -39,13 +42,14 @@ pub struct BlockInfo {
     pub attdefs: Vec<AttDefInfo>,
 }
 
-/// One attribute definition: its tag, the prompt asked on insert, and the value it takes when
-/// none is given.
+/// One attribute definition: its tag, the prompt asked on insert, the value it takes when none
+/// is given, and whether it is constant (never asked: it draws from the block).
 #[derive(Debug, Clone, Serialize)]
 pub struct AttDefInfo {
     pub tag: String,
     pub prompt: String,
     pub default: String,
+    pub constant: bool,
 }
 
 /// A block being edited in place (see the module documentation).
@@ -55,18 +59,17 @@ pub(crate) struct BlockEdit {
     pub name: String,
     /// The reference edited through, hidden while editing.
     pub insert: Handle,
-    /// Each temporary copy on the sheet, with the block entity it shows.
-    pub temps: HashMap<u64, Handle>,
+    /// The sheet the copies are on.
+    pub sheet: String,
+    /// Each temporary copy on the sheet, with the block entity it shows and the copy as it was
+    /// made (a copy still like that leaves its block entity as it is).
+    pub temps: HashMap<u64, (Handle, Arc<EntityType>)>,
     /// The sheet's entities before the edit began: drawn faded, and locked.
     pub outside: HashSet<u64>,
     /// The world back to block coordinates.
     pub inverse: Transform,
-    /// Undo steps there were when the edit began: none of those can be undone while editing.
-    pub floor: usize,
     /// The drawing had no unsaved changes when the edit began.
     pub was_clean: bool,
-    /// Block entities whose copies were left as they were (known once the edit ends).
-    pub untouched: HashSet<Handle>,
 }
 
 fn invalid(why: impl Into<String>) -> CoreError {
@@ -107,6 +110,15 @@ fn check_new_name(doc: &CadDocument, name: &str) -> Result<String, CoreError> {
     Ok(name.to_string())
 }
 
+/// `a` and `b` name the same file: as written, or once resolved.
+fn same_file(a: &Path, b: &Path) -> bool {
+    a == b
+        || matches!(
+            (a.canonicalize(), b.canonicalize()),
+            (Ok(x), Ok(y)) if x == y
+        )
+}
+
 /// The named block `name` of `doc` (not a sheet, an xref or an anonymous block), or why not.
 fn named_block<'a>(doc: &'a CadDocument, name: &str) -> Result<&'a BlockRecord, CoreError> {
     let record = doc
@@ -133,18 +145,37 @@ fn uses(doc: &CadDocument, block: &str, name: &str, depth: usize) -> bool {
         })
 }
 
-/// The names of the named blocks of the drawing at `path`, opened read-only, sorted.
-pub fn drawing_blocks(path: &Path) -> Result<Vec<String>, CoreError> {
-    let drawing = Drawing::open(path)?;
-    let doc = &drawing.doc;
-    let mut names: Vec<String> = doc
+/// The named blocks of `doc` (not sheets, xrefs or anonymous blocks) with their attribute
+/// definitions, sorted by name.
+fn block_infos(doc: &CadDocument) -> Vec<BlockInfo> {
+    let mut out: Vec<BlockInfo> = doc
         .block_records
         .iter()
         .filter(|b| !b.name.starts_with('*') && !is_xref_block(doc, &b.name))
-        .map(|b| b.name.clone())
+        .map(|b| BlockInfo {
+            name: b.name.clone(),
+            attdefs: doc
+                .entities_in_block(&b.name)
+                .filter_map(|e| match e {
+                    EntityType::AttributeDefinition(a) => Some(AttDefInfo {
+                        tag: a.tag.clone(),
+                        prompt: a.prompt.clone(),
+                        default: a.default_value.clone(),
+                        constant: a.flags.constant,
+                    }),
+                    _ => None,
+                })
+                .collect(),
+        })
         .collect();
-    names.sort_by_key(|n| n.to_uppercase());
-    Ok(names)
+    out.sort_by_key(|b| b.name.to_uppercase());
+    out
+}
+
+/// The named blocks of the drawing at `path`, opened read-only, with their attribute
+/// definitions (the Design Center).
+pub fn drawing_blocks(path: &Path) -> Result<Vec<BlockInfo>, CoreError> {
+    Ok(block_infos(&Drawing::open(path)?.doc))
 }
 
 /// Block coordinates of `record` to where `insert` draws them (its first cell).
@@ -447,28 +478,7 @@ impl Session {
     /// The drawing's named blocks (not sheets, xrefs or anonymous blocks) with their attribute
     /// definitions, sorted by name.
     pub fn blocks(&self) -> Vec<BlockInfo> {
-        let doc = &self.drawing.doc;
-        let mut out: Vec<BlockInfo> = doc
-            .block_records
-            .iter()
-            .filter(|b| !b.name.starts_with('*') && !is_xref_block(doc, &b.name))
-            .map(|b| BlockInfo {
-                name: b.name.clone(),
-                attdefs: doc
-                    .entities_in_block(&b.name)
-                    .filter_map(|e| match e {
-                        EntityType::AttributeDefinition(a) => Some(AttDefInfo {
-                            tag: a.tag.clone(),
-                            prompt: a.prompt.clone(),
-                            default: a.default_value.clone(),
-                        }),
-                        _ => None,
-                    })
-                    .collect(),
-            })
-            .collect();
-        out.sort_by_key(|b| b.name.to_uppercase());
-        out
+        block_infos(&self.drawing.doc)
     }
 
     /// The lines of the block `name` as a sheet of their own, in block coordinates, for a
@@ -488,9 +498,9 @@ impl Session {
         self.block_edit.as_ref().map(|b| b.name.clone())
     }
 
-    /// Refuses what can't be done while a block is edited in place: take-off, BOQ and conflict
-    /// changes (their rows would point at entities about to go), another edit in place,
-    /// changing a block's definition another way, and inserting the block into itself.
+    /// Refuses what can't be done while a block is edited in place: making or writing a block,
+    /// another edit in place, and inserting the block into itself (or into something it holds).
+    /// Everything else goes on as usual.
     pub(crate) fn check_block_edit(&self, cmd: &Command) -> Result<(), CoreError> {
         let Some(edit) = &self.block_edit else {
             return match cmd {
@@ -500,18 +510,13 @@ impl Session {
                 _ => Ok(()),
             };
         };
-        let busy = || {
-            Err(invalid(format!(
-                "Block {} is being edited in place: save or discard the edit first (REFCLOSE)",
-                edit.name
-            )))
-        };
         match cmd {
             Command::EditBlockInPlace { .. }
-            | Command::RedefineBlock { .. }
-            | Command::EditAttDef { .. }
-            | Command::SyncAttributes { .. }
-            | Command::SetSheet { .. } => busy(),
+            | Command::CreateBlock { .. }
+            | Command::WriteBlock { .. } => Err(invalid(format!(
+                "Block {} is being edited in place: save or discard the edit first (REFCLOSE)",
+                edit.name
+            ))),
             Command::InsertBlock { name, .. }
                 if name.trim().eq_ignore_ascii_case(&edit.name)
                     || uses(&self.drawing.doc, name.trim(), &edit.name, 0) =>
@@ -521,10 +526,7 @@ impl Session {
                     edit.name
                 )))
             }
-            _ => match cmd.changes() {
-                Some(crate::commands::Part::Document { .. }) | None => Ok(()),
-                Some(_) => busy(),
-            },
+            _ => Ok(()),
         }
     }
 
@@ -664,6 +666,11 @@ impl Session {
         if !is_dwg {
             return Err(invalid("Write the block as a .dwg file"));
         }
+        if same_file(path, &self.drawing.path) {
+            return Err(invalid(
+                "A block can't be written over the drawing it comes from",
+            ));
+        }
         let src = &self.drawing.doc;
         let record = named_block(src, name)?;
         let mut doc = CadDocument::new();
@@ -702,10 +709,17 @@ impl Session {
         Ok(real.join(full.file_name().ok_or_else(outside)?))
     }
 
-    /// `Command::WriteBlock`: `write_block` to a file in the drawing's folder.
+    /// `Command::WriteBlock`: `write_block` to a new file in the drawing's folder (a file there
+    /// already is only written over through the Save dialog, which asks).
     pub(crate) fn write_block_in_folder(&self, name: &str, path: &str) -> Result<(), CoreError> {
         named_block(&self.drawing.doc, name)?;
         let path = self.inside_drawing_folder(path)?;
+        if path.exists() {
+            return Err(invalid(format!(
+                "{} exists already: choose it in the Save dialog to write over it",
+                path.display()
+            )));
+        }
         self.write_block(name, &path)
     }
 
@@ -757,7 +771,12 @@ impl Session {
         for (original, mut e) in parts {
             place(&mut e, &Placing::plain(forward));
             let t = self.add_fresh(e, owner)?;
-            temps.insert(t, original);
+            let made = self
+                .drawing
+                .doc
+                .get_entity_arc(Handle::new(t))
+                .expect("just added");
+            temps.insert(t, (original, made));
             handles.push(t);
         }
         if let Some(e) = self.drawing.doc.get_entity_mut(h) {
@@ -766,111 +785,137 @@ impl Session {
         self.block_edit = Some(BlockEdit {
             name,
             insert: h,
+            sheet: self.sheet.clone(),
             temps,
             outside,
             inverse,
-            floor: self.history.undo_len(),
             was_clean: !self.is_dirty(),
-            untouched: HashSet::new(),
         });
         self.history.set_floor(self.history.undo_len());
         self.drawing_changed();
         Ok(handles)
     }
 
-    /// Ends an edit in place: undoes the steps made while editing, removes the copies and shows
-    /// the reference again. Returns the edit and the entities that were in it at the end and
-    /// changed (the copies changed and anything new on the sheet), in world coordinates with
-    /// their handles; copies left as they were are left out of that and their block entities kept
-    /// in `edit.temps` (copies gone are not).
-    fn close_block_edit(&mut self) -> Result<(BlockEdit, Vec<EntityType>), CoreError> {
+    /// `Command::SaveBlockEdits` (`save`) and `DiscardBlockEdits`: ends the edit in place. Saving
+    /// makes what is on the edit's sheet beyond what was there before (the copies left, and
+    /// anything drawn there meanwhile) the block's contents, taken back through the reference: a
+    /// changed copy replaces its block entity under that entity's handle, an unchanged one leaves
+    /// it as it is, a block entity whose copy went is removed, anything new is added. Discarding
+    /// keeps the block as it is. Either way those entities leave the sheet, the reference shows
+    /// again, and nothing else done while editing is put back. Not an undo step: the steps made
+    /// while editing leave the history, with every earlier drawing step that changed the
+    /// drawing's tables or the block's entities (undoing one would put the block back under its
+    /// references). Take-off rows on the entities that left lose their link; rows on the
+    /// references are measured again.
+    pub(crate) fn close_block_edit(&mut self, save: bool) -> Result<Outcome, CoreError> {
         let edit = self
             .block_edit
             .take()
             .ok_or_else(|| invalid("No block is being edited in place"))?;
-        let kept: Vec<EntityType> = self
+        let working: Vec<Handle> = self
             .drawing
-            .entities_in(&self.sheet)
-            .filter(|e| !edit.outside.contains(&e.common().handle.value()))
-            .cloned()
+            .entities_in(&edit.sheet)
+            .map(|e| e.common().handle)
+            .filter(|h| !edit.outside.contains(&h.value()))
             .collect();
-        self.history.set_floor(0);
-        while self.history.undo_len() > edit.floor {
-            self.undo();
-        }
-        self.history.clear_redo();
-        // A copy as it was when the edit began was not touched: its block entity stays as it is.
-        let (untouched, kept): (Vec<EntityType>, Vec<EntityType>) =
-            kept.into_iter().partition(|e| {
-                let h = e.common().handle;
-                edit.temps.contains_key(&h.value()) && self.drawing.doc.get_entity(h) == Some(e)
-            });
-        let mut edit = edit;
-        edit.untouched = untouched
+        let mut unlinked = self
+            .takeoff
+            .items
             .iter()
-            .filter_map(|e| edit.temps.get(&e.common().handle.value()).copied())
-            .collect();
-        let doc = &mut self.drawing.doc;
-        for &t in edit.temps.keys() {
-            doc.remove_entity_arc(Handle::new(t));
+            .filter(|m| {
+                working
+                    .iter()
+                    .any(|&h| crate::modify::measures(m, h.value()))
+            })
+            .count();
+        let originals: HashSet<Handle> = self
+            .drawing
+            .doc
+            .block_records
+            .get(&edit.name)
+            .map(|r| r.entity_handles.iter().copied().collect())
+            .unwrap_or_default();
+        if save {
+            self.write_back(&edit, &working)?;
         }
-        if let Some(sheet) = doc.block_records.get_mut(&self.sheet) {
-            sheet
-                .entity_handles
-                .retain(|h| !edit.temps.contains_key(&h.value()));
+        let doc = &mut self.drawing.doc;
+        for &h in &working {
+            doc.remove_entity_arc(h);
+        }
+        if let Some(sheet) = doc.block_records.get_mut(&edit.sheet) {
+            let gone: HashSet<Handle> = working.iter().copied().collect();
+            sheet.entity_handles.retain(|h| !gone.contains(h));
         }
         if let Some(e) = doc.get_entity_mut(edit.insert) {
             e.common_mut().invisible = false;
         }
+        self.follow_takeoff(&[], &working);
+        if save {
+            let references = self.references_to(&edit.name);
+            unlinked += self.follow_takeoff(&references, &[]);
+        }
+        let quiet = self.history.edit_was_quiet();
+        let dropped = self.history.close_edit(|step| step.puts_back(&originals));
         self.drawing_changed();
-        Ok((edit, kept))
-    }
-
-    /// `Command::DiscardBlockEdits`: everything back as it was before the edit began.
-    pub(crate) fn discard_block_edits(&mut self) -> Result<(), CoreError> {
-        let (edit, _) = self.close_block_edit()?;
-        if edit.was_clean {
+        // A discarded edit that did nothing leaves the drawing as clean as it was.
+        if !save && quiet && edit.was_clean {
             self.mark_saved();
         }
-        Ok(())
+        Ok(Outcome::BlockEditClosed {
+            name: edit.name,
+            saved: save,
+            unlinked,
+            dropped,
+        })
     }
 
-    /// `Command::SaveBlockEdits`: writes what was edited back into the block, one undo step by
-    /// `source` (none when nothing changed); every reference changes, and rows measuring them are
-    /// measured again.
-    pub(crate) fn save_block_edits(&mut self, source: crate::Source) -> Result<(), CoreError> {
-        let (edit, kept) = self.close_block_edit()?;
-        // The take-off is kept only when rows measure a reference that changes.
-        let rows = self
-            .references_to(&edit.name)
-            .into_iter()
-            .any(|h| self.rows_measuring(h) > 0);
-        self.record_document_change(source, true, rows, |s| s.write_back(&edit, kept))
-    }
-
-    /// The block `edit.name` holds `kept` (world coordinates) taken back through the reference:
-    /// a changed copy of a block entity replaces it under its own handle, a block entity whose
-    /// copy went is removed (one whose copy was untouched stays), anything new is added.
-    fn write_back(&mut self, edit: &BlockEdit, kept: Vec<EntityType>) -> Result<(), CoreError> {
+    /// The block `edit.name` holds the entities `working` (on the sheet, in world coordinates)
+    /// taken back through the reference; see `close_block_edit`. Not recorded.
+    fn write_back(&mut self, edit: &BlockEdit, working: &[Handle]) -> Result<(), CoreError> {
         let doc = &mut self.drawing.doc;
         let record = doc
             .block_records
             .get(&edit.name)
             .ok_or_else(|| invalid(format!("Block {} is gone", edit.name)))?;
         let (owner, originals) = (record.handle, record.entity_handles.clone());
+        let back_xf = Placing::plain(edit.inverse);
+        let mut untouched = HashSet::new();
         let mut back: HashMap<Handle, EntityType> = HashMap::new();
         let mut fresh = Vec::new();
-        for mut e in kept {
-            place(&mut e, &Placing::plain(edit.inverse));
-            match edit.temps.get(&e.common().handle.value()) {
-                Some(&original) => {
-                    back.insert(original, e);
+        for &h in working {
+            let Some(now) = doc.get_entity(h) else {
+                continue;
+            };
+            let copy_of = edit.temps.get(&h.value());
+            if let Some((original, made)) = copy_of {
+                if now == made.as_ref() {
+                    untouched.insert(*original);
+                    continue;
+                }
+            }
+            let mut e = now.clone();
+            // A dimension's block is drawn where the dimension is: it goes back too.
+            if let Some(block) = crate::modify::place_keeping_blocks(&mut e, &back_xf) {
+                let inside = doc
+                    .block_records
+                    .get(&block)
+                    .map(|b| b.entity_handles.clone())
+                    .unwrap_or_default();
+                for part in inside {
+                    if let Some(p) = doc.get_entity_mut(part) {
+                        place(p, &back_xf);
+                    }
+                }
+            }
+            match copy_of {
+                Some((original, _)) => {
+                    back.insert(*original, e);
                 }
                 None => fresh.push(e),
             }
         }
         for h in originals {
-            if doc.get_entity(h).is_none() || edit.untouched.contains(&h) {
+            if doc.get_entity(h).is_none() || untouched.contains(&h) {
                 continue;
             }
             match back.remove(&h) {
@@ -878,10 +923,7 @@ impl Session {
                     let c = e.common_mut();
                     c.handle = h;
                     c.owner_handle = owner;
-                    let slot = doc.get_entity_mut(h).expect("checked above");
-                    if *slot != e {
-                        *slot = e;
-                    }
+                    *doc.get_entity_mut(h).expect("checked above") = e;
                 }
                 None => {
                     doc.remove_entity_arc(h);
@@ -894,10 +936,19 @@ impl Session {
         let has_attributes = doc
             .entities_in_block(&edit.name)
             .any(|e| matches!(e, EntityType::AttributeDefinition(_)));
+        // Not recorded, so the list keeps only what is there.
+        let live: Vec<Handle> = doc
+            .block_records
+            .get(&edit.name)
+            .map(|r| r.entity_handles.clone())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|&h| doc.get_entity(h).is_some())
+            .collect();
         if let Some(r) = doc.block_records.get_mut(&edit.name) {
             r.flags.has_attributes = has_attributes;
+            r.entity_handles = live;
         }
-        self.follow_block(&edit.name);
         Ok(())
     }
 

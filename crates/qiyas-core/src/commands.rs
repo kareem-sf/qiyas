@@ -454,9 +454,11 @@ pub enum Command {
     EditBlockInPlace {
         target: Target,
     },
-    /// Writes the entities edited in place back into the block: one undo step.
+    /// Ends the edit in place, the block taking what was edited (every reference changes).
+    /// Not an undo step: the edit's steps leave the history. `Outcome::BlockEditClosed`.
     SaveBlockEdits,
-    /// Puts everything back as it was before the edit in place began. Not an undo step.
+    /// Ends the edit in place, the block as it was; everything else done meanwhile stays.
+    /// `Outcome::BlockEditClosed`.
     DiscardBlockEdits,
     /// An attribute definition `tag` (one word, upper-cased) on the current layer at `at`,
     /// `height` tall: it asks `prompt` on insert and takes `default` when nothing is given.
@@ -675,6 +677,14 @@ pub enum Outcome {
     Table {
         columns: Vec<String>,
         rows: Vec<Vec<String>>,
+    },
+    /// An edit in place of the block `name` ended, `saved` into the block or not: how many
+    /// take-off rows lost their link, and how many undo steps left the history with it.
+    BlockEditClosed {
+        name: String,
+        saved: bool,
+        unlinked: usize,
+        dropped: usize,
     },
 }
 
@@ -1129,14 +1139,8 @@ impl Session {
                 let handles = self.edit_block_in_place(&target)?;
                 return Ok(Outcome::Added { handles });
             }
-            Command::SaveBlockEdits => {
-                self.save_block_edits(source)?;
-                return Ok(Outcome::Changed);
-            }
-            Command::DiscardBlockEdits => {
-                self.discard_block_edits()?;
-                return Ok(Outcome::Changed);
-            }
+            Command::SaveBlockEdits => return self.close_block_edit(true),
+            Command::DiscardBlockEdits => return self.close_block_edit(false),
             Command::AttDef {
                 tag,
                 prompt,

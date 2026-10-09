@@ -41,6 +41,9 @@ pub(crate) struct Near {
     pub whole_sheet: bool,
 }
 
+/// Segments looked at past locked ones for a pick while a block is edited in place.
+const PICK_PAST_LOCKED: usize = 4096;
+
 /// Flatten tolerance for measured lengths and areas, in drawing units. Finer than `BATCH_TOL`
 /// so arcs measure close to their true length.
 pub(crate) const MEASURE_TOL: f64 = 1e-3;
@@ -625,11 +628,6 @@ impl Session {
 
     /// Shows the sheet whose block is `block` (case-insensitive).
     pub fn set_sheet(&mut self, block: &str) -> Result<(), CoreError> {
-        if let Some(name) = self.block_edit_name() {
-            return Err(CoreError::InvalidCommand(format!(
-                "Block {name} is being edited in place: save or discard the edit first (REFCLOSE)"
-            )));
-        }
         let sheet = self
             .drawing
             .sheets()
@@ -724,11 +722,31 @@ impl Session {
         self.text.borrow().atlas_bytes(since)
     }
 
+    /// The entities at the top of the sheet that can't be picked: all but the block's while one
+    /// is edited in place.
+    fn locked(&self) -> Option<&HashSet<u64>> {
+        self.block_edit.as_ref().map(|e| &e.outside)
+    }
+
     /// The entity nearest to `p` (drawing coordinates) within `tol`, among what is drawn, down
-    /// to the entity inside any blocks.
+    /// to the entity inside any blocks (while a block is edited in place, among its entities).
     pub fn pick(&self, p: [f64; 2], tol: f64) -> Option<Picked> {
         self.with_cache(None, |cached| {
-            let range = cached.batch.range_of(cached.index.pick(p, tol)?)?;
+            let i = match self.locked() {
+                None => cached.index.pick(p, tol)?,
+                // While a block is edited in place, the nearest of its entities only.
+                Some(locked) => cached
+                    .index
+                    .near(p, tol, PICK_PAST_LOCKED)
+                    .into_iter()
+                    .find(|&i| {
+                        cached
+                            .batch
+                            .range_of(i)
+                            .is_some_and(|r| !locked.contains(&r.top))
+                    })?,
+            };
+            let range = cached.batch.range_of(i)?;
             let chain = cached.batch.chain_of(range).to_vec();
             Some(Picked {
                 top: range.top,
@@ -744,7 +762,8 @@ impl Session {
     /// `crossing`, each with a drawn segment inside or crossing `bounds` (`[[min_x, min_y],
     /// [max_x, max_y]]`, drawing coordinates); otherwise each drawn wholly inside it. Always the
     /// entity at the top of the sheet: a block reference, or an xref's reference, is picked whole
-    /// (never what is inside it), so `entity == top` and `chain` is empty. Sorted by handle.
+    /// (never what is inside it), so `entity == top` and `chain` is empty. Sorted by handle. While a
+    /// block is edited in place, only its entities.
     pub fn pick_window(&self, bounds: [[f64; 2]; 2], crossing: bool) -> Vec<Picked> {
         self.with_cache(None, |cached| {
             let batch = &cached.batch;
@@ -785,6 +804,9 @@ impl Session {
                     }
                 }
                 tops.extend(reached.difference(&outside));
+            }
+            if let Some(locked) = self.locked() {
+                tops.retain(|top| !locked.contains(top));
             }
             tops.into_iter()
                 .map(|top| Picked {
@@ -1001,10 +1023,6 @@ impl Session {
     /// New measurements are marked as made by `source`.
     pub fn run_as(&mut self, cmd: Command, source: Source) -> Result<Outcome, CoreError> {
         self.check_block_edit(&cmd)?;
-        if let Command::SaveBlockEdits = cmd {
-            self.save_block_edits(source)?;
-            return Ok(Outcome::Changed);
-        }
         let before = match cmd.changes() {
             None => return self.execute(cmd, source),
             Some(Part::Document { tables, takeoff }) => {
