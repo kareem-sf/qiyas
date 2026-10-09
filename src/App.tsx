@@ -6,7 +6,13 @@ import {
   activateTab,
   aiUndo,
   aliases as readAliases,
+  blocks as readBlocks,
+  blockThumbnail,
   clearRecents,
+  drawingBlocks,
+  getSettings,
+  setToolPalette,
+  writeBlock,
   closeTab,
   EMPTY_MODEL,
   recents as readRecents,
@@ -59,6 +65,7 @@ import {
   totals,
   undo,
   type AiUi,
+  type BlockInfo,
   type Boq,
   type Command,
   type Conflict,
@@ -72,6 +79,7 @@ import {
   type TableInfo,
   type Measurement,
   type NamedView,
+  type PaletteItem,
   type TabInfo,
   type TextMatch,
   type Total,
@@ -97,6 +105,15 @@ import {
   type AttachRequest,
 } from "./shell/AttachPdfDialog";
 import { blurAfterClick } from "./shell/blurAfterClick";
+import {
+  AttDefDialog,
+  AttributeManager,
+  AttributesDialog,
+  BlockEditBar,
+  CreateBlockDialog,
+  type AttributeField,
+} from "./shell/BlockDialogs";
+import { BlockPalette } from "./shell/BlockPalette";
 import { CommandLine } from "./shell/CommandLine";
 import { DraftingSettings } from "./shell/DraftingSettings";
 import { ExtractDialog } from "./shell/ExtractDialog";
@@ -109,6 +126,8 @@ import { PropertiesPanel } from "./shell/PropertiesPanel";
 import { Ribbon, type Tool } from "./shell/Ribbon";
 import { SettingsDialog } from "./shell/SettingsDialog";
 import { DimStylePanel } from "./shell/DimStylePanel";
+import { DesignCenter } from "./shell/DesignCenter";
+import { ToolPalettes } from "./shell/ToolPalettes";
 import { InPlaceText, TextDialog, type TextDraft } from "./shell/TextEditor";
 import { ToleranceDialog } from "./shell/ToleranceDialog";
 import { NewTableDialog, TableEditor } from "./shell/TableEditor";
@@ -129,7 +148,7 @@ import {
   pointMarks,
 } from "./tools/overlay";
 import { mergeAliases } from "./tools/aliases";
-import type { Action, Expect, ParseState } from "./tools/commandParser";
+import { parse, type Action, type Expect, type ParseState } from "./tools/commandParser";
 import { shortcutFor, type DraftingToggle } from "./tools/shortcuts";
 import type { DimRequest } from "./tools/dimTools";
 import type { TextRequest } from "./tools/textTools";
@@ -271,6 +290,31 @@ export default function App() {
     { mode: "text"; at: Point; height: number | null } | { mode: "cell"; cell: [number, number] } | null
   >(null);
   const [fieldTarget, setFieldTarget] = useState<{ handle: number; kind: string } | null>(null);
+  /** BLOCK's base point is clicked: the command waiting for the new block's name, and the names
+   *  taken. */
+  const [createBlockAsk, setCreateBlockAsk] = useState<{
+    cmd: Extract<Command, { type: "create_block" }>;
+    names: string[];
+  } | null>(null);
+  /** The block INSERT places, and the drawing its definition comes from when this one lacks it. */
+  const [insertChoice, setInsertChoice] = useState<{ block: BlockInfo; fromPath: string | null } | null>(null);
+  /** Attribute values asked for (INSERT's prompts, ATTEDIT): the command they make, if any. */
+  const [attributesAsk, setAttributesAsk] = useState<{
+    heading: string;
+    fields: AttributeField[];
+    command(values: Record<string, string>): Command | null;
+  } | null>(null);
+  /** ATTDEF's click, waiting for the definition. */
+  const [attDefAt, setAttDefAt] = useState<{ at: Point; height: number | null } | null>(null);
+  const [blockPaletteOpen, setBlockPaletteOpen] = useState(false);
+  /** The Design Center is open; the drawing's own block names (upper case). */
+  const [designCenter, setDesignCenter] = useState<string[] | null>(null);
+  /** The tool palette is open, with its buttons. */
+  const [palette, setPalette] = useState<PaletteItem[] | null>(null);
+  /** BATTMAN is open on these blocks. */
+  const [managerBlocks, setManagerBlocks] = useState<BlockInfo[] | null>(null);
+  /** The block palette's thumbnails, revoked when it closes. */
+  const thumbUrls = useRef<string[]>([]);
   /** The text height and style new text takes: the last ones used; null until then (2.5 mm in
    *  drawing units, and the drawing's current style). */
   const [textHeight, setTextHeight] = useState<number | null>(null);
@@ -284,7 +328,7 @@ export default function App() {
   /** The MText dialog (a new MText's box), or the text edit dialog (an entity's text). */
   const [textDialog, setTextDialog] = useState<
     | { kind: "mtext"; request: Extract<TextRequest, { kind: "mtext" }> }
-    | { kind: "edit"; handle: number; value: string; multiline: boolean; attributes?: [string, string][] }
+    | { kind: "edit"; handle: number; value: string; multiline: boolean }
     | null
   >(null);
   /** The command line shows (Ctrl+9), its input, and whether to focus it once shown. */
@@ -436,6 +480,11 @@ export default function App() {
   /** Runs a take-off command; a new measurement becomes the selected row. An inquiry's answer
    *  shows in the info card. */
   async function apply(cmd: Command) {
+    // BLOCK's base point is clicked: the name comes from its dialog.
+    if (cmd.type === "create_block" && cmd.name === "") {
+      await run(async () => setCreateBlockAsk({ cmd, names: (await readBlocks()).map((b) => b.name) }));
+      return;
+    }
     let changed = false;
     await run(async () => {
       const outcome = await runCommand(cmd);
@@ -466,9 +515,16 @@ export default function App() {
         "leader",
         "mleader",
         "tolerance",
+        "insert_block",
+        "edit_block_in_place",
       ];
       if (drawingChanged.includes(cmd.type)) {
         await redraw();
+      }
+      // An edit in place began: the bar to end it shows, and Select works on the block.
+      if (cmd.type === "edit_block_in_place") {
+        setInfo(await drawingInfo());
+        chooseTool("select");
       }
       if (outcome.type === "measured") setSelectedId(outcome.measurement.id);
       if (outcome.type === "exploded" && outcome.left_alone > 0) {
@@ -537,6 +593,14 @@ export default function App() {
       setFieldAsk({ mode: "text", at: request.at, height: request.height });
       return;
     }
+    if (request.kind === "insertBlock") {
+      placeBlock(request);
+      return;
+    }
+    if (request.kind === "attdef") {
+      setAttDefAt({ at: request.at, height: request.height });
+      return;
+    }
     const at = viewport.current?.toScreen(request.at) ?? [0, 0];
     setTextEditor({ request, at, key: performance.now() });
   }
@@ -552,7 +616,22 @@ export default function App() {
     } else if ((e.kind === "Text" || e.kind === "MText") && value !== null) {
       setTextDialog({ kind: "edit", handle, value, multiline: e.kind === "MText" });
     } else if (e.kind === "Insert" && e.attributes.length > 0) {
-      setTextDialog({ kind: "edit", handle, value: "", multiline: false, attributes: e.attributes });
+      const defs = (await readBlocks()).find((b) => b.name === e.block_name)?.attdefs ?? [];
+      const before = Object.fromEntries(e.attributes);
+      setAttributesAsk({
+        heading: "block.editAttributesTitle",
+        fields: e.attributes.map(([tag, value]) => ({
+          tag,
+          prompt: defs.find((d) => d.tag === tag)?.prompt ?? "",
+          value,
+        })),
+        // Only what changed; nothing changed sends nothing.
+        command: (values) => {
+          const changed = Object.entries(values).filter(([tag, v]) => v !== before[tag]);
+          if (changed.length === 0) return null;
+          return { type: "edit_attributes", target: { handle, chain: [] }, values: Object.fromEntries(changed) };
+        },
+      });
     } else {
       setNotice(t("text.noText"));
     }
@@ -618,6 +697,124 @@ export default function App() {
     run(async () => {
       await runText({ type: "update_fields" });
       setNotice(t("insertField.updated"));
+    });
+  }
+
+  /** Runs a block command from a dialog or the edit bar, then draws it and reads the take-off
+   *  (rows may lose their links) and the drawing's state (an edit in place may end) again; an
+   *  error goes back to the caller. */
+  async function runBlock(cmd: Command) {
+    const gen = switchGen.current;
+    const outcome = await runCommand(cmd);
+    await redraw();
+    await refreshTakeoffAndBoq();
+    const next = await drawingInfo();
+    if (!isStale(gen, switchGen.current)) setInfo(next);
+    await autosave();
+    return outcome;
+  }
+
+  /** A block's picture for the block palette, as a URL revoked when the palette closes. */
+  async function blockPicture(name: string) {
+    const png = await blockThumbnail(name, 96);
+    const url = URL.createObjectURL(new Blob([png], { type: "image/png" }));
+    thumbUrls.current.push(url);
+    return url;
+  }
+
+  function closeBlockPalette() {
+    thumbUrls.current.forEach((url) => URL.revokeObjectURL(url));
+    thumbUrls.current = [];
+    setBlockPaletteOpen(false);
+    focusDrawing();
+  }
+
+  /** Starts INSERT with `block`; with `fromPath` its definition is copied from that drawing when
+   *  this one lacks it. */
+  function startInsert(block: BlockInfo, fromPath: string | null = null) {
+    setInsertChoice({ block, fromPath });
+    chooseTool("insertBlock");
+  }
+
+  /** INSERT's click: the block goes there, after its attribute prompts when it has any. */
+  function placeBlock(r: Extract<TextRequest, { kind: "insertBlock" }>) {
+    const choice = insertChoice;
+    if (!choice) {
+      setBlockPaletteOpen(true);
+      return;
+    }
+    const command = (values: Record<string, string>): Command => ({
+      type: "insert_block",
+      name: choice.block.name,
+      at: r.at,
+      scale: r.scale,
+      rotation: r.rotation,
+      attribute_values: values,
+      from_path: choice.fromPath,
+    });
+    if (choice.block.attdefs.length === 0) {
+      apply(command({}));
+      return;
+    }
+    const fields = choice.block.attdefs.map((a) => ({ tag: a.tag, prompt: a.prompt, value: a.default }));
+    setAttributesAsk({ heading: "block.attributesTitle", fields, command });
+  }
+
+  /** WBLOCK: writes the block to the .dwg the Save dialog names. */
+  function writeBlockFile(name: string) {
+    run(async () => {
+      const path = await save({ defaultPath: `${name}.dwg`, filters: [{ name: "DWG", extensions: ["dwg"] }] });
+      if (!path) return;
+      await writeBlock(name, path);
+      setNotice(t("block.written", { path }));
+    });
+  }
+
+  /** REFCLOSE and the edit bar: ends the edit in place, saved into the block or discarded. */
+  function closeBlockEdit(keep: boolean) {
+    const name = info?.block_edit;
+    if (!name) {
+      setError(t("cmd.notNow", { name: "REFCLOSE" }));
+      return;
+    }
+    run(async () => {
+      await runBlock({ type: keep ? "save_block_edits" : "discard_block_edits" });
+      setNotice(keep ? t("block.saved", { name }) : null);
+    });
+  }
+
+  function openAttributeManager() {
+    run(async () => setManagerBlocks(await readBlocks()));
+  }
+
+  function openDesignCenter() {
+    run(async () => setDesignCenter((await readBlocks()).map((b) => b.name.toUpperCase())));
+  }
+
+  function openToolPalettes() {
+    run(async () => setPalette((await getSettings()).tool_palette ?? []));
+  }
+
+  /** Puts a button for the block `name` on the tool palette. */
+  function addToPalette(name: string) {
+    run(async () => {
+      const now = (await getSettings()).tool_palette ?? [];
+      await setToolPalette([...now, { kind: "block", label: name, value: name }]);
+    });
+  }
+
+  /** A tool palette button: its block is inserted, its command line run. */
+  function runPaletteItem(item: PaletteItem) {
+    if (item.kind === "command") {
+      const a = parse(item.value, { expect: "command", last: null, aliases: commandAliases });
+      if (a.type === "error") setError(t(a.key, a.args));
+      else onCommand(a);
+      return;
+    }
+    run(async () => {
+      const block = (await readBlocks()).find((b) => b.name.toUpperCase() === item.value.toUpperCase());
+      if (block) startInsert(block);
+      else setError(t("block.missing", { name: item.value }));
     });
   }
 
@@ -1656,6 +1853,13 @@ export default function App() {
         return openDimStyle();
       case "updateFields":
         return updateFields();
+      case "insertBlock":
+      case "writeBlock":
+        return setBlockPaletteOpen(true);
+      case "refClose":
+        return closeBlockEdit(true);
+      case "attributeManager":
+        return openAttributeManager();
       case "calibrate":
         if (!batch || batch.imageTable.length === 0) {
           setError(t("cmd.notNow", { name: "CALIBRATE" }));
@@ -2034,6 +2238,11 @@ export default function App() {
           onFind={info ? () => setFindOpen(true) : undefined}
           onDimStyle={info ? openDimStyle : undefined}
           onUpdateFields={info ? updateFields : undefined}
+          onInsertBlock={info ? () => setBlockPaletteOpen(true) : undefined}
+          onWriteBlock={info ? () => setBlockPaletteOpen(true) : undefined}
+          onAttributeManager={info ? openAttributeManager : undefined}
+          onDesignCenter={info ? openDesignCenter : undefined}
+          onToolPalettes={info ? openToolPalettes : undefined}
           arabicReversed={arabicReversed}
           onArabicReversed={info ? chooseArabicReversed : undefined}
           {...(onModel && {
@@ -2191,20 +2400,124 @@ export default function App() {
           heading="text.editTitle"
           value={textDialog.value}
           multiline={textDialog.multiline}
-          attributes={textDialog.attributes}
           onSubmit={async (d) => {
-            const before = textDialog.attributes?.find(([k]) => k === d.tag)?.[1] ?? textDialog.value;
             // Unchanged: nothing to do (an MText keeps its formatting).
-            if (d.value === before) return;
+            if (d.value === textDialog.value) return;
             await runText({
               type: "edit_text",
               target: { handle: textDialog.handle, chain: [] },
               value: d.value,
-              tag: d.tag,
+              tag: null,
             });
           }}
           onClose={() => {
             setTextDialog(null);
+            focusDrawing();
+          }}
+        />
+      )}
+      {createBlockAsk && (
+        <CreateBlockDialog
+          names={createBlockAsk.names}
+          onSubmit={async (name, convert) => {
+            const outcome = await runBlock({ ...createBlockAsk.cmd, name, convert_to_insert: convert });
+            if (outcome.type === "edited" && outcome.unlinked > 0) {
+              setNotice(t("block.unlinked", { n: outcome.unlinked }));
+            }
+          }}
+          onClose={() => {
+            setCreateBlockAsk(null);
+            focusDrawing();
+          }}
+        />
+      )}
+      {attributesAsk && (
+        <AttributesDialog
+          heading={attributesAsk.heading}
+          fields={attributesAsk.fields}
+          onSubmit={async (values) => {
+            const cmd = attributesAsk.command(values);
+            if (cmd) await runBlock(cmd);
+          }}
+          onClose={() => {
+            setAttributesAsk(null);
+            focusDrawing();
+          }}
+        />
+      )}
+      {attDefAt && (
+        <AttDefDialog
+          height={attDefAt.height ?? currentTextHeight}
+          onSubmit={async (d) => {
+            setTextHeight(d.height);
+            const { tag, prompt, height } = d;
+            await runBlock({ type: "att_def", tag, prompt, default: d.default, at: attDefAt.at, height });
+          }}
+          onClose={() => {
+            setAttDefAt(null);
+            focusDrawing();
+          }}
+        />
+      )}
+      {blockPaletteOpen && info && (
+        <BlockPalette
+          load={readBlocks}
+          thumbnail={blockPicture}
+          onInsert={(block) => startInsert(block)}
+          onWrite={writeBlockFile}
+          onAddToPalette={addToPalette}
+          onClose={closeBlockPalette}
+        />
+      )}
+      {designCenter && info && (
+        <DesignCenter
+          choose={async () => {
+            const path = await open({ filters: [{ name: "Drawings", extensions: ["dwg", "dxf"] }] });
+            return typeof path === "string" ? path : null;
+          }}
+          list={drawingBlocks}
+          has={(name) => designCenter.includes(name.toUpperCase())}
+          onInsert={(name, path) => {
+            // A block this drawing has is inserted as this drawing defines it.
+            const own = designCenter.includes(name.toUpperCase());
+            run(async () => {
+              const found = own ? (await readBlocks()).find((b) => b.name.toUpperCase() === name.toUpperCase()) : null;
+              startInsert(found ?? { name, attdefs: [] }, own ? null : path);
+            });
+          }}
+          onRedefine={async (name, path) => {
+            await runBlock({ type: "redefine_block", name, from_path: path });
+            setNotice(t("block.redefined", { name }));
+          }}
+          onClose={() => {
+            setDesignCenter(null);
+            focusDrawing();
+          }}
+        />
+      )}
+      {palette && info && (
+        <ToolPalettes
+          items={palette}
+          onRun={runPaletteItem}
+          onSave={setToolPalette}
+          onClose={() => {
+            setPalette(null);
+            focusDrawing();
+          }}
+        />
+      )}
+      {managerBlocks && (
+        <AttributeManager
+          blocks={managerBlocks}
+          onSave={async (block, tag, prompt, value) => {
+            await runBlock({ type: "edit_att_def", block, tag, prompt, default: value });
+          }}
+          onSync={async (block) => {
+            await runBlock({ type: "sync_attributes", block });
+            setNotice(t("block.synced"));
+          }}
+          onClose={() => {
+            setManagerBlocks(null);
             focusDrawing();
           }}
         />
@@ -2329,6 +2642,13 @@ export default function App() {
           />
         </div>
         <main className="work">
+          {info?.block_edit && (
+            <BlockEditBar
+              name={info.block_edit}
+              onSave={() => closeBlockEdit(true)}
+              onDiscard={() => closeBlockEdit(false)}
+            />
+          )}
           <FileTabs
             tabs={fileTabs}
             active={activeTab}

@@ -667,3 +667,30 @@ test("TABLE and FIELD hand their click to the app", () => {
   const field = run("field", [click([3, 4], 0)]);
   expect(field.text?.request).toEqual({ kind: "field", at: [3, 4], height: null });
 });
+
+test("a double click on a block's attribute edits its attributes", () => {
+  // An attribute is picked as its block reference, at the top of the sheet.
+  const tag = { ...onSheet(7), kind: "Insert" };
+  const twice = run("select", [click([1, 2], 0, tag), click([1, 2], 100, tag)]);
+  expect(twice.pendingEdit).toBe(7);
+  expect(twice.pendingCommand).toBeNull();
+});
+
+test("REFEDIT edits the block of the reference clicked; anything else is no block", () => {
+  const leaf: Picked = { top: 9, entity: 3, chain: [9], xref: null, kind: "Insert" };
+  const edit = run("refedit", [click([0, 0], 0, leaf)]);
+  expect(edit.pendingCommand).toEqual({ type: "edit_block_in_place", target: { handle: 9, chain: [] } });
+  const line = run("refedit", [click([0, 0], 0, { ...onSheet(8), kind: "Line" })]);
+  expect(line.pendingCommand).toBeNull();
+  expect(line.hint).toBe("block.prompt.notBlock");
+  // An xref is no block to edit.
+  const xref: Picked = { top: 5, entity: 4, chain: [5], xref: "plan", kind: "Insert" };
+  expect(run("refedit", [click([0, 0], 0, xref)]).pendingCommand).toBeNull();
+});
+
+test("INSERT and ATTDEF hand their click to the app", () => {
+  const insert = run("insertBlock", [click([1, 2], 0)]);
+  expect(insert.text?.request).toEqual({ kind: "insertBlock", at: [1, 2], rotation: 0, scale: 1 });
+  const attdef = run("attdef", [click([3, 4], 0)]);
+  expect(attdef.text?.request).toEqual({ kind: "attdef", at: [3, 4], height: null });
+});

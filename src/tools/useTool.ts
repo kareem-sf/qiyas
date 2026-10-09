@@ -171,6 +171,7 @@ const PROMPT: Partial<Record<Tool, string>> = {
   idPoint: "inquiry.clickPoint",
   textEdit: "text.prompt.edit",
   tableEdit: "table.prompt.edit",
+  refedit: "block.prompt.refedit",
 };
 
 /** The tools that act on the entity clicked. */
@@ -181,7 +182,8 @@ const picksEntity = (tool: Tool) =>
   tool === "divide" ||
   tool === "measureAlong" ||
   tool === "textEdit" ||
-  tool === "tableEdit";
+  tool === "tableEdit" ||
+  tool === "refedit";
 
 /** The first prompt of `tool`. */
 const promptOf = (tool: Tool): string =>
@@ -483,8 +485,10 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
             if (picked.chain.length > 0 && !double) {
               return selectHint(clicked, { ...current, whole: !current.whole, toggled: true });
             }
-            // A double click on a text or a table edits it.
-            const editable = picked.kind === "Text" || picked.kind === "MText" || picked.kind === "Table";
+            // A double click on a text, a table or a block's attribute (picked as its reference)
+            // edits it.
+            const editable =
+              picked.kind === "Text" || picked.kind === "MText" || picked.kind === "Table" || picked.kind === "Insert";
             if (double && picked.chain.length === 0 && editable) {
               return { ...clicked, pendingEdit: picked.top, editAt: event.world };
             }
@@ -543,6 +547,13 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
           if (double || event.picked === null) return clicked;
           if (event.picked.kind !== "Table") return { ...clicked, hint: "table.prompt.notTable" };
           return { ...clicked, hint: promptOf("tableEdit"), pendingEdit: event.picked.top, editAt: event.world };
+        case "refedit": {
+          const picked = event.picked;
+          if (double || picked === null) return clicked;
+          if (picked.kind !== "Insert" || picked.xref) return { ...clicked, hint: "block.prompt.notBlock" };
+          const target = { handle: picked.top, chain: [] };
+          return { ...clicked, hint: promptOf("refedit"), pendingCommand: { type: "edit_block_in_place", target } };
+        }
         case "idPoint":
           return {
             ...clicked,

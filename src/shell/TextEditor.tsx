@@ -97,31 +97,25 @@ type DialogProps = {
   styles?: string[];
   style?: string;
   height?: number;
-  /** For a block reference: its attributes as [tag, value]; the text edits the one chosen. */
-  attributes?: [string, string][];
-  /** The text (and for a new one its style and height, for an attribute its tag). */
-  onSubmit(draft: TextDraft & { tag: string | null }): Promise<void>;
+  /** The text (and for a new one its style and height). */
+  onSubmit(draft: TextDraft): Promise<void>;
   onClose(): void;
 };
 
-/** The MText dialog (a new MText's text, style and height) and the text edit dialog (a text, an
- *  MText or one attribute of a block reference). Ctrl+Enter submits a textarea; an error from
+/** The MText dialog (a new MText's text, style and height) and the text edit dialog (a text or
+ *  an MText; a block's attributes have `AttributesDialog`). Ctrl+Enter submits a textarea; an error from
  *  the drawing stays in the dialog. */
 export function TextDialog(props: DialogProps) {
-  const { heading, multiline, styles, attributes, onSubmit, onClose } = props;
+  const { heading, multiline, styles, onSubmit, onClose } = props;
   const t = useT();
   const dialog = useRef<HTMLDialogElement>(null);
-  const [tag, setTag] = useState(attributes?.[0]?.[0] ?? null);
-  const [value, setValue] = useState(attributes?.[0]?.[1] ?? props.value);
+  const [value, setValue] = useState(props.value);
   const [style, setStyle] = useState(props.style ?? "");
   const [height, setHeight] = useState(String(props.height ?? 1));
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const h = Number(height);
-  // An attribute may be cleared; a text may not.
-  const valid =
-    (attributes !== undefined || value.trim() !== "") &&
-    (props.height === undefined || (h > 0 && Number.isFinite(h)));
+  const valid = value.trim() !== "" && (props.height === undefined || (h > 0 && Number.isFinite(h)));
 
   useEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -134,7 +128,7 @@ export function TextDialog(props: DialogProps) {
     setBusy(true);
     setError(null);
     try {
-      await onSubmit({ value, style, height: h, tag });
+      await onSubmit({ value, style, height: h });
       dialog.current?.close();
     } catch (e) {
       setError(String(e));
@@ -161,25 +155,6 @@ export function TextDialog(props: DialogProps) {
         <h2 id="text-dialog-title" className="heading">
           {t(heading)}
         </h2>
-        {attributes && (
-          <label>
-            <span>{t("text.attribute")}</span>
-            <select
-              value={tag ?? ""}
-              onChange={(e) => {
-                const next = e.target.value;
-                setTag(next);
-                setValue(attributes.find(([k]) => k === next)?.[1] ?? "");
-              }}
-            >
-              {attributes.map(([k]) => (
-                <option key={k} value={k}>
-                  {k}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
         <label>
           <span>{t("text.value")}</span>
           {multiline ? (

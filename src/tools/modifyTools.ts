@@ -19,6 +19,9 @@ export const MODIFY_TOOLS = [
   "array",
   "explode",
   "erase",
+  /** BLOCK: the entities picked become a block, made at the base point clicked (the app asks
+   *  for its name). On the ribbon's Insert tab, not the Modify group. */
+  "block",
 ] as const;
 
 export type ModifyKind = (typeof MODIFY_TOOLS)[number];
@@ -76,7 +79,7 @@ export type ModifyInput =
 /** Kinds drawn from a block of their own, which isn't made again yet: only move and copy change
  *  them (erase and explode take them as they are). */
 const BLOCK_DRAWN = new Set(["Dimension", "Table"]);
-const TAKES_BLOCK_DRAWN = new Set<ModifyKind>(["move", "copy", "erase", "explode"]);
+const TAKES_BLOCK_DRAWN = new Set<ModifyKind>(["move", "copy", "erase", "explode", "block"]);
 
 /** `handles` less the dimensions and tables `kind` can't change, and how many those were. */
 function admit(
@@ -150,6 +153,8 @@ function startPoints(s: ModifyState): ModifyState {
       return { ...p, hint: "modify.prompt.source1" };
     case "array":
       return { ...p, asking: "arrayKind", hint: "modify.prompt.arrayKind" };
+    case "block":
+      return { ...p, hint: "block.prompt.base" };
     default:
       return { ...p, hint: "modify.prompt.base" };
   }
@@ -250,6 +255,9 @@ function addPoint(s: ModifyState, q: Point): ModifyState {
     case "array":
       // The polar centre; then the number of items.
       return { ...s, points, asking: "items", hint: "modify.prompt.items" };
+    case "block":
+      // The name comes from the app's dialog.
+      return done(s, { type: "create_block", name: "", base: q, targets: t, convert_to_insert: true });
     default:
       return s;
   }

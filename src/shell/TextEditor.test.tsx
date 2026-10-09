@@ -94,50 +94,6 @@ test("the MText dialog gives the lines, the style and the height; Ctrl+Enter pla
   fireEvent.change(area, { target: { value: "غرفة\nRoom" } });
   fireEvent.keyDown(area, { key: "Enter", ctrlKey: true });
   await waitFor(() => expect(onClose).toHaveBeenCalled());
-  expect(onSubmit).toHaveBeenCalledWith({ value: "غرفة\nRoom", style: "NOTES", height: 3.5, tag: null });
+  expect(onSubmit).toHaveBeenCalledWith({ value: "غرفة\nRoom", style: "NOTES", height: 3.5 });
 });
 
-test("editing a block's attributes edits the one chosen, and an error stays", async () => {
-  const onSubmit = vi.fn(async () => {
-    throw new Error("refused");
-  });
-  render(
-    <TextDialog
-      heading="text.editTitle"
-      value=""
-      multiline={false}
-      attributes={[
-        ["MARK", "D9"],
-        ["WIDTH", "0.9"],
-      ]}
-      onSubmit={onSubmit}
-      onClose={() => {}}
-    />,
-  );
-  const input = screen.getByRole("textbox", { name: "Text" });
-  expect((input as HTMLInputElement).value).toBe("D9");
-  fireEvent.change(screen.getByRole("combobox", { name: "Attribute" }), { target: { value: "WIDTH" } });
-  expect((input as HTMLInputElement).value).toBe("0.9");
-  expect(screen.queryByRole("combobox", { name: "Style" })).toBeNull();
-  fireEvent.change(input, { target: { value: "1.0" } });
-  fireEvent.click(screen.getByRole("button", { name: "Save" }));
-  await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("refused"));
-  expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ value: "1.0", tag: "WIDTH" }));
-});
-
-test("an attribute may be cleared", async () => {
-  const onSubmit = vi.fn(async () => {});
-  render(
-    <TextDialog
-      heading="text.editTitle"
-      value=""
-      multiline={false}
-      attributes={[["MARK", "D9"]]}
-      onSubmit={onSubmit}
-      onClose={() => {}}
-    />,
-  );
-  fireEvent.change(screen.getByRole("textbox", { name: "Text" }), { target: { value: "" } });
-  fireEvent.click(screen.getByRole("button", { name: "Save" }));
-  await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ value: "", tag: "MARK" })));
-});

@@ -268,3 +268,18 @@ describe("dimensions and tables", () => {
     expect(s.skipped).toBe(1);
   });
 });
+
+describe("block", () => {
+  it("takes the entities, then the base point: a block to name, converted to a reference", () => {
+    const { commands } = feed(initialModifyState("block", []), [picked(1, 2), finish, pt([5, 6])]);
+    expect(commands).toEqual([
+      { type: "create_block", name: "", base: [5, 6], targets: t([1, 2]), convert_to_insert: true },
+    ]);
+  });
+
+  it("takes dimensions and tables too", () => {
+    const s = initialModifyState("block", [3, 4], { 3: "Dimension", 4: "Table" });
+    expect(s.handles).toEqual([3, 4]);
+    expect(s.hint).toBe("block.prompt.base");
+  });
+});

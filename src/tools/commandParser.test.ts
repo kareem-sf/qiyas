@@ -268,6 +268,32 @@ test("the table and field commands start their tools, UPDATEFIELD runs", () => {
   expect(parse("updatefield", cmd)).toEqual({ type: "run", what: "updateFields" });
 });
 
+test("the block commands start their tools or open their dialogs", () => {
+  for (const [line, tool] of [
+    ["B", "block"],
+    ["BLOCK", "block"],
+    ["REFEDIT", "refedit"],
+    ["BEDIT", "refedit"],
+    ["ATT", "attdef"],
+    ["ATTDEF", "attdef"],
+    ["ATTEDIT", "textEdit"],
+  ]) {
+    expect(parse(line, cmd)).toEqual({ type: "tool", tool });
+  }
+  for (const [line, what] of [
+    ["I", "insertBlock"],
+    ["INSERT", "insertBlock"],
+    ["W", "writeBlock"],
+    ["WBLOCK", "writeBlock"],
+    ["REFCLOSE", "refClose"],
+    ["BATTMAN", "attributeManager"],
+  ]) {
+    expect(parse(line, cmd)).toEqual({ type: "run", what });
+  }
+  // Z W is still a zoom window.
+  expect(parse("Z W", cmd)).toEqual({ type: "tool", tool: "zoomWindow" });
+});
+
 test("a draw tool's options and typed distances", () => {
   const pline = { ...at("point", [0, 0]), options: ["A", "L", "C", "U"] };
   expect(parse("a", pline)).toEqual({ type: "option", option: "A" });

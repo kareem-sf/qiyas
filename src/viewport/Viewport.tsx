@@ -44,6 +44,8 @@ export type Tool =
   | "textEdit"
   /** Click a table to edit its cells. */
   | "tableEdit"
+  /** Click a block reference to edit its block in place. */
+  | "refedit"
   | "select"
   | "distance"
   | "area"

@@ -63,6 +63,8 @@ export type DrawingInfo = {
   /** Drawing units per paper unit it gives (50 for "1:50"): new text and annotations are that
    *  many times their paper size. */
   annotation_factor: number;
+  /** The block being edited in place, if one is. */
+  block_edit: string | null;
 };
 
 /** A dimension style's common fields, in drawing units before its `scale` (DIMASZ, DIMTXT,
@@ -838,7 +840,33 @@ export type Command =
   /** A one-line text holding the field: an `added` outcome. */
   | { type: "field"; at: P; height: number; field: FieldKind }
   /** Works every field out again: one undo step when one changes. */
-  | { type: "update_fields" };
+  | { type: "update_fields" }
+  /** A new block from `targets` (they leave the sheet, relative to `base`); with
+   *  `convert_to_insert` a reference takes their place. An `edited` outcome. */
+  | { type: "create_block"; name: string; base: P; targets: EntityTarget[]; convert_to_insert: boolean }
+  /** A reference to `name` on the current layer, `rotation` in degrees; attributes by tag. With
+   *  `from_path`, a block the drawing lacks is copied from that drawing first. */
+  | {
+      type: "insert_block";
+      name: string;
+      at: P;
+      scale: number;
+      rotation: number;
+      attribute_values: Record<string, string>;
+      from_path?: string | null;
+    }
+  /** Writes the block to a .dwg in the drawing's folder (the Save dialog uses `writeBlock`). */
+  | { type: "write_block"; name: string; path: string }
+  /** Edits the reference's block in place until saved or discarded: not an undo step. */
+  | { type: "edit_block_in_place"; target: EntityTarget }
+  | { type: "save_block_edits" }
+  | { type: "discard_block_edits" }
+  | { type: "att_def"; tag: string; prompt: string; default: string; at: P; height: number }
+  | { type: "edit_attributes"; target: EntityTarget; values: Record<string, string> }
+  | { type: "edit_att_def"; block: string; tag: string; prompt: string; default: string }
+  /** Every reference gets the block's attributes as defined now, keeping each tag's value. */
+  | { type: "sync_attributes"; block: string }
+  | { type: "redefine_block"; name: string; from_path: string };
 
 /** Where find and replace looks: the sheet on screen, or every sheet. */
 export type TextScope = "sheet" | "drawing";
@@ -949,9 +977,35 @@ export type Settings = {
   theme: "system" | "light" | "dark";
   /** The user's command line aliases, alias to command, over the built-in ones. */
   aliases: Record<string, string>;
+  /** The tool palette; changed only with `setToolPalette`. */
+  tool_palette?: PaletteItem[];
 };
 
 export const getSettings = () => invoke<Settings>("get_settings");
+
+/** One button of the tool palette: a block to insert or a command line to run. */
+export type PaletteItem = { kind: "block" | "command"; label: string; value: string };
+
+/** Keeps the tool palette in the settings file. */
+export const setToolPalette = (items: PaletteItem[]) => invoke<void>("set_tool_palette", { items });
+
+/** An attribute definition: its tag, the prompt asked on insert and its default value. */
+export type AttDefInfo = { tag: string; prompt: string; default: string };
+
+/** A named block of the drawing, with its attribute definitions. */
+export type BlockInfo = { name: string; attdefs: AttDefInfo[] };
+
+export const blocks = () => invoke<BlockInfo[]>("blocks");
+
+/** A PNG of the block, `px` wide. */
+export const blockThumbnail = (name: string, px: number) =>
+  invoke<ArrayBuffer>("block_thumbnail", { name, px });
+
+/** The named blocks of another drawing, opened read-only (the Design Center). */
+export const drawingBlocks = (path: string) => invoke<string[]>("drawing_blocks", { path });
+
+/** WBLOCK to a .dwg the user chose in the Save dialog. */
+export const writeBlock = (name: string, path: string) => invoke<void>("write_block", { name, path });
 
 /** Rejects a port outside 1024–65535 or an unknown effort. */
 export const setSettings = (settings: Settings) => invoke<void>("set_settings", { settings });

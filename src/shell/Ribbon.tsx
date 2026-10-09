@@ -45,6 +45,13 @@ type Props = {
   onDimStyle?(): void;
   /** Works every field out again (UPDATEFIELD). */
   onUpdateFields?(): void;
+  /** The Insert tab: the block palette to insert from (INSERT) or write a block (WBLOCK), the
+   *  attribute manager (BATTMAN), the Design Center and the tool palette. */
+  onInsertBlock?(): void;
+  onWriteBlock?(): void;
+  onAttributeManager?(): void;
+  onDesignCenter?(): void;
+  onToolPalettes?(): void;
   onUndo?(): void;
   onRedo?(): void;
   /** The drawing holds its Arabic text backwards; the checkbox is disabled without a handler. */
@@ -57,8 +64,8 @@ type Props = {
   onDeleteView?(name: string): Promise<void>;
 };
 
-type Tab = "home" | "measure" | "annotate" | "view";
-const TABS: Tab[] = ["home", "measure", "annotate", "view"];
+type Tab = "home" | "measure" | "annotate" | "insert" | "view";
+const TABS: Tab[] = ["home", "measure", "annotate", "insert", "view"];
 
 /** The Annotate tab's Leaders group; the rest of `DIM_TOOLS` are the Dimensions group. */
 const NOTE_TOOLS = ["leader", "mleader", "tolerance"] as const;
@@ -146,7 +153,7 @@ export function Ribbon(props: Props) {
           </span>,
           <span key="sep-modify" className="sep" />,
           <span key="modify" className="ribbon-group" role="group" aria-label={t("modify.group")}>
-            {MODIFY_TOOLS.map((name) => tool(name, `modify.${name}`))}
+            {MODIFY_TOOLS.filter((name) => name !== "block").map((name) => tool(name, `modify.${name}`))}
             {/* The second row of Modify: trim, extend, fillet… */}
             <span className="ribbon-break" />
             {EDIT_TOOLS.map((name) => tool(name, `edit.${name}`))}
@@ -180,6 +187,19 @@ export function Ribbon(props: Props) {
             {tool("tableEdit", "table.tableEdit")}
             {tool("field", "table.fieldTool")}
             {action("table.updateFields", props.onUpdateFields)}
+          </span>,
+        ]}
+        {tab === "insert" && [
+          <span key="block" className="ribbon-group" role="group" aria-label={t("block.group")}>
+            {tool("block", "block.createTool")}
+            {action("block.insertTool", props.onInsertBlock)}
+            {action("block.writeTool", props.onWriteBlock)}
+            {tool("refedit", "block.refedit")}
+            {tool("attdef", "block.attdefTool")}
+            {tool("textEdit", "block.attedit")}
+            {action("block.manager", props.onAttributeManager)}
+            {action("block.designCenter", props.onDesignCenter)}
+            {action("block.toolPalettes", props.onToolPalettes)}
           </span>,
         ]}
         {tab === "view" && [

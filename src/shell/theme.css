@@ -2033,3 +2033,53 @@ button.close {
   justify-content: space-between;
   gap: 8px;
 }
+
+/* Blocks: the edit-in-place bar, the block palette's tiles, the attribute manager's table. */
+.block-edit-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  background: var(--accent-soft);
+  border-bottom: 1px solid var(--accent);
+}
+
+.block-tiles,
+.design-center-blocks,
+.palette-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-height: 50vh;
+  overflow: auto;
+}
+
+.block-tiles li,
+.design-center-blocks li,
+.palette-items li {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.block-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 112px;
+}
+
+.block-tile img,
+.block-blank {
+  width: 96px;
+  height: 96px;
+  background: #fff;
+}
+
+.attdefs input {
+  width: 100%;
+}

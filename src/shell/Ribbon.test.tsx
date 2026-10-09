@@ -204,3 +204,36 @@ test("the Annotate tab has the Tables group: table, edit, field and update field
   fireEvent.click(within(group).getByRole("button", { name: "Update fields" }));
   expect(onUpdateFields).toHaveBeenCalled();
 });
+
+test("the Insert tab has the Block group", () => {
+  const onTool = vi.fn();
+  const handlers = {
+    onInsertBlock: vi.fn(),
+    onWriteBlock: vi.fn(),
+    onAttributeManager: vi.fn(),
+    onDesignCenter: vi.fn(),
+    onToolPalettes: vi.fn(),
+  };
+  render(<Ribbon {...props} onTool={onTool} {...handlers} />);
+  fireEvent.click(screen.getByRole("tab", { name: "Insert" }));
+  const group = screen.getByRole("group", { name: "Block" });
+  for (const [name, tool] of [
+    ["Create block", "block"],
+    ["Edit in place", "refedit"],
+    ["Define attribute", "attdef"],
+    ["Edit attributes", "textEdit"],
+  ]) {
+    fireEvent.click(within(group).getByRole("button", { name }));
+    expect(onTool).toHaveBeenLastCalledWith(tool);
+  }
+  for (const [name, handler] of [
+    ["Insert…", handlers.onInsertBlock],
+    ["Write block…", handlers.onWriteBlock],
+    ["Attribute manager", handlers.onAttributeManager],
+    ["Design Center", handlers.onDesignCenter],
+    ["Tool palette", handlers.onToolPalettes],
+  ] as const) {
+    fireEvent.click(within(group).getByRole("button", { name }));
+    expect(handler).toHaveBeenCalled();
+  }
+});

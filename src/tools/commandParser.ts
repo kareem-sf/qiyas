@@ -44,7 +44,11 @@ export type Run =
   | "extract"
   | "find"
   | "dimStyle"
-  | "updateFields";
+  | "updateFields"
+  | "insertBlock"
+  | "writeBlock"
+  | "refClose"
+  | "attributeManager";
 
 export type Action =
   /** An empty line where a command is expected: run the last command again. */
@@ -93,6 +97,10 @@ const RUNS: Partial<Record<CommandName, Run>> = {
   FIND: "find",
   DIMSTYLE: "dimStyle",
   UPDATEFIELD: "updateFields",
+  INSERT: "insertBlock",
+  WBLOCK: "writeBlock",
+  REFCLOSE: "refClose",
+  BATTMAN: "attributeManager",
 };
 
 const TOOLS: Partial<Record<CommandName, Tool>> = {
@@ -157,6 +165,11 @@ const TOOLS: Partial<Record<CommandName, Tool>> = {
   TABLE: "table",
   TABLEDIT: "tableEdit",
   FIELD: "field",
+  BLOCK: "block",
+  REFEDIT: "refedit",
+  BEDIT: "refedit",
+  ATTDEF: "attdef",
+  ATTEDIT: "textEdit",
 };
 
 /** The draws typed whole on one line. */

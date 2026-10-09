@@ -91,3 +91,20 @@ test("TABLE and FIELD place where clicked: a table's corner, a field's text", ()
   expect(initialTextState("field").hint).toBe("table.prompt.field");
   expect(textOptions(initialTextState("field"))).toEqual(["H"]);
 });
+
+test("INSERT places a block where clicked, turned by R and scaled by S; ATTDEF takes H", () => {
+  expect(isTextTool("insertBlock")).toBe(true);
+  expect(isTextTool("attdef")).toBe(true);
+  const s = initialTextState("insertBlock");
+  expect(s.hint).toBe("block.prompt.insert");
+  expect(textOptions(s)).toEqual(["R", "S"]);
+  expect(takesTextNumber(textReducer(s, opt("S")))).toBe("distance");
+  expect(
+    requests("insertBlock", [pt([1, 2]), opt("R"), num(90), opt("S"), num(2), pt([3, 4]), opt("S"), num(0)]),
+  ).toEqual([
+    { kind: "insertBlock", at: [1, 2], rotation: 0, scale: 1 },
+    { kind: "insertBlock", at: [3, 4], rotation: 90, scale: 2 },
+  ]);
+  expect(textOptions(initialTextState("attdef"))).toEqual(["H"]);
+  expect(requests("attdef", [opt("H"), num(0.5), pt([7, 8])])).toEqual([{ kind: "attdef", at: [7, 8], height: 0.5 }]);
+});
