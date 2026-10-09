@@ -6,6 +6,7 @@ import {
   imageUniforms,
   IMAGE_MONOCHROME,
   matchingRanges,
+  newPictureBounds,
   NO_CHAIN,
   packImageFlags,
   parseAtlas,
@@ -402,4 +403,15 @@ test("the shader is given neutral values for 50, 50, 0 and the extremes past the
   });
   // A faded PDF underlay keeps its half fade and is otherwise as it is.
   expect(imageUniforms(IMAGE_FADED)).toEqual({ monochrome: false, brightness: 0, contrast: 1, fade: 0.5 });
+});
+
+test("the box of a picture just attached is the one the batch before did not have", () => {
+  // Picture 3 covers x 0 to 20, y 0 to 10.
+  const b = parseBatch(fromHex(IMAGES_FROM_RUST));
+  expect(newPictureBounds(null, b)).toEqual([
+    [0, 0],
+    [20, 10],
+  ]);
+  expect(newPictureBounds(b, b)).toBeNull();
+  expect(newPictureBounds(b, null)).toBeNull();
 });

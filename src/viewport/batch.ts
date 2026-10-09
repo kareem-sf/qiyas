@@ -463,6 +463,24 @@ export function picturesInView(batch: Batch | null, visible: WorldBounds): Set<n
   return out;
 }
 
+/** The box around the pictures of `after` whose ids `before` did not have (an underlay or image
+ *  just attached), or null when there are none. */
+export function newPictureBounds(before: Batch | null, after: Batch | null): WorldBounds | null {
+  if (!after) return null;
+  const old = new Set((before?.imageTable ?? []).map((e) => e.id));
+  const [ox, oy] = after.origin;
+  const q = after.images;
+  let [lx, ly, hx, hy] = [Infinity, Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < q.length; i++) {
+    if (old.has(q.id(i))) continue;
+    for (let k = 0; k < 4; k++) {
+      const [x, y] = [q.x(i, k) + ox, q.y(i, k) + oy];
+      [lx, ly, hx, hy] = [Math.min(lx, x), Math.min(ly, y), Math.max(hx, x), Math.max(hy, y)];
+    }
+  }
+  return lx <= hx ? [[lx, ly], [hx, hy]] : null;
+}
+
 /** The picture ids of `batch` in view (`picturesInView`) the window should fetch for a zoom of
  *  `now`: not held, held at another version, or held for a zoom too far off
  *  (`pictureNeedsRedraw`). Pictures out of view are never fetched. */

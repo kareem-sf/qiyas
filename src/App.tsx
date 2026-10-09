@@ -123,6 +123,7 @@ import {
   parseAtlas,
   parseBatch,
   fetchPictures,
+  newPictureBounds,
   parseThumbnails,
   type AtlasPage,
   type Batch,
@@ -1112,11 +1113,13 @@ export default function App() {
   /** Attaches a PDF page from the dialog, then draws it: an underlay's picture is fetched before
    *  the dialog closes, so its progress shows there. Errors go to the dialog. */
   async function attachPdfPage(r: AttachRequest) {
+    const before = batchHeld.current;
     const added = await attachPdf(r.path, r.page, r.at, r.scale, r.mode);
     setInfo(await drawingInfo());
     await redraw();
     const view = viewport.current;
     if (r.mode === "underlay" && view) {
+      showNewPicture(before);
       await syncPictures(batchHeld.current, view.pxPerUnit(), view.visible());
     } else {
       setNotice(t("attachPdf.imported", { n: added }));
@@ -1125,11 +1128,20 @@ export default function App() {
 
   /** Attaches an image from the dialog, then draws it with its picture. Errors go to the dialog. */
   async function attachImageFile(r: AttachImageRequest) {
+    const before = batchHeld.current;
     await attachImage(r.path, r.at, r.width);
     setInfo(await drawingInfo());
     await redraw();
     const view = viewport.current;
+    showNewPicture(before);
     if (view) await syncPictures(batchHeld.current, view.pxPerUnit(), view.visible());
+  }
+
+  /** Fits the view to the picture the batch on screen has and `before` did not (one just
+   *  attached), so it never lands off screen. */
+  function showNewPicture(before: Batch | null) {
+    const box = newPictureBounds(before, batchHeld.current);
+    if (box) viewport.current?.fitTo(box);
   }
 
   /** Sets the chosen image's brightness, contrast and fade (one undo step), then draws it. */
