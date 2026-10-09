@@ -13,7 +13,7 @@ use crate::inquiry::{Field, Spacing};
 use crate::session::{effective_block_name, locate, variant_name, xref_of_chain, Located};
 use crate::takeoff::in_metres;
 use crate::{
-    AttachMode, Boq, Conflict, ConflictStatus, CoreError, Current, Drafting, DrawSpec,
+    AttachMode, Boq, Conflict, ConflictStatus, CoreError, Current, Drafting, DrawSpec, EditSpec,
     EntityFilter, Kind, Measurement, ModifySpec, PreparedPdf, Schedule, Session, SnapKind, Source,
 };
 
@@ -234,6 +234,10 @@ pub enum Command {
     /// Moves, copies, turns, scales, mirrors, stretches, aligns, arrays or explodes entities at
     /// the top of the sheet on screen (see `ModifySpec`): one undo step.
     Modify(ModifySpec),
+    /// Trims, extends, breaks, joins, lengthens, reverses, offsets, fillets, chamfers, blends,
+    /// edits polylines, removes duplicates or flattens entities at the top of the sheet on screen
+    /// (see `EditSpec`): one undo step.
+    Edit(EditSpec),
 }
 
 /// An entity as picked (see `Picked`): its handle and the block references it sits inside,
@@ -280,7 +284,8 @@ impl Command {
             Command::Calibrate { .. }
             | Command::SetImageDisplay { .. }
             | Command::DeleteEntities { .. }
-            | Command::Modify(_) => Some(Part::Document {
+            | Command::Modify(_)
+            | Command::Edit(_) => Some(Part::Document {
                 tables: false,
                 takeoff: false,
             }),
@@ -326,6 +331,13 @@ pub enum Outcome {
     /// as they are.
     Exploded {
         handles: Vec<u64>,
+        left_alone: usize,
+    },
+    /// An edit made in place: the entities it added (pieces of a trim or a break, a fillet's
+    /// arc...) and removed (joined or duplicates), and how many picked it left as they were.
+    Edited {
+        added: Vec<u64>,
+        removed: Vec<u64>,
         left_alone: usize,
     },
     /// The command named a measurement or BOQ item that does not exist.
@@ -609,6 +621,7 @@ impl Session {
                 return Ok(Outcome::Changed);
             }
             Command::Modify(spec) => return self.modify(spec),
+            Command::Edit(spec) => return self.edit_entities(spec),
         };
         measurement.source = source.name().to_string();
         self.takeoff.add(measurement.clone());

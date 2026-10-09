@@ -520,7 +520,7 @@ impl Session {
         Ok(())
     }
 
-    fn entity(&self, h: Handle) -> &EntityType {
+    pub(crate) fn entity(&self, h: Handle) -> &EntityType {
         self.drawing
             .doc
             .get_entity(h)
@@ -652,7 +652,11 @@ impl Session {
     /// screen) as a new entity: new handles for it and its attributes, none of its parts' old
     /// handles (vertices, faces, the sequence end), and nothing that ties it to the one it came
     /// from (reactors, extension dictionary, hatch boundary links).
-    fn add_fresh(&mut self, mut e: EntityType, owner: Option<Handle>) -> Result<u64, CoreError> {
+    pub(crate) fn add_fresh(
+        &mut self,
+        mut e: EntityType,
+        owner: Option<Handle>,
+    ) -> Result<u64, CoreError> {
         let doc = &mut self.drawing.doc;
         let c = e.common_mut();
         c.handle = Handle::NULL;
@@ -1020,6 +1024,7 @@ impl Session {
     /// tables (a copied dimension's or table's block; an erased image's or underlay's definition
     /// link) and the take-off (rows measuring a target).
     pub(crate) fn document_extras(&self, cmd: &Command) -> (bool, bool) {
+        let edited;
         let (targets, copying, erasing) = match cmd {
             Command::DeleteEntities { targets } => (targets.as_slice(), false, true),
             Command::Modify(spec) => (
@@ -1027,6 +1032,10 @@ impl Session {
                 matches!(spec, ModifySpec::Copy { .. }),
                 false,
             ),
+            Command::Edit(spec) => {
+                edited = spec.targets();
+                (edited.as_slice(), false, false)
+            }
             _ => return (false, false),
         };
         let doc = &self.drawing.doc;
