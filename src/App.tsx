@@ -216,8 +216,10 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [xrefsOpen, setXrefsOpen] = useState(false);
   const [extractOpen, setExtractOpen] = useState(false);
-  /** The command line shows (Ctrl+9). */
+  /** The command line shows (Ctrl+9), its input, and whether to focus it once shown. */
   const [commandLineOn, setCommandLineOn] = useState(true);
+  const commandInput = useRef<HTMLInputElement>(null);
+  const focusCommandLine = useRef(false);
   /** The user's command line aliases from the settings. */
   const [userAliases, setUserAliases] = useState<Record<string, string>>({});
   const commandAliases = useMemo(() => mergeAliases(userAliases), [userAliases]);
@@ -669,6 +671,7 @@ export default function App() {
       setCompared(false);
       setInfoCard(null);
       measure.escape();
+      lastPoint.current = null;
       await refreshTakeoffAndBoq();
       await redraw(true);
     });
@@ -978,13 +981,21 @@ export default function App() {
     else if (measure.asking === "measureAlong" && info) measure.answer(value / metresPerUnit(info.units));
   }
 
-  // DIVIDE n and MEASURE step: the number typed with the command answers once the entity is clicked.
+  // DIVIDE n and MEASURE step: the number typed with the command answers once the entity is
+  // clicked. It is used once, and dropped when the prompt closes or another tool is chosen, so it
+  // never answers a later prompt.
   useEffect(() => {
     const typed = preset.current;
-    if (!typed || !measure.asking) return;
     preset.current = null;
-    if (typed.tool === tool) answerAlong(typed.value);
+    if (typed && measure.asking && typed.tool === tool) answerAlong(typed.value);
   }, [measure.asking]);
+  useEffect(() => {
+    if (preset.current?.tool !== tool) preset.current = null;
+  }, [tool]);
+  useEffect(() => {
+    if (commandLineOn && focusCommandLine.current) commandInput.current?.focus();
+    focusCommandLine.current = false;
+  }, [commandLineOn]);
 
   /** The layer named `name` in any case, as the drawing spells it; null (and an error) when none. */
   function layerNamed(name: string): string | null {
@@ -1017,6 +1028,12 @@ export default function App() {
         answerAlong(a.value);
         return;
       case "tool":
+        if (needDrawing()) return;
+        // DIVIDE n while divide already asks for its number: that is the answer.
+        if (a.preset !== undefined && a.tool === tool && measure.asking === tool) {
+          answerAlong(a.preset);
+          return;
+        }
         preset.current = a.preset !== undefined ? { tool: a.tool, value: a.preset } : null;
         setTool(a.tool);
         return;
@@ -1122,7 +1139,9 @@ export default function App() {
       // Ctrl+9 works from the command line too.
       if (action === "commandLine") {
         e.preventDefault();
-        setCommandLineOn((on) => !on);
+        if (e.repeat) return;
+        focusCommandLine.current = !commandLineOn;
+        setCommandLineOn(!commandLineOn);
         return;
       }
       if (typing(e)) return;
@@ -1732,7 +1751,12 @@ export default function App() {
         </div>
       </div>
       {commandLineOn && (
-        <CommandLine state={commandState} prompt={t(promptKey)} onAction={onCommand} />
+        <CommandLine
+          state={commandState}
+          prompt={t(promptKey)}
+          onAction={onCommand}
+          inputRef={commandInput}
+        />
       )}
       <StatusBar
         cursor={measure.cursor}

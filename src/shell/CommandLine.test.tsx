@@ -97,3 +97,32 @@ test("at a point prompt, a typed point is an answer, not a command to repeat", (
   expect(onAction).toHaveBeenLastCalledWith({ type: "finish" });
   expect(log()).toEqual(["Specify next point: @2,0", "Specify next point:"]);
 });
+
+test("Enter never repeats COUNT <block> or AI <text>; tools and UNDO still repeat", () => {
+  const { onAction, enter, key } = setup();
+  enter("COUNT DOOR");
+  key("Enter");
+  enter("AI how long is the wall?");
+  key("Enter");
+  expect(onAction.mock.calls.map(([a]) => a.type)).toEqual(["count", "ai"]);
+
+  enter("U");
+  key("Enter");
+  enter("AA");
+  key("Enter");
+  expect(onAction.mock.calls.slice(2).map(([a]) => a)).toEqual([
+    { type: "run", what: "undo" },
+    { type: "run", what: "undo" },
+    { type: "tool", tool: "area" },
+    { type: "tool", tool: "area" },
+  ]);
+});
+
+test("history keeps the last 50 lines", () => {
+  const { input, enter, key } = setup();
+  for (let i = 1; i <= 55; i++) enter(`LAYOFF L${i}`);
+  key("ArrowUp");
+  expect(input.value).toBe("LAYOFF L55");
+  for (let i = 0; i < 60; i++) key("ArrowUp");
+  expect(input.value).toBe("LAYOFF L6");
+});

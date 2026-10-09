@@ -208,6 +208,42 @@ pub fn flatten_with(
     }
 }
 
+/// The layer and colour an entity is drawn with, resolved exactly as `flatten_with` resolves them:
+/// `chain` holds the block references it sits inside (outermost first, all in `doc`); `xref`
+/// names the xref the last of them shows, when the entity is one at the top of that xref's model
+/// space. The colour is still ByLayer or ByBlock only when nothing resolves it.
+pub fn drawn_style(
+    doc: &CadDocument,
+    xrefs: &XrefDocs,
+    chain: &[&EntityCommon],
+    entity: &EntityCommon,
+    xref: Option<&str>,
+) -> (String, Color) {
+    let mut walk = Walk {
+        host: doc,
+        xrefs,
+        doc,
+        tol: 0.0,
+        out: Vec::new(),
+        budget: 0,
+        truncated: false,
+        chain: Vec::new(),
+        layer_colors: HashMap::new(),
+        xref_stack: Vec::new(),
+        xref_entity: None,
+        xref_insert_layers: Vec::new(),
+    };
+    let mut parent: Option<Style> = None;
+    for common in chain {
+        parent = Some(walk.style(common, parent.as_ref()));
+    }
+    if let Some(name) = xref {
+        walk.xref_stack.push(name.to_string());
+    }
+    let style = walk.style(entity, parent.as_ref());
+    (style.layer, style.color)
+}
+
 /// The layer and colour an entity is drawn with.
 struct Style {
     layer: String,

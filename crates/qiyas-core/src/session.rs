@@ -4,13 +4,14 @@ use std::fmt::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use opencadcodec::entities::EntityCommon;
 use opencadcodec::entities::Insert;
 use opencadcodec::tables::normalize_name;
 use opencadcodec::{CadDocument, Color, DwgWriter, DxfWriter, EntityType, Handle};
 use opencadkernel::geom2d::Curve;
 use qiyas_geom::{
-    exact_area, exact_length, flatten_with, insert_instances, is_xref_block, snap_shapes, Xform,
-    XrefDocs, MAX_XREF_DEPTH,
+    drawn_style, exact_area, exact_length, flatten_with, insert_instances, is_xref_block,
+    snap_shapes, Xform, XrefDocs, MAX_XREF_DEPTH,
 };
 use qiyas_render::{
     add_images, add_pick_outlines, build_batch_with_xrefs, layer_shown, place_text, resolve_color,
@@ -734,7 +735,7 @@ impl Session {
         } else {
             common.linetype.clone()
         };
-        let color_rgb = self.drawn_color(&common.color, chain, &located.layer);
+        let color_rgb = self.drawn_color(common, chain, located.xref.as_deref());
         Ok(EntityInfo {
             handle,
             kind: variant_name(entity),
@@ -758,33 +759,16 @@ impl Session {
         })
     }
 
-    /// The colour an entity of colour `color`, inside the block references `chain`, on layer
-    /// `layer` (as drawn) is drawn with. ByBlock takes the innermost reference's colour, and so on
-    /// outwards; ByLayer takes the layer's.
-    fn drawn_color(&self, color: &Color, chain: &[u64], layer: &str) -> [u8; 3] {
-        let mut color = *color;
-        for &h in chain.iter().rev() {
-            if color != Color::ByBlock {
-                break;
-            }
-            if let Some(insert) = self.drawing.doc.get_entity(Handle::new(h)) {
-                color = insert.common().color;
-            }
-        }
-        let layer_color = match color {
-            Color::ByLayer => {
-                let name = normalize_name(layer);
-                self.layers()
-                    .into_iter()
-                    .find(|l| normalize_name(&l.name) == name)
-                    .map_or(Color::Index(7), |l| {
-                        let [r, g, b] = l.color;
-                        Color::Rgb { r, g, b }
-                    })
-            }
-            _ => Color::ByLayer,
-        };
-        resolve_color(&color, &layer_color)
+    /// The colour the entity `common` inside the block references `chain` is drawn with,
+    /// resolved as the renderer resolves it (`drawn_style`); white when nothing gives one.
+    fn drawn_color(&self, common: &EntityCommon, chain: &[u64], xref: Option<&str>) -> [u8; 3] {
+        let doc = &self.drawing.doc;
+        let commons: Vec<&EntityCommon> = chain
+            .iter()
+            .filter_map(|&h| doc.get_entity(Handle::new(h)).map(EntityType::common))
+            .collect();
+        let (_, color) = drawn_style(doc, &self.xref_docs(), &commons, common, xref);
+        resolve_color(&color, &Color::ByLayer)
     }
 
     /// Runs `cmd` for the user; see `run_as`.

@@ -300,3 +300,76 @@ fn entity_info_reports_colour_linetype_weight_and_attributes() {
     assert_eq!(info.height, Some(0.5));
     assert!(info.style.is_some());
 }
+
+/// Adds a block `name` holding `entity` and returns the entity's handle.
+fn add_block(
+    doc: &mut opencadcodec::CadDocument,
+    name: &str,
+    entity: opencadcodec::EntityType,
+) -> u64 {
+    let mut block = opencadcodec::BlockRecord::new(name);
+    block.handle = doc.allocate_handle();
+    block.block_entity_handle = doc.allocate_handle();
+    block.block_end_handle = doc.allocate_handle();
+    let owner = block.handle;
+    doc.block_records.add(block).unwrap();
+    let mut entity = entity;
+    entity.common_mut().owner_handle = owner;
+    doc.add_entity(entity).unwrap().value()
+}
+
+#[test]
+fn entity_info_resolves_by_block_colours_as_drawn() {
+    use opencadcodec::entities::Insert;
+    use opencadcodec::{Color, EntityType, Line, Vector3};
+
+    let line = |color: Color| {
+        let mut l = Line::from_coords(0.0, 0.0, 0.0, 1.0, 0.0, 0.0);
+        l.common.layer = "A-WALL".to_string();
+        l.common.color = color;
+        EntityType::Line(l)
+    };
+    let reference = |block: &str, layer: &str, color: Color| {
+        let mut i = Insert::new(block, Vector3::new(0.0, 0.0, 0.0));
+        i.common.layer = layer.to_string();
+        i.common.color = color;
+        EntityType::Insert(i)
+    };
+    let mut doc = qiyas_core::fixtures::sample_doc();
+    // A ByBlock line on A-WALL (red) in LEAF; LEAF referenced ByBlock on A-WALL inside FRAME.
+    let leaf_line = add_block(&mut doc, "LEAF", line(Color::ByBlock));
+    let inner = add_block(
+        &mut doc,
+        "FRAME",
+        reference("LEAF", "A-WALL", Color::ByBlock),
+    );
+    // On the sheet: LEAF on A-DOOR (green) ByLayer; FRAME on A-DOOR ByLayer; FRAME in blue.
+    let one = doc
+        .add_entity(reference("LEAF", "A-DOOR", Color::ByLayer))
+        .unwrap()
+        .value();
+    let two = doc
+        .add_entity(reference("FRAME", "A-DOOR", Color::ByLayer))
+        .unwrap()
+        .value();
+    let blue = doc
+        .add_entity(reference("FRAME", "A-DOOR", Color::Index(5)))
+        .unwrap()
+        .value();
+    let dir = tempfile::tempdir().unwrap();
+    let path = qiyas_core::fixtures::write_drawing(&doc, &dir.path().join("byblock.dxf"));
+    let session = Session::open(&path).unwrap();
+
+    // ByBlock in a ByLayer reference takes the reference's layer colour, not its own layer's.
+    let info = session.entity_info(leaf_line, &[one]).unwrap();
+    assert_eq!(info.color, "ByBlock");
+    assert_eq!(info.layer, "A-WALL");
+    assert_eq!(info.color_rgb, [0, 255, 0]);
+
+    // Two levels: ByBlock in a ByBlock reference in a ByLayer one on A-DOOR: green.
+    let info = session.entity_info(leaf_line, &[two, inner]).unwrap();
+    assert_eq!(info.color_rgb, [0, 255, 0]);
+    // The same with the outer reference blue.
+    let info = session.entity_info(leaf_line, &[blue, inner]).unwrap();
+    assert_eq!(info.color_rgb, [0, 0, 255]);
+}

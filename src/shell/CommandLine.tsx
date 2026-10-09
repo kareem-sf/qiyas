@@ -1,4 +1,4 @@
-import { useId, useMemo, useState, type KeyboardEvent } from "react";
+import { useId, useMemo, useState, type KeyboardEvent, type Ref } from "react";
 import { useT } from "../i18n";
 import { parse, suggest, type Action, type ParseState } from "../tools/commandParser";
 
@@ -13,13 +13,19 @@ type Props = {
   /** The prompt before the input, translated, e.g. "Specify first point:". */
   prompt: string;
   onAction(action: Action): void;
+  /** The input, so the app can focus it (Ctrl+9). */
+  inputRef?: Ref<HTMLInputElement>;
 };
+
+/** Actions an empty Enter never repeats: answers to a prompt, and those that would add a second
+ *  count or send the question again. */
+const NOT_REPEATED: Action["type"][] = ["point", "number", "finish", "cancel", "count", "ai"];
 
 /** The command line above the status bar: type a command (or its alias), a point or a number and
  *  press Enter. An empty Enter repeats the last command (or finishes a measure at a point prompt);
  *  ↑ and ↓ go through the last 50 lines; typing shows the matching commands (↑, ↓, Tab, Enter);
  *  Escape cancels. The two lines above show what was typed and any error. */
-export function CommandLine({ state, prompt, onAction }: Props) {
+export function CommandLine({ state, prompt, onAction, inputRef }: Props) {
   const t = useT();
   const id = useId();
   const [text, setText] = useState("");
@@ -59,8 +65,9 @@ export function CommandLine({ state, prompt, onAction }: Props) {
       return;
     }
     write(echo);
-    // Answers to a prompt are not commands to repeat.
-    if (!["point", "number", "finish", "cancel"].includes(action.type)) setLastCommand(typed);
+    // COUNT <block> and AI <text> clear the repeat: Enter after them does nothing.
+    if (action.type === "count" || action.type === "ai") setLastCommand(null);
+    else if (!NOT_REPEATED.includes(action.type)) setLastCommand(typed);
     onAction(action);
   }
 
@@ -119,6 +126,7 @@ export function CommandLine({ state, prompt, onAction }: Props) {
       <div className="command-input">
         <label htmlFor={`${id}-input`}>{prompt}</label>
         <input
+          ref={inputRef}
           id={`${id}-input`}
           role="combobox"
           aria-expanded={open}
