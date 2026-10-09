@@ -93,6 +93,7 @@ pub fn run() {
             blocks::blocks,
             blocks::block_thumbnail,
             blocks::drawing_blocks,
+            blocks::drawing_layers,
             blocks::write_block,
             blocks::set_tool_palette,
         ])

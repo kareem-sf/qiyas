@@ -1,10 +1,11 @@
 //! IPC for the block palette, the Design Center, WBLOCK through the Save dialog and the user's
-//! tool palette. Inserting, editing and attributes go through `run_command`.
+//! tool palette, and another drawing's layers for the layer translator. Inserting, editing and
+//! attributes go through `run_command`.
 
 use std::path::Path;
 use std::sync::PoisonError;
 
-use qiyas_core::BlockInfo;
+use qiyas_core::{BlockInfo, LayerInfo};
 use tauri::ipc::Response;
 use tauri::State;
 
@@ -45,6 +46,16 @@ pub async fn block_thumbnail(
 pub async fn drawing_blocks(path: String) -> Result<Vec<BlockInfo>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         qiyas_core::drawing_blocks(Path::new(&path)).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// The layers of the drawing at `path`, opened read-only (the layer translator's standard).
+#[tauri::command]
+pub async fn drawing_layers(path: String) -> Result<Vec<LayerInfo>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        qiyas_core::drawing_layers(Path::new(&path)).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?

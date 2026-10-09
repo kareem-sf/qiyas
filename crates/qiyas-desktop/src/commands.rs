@@ -871,6 +871,7 @@ mod tests {
                     crate::blocks::blocks,
                     crate::blocks::block_thumbnail,
                     crate::blocks::drawing_blocks,
+                    crate::blocks::drawing_layers,
                     crate::blocks::write_block,
                     crate::blocks::set_tool_palette
                 ])
@@ -979,6 +980,17 @@ mod tests {
             .call("drawing_blocks", json!({ "path": sample }))
             .unwrap();
         assert_eq!(names, json!([{ "name": "DOOR", "attdefs": [] }]));
+        // The layer translator reads another drawing's layers.
+        let layers = ipc
+            .call("drawing_layers", json!({ "path": sample }))
+            .unwrap();
+        let wall = layers
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|l| l["name"] == "A-WALL")
+            .unwrap();
+        assert_eq!(wall["color_name"], "ACI 1");
 
         // A block written where the Save dialog chose, even outside the drawing's folder.
         let elsewhere = tempfile::tempdir().unwrap();
