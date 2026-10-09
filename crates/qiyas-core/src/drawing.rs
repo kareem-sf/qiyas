@@ -136,3 +136,46 @@ impl Drawing {
         self.doc.entities_in_block(sheet_block)
     }
 }
+
+/// A layer name as a QS reads it: a bound xref's layer `XREF$0$LAYER` (nested ones repeat the
+/// `$N$`) gives the part after its last `$N$`, e.g. `A-WALL`. Other names are kept whole.
+pub fn short_layer_name(name: &str) -> &str {
+    let bytes = name.as_bytes();
+    let mut start = 0;
+    for (i, &b) in bytes.iter().enumerate() {
+        if b != b'$' {
+            continue;
+        }
+        let digits = bytes[i + 1..]
+            .iter()
+            .take_while(|c| c.is_ascii_digit())
+            .count();
+        if digits > 0 && bytes.get(i + 1 + digits) == Some(&b'$') {
+            start = i + digits + 2;
+        }
+    }
+    match &name[start..] {
+        "" => name,
+        short => short,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::short_layer_name;
+
+    #[test]
+    fn a_bound_xref_layer_is_shown_by_its_own_name() {
+        assert_eq!(short_layer_name("A-WALL"), "A-WALL");
+        assert_eq!(short_layer_name("BASE-B$0$A-WALL"), "A-WALL");
+        assert_eq!(
+            short_layer_name("02-First floor (arch&furn)$0$02-FIRST FLOOR (ARCH&FURN)$0$A-WALL"),
+            "A-WALL"
+        );
+        assert_eq!(short_layer_name("X$12$Y"), "Y");
+        // `$` without the `$N$` pattern stays.
+        assert_eq!(short_layer_name("COST$A-WALL"), "COST$A-WALL");
+        assert_eq!(short_layer_name("A$$B$x$C"), "A$$B$x$C");
+        assert_eq!(short_layer_name("A$0$"), "A$0$");
+    }
+}

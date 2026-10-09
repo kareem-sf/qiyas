@@ -25,6 +25,7 @@ use opencadcodec::{
 };
 use qiyas_geom::{flatten, object_to_world, Path, XrefDocs};
 
+use crate::drawing::short_layer_name;
 use crate::session::{effective_block_name, locate, MEASURE_TOL};
 use crate::{Kind, Measurement, Units};
 
@@ -267,9 +268,14 @@ pub fn read_embedded(doc: &CadDocument) -> Vec<Measurement> {
 /// True when the description is one Qiyas makes up for a new measurement.
 fn is_default_description(m: &Measurement) -> bool {
     let d = m.description.as_str();
-    let kind_on_layer = d
-        .strip_suffix(&format!(" on {}", m.layer))
-        .is_some_and(|kind| !kind.is_empty() && kind.chars().all(|c| c.is_ascii_alphanumeric()));
+    // Older measurements carry the whole bound-xref layer name, newer ones the short one.
+    let kind_on_layer = [m.layer.as_str(), short_layer_name(&m.layer)]
+        .iter()
+        .any(|layer| {
+            d.strip_suffix(&format!(" on {layer}")).is_some_and(|kind| {
+                !kind.is_empty() && kind.chars().all(|c| c.is_ascii_alphanumeric())
+            })
+        });
     let block_count = m
         .block_name
         .as_ref()
@@ -329,4 +335,27 @@ fn parse(record: &ExtendedDataRecord, units: Units) -> Option<Measurement> {
         _ => {}
     }
     Some(m)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_bound_xref_description_is_a_default_whole_or_short() {
+        let layer = "BASE-B$0$A-WALL".to_string();
+        let m = |d: &str| {
+            Measurement::new(
+                Kind::Length,
+                1.0,
+                Units::Metres,
+                d.into(),
+                layer.clone(),
+                "*Model_Space".into(),
+            )
+        };
+        assert!(is_default_description(&m("Line on A-WALL")));
+        assert!(is_default_description(&m("Line on BASE-B$0$A-WALL")));
+        assert!(!is_default_description(&m("Wall on level 1")));
+    }
 }

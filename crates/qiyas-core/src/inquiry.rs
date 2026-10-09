@@ -12,6 +12,7 @@ use qiyas_geom::{object_to_world, snap_shapes, XrefDocs};
 use serde::{Deserialize, Serialize};
 
 use crate::commands::insert_point;
+use crate::drawing::short_layer_name;
 use crate::query::{bounds, plain_text, texts_of, Candidate};
 use crate::session::{effective_block_name, locate, variant_name, Located, MEASURE_TOL};
 use crate::{CoreError, EntityFilter, Kind, Measurement, Session, SnapKind};
@@ -140,7 +141,11 @@ impl Session {
         let s = self.shown();
         let e = located.entity;
         let mut rows = Rows::new();
-        row(&mut rows, "layer", located.layer.clone());
+        row(
+            &mut rows,
+            "layer",
+            short_layer_name(&located.layer).to_string(),
+        );
         match e {
             EntityType::Insert(insert) => {
                 row(
@@ -279,7 +284,10 @@ impl Session {
                     }
                     let first = if closed { 0 } else { 1 };
                     let d = (first..n).map(|k| total * k as f64 / n as f64).collect();
-                    (d, format!("Divide {n} on {}", located.layer))
+                    (
+                        d,
+                        format!("Divide {n} on {}", short_layer_name(&located.layer)),
+                    )
                 }
                 Spacing::Step(step) => {
                     if !(step > 0.0 && step.is_finite()) {
@@ -294,7 +302,13 @@ impl Session {
                         return Err(invalid("That step places more than 1000 points"));
                     }
                     let d = (1..=n as usize).map(|k| step * k as f64).collect();
-                    (d, format!("Measure every {step} on {}", located.layer))
+                    (
+                        d,
+                        format!(
+                            "Measure every {step} on {}",
+                            short_layer_name(&located.layer)
+                        ),
+                    )
                 }
             };
             let positions: Vec<[f64; 2]> = distances.iter().map(|&d| point_at(&path, d)).collect();

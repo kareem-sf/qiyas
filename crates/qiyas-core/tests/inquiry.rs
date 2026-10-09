@@ -463,3 +463,53 @@ fn extract_door_attributes_to_a_table() {
     });
     assert!(matches!(none, Err(CoreError::InvalidCommand(_))));
 }
+
+#[test]
+fn a_bound_xref_layer_is_shown_short_but_kept_whole() {
+    const BOUND: &str = "02-First floor (arch&furn)$0$02-FIRST FLOOR (ARCH&FURN)$0$A-WALL";
+    let mut doc = qiyas_core::fixtures::sample_doc();
+    let mut layer = opencadcodec::Layer::new(BOUND);
+    layer.handle = doc.allocate_handle();
+    doc.layers.add(layer).unwrap();
+    let mut wall = opencadcodec::Line::from_coords(0.0, 30.0, 0.0, 6.0, 30.0, 0.0);
+    wall.common.layer = BOUND.to_string();
+    doc.add_entity(EntityType::Line(wall)).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = qiyas_core::fixtures::write_drawing(&doc, &dir.path().join("bound.dxf"));
+    let mut s = Session::open(&path).unwrap();
+    let h = handle_of(&s, |e| e.common().layer == BOUND);
+
+    let one = |handle| Command::MeasureEntity {
+        handle,
+        chain: Vec::new(),
+    };
+    let m = measured(&mut s, one(h));
+    assert_eq!(m.description, "Line on A-WALL");
+    assert_eq!(m.layer, BOUND);
+    assert!(m.auto_description);
+
+    let palette = s.entity_info(h, &[]).unwrap();
+    assert_eq!(
+        (palette.layer.as_str(), palette.layer_short.as_str()),
+        (BOUND, "A-WALL")
+    );
+
+    let (_, rows) = geometry(&mut s, h);
+    assert_eq!(value(&rows, "layer"), "A-WALL");
+
+    let divide = Command::DivideAlong {
+        handle: h,
+        chain: Vec::new(),
+        count: 3,
+    };
+    assert_eq!(measured(&mut s, divide).description, "Divide 3 on A-WALL");
+    let along = Command::MeasureAlong {
+        handle: h,
+        chain: Vec::new(),
+        step: 2.5,
+    };
+    assert_eq!(
+        measured(&mut s, along).description,
+        "Measure every 2.5 on A-WALL"
+    );
+}

@@ -20,6 +20,7 @@ use qiyas_render::{
 use serde::{Deserialize, Serialize};
 
 use crate::commands::Part;
+use crate::drawing::short_layer_name;
 use crate::embed::{embed_measurements, read_embedded};
 use crate::project::{self, project_path, Project};
 use crate::underlay::{rebase_links, Underlays};
@@ -149,6 +150,9 @@ pub struct EntityInfo {
     pub kind: String,
     /// The layer it is drawn on: its own, or for one on layer "0" inside a block, its insert's.
     pub layer: String,
+    /// `layer` as shown to the QS: a bound xref's layer without its `XREF$0$` (see
+    /// `short_layer_name`).
+    pub layer_short: String,
     pub length: Option<f64>,
     /// Sum of the closed paths' areas; `None` when the entity has no closed path.
     pub area: Option<f64>,
@@ -756,6 +760,7 @@ impl Session {
         Ok(EntityInfo {
             handle,
             kind: variant_name(entity),
+            layer_short: short_layer_name(&located.layer).to_string(),
             layer: located.layer,
             length,
             area,

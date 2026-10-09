@@ -610,7 +610,7 @@ fn measure(
                 points: Vec::new(),
                 handles: vec![handle],
                 chain: input.chain,
-                description: format!("{} on {}", entity.kind, entity.layer),
+                description: format!("{} on {}", entity.kind, entity.layer_short),
                 note: String::new(),
             }
         }

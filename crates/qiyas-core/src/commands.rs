@@ -7,6 +7,7 @@ use qiyas_geom::{object_to_world, Path};
 use qiyas_render::layer_shown_with;
 use serde::{Deserialize, Serialize};
 
+use crate::drawing::short_layer_name;
 use crate::inquiry::{Field, Spacing};
 use crate::session::{effective_block_name, locate, variant_name, Located};
 use crate::takeoff::in_metres;
@@ -689,7 +690,7 @@ impl Session {
         let located = locate(&self.drawing.doc, &xrefs, handle, &chain)?;
         let entity = located.entity;
         let layer = &located.layer;
-        let description = format!("{} on {layer}", variant_name(entity));
+        let description = format!("{} on {}", variant_name(entity), short_layer_name(layer));
         let mut m = if let EntityType::Insert(insert) = entity {
             let mut m = self.measurement(Kind::Count, 1.0, &description, layer);
             m.block_name = Some(effective_block_name(located.doc, insert));
