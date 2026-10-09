@@ -29,7 +29,7 @@ pub use self::image::{draw_picture, image_size, ImageDisplay, IMAGE_EXTENSIONS, 
 pub use boq::{Boq, BoqItem};
 pub use commands::{Command, Outcome, Target};
 pub use conflict::{Conflict, ConflictKind, ConflictStatus};
-pub use draw::{Current, DrawSpec, HatchPattern};
+pub use draw::{Boundary, Current, DrawSpec, HatchPattern, BOUNDARY_SEGMENTS};
 pub use drawing::{short_layer_name, Drawing, LayerInfo, Sheet};
 pub use embed::{embed_measurements, read_embedded};
 pub use error::CoreError;

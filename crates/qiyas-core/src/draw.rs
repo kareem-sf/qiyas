@@ -5,7 +5,7 @@
 use std::f64::consts::{PI, TAU};
 
 use opencadcodec::entities::{
-    BoundaryEdge, BoundaryPath, CircularArcEdge, Hatch, HatchPattern as CodecPattern,
+    BoundaryEdge, BoundaryPath, BoundaryPathFlags, CircularArcEdge, Hatch, HatchPattern as CodecPattern,
     HatchPatternLine, HatchPatternType, MLine, MLineJustification, PolylineEdge, Ray, Solid,
     Wipeout, XLine,
 };
@@ -187,6 +187,9 @@ pub enum DrawSpec {
         boundary_handles: Vec<u64>,
         #[serde(default)]
         points: Vec<[f64; 2]>,
+        /// With `points`: islands inside the ring, left empty (as `Boundary::Ring` gives them).
+        #[serde(default)]
+        holes: Vec<Vec<[f64; 2]>>,
         pattern: HatchPattern,
     },
     /// A filled triangle or quadrilateral (AutoCAD's SOLID), its corners in AutoCAD's order: the
@@ -399,6 +402,12 @@ fn ring_path(points: &[[f64; 2]], bulges: &[f64]) -> BoundaryPath {
     path
 }
 
+/// AutoCAD's lineweights, in hundredths of a millimetre.
+const LINEWEIGHTS: [i16; 24] = [
+    0, 5, 9, 13, 15, 18, 20, 25, 30, 35, 40, 50, 53, 60, 70, 80, 90, 100, 106, 120, 140, 158, 200,
+    211,
+];
+
 impl Session {
     /// `Command::SetCurrent`: checks `current` against the drawing and keeps it, the layer as the
     /// drawing spells it.
@@ -413,13 +422,17 @@ impl Session {
             return Err(invalid(format!("{} is not a colour", current.color)));
         }
         let lt = current.linetype.trim();
-        let known = lt.eq_ignore_ascii_case("ByLayer")
-            || lt.eq_ignore_ascii_case("ByBlock")
-            || doc.line_types.contains(lt);
-        if !known {
-            return Err(invalid(format!("The drawing has no linetype {lt}")));
-        }
-        if !matches!(current.lineweight, -3..=211) {
+        current.linetype = if lt.eq_ignore_ascii_case("ByLayer") {
+            "ByLayer".to_string()
+        } else if lt.eq_ignore_ascii_case("ByBlock") {
+            "ByBlock".to_string()
+        } else {
+            doc.line_types
+                .get(lt)
+                .map(|t| t.name.clone())
+                .ok_or_else(|| invalid(format!("The drawing has no linetype {lt}")))?
+        };
+        if !(LINEWEIGHTS.contains(&current.lineweight) || matches!(current.lineweight, -3..=-1)) {
             return Err(invalid(format!(
                 "{} is not a lineweight",
                 current.lineweight
@@ -655,10 +668,12 @@ impl Session {
             DrawSpec::Hatch {
                 boundary_handles,
                 points,
+                holes,
                 pattern,
             } => one(EntityType::Hatch(self.hatch(
                 &boundary_handles,
                 &points,
+                &holes,
                 pattern,
             )?)),
             DrawSpec::Solid2D { points } => {
@@ -734,13 +749,17 @@ impl Session {
     }
 
     /// A hatch inside the closed entities `handles` (at the top of the sheet on screen) or the
-    /// ring `points`.
+    /// ring `points` less the islands `holes`.
     fn hatch(
         &self,
         handles: &[u64],
         points: &[[f64; 2]],
+        holes: &[Vec<[f64; 2]>],
         pattern: HatchPattern,
     ) -> Result<Hatch, CoreError> {
+        if !holes.is_empty() && points.is_empty() {
+            return Err(invalid("Islands go with a ring of points"));
+        }
         let pattern = match pattern {
             HatchPattern::Solid => None,
             HatchPattern::Ansi31 => Some(("ANSI31".to_string(), 0.0, 1.0)),
@@ -766,6 +785,12 @@ impl Session {
             (true, false) => {
                 check_ring(points, "hatch boundary")?;
                 hatch.add_path(ring_path(points, &[]));
+                for hole in holes {
+                    check_ring(hole, "hatch island")?;
+                    let mut path = ring_path(hole, &[]);
+                    path.flags = BoundaryPathFlags::DEFAULT;
+                    hatch.add_path(path);
+                }
             }
             (false, true) => {
                 let sheet = self.sheet_owner();
@@ -864,32 +889,104 @@ impl Session {
         Ok(m)
     }
 
-    /// The ring around `p` (drawing coordinates) that the drawn line work on the sheet within
-    /// `radius` of it closes: the smallest bounded region holding `p`, counter-clockwise. Text
-    /// boxes and hatch pattern lines are left out. `None` when `p` is inside no closed region.
-    pub fn boundary_at(&self, p: [f64; 2], radius: f64) -> Option<Vec<[f64; 2]>> {
-        if !(p.iter().all(|v| v.is_finite()) && radius > 0.0 && radius.is_finite()) {
-            return None;
+    /// The closed area around `p` (drawing coordinates) that the drawn line work on the sheet
+    /// makes, for a hatch: the smallest bounded region holding `p`, counter-clockwise, and the
+    /// regions inside it as islands (AutoCAD's Normal style, outermost only). Text boxes and
+    /// hatch pattern lines are left out. Looks `start` around `p` first, then 4 times as far
+    /// each time until the region found lies inside the box looked at, so nothing outside it can
+    /// cut the region. A box with more than `BOUNDARY_SEGMENTS` segments is refused
+    /// (`TooDense`), never searched in part.
+    pub fn boundary_at(&self, p: [f64; 2], start: f64) -> Boundary {
+        self.boundary_at_most(p, start, BOUNDARY_SEGMENTS)
+    }
+
+    /// `boundary_at` with at most `max` segments in the box looked at.
+    pub fn boundary_at_most(&self, p: [f64; 2], start: f64, max: usize) -> Boundary {
+        if !(p.iter().all(|v| v.is_finite()) && start > 0.0 && start.is_finite()) {
+            return Boundary::None;
         }
-        let segments: Vec<KernelLine> = self
-            .segments_near(p, radius, MAX_BOUNDARY_SEGMENTS)
-            .into_iter()
-            .map(|[x0, y0, x1, y1]| KernelLine {
-                start: [x0, y0],
-                end: [x1, y1],
-            })
-            .collect();
-        // Points of the batch are f32 relative to its origin: weld at a few of their units.
-        let tol = (radius * 1e-6).max(1e-6);
-        bounded_faces(&segments, Tolerance::new(tol))
-            .into_iter()
-            .filter(|ring| inside(ring, p))
-            .min_by(|a, b| twice_area(a).abs().total_cmp(&twice_area(b).abs()))
+        let mut radius = start;
+        loop {
+            let Some(near) = self.segments_near(p, radius, max) else {
+                return Boundary::TooDense;
+            };
+            let lo = [p[0] - radius, p[1] - radius];
+            let hi = [p[0] + radius, p[1] + radius];
+            if let Some(found) = region_around(&near.segments, p, radius, lo, hi) {
+                return found;
+            }
+            // The box held every segment there is: nothing further can close a region.
+            if near.whole_sheet {
+                return Boundary::None;
+            }
+            radius *= 4.0;
+        }
     }
 }
 
-/// Most segments `boundary_at` looks at.
-const MAX_BOUNDARY_SEGMENTS: usize = 200_000;
+/// What `Session::boundary_at` finds around a point.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "found", rename_all = "snake_case")]
+pub enum Boundary {
+    /// The region's ring (counter-clockwise) and its islands.
+    Ring {
+        ring: Vec<[f64; 2]>,
+        holes: Vec<Vec<[f64; 2]>>,
+    },
+    /// The point is inside no closed region.
+    None,
+    /// Too much line work around the point to look through: zoom in.
+    TooDense,
+}
+
+/// Most segments `boundary_at` looks through at once.
+pub const BOUNDARY_SEGMENTS: usize = 50_000;
+
+/// The smallest region of `segments` holding `p` with its islands, when it lies inside the box
+/// `lo hi`; `None` when there is none there yet.
+fn region_around(
+    segments: &[[f64; 4]],
+    p: [f64; 2],
+    radius: f64,
+    lo: [f64; 2],
+    hi: [f64; 2],
+) -> Option<Boundary> {
+    let lines: Vec<KernelLine> = segments
+        .iter()
+        .map(|&[x0, y0, x1, y1]| KernelLine {
+            start: [x0, y0],
+            end: [x1, y1],
+        })
+        .collect();
+    // Points of the batch are f32 relative to its origin: weld at a few of their units.
+    let tol = (radius * 1e-6).max(1e-6);
+    let faces = bounded_faces(&lines, Tolerance::new(tol));
+    let (at, ring) = faces
+        .iter()
+        .enumerate()
+        .filter(|(_, ring)| inside(ring, p))
+        .min_by(|(_, a), (_, b)| twice_area(a).abs().total_cmp(&twice_area(b).abs()))?;
+    let fits = ring
+        .iter()
+        .all(|q| q[0] >= lo[0] && q[0] <= hi[0] && q[1] >= lo[1] && q[1] <= hi[1]);
+    if !fits {
+        return None;
+    }
+    // Regions wholly inside the ring are islands; one inside another island is not.
+    let within = |outer: &[[f64; 2]], inner: &[[f64; 2]]| inner.iter().all(|q| inside(outer, *q));
+    let inner: Vec<usize> = (0..faces.len())
+        .filter(|&i| i != at && within(ring, &faces[i]))
+        .collect();
+    let holes = inner
+        .iter()
+        .filter(|&&i| !inner.iter().any(|&o| o != i && within(&faces[o], &faces[i])))
+        .map(|&i| faces[i].clone())
+        .collect();
+    Some(Boundary::Ring {
+        ring: ring.clone(),
+        holes,
+    })
+}
 
 /// Even-odd: `p` is inside `ring`.
 fn inside(ring: &[[f64; 2]], p: [f64; 2]) -> bool {

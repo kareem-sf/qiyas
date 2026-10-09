@@ -33,6 +33,13 @@ use crate::{
 
 /// Flatten tolerance for drawing on screen, in drawing units.
 pub const BATCH_TOL: f64 = 0.05;
+/// What `Session::segments_near` finds.
+pub(crate) struct Near {
+    pub segments: Vec<[f64; 4]>,
+    /// The square held the whole sheet: there is nothing further out.
+    pub whole_sheet: bool,
+}
+
 /// Flatten tolerance for measured lengths and areas, in drawing units. Finer than `BATCH_TOL`
 /// so arcs measure close to their true length.
 pub(crate) const MEASURE_TOL: f64 = 1e-3;
@@ -729,17 +736,22 @@ impl Session {
         })
     }
 
-    /// Up to `max` drawn segments (drawing coordinates, `x0 y0 x1 y1`) with a part within the
-    /// square `radius` around `p`, leaving out text boxes and hatch pattern lines.
-    pub(crate) fn segments_near(&self, p: [f64; 2], radius: f64, max: usize) -> Vec<[f64; 4]> {
+    /// The drawn segments (absolute `x0 y0 x1 y1`) of the sheet on screen that reach into the
+    /// square `radius` around `p`, text boxes and hatch pattern lines left out; `None` when more
+    /// than `max` of them do.
+    pub(crate) fn segments_near(&self, p: [f64; 2], radius: f64, max: usize) -> Option<Near> {
         self.with_cache(None, |cached| {
             let batch = &cached.batch;
             let [ox, oy] = batch.origin;
             let lo = [p[0] - radius, p[1] - radius];
             let hi = [p[0] + radius, p[1] + radius];
-            cached
-                .index
-                .within(lo, hi, max)
+            let found = cached.index.within(lo, hi, max + 1);
+            if found.len() > max {
+                return None;
+            }
+            let [b0, b1] = batch.bounds;
+            let whole_sheet = lo[0] <= b0[0] && lo[1] <= b0[1] && hi[0] >= b1[0] && hi[1] >= b1[1];
+            let segments = found
                 .into_iter()
                 .filter(|&i| {
                     batch
@@ -755,7 +767,11 @@ impl Session {
                         f64::from(s[3]) + oy,
                     ]
                 })
-                .collect()
+                .collect();
+            Some(Near {
+                segments,
+                whole_sheet,
+            })
         })
     }
 

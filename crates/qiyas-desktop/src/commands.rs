@@ -226,16 +226,16 @@ pub async fn pick(
     with_session(&state, |s| Ok(s.pick([x, y], tol)))
 }
 
-/// The ring around (x, y) that the drawn lines within `radius` close, for a hatch; `None` when
-/// (x, y) is inside no closed area.
+/// The closed area around (x, y) the drawn lines make, for a hatch: looked for `start` around
+/// it first, then further (see `Session::boundary_at`).
 #[tauri::command]
 pub async fn boundary_at(
     x: f64,
     y: f64,
-    radius: f64,
+    start: f64,
     state: State<'_, AppState>,
-) -> Result<Option<Vec<[f64; 2]>>, String> {
-    with_session(&state, |s| Ok(s.boundary_at([x, y], radius)))
+) -> Result<qiyas_core::Boundary, String> {
+    with_session(&state, |s| Ok(s.boundary_at([x, y], start)))
 }
 
 /// The object snap within `tol` (drawing units) of `(x, y)`, with the session's snap modes;

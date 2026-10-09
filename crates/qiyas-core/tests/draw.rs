@@ -6,7 +6,9 @@ use std::f64::consts::{FRAC_PI_2, PI};
 use opencadcodec::entities::{BoundaryEdge, HatchPatternType};
 use opencadcodec::{Color, EntityType, Handle, LineWeight};
 use qiyas_core::fixtures::write_sample;
-use qiyas_core::{Command, CoreError, Current, DrawSpec, HatchPattern, Outcome, Session};
+use qiyas_core::{
+    Boundary, Command, CoreError, Current, DrawSpec, HatchPattern, Outcome, Session,
+};
 
 const MODEL: &str = "*Model_Space";
 
@@ -549,6 +551,14 @@ fn a_revision_cloud_is_a_closed_polyline_of_outward_arcs() {
     );
 }
 
+/// The ring found, with no islands.
+fn ring_of(found: Boundary) -> Vec<[f64; 2]> {
+    match found {
+        Boundary::Ring { ring, holes } if holes.is_empty() => ring,
+        other => panic!("a ring without islands, got {other:?}"),
+    }
+}
+
 fn signed_area(ring: &[[f64; 2]]) -> f64 {
     let n = ring.len();
     (0..n)
@@ -602,6 +612,7 @@ fn hatches_from_points_or_closed_entities_with_solid_or_pattern_fills() {
         DrawSpec::Hatch {
             boundary_handles: Vec::new(),
             points: ring.clone(),
+            holes: Vec::new(),
             pattern: HatchPattern::Solid,
         },
     ) else {
@@ -623,6 +634,7 @@ fn hatches_from_points_or_closed_entities_with_solid_or_pattern_fills() {
         DrawSpec::Hatch {
             boundary_handles: Vec::new(),
             points: ring.clone(),
+            holes: Vec::new(),
             pattern: HatchPattern::Ansi31,
         },
     ) else {
@@ -642,6 +654,7 @@ fn hatches_from_points_or_closed_entities_with_solid_or_pattern_fills() {
         DrawSpec::Hatch {
             boundary_handles: Vec::new(),
             points: ring.clone(),
+            holes: Vec::new(),
             pattern: HatchPattern::Ansi37,
         },
     ) else {
@@ -655,6 +668,7 @@ fn hatches_from_points_or_closed_entities_with_solid_or_pattern_fills() {
         DrawSpec::Hatch {
             boundary_handles: Vec::new(),
             points: ring.clone(),
+            holes: Vec::new(),
             pattern: HatchPattern::Custom {
                 name: "line".into(),
                 angle: 90.0,
@@ -674,6 +688,7 @@ fn hatches_from_points_or_closed_entities_with_solid_or_pattern_fills() {
         DrawSpec::Hatch {
             boundary_handles: Vec::new(),
             points: ring.clone(),
+            holes: Vec::new(),
             pattern: HatchPattern::Custom {
                 name: "NO-SUCH".into(),
                 angle: 0.0,
@@ -697,6 +712,7 @@ fn hatches_from_points_or_closed_entities_with_solid_or_pattern_fills() {
         DrawSpec::Hatch {
             boundary_handles: vec![rectangle],
             points: Vec::new(),
+            holes: Vec::new(),
             pattern: HatchPattern::Solid,
         },
     ) else {
@@ -729,6 +745,7 @@ fn hatches_from_points_or_closed_entities_with_solid_or_pattern_fills() {
             DrawSpec::Hatch {
                 boundary_handles: handles,
                 points,
+                holes: Vec::new(),
                 pattern: HatchPattern::Solid,
             },
         );
@@ -738,13 +755,13 @@ fn hatches_from_points_or_closed_entities_with_solid_or_pattern_fills() {
 #[test]
 fn the_hatch_boundary_inside_the_sample_rectangle_is_its_ring() {
     let (_dir, s) = sample_session();
-    let ring = s.boundary_at([2.0, 2.0], 50.0).expect("a ring");
+    let ring = ring_of(s.boundary_at([2.0, 2.0], 50.0));
     assert!(close(signed_area(&ring).abs(), 12.0), "{ring:?}");
     for p in &ring {
         assert!(p[0] > -1e-6 && p[0] < 4.0 + 1e-6 && p[1] > -1e-6 && p[1] < 3.0 + 1e-6);
     }
     // Outside any closed shape there is none.
-    assert!(s.boundary_at([30.0, 30.0], 50.0).is_none());
+    assert_eq!(s.boundary_at([30.0, 30.0], 50.0), Boundary::None);
     // A hatch drawn from it fills the room.
     let mut s = s;
     let EntityType::Hatch(h) = one(
@@ -752,6 +769,7 @@ fn the_hatch_boundary_inside_the_sample_rectangle_is_its_ring() {
         DrawSpec::Hatch {
             boundary_handles: Vec::new(),
             points: ring,
+            holes: Vec::new(),
             pattern: HatchPattern::Solid,
         },
     ) else {
@@ -919,11 +937,13 @@ fn every_draw() -> Vec<DrawSpec> {
         DrawSpec::Hatch {
             boundary_handles: Vec::new(),
             points: ring.clone(),
+            holes: Vec::new(),
             pattern: HatchPattern::Solid,
         },
         DrawSpec::Hatch {
             boundary_handles: Vec::new(),
             points: ring.clone(),
+            holes: Vec::new(),
             pattern: HatchPattern::Ansi37,
         },
         DrawSpec::Solid2D {
@@ -1060,8 +1080,9 @@ fn the_wire_form_is_the_command_type_with_the_draw_kind_beside_it() {
         solid,
         DrawSpec::Hatch {
             pattern: HatchPattern::Solid,
+            ref holes,
             ..
-        }
+        } if holes.is_empty()
     ));
     let set: Command = serde_json::from_str(
         r#"{"type":"set_current","current":{"layer":"A-WALL","color":"ByLayer","linetype":"ByLayer","lineweight":-1}}"#,
@@ -1079,6 +1100,7 @@ fn drawn_hatches_solids_and_wipeouts_fill_in_the_batch() {
         DrawSpec::Hatch {
             boundary_handles: Vec::new(),
             points: ring.clone(),
+            holes: Vec::new(),
             pattern: HatchPattern::Solid,
         },
     )[0];
@@ -1088,6 +1110,7 @@ fn drawn_hatches_solids_and_wipeouts_fill_in_the_batch() {
         DrawSpec::Hatch {
             boundary_handles: Vec::new(),
             points: vec![[40.0, 0.0], [50.0, 0.0], [50.0, 10.0], [40.0, 10.0]],
+            holes: Vec::new(),
             pattern: HatchPattern::Ansi31,
         },
     )[0];
@@ -1105,8 +1128,126 @@ fn drawn_hatches_solids_and_wipeouts_fill_in_the_batch() {
         .iter()
         .any(|r| r.entity == pattern && r.flags & qiyas_render::PATTERN != 0));
     // The pattern lines don't break the boundary search inside the hatched room.
-    let ring = s.boundary_at([45.0, 5.0], 20.0).unwrap();
+    let ring = ring_of(s.boundary_at([45.0, 5.0], 20.0));
     assert!(close(signed_area(&ring).abs(), 100.0), "{ring:?}");
     assert!(s.undo() && s.undo() && s.undo());
     assert!(s.batch().fills.is_empty());
+}
+
+/// A closed square polyline from `lo` to `hi`.
+fn square(s: &mut Session, lo: [f64; 2], hi: [f64; 2]) {
+    draw(
+        s,
+        DrawSpec::Rectangle { a: lo, b: hi },
+    );
+}
+
+#[test]
+fn the_boundary_search_grows_until_the_region_fits_and_finds_its_islands() {
+    let (_dir, mut s) = sample_session();
+    // A room 100 x 100 at 1000, a column in it far from the click and a column inside that.
+    square(&mut s, [1000.0, 1000.0], [1100.0, 1100.0]);
+    square(&mut s, [1080.0, 1080.0], [1090.0, 1090.0]);
+    square(&mut s, [1083.0, 1083.0], [1086.0, 1086.0]);
+    // Looked for 1 unit around first: the room is found all the same, with the outer column as
+    // its one island (the inner one is the column's own).
+    let Boundary::Ring { ring, holes } = s.boundary_at([1010.0, 1010.0], 1.0) else {
+        panic!("a ring");
+    };
+    assert!(close(signed_area(&ring).abs(), 10_000.0), "{ring:?}");
+    assert_eq!(holes.len(), 1, "{holes:?}");
+    assert!(close(signed_area(&holes[0]).abs(), 100.0), "{holes:?}");
+    // Hatched with it, the column stays empty.
+    let EntityType::Hatch(h) = one(
+        &mut s,
+        DrawSpec::Hatch {
+            boundary_handles: Vec::new(),
+            points: ring,
+            holes,
+            pattern: HatchPattern::Solid,
+        },
+    ) else {
+        panic!("a hatch");
+    };
+    assert_eq!(h.paths.len(), 2);
+    assert!(h.paths[0].flags.is_external());
+    assert!(!h.paths[1].flags.is_external());
+    // Inside the column, the column with its own island; outside everything, nothing even once
+    // the box holds the whole sheet.
+    let Boundary::Ring { ring, holes } = s.boundary_at([1081.0, 1081.0], 0.5) else {
+        panic!("the column");
+    };
+    assert!(close(signed_area(&ring).abs(), 100.0));
+    assert!(close(signed_area(&holes[0]).abs(), 9.0));
+    assert_eq!(s.boundary_at([5000.0, 5000.0], 1.0), Boundary::None);
+}
+
+#[test]
+fn too_much_line_work_around_the_point_is_refused_never_searched_in_part() {
+    let (_dir, mut s) = sample_session();
+    // A circle inside the sample's 4 x 3 rectangle: drawn as many segments.
+    draw(
+        &mut s,
+        DrawSpec::Circle {
+            centre: [2.0, 1.5],
+            radius: 1.0,
+        },
+    );
+    assert_eq!(s.boundary_at_most([2.0, 1.5], 0.5, 8), Boundary::TooDense);
+    // With room for them, the circle's inside.
+    let Boundary::Ring { ring, .. } = s.boundary_at([2.0, 1.5], 0.5) else {
+        panic!("a ring");
+    };
+    // The circle as drawn: a polygon a little inside it.
+    let area = signed_area(&ring).abs();
+    assert!(area > 0.9 * PI && area < PI, "{area}");
+    // The wire form names what was found.
+    let json = serde_json::to_value(Boundary::TooDense).unwrap();
+    assert_eq!(json["found"], "too_dense");
+    assert_eq!(serde_json::to_value(Boundary::None).unwrap()["found"], "none");
+}
+
+#[test]
+fn a_multiline_measures_along_its_centre_line() {
+    let (_dir, mut s) = sample_session();
+    let h = draw(
+        &mut s,
+        DrawSpec::MLine {
+            points: vec![[0.0, 0.0], [5.0, 0.0], [5.0, 5.0]],
+            style: None,
+            scale: Some(2.0),
+        },
+    )[0];
+    let info = s.entity_info(h, &[]).unwrap();
+    assert!(close(info.length.unwrap(), 10.0), "{:?}", info.length);
+}
+
+#[test]
+fn the_current_lineweight_is_a_standard_one_and_the_linetype_takes_the_drawing_spelling() {
+    let (_dir, mut s) = sample_session();
+    for (weight, ok) in [(25, true), (211, true), (-1, true), (-3, true), (26, false), (1, false)] {
+        let result = s.run(Command::SetCurrent {
+            current: Current {
+                lineweight: weight,
+                ..Current::default()
+            },
+        });
+        assert_eq!(result.is_ok(), ok, "{weight}");
+    }
+    s.run(Command::SetCurrent {
+        current: Current {
+            linetype: "continuous".into(),
+            ..Current::default()
+        },
+    })
+    .unwrap();
+    assert_eq!(s.current.linetype, "Continuous");
+    s.run(Command::SetCurrent {
+        current: Current {
+            linetype: "bylayer".into(),
+            ..Current::default()
+        },
+    })
+    .unwrap();
+    assert_eq!(s.current.linetype, "ByLayer");
 }
