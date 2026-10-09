@@ -8,3 +8,6 @@ samples/*.qiyas
 samples/*.bak
 crates/qiyas-desktop/binaries/
 crates/qiyas-desktop/resources/
+
+# SDD plan workspaces (ledgers, briefs, review packages)
+.superpowers/
