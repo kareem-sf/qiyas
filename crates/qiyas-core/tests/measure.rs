@@ -649,3 +649,42 @@ fn default_descriptions_are_marked_auto() {
         .unwrap();
     assert!(!session.takeoff.get(&id).unwrap().auto_description);
 }
+
+#[test]
+fn a_hatch_with_an_island_measures_without_it_and_after_a_move() {
+    let (_dir, mut s) = sample_session();
+    let square = vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]];
+    let island = vec![[4.0, 4.0], [6.0, 4.0], [6.0, 6.0], [4.0, 6.0]];
+    let Outcome::Added { handles } = s
+        .run(Command::Draw(qiyas_core::DrawSpec::Hatch {
+            boundary_handles: Vec::new(),
+            points: square,
+            holes: vec![island],
+            pattern: qiyas_core::HatchPattern::Solid,
+        }))
+        .unwrap()
+    else {
+        panic!("a hatch")
+    };
+    let h = handles[0];
+    let m = measure(
+        &mut s,
+        Command::MeasureEntity {
+            handle: h,
+            chain: Vec::new(),
+        },
+    );
+    assert_eq!(m.kind, Kind::Area);
+    assert!((m.value - 96.0).abs() < 1e-9, "{}", m.value);
+    // Moved: the row is measured again, still without the island.
+    s.run(Command::Modify(qiyas_core::ModifySpec::Move {
+        targets: vec![qiyas_core::Target {
+            handle: h,
+            chain: Vec::new(),
+        }],
+        delta: [5.0, 0.0],
+    }))
+    .unwrap();
+    let row = s.takeoff.items.iter().find(|r| r.handles == [h]).unwrap();
+    assert!((row.value - 96.0).abs() < 1e-9, "{}", row.value);
+}

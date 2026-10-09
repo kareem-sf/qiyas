@@ -8,7 +8,7 @@ use opencadcodec::entities::EntityCommon;
 use opencadcodec::entities::Insert;
 use opencadcodec::tables::normalize_name;
 use opencadcodec::{CadDocument, Color, DwgWriter, DxfWriter, EntityType, Handle};
-use opencadkernel::geom2d::Curve;
+use opencadkernel::geom2d::{ring_nesting_depths, Curve};
 use qiyas_geom::{
     dimension_text, drawn_style, exact_area, exact_length, flatten_with, insert_instances,
     is_xref_block, snap_shapes, DimLook, Xform, XrefDocs, MAX_XREF_DEPTH,
@@ -1364,8 +1364,22 @@ impl Session {
         });
         // A crossing outline's lobes would cancel in the exact sum; the flattened one adds them.
         let exact = exact_area(entity, xf).filter(|_| !self_intersecting);
-        let area = (!closed.is_empty())
-            .then(|| exact.unwrap_or_else(|| closed.iter().map(|p| p.area()).sum()));
+        let area = (!closed.is_empty()).then(|| {
+            exact.unwrap_or_else(|| match entity {
+                // A hatch's boundary paths fill even-odd: an island is taken away.
+                EntityType::Hatch(_) if closed.len() > 1 => {
+                    let rings: Vec<Vec<[f64; 2]>> =
+                        closed.iter().map(|p| p.points.clone()).collect();
+                    let depths = ring_nesting_depths(&rings);
+                    closed
+                        .iter()
+                        .zip(depths)
+                        .map(|(p, d)| if d % 2 == 0 { p.area() } else { -p.area() })
+                        .sum()
+                }
+                _ => closed.iter().map(|p| p.area()).sum(),
+            })
+        });
         Extent {
             length,
             area,
