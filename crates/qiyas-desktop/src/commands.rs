@@ -2,6 +2,7 @@
 //! All are `async` so Tauri runs them off the main thread and a slow open or batch never freezes
 //! the window. None awaits, so no lock is held across an `.await`.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{MutexGuard, PoisonError};
 
@@ -316,6 +317,17 @@ pub async fn get_settings(state: State<'_, AppState>) -> Result<Settings, String
         .settings
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
+        .clone())
+}
+
+/// The user's command line aliases (alias to command), over the built-in ones.
+#[tauri::command]
+pub async fn aliases(state: State<'_, AppState>) -> Result<BTreeMap<String, String>, String> {
+    Ok(state
+        .settings
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .aliases
         .clone())
 }
 

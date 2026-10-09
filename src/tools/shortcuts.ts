@@ -4,7 +4,15 @@ import type { Tool } from "../shell/Ribbon";
 export type DraftingToggle = "osnap" | "grid" | "ortho" | "polar";
 
 /** What a key press asks for: a tool, a drafting switch, or one of the actions below. */
-export type Shortcut = Tool | DraftingToggle | "undo" | "redo" | "save" | "escape" | "finish";
+export type Shortcut =
+  | Tool
+  | DraftingToggle
+  | "undo"
+  | "redo"
+  | "save"
+  | "escape"
+  | "finish"
+  | "commandLine";
 
 export type Keys = Pick<KeyboardEvent, "code" | "key" | "ctrlKey" | "metaKey" | "shiftKey" | "altKey">;
 
@@ -30,6 +38,8 @@ export function shortcutFor(e: Keys): Shortcut | null {
     if (e.code === "KeyZ") return e.shiftKey ? "redo" : "undo";
     if (e.code === "KeyY") return "redo";
     if (e.code === "KeyS" && !e.shiftKey) return "save";
+    // Shows and hides the command line, as in AutoCAD.
+    if (e.code === "Digit9" && !e.shiftKey) return "commandLine";
     return null;
   }
   if (e.code === "Escape") return "escape";

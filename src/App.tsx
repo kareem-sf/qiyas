@@ -4,6 +4,7 @@ import { ask, message as messageDialog, open, save } from "@tauri-apps/plugin-di
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   aiUndo,
+  aliases as readAliases,
   attachImage,
   attachPdf,
   calibrate,
@@ -54,6 +55,7 @@ import {
   type Drafting,
   type DrawingInfo,
   type EntityFilter,
+  type EntityInfo,
   type Field,
   type ImageDisplay,
   type Measurement,
@@ -73,11 +75,18 @@ import {
   ImageDisplayPanel,
   type AttachImageRequest,
 } from "./shell/AttachImageDialog";
-import { AttachPdfDialog, CalibrateDialog, type AttachRequest } from "./shell/AttachPdfDialog";
+import {
+  AttachPdfDialog,
+  CalibrateDialog,
+  metresPerUnit,
+  type AttachRequest,
+} from "./shell/AttachPdfDialog";
+import { CommandLine } from "./shell/CommandLine";
 import { DraftingSettings } from "./shell/DraftingSettings";
 import { ExtractDialog } from "./shell/ExtractDialog";
 import { AlongPrompt, InfoCard, type Info } from "./shell/InfoCard";
 import { LayersPanel } from "./shell/LayersPanel";
+import { PropertiesPanel } from "./shell/PropertiesPanel";
 import { Ribbon, type Tool } from "./shell/Ribbon";
 import { SettingsDialog } from "./shell/SettingsDialog";
 import { SheetTabs } from "./shell/SheetTabs";
@@ -93,6 +102,8 @@ import {
   overlaySegments,
   pointMarks,
 } from "./tools/overlay";
+import { mergeAliases } from "./tools/aliases";
+import type { Action, Expect, ParseState } from "./tools/commandParser";
 import { shortcutFor, type DraftingToggle } from "./tools/shortcuts";
 import { useTool } from "./tools/useTool";
 import {
@@ -205,6 +216,17 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [xrefsOpen, setXrefsOpen] = useState(false);
   const [extractOpen, setExtractOpen] = useState(false);
+  /** The command line shows (Ctrl+9). */
+  const [commandLineOn, setCommandLineOn] = useState(true);
+  /** The user's command line aliases from the settings. */
+  const [userAliases, setUserAliases] = useState<Record<string, string>>({});
+  const commandAliases = useMemo(() => mergeAliases(userAliases), [userAliases]);
+  /** The last point clicked or typed, for the command line's `@`. */
+  const lastPoint = useRef<Point | null>(null);
+  /** DIVIDE n or MEASURE step typed on the command line: the answer once the entity is clicked. */
+  const preset = useRef<{ tool: Tool; value: number } | null>(null);
+  /** What the select tool picked, for the properties palette. */
+  const [pickedInfo, setPickedInfo] = useState<EntityInfo | null>(null);
   /** What the last inquiry (geometry, ID point) found, shown until closed. */
   const [infoCard, setInfoCard] = useState<Info | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -242,6 +264,15 @@ export default function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
+
+  /** Reads the user's command line aliases (at start and after the settings close). */
+  const loadAliases = () =>
+    readAliases()
+      .then(setUserAliases)
+      .catch(() => {});
+  useEffect(() => {
+    loadAliases();
+  }, []);
 
   // Runs after the viewport has taken the new batch (child effects run first).
   useEffect(() => {
@@ -896,35 +927,205 @@ export default function App() {
     await redraw();
   }
 
+  /** Gives `p` to the PDF or image insert point or the calibration waiting for one. False when
+   *  none is. */
+  function pendingPoint(p: Point): boolean {
+    if (pending?.kind === "insert") {
+      setPickedInsert(p);
+      setPending(null);
+    } else if (pending?.kind === "calibrate" && !pending.first) {
+      setPending({ kind: "calibrate", first: p });
+    } else if (pending?.kind === "calibrate" && pending.first) {
+      setCalibration([pending.first, p]);
+      setPending(null);
+    } else {
+      return false;
+    }
+    return true;
+  }
+
   /** A click in the drawing: the one a PDF or image insert point or a calibration waits for, else
    *  the tool's. */
   function clickDrawing(world: Point, screen: Point, worldPerPixel: number) {
-    if (pending?.kind === "insert") {
-      setPickedInsert(world);
-      setPending(null);
-    } else if (pending?.kind === "calibrate" && !pending.first) {
-      setPending({ kind: "calibrate", first: world });
-    } else if (pending?.kind === "calibrate" && pending.first) {
-      setCalibration([pending.first, world]);
-      setPending(null);
-    } else {
-      measure.onClick(world, screen, worldPerPixel);
-    }
+    lastPoint.current = world;
+    if (!pendingPoint(world)) measure.onClick(world, screen, worldPerPixel);
   }
 
   // Hand the keyboard back to the drawing, so Space pans instead of pressing a button.
   const focusDrawing = () => viewportBox.current?.focus();
 
   function chooseTool(next: Tool) {
+    preset.current = null;
     setTool(next);
     focusDrawing();
+  }
+
+  /** Escape: drops what is waiting (an insert point, a measure, a prompt) and every highlight. */
+  function cancelAll() {
+    preset.current = null;
+    setPending(null);
+    setInfoCard(null);
+    measure.escape();
+    setSelectedId(null);
+    setBoqCode(null);
+    setAiHighlight([]);
+    setConflictIds([]);
+  }
+
+  /** Answers divide's number of parts or measure along's step (metres). */
+  function answerAlong(value: number) {
+    if (measure.asking === "divide") measure.answer(value);
+    else if (measure.asking === "measureAlong" && info) measure.answer(value / metresPerUnit(info.units));
+  }
+
+  // DIVIDE n and MEASURE step: the number typed with the command answers once the entity is clicked.
+  useEffect(() => {
+    const typed = preset.current;
+    if (!typed || !measure.asking) return;
+    preset.current = null;
+    if (typed.tool === tool) answerAlong(typed.value);
+  }, [measure.asking]);
+
+  /** The layer named `name` in any case, as the drawing spells it; null (and an error) when none. */
+  function layerNamed(name: string): string | null {
+    const found = info?.layers.find((l) => l.name.toUpperCase() === name.toUpperCase());
+    if (!found) setError(t("cmd.noLayer", { name }));
+    return found?.name ?? null;
+  }
+
+  /** Runs what the command line asks for, through the same handlers as the ribbon and keys. */
+  function onCommand(a: Action) {
+    setNotice(null);
+    const needDrawing = () => {
+      if (!info) setError(t("cmd.noDrawing"));
+      return !info;
+    };
+    switch (a.type) {
+      case "repeat":
+        return;
+      case "finish":
+        measure.finish();
+        return;
+      case "cancel":
+        cancelAll();
+        return;
+      case "point":
+        lastPoint.current = a.p;
+        if (!pendingPoint(a.p)) measure.typePoint(a.p);
+        return;
+      case "number":
+        answerAlong(a.value);
+        return;
+      case "tool":
+        preset.current = a.preset !== undefined ? { tool: a.tool, value: a.preset } : null;
+        setTool(a.tool);
+        return;
+      case "count":
+        if (!needDrawing()) apply({ type: "count_block", block_name: a.block, layer: null });
+        return;
+      case "layers": {
+        if (needDrawing()) return;
+        const names = a.names.map(layerNamed);
+        if (names.includes(null)) return;
+        const next = new Set(hidden);
+        for (const n of names as string[]) {
+          if (a.hide) next.add(n);
+          else next.delete(n);
+        }
+        applyHidden(next);
+        return;
+      }
+      case "isolate": {
+        const name = needDrawing() ? null : layerNamed(a.name);
+        if (name) isolateLayer(name);
+        return;
+      }
+      case "showAll":
+        if (!needDrawing()) showAll();
+        return;
+      case "zoom":
+        if (a.how === "extents") viewport.current?.fitExtents();
+        else viewport.current?.zoomBy(a.how === "in" ? 0.5 : 2);
+        return;
+      case "toggle":
+        if (!needDrawing()) toggleDrafting(a.toggle);
+        return;
+      case "sheet": {
+        if (needDrawing()) return;
+        const want = a.name.toUpperCase();
+        const found = info!.sheets.find(
+          (s) => s.name.toUpperCase() === want || s.block.toUpperCase() === want,
+        );
+        if (found) chooseSheet(found.block);
+        else setError(t("cmd.noSheet", { name: a.name }));
+        return;
+      }
+      case "ai":
+        setSideTab("assistant");
+        assistant.send(a.text);
+        return;
+      case "run":
+        runCommandLine(a.what);
+    }
+  }
+
+  /** The command line's file, view and BOQ commands: what the ribbon's buttons do, when they
+   *  are enabled. */
+  function runCommandLine(what: Extract<Action, { type: "run" }>["what"]) {
+    if (what === "open") {
+      openFile();
+      return;
+    }
+    if (!info) {
+      setError(t("cmd.noDrawing"));
+      return;
+    }
+    switch (what) {
+      case "save":
+        return saveFile();
+      case "saveAs":
+        return saveFileAs();
+      case "export":
+        return exportFile();
+      case "importBoq":
+        return importBoqFile();
+      case "compare":
+        return compareNow();
+      case "undo":
+        return history(undo);
+      case "redo":
+        return history(redo);
+      case "attachPdf":
+        setPickedInsert(null);
+        return setAttachOpen(true);
+      case "attachImage":
+        setPickedInsert(null);
+        return setAttachImageOpen(true);
+      case "xrefs":
+        return setXrefsOpen(true);
+      case "extract":
+        return setExtractOpen(true);
+      case "calibrate":
+        if (!batch || batch.imageTable.length === 0) {
+          setError(t("cmd.notNow", { name: "CALIBRATE" }));
+          return;
+        }
+        measure.escape();
+        setPending({ kind: "calibrate", first: null });
+    }
   }
 
   // Keyboard: tool letters, Escape, Enter, undo, redo and save. Re-bound each render, so it sees fresh state.
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      if (typing(e)) return;
       const action = shortcutFor(e);
+      // Ctrl+9 works from the command line too.
+      if (action === "commandLine") {
+        e.preventDefault();
+        setCommandLineOn((on) => !on);
+        return;
+      }
+      if (typing(e)) return;
       if (action === "osnap" || action === "grid" || action === "ortho" || action === "polar") {
         // F7 and F10 also mean something to the web view; not here.
         e.preventDefault();
@@ -935,13 +1136,7 @@ export default function App() {
         else saveFile();
         e.preventDefault();
       } else if (action === "escape") {
-        setPending(null);
-        setInfoCard(null);
-        measure.escape();
-        setSelectedId(null);
-        setBoqCode(null);
-        setAiHighlight([]);
-        setConflictIds([]);
+        cancelAll();
       } else if (action === "finish") {
         // Enter on a focused button presses it; don't also finish the measure.
         if (e.target instanceof HTMLButtonElement) return;
@@ -1063,6 +1258,24 @@ export default function App() {
     };
   }, [chosenHandle, batch]);
 
+  // The select tool's pick, for the properties palette; read again when the batch changes (an
+  // undo, a redo, another sheet).
+  const pickedTarget = tool === "select" ? measure.highlighted : null;
+  const pickedKey = pickedTarget ? `${pickedTarget.handle}:${pickedTarget.chain.join(",")}` : null;
+  useEffect(() => {
+    if (!pickedTarget) {
+      setPickedInfo(null);
+      return;
+    }
+    let gone = false;
+    entityInfo(pickedTarget.handle, pickedTarget.chain)
+      .then((found) => !gone && setPickedInfo(found))
+      .catch(() => !gone && setPickedInfo(null));
+    return () => {
+      gone = true;
+    };
+  }, [pickedKey, batch]);
+
   const highlight = useMemo(() => {
     const rows = [...(selected ? [selected] : []), ...boqLinked, ...conflictLinked];
     const targets: Target[] = [
@@ -1125,6 +1338,36 @@ export default function App() {
         : measure.hint
       ? t(measure.hint, measure.hintArgs ?? undefined)
       : (notice ?? (info ? fileName : t("noDrawing")));
+  // What the command line waits for, and its prompt.
+  let expect: Expect = "command";
+  let promptKey = "cmd.prompt.command";
+  if (pending) {
+    expect = "point";
+    promptKey =
+      pending.kind === "insert"
+        ? "cmd.prompt.insert"
+        : pending.first
+          ? "cmd.prompt.calibrateSecond"
+          : "cmd.prompt.calibrateFirst";
+  } else if (measure.asking) {
+    expect = measure.asking === "divide" ? "count" : "step";
+    promptKey = `cmd.prompt.${expect}`;
+  } else if (tool === "distance" || tool === "area") {
+    expect = "point";
+    promptKey = measure.points.length > 0 ? "cmd.prompt.nextPoint" : "cmd.prompt.firstPoint";
+  } else if (tool === "idPoint") {
+    expect = "point";
+    promptKey = "cmd.prompt.point";
+  } else if (tool === "count" || tool === "geometry" || tool === "divide" || tool === "measureAlong") {
+    promptKey = "cmd.prompt.select";
+  }
+  const commandState: ParseState = {
+    expect,
+    last: measure.points[measure.points.length - 1] ?? lastPoint.current,
+    aliases: commandAliases,
+  };
+  const sheetName =
+    info?.sheets.find((s) => s.block.toLowerCase() === sheet.toLowerCase())?.name ?? sheet;
   // Unknown units are measured as millimetres; the status bar says so.
   const units = info ? t(`unit.${info.units === "unknown" ? "millimetres" : info.units}`) : "";
 
@@ -1300,17 +1543,26 @@ export default function App() {
           onClose={() => {
             setSettingsOpen(false);
             assistant.refreshStatus();
+            loadAliases();
           }}
         />
       )}
       <div className="middle">
-        <LayersPanel
-          layers={info?.layers ?? []}
-          hidden={hidden}
-          onToggle={toggleLayer}
-          onIsolate={isolateLayer}
-          onShowAll={showAll}
-        />
+        <div className="left">
+          <LayersPanel
+            layers={info?.layers ?? []}
+            hidden={hidden}
+            onToggle={toggleLayer}
+            onIsolate={isolateLayer}
+            onShowAll={showAll}
+          />
+          <PropertiesPanel
+            entity={pickedInfo}
+            units={info?.units ?? "metres"}
+            precision={drafting?.precision ?? 3}
+            sheet={sheetName}
+          />
+        </div>
         <main className="work">
           <div className="viewport" ref={viewportBox} tabIndex={0}>
             <Viewport
@@ -1479,6 +1731,9 @@ export default function App() {
           </div>
         </div>
       </div>
+      {commandLineOn && (
+        <CommandLine state={commandState} prompt={t(promptKey)} onAction={onCommand} />
+      )}
       <StatusBar
         cursor={measure.cursor}
         precision={drafting?.precision ?? 3}

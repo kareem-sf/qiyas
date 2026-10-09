@@ -207,3 +207,96 @@ fn glyphs_are_drawn_again_for_another_zoom_and_atlas_pages_follow() {
     session.batch_bytes_if(None, None).unwrap();
     assert_eq!(session.batch().px_per_unit, zoomed.px_per_unit);
 }
+
+#[test]
+fn entity_info_reports_colour_linetype_weight_and_attributes() {
+    use opencadcodec::entities::AttributeEntity;
+    use opencadcodec::{Color, EntityType, LineWeight};
+
+    // The sample with the rectangle in true colour, dashed and 0.35 mm; the arc blue (ACI 5); the
+    // first DOOR reference cyan (ACI 4) with a MARK attribute, and the door leaf ByBlock.
+    let mut doc = qiyas_core::fixtures::sample_doc();
+    let handles: Vec<(u64, &'static str)> = doc
+        .entities_in_block("*Model_Space")
+        .map(|e| {
+            let kind = match e {
+                EntityType::Line(_) => "line",
+                EntityType::LwPolyline(_) => "rectangle",
+                EntityType::Arc(_) => "arc",
+                EntityType::Insert(_) => "door",
+                EntityType::Text(_) => "text",
+                _ => "other",
+            };
+            (e.common().handle.value(), kind)
+        })
+        .collect();
+    let find = |kind: &str| handles.iter().find(|(_, k)| *k == kind).unwrap().0;
+    let (line, rectangle, arc, door, text) = (
+        find("line"),
+        find("rectangle"),
+        find("arc"),
+        find("door"),
+        find("text"),
+    );
+    fn get(doc: &mut opencadcodec::CadDocument, h: u64) -> &mut EntityType {
+        doc.get_entity_mut(opencadcodec::Handle::new(h)).unwrap()
+    }
+    let common = get(&mut doc, rectangle).common_mut();
+    common.color = Color::Rgb {
+        r: 0x12,
+        g: 0x34,
+        b: 0x56,
+    };
+    common.linetype = "DASHED".to_string();
+    common.line_weight = LineWeight::Value(35);
+    get(&mut doc, arc).common_mut().color = Color::Index(5);
+    let EntityType::Insert(insert) = get(&mut doc, door) else {
+        unreachable!()
+    };
+    insert.common.color = Color::Index(4);
+    let at = insert.insert_point;
+    insert.attributes.push(
+        AttributeEntity::new("MARK".to_string(), "D1".to_string())
+            .with_position(at)
+            .with_height(0.2),
+    );
+    let leaf = doc.block_records.get("DOOR").unwrap().entity_handles[0].value();
+    get(&mut doc, leaf).common_mut().color = Color::ByBlock;
+    let dir = tempfile::tempdir().unwrap();
+    let path = qiyas_core::fixtures::write_drawing(&doc, &dir.path().join("props.dxf"));
+    let session = Session::open(&path).unwrap();
+
+    // ByLayer takes the layer's colour (A-WALL is red).
+    let info = session.entity_info(line, &[]).unwrap();
+    assert_eq!(info.color, "ByLayer");
+    assert_eq!(info.color_rgb, [255, 0, 0]);
+    assert_eq!(info.linetype, "ByLayer");
+    assert_eq!(info.lineweight, -1);
+    assert_eq!(info.radius, None);
+    assert!(info.attributes.is_empty());
+
+    let info = session.entity_info(rectangle, &[]).unwrap();
+    assert_eq!(info.color, "#123456");
+    assert_eq!(info.color_rgb, [0x12, 0x34, 0x56]);
+    assert_eq!(info.linetype, "DASHED");
+    assert_eq!(info.lineweight, 35);
+
+    let info = session.entity_info(arc, &[]).unwrap();
+    assert_eq!(info.color, "ACI 5");
+    assert_eq!(info.color_rgb, [0, 0, 255]);
+    assert_eq!(info.radius, Some(2.0));
+
+    let info = session.entity_info(door, &[]).unwrap();
+    assert_eq!(info.color, "ACI 4");
+    assert_eq!(info.block_name.as_deref(), Some("DOOR"));
+    assert_eq!(info.attributes, [("MARK".to_string(), "D1".to_string())]);
+
+    // ByBlock inside the reference takes the reference's colour.
+    let info = session.entity_info(leaf, &[door]).unwrap();
+    assert_eq!(info.color, "ByBlock");
+    assert_eq!(info.color_rgb, [0, 255, 255]);
+
+    let info = session.entity_info(text, &[]).unwrap();
+    assert_eq!(info.height, Some(0.5));
+    assert!(info.style.is_some());
+}

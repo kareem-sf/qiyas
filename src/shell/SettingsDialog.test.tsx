@@ -16,6 +16,7 @@ const settings: Settings = {
   mcp_token: TOKEN,
   language: "en",
   theme: "system",
+  aliases: {},
 };
 
 const api = vi.hoisted(() => ({

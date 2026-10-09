@@ -361,6 +361,19 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
     /** Hands the typed number of parts or step (drawing units) to `divide` or `measureAlong`. */
     answer: (value: number) => dispatch({ type: "answer", value }),
     onClick,
+    /** A point typed on the command line, for `distance`, `area` and `idPoint`: placed as typed,
+     *  without snaps, grid, ortho or polar, and never half of a double click. */
+    typePoint: (p: Point) =>
+      dispatch({
+        type: "click",
+        world: p,
+        screen: [Number.NaN, Number.NaN],
+        time: performance.now(),
+        picked: null,
+        info: null,
+        snapped: true,
+        snapKind: null,
+      }),
     finish: () => dispatch({ type: "finish" }),
     escape: () => dispatch({ type: "escape" }),
   };

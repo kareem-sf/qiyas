@@ -35,6 +35,8 @@ export type Tool =
 export type ViewportHandle = {
   fitExtents(): void;
   fitTo(bounds: Bounds): void;
+  /** Zooms about the middle of the view: `factor` below 1 zooms in. */
+  zoomBy(factor: number): void;
   /** Screen (device) pixels per drawing unit at the current zoom. */
   pxPerUnit(): number;
   /** The drawing area in view. */
@@ -176,6 +178,10 @@ export function Viewport({
     () => ({
       fitExtents,
       fitTo: (b) => setCamera(fitBounds(camera.current, b, FIT_MARGIN_PX)),
+      zoomBy: (factor) => {
+        const c = camera.current;
+        setCamera(zoomAt(c, [c.width / 2, c.height / 2], factor));
+      },
       pxPerUnit,
       visible: () => visibleBounds(camera.current),
     }),

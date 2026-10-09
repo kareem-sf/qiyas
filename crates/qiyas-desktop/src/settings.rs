@@ -3,6 +3,7 @@
 //!
 //! Plain functions over a directory, so tests run without Tauri.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
@@ -58,6 +59,9 @@ pub struct Settings {
     pub language: String,
     /// "system", "light" or "dark".
     pub theme: String,
+    /// The user's command line aliases, alias to command (e.g. "L" to "LAYOFF"), over the
+    /// built-in ones.
+    pub aliases: BTreeMap<String, String>,
 }
 
 impl Default for Settings {
@@ -72,6 +76,7 @@ impl Default for Settings {
             mcp_token: new_token(),
             language: "en".into(),
             theme: "system".into(),
+            aliases: BTreeMap::new(),
         }
     }
 }
@@ -113,6 +118,13 @@ pub fn validate(s: &Settings) -> Result<(), String> {
     }
     if !["system", "light", "dark"].contains(&s.theme.as_str()) {
         return Err(format!("Unknown theme \"{}\"", s.theme));
+    }
+    for (alias, command) in &s.aliases {
+        if alias.is_empty() || alias.contains(char::is_whitespace) || command.trim().is_empty() {
+            return Err(format!(
+                "The alias \"{alias}\" needs one word and a command"
+            ));
+        }
     }
     Ok(())
 }

@@ -207,14 +207,23 @@ button[aria-pressed="true"] {
   padding: 2px 8px;
 }
 
-/* Layers panel */
-.layers {
+/* Left column: the layers, then the properties of the picked entity. */
+.left {
   width: 220px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
+  min-height: 0;
   background: var(--panel);
   border-inline-end: 1px solid var(--rule);
+}
+
+/* Layers panel */
+.layers {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 .layers-head {
   display: flex;
@@ -1597,4 +1606,131 @@ button.link {
   position: sticky;
   top: 0;
   background: var(--panel);
+}
+
+/* Properties palette: below the layers, read-only. */
+.properties {
+  flex-shrink: 0;
+  max-height: 45%;
+  overflow-y: auto;
+  padding: 4px 10px 10px;
+  border-top: 1px solid var(--rule);
+}
+.properties h2 button {
+  width: 100%;
+  padding: 4px 0;
+  text-align: start;
+  font-feature-settings: inherit;
+}
+.properties h2 button::before {
+  content: "▾ ";
+  color: var(--muted);
+}
+.properties h2 button[aria-expanded="false"]::before {
+  content: "▸ ";
+}
+:root[dir="rtl"] .properties h2 button[aria-expanded="false"]::before {
+  content: "◂ ";
+}
+.properties .muted {
+  margin: 4px 0 0;
+  color: var(--muted);
+}
+.properties dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 10px;
+  margin: 4px 0 0;
+}
+.properties dl > div {
+  display: contents;
+}
+.properties dt {
+  color: var(--muted);
+}
+.properties dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+.properties dd .swatch {
+  display: inline-block;
+  margin-inline-end: 6px;
+  vertical-align: -1px;
+}
+.properties .attributes dd dl {
+  margin: 0;
+}
+
+/* Command line: two lines of what was typed and any error, then the prompt and the input. */
+.command-line {
+  padding: 2px 10px 4px;
+  font-size: 12px;
+  background: var(--panel);
+  border-top: 1px solid var(--rule);
+}
+.command-log {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  min-height: calc(2 * 1.4em);
+  color: var(--muted);
+}
+.command-log li {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.command-input {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.command-input label {
+  white-space: nowrap;
+  color: var(--accent);
+}
+.command-input input {
+  flex: 1;
+  min-width: 0;
+  font: 12px/1.4 ui-monospace, monospace;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+.command-input [role="listbox"] {
+  position: absolute;
+  inset-block-end: 100%;
+  inset-inline-start: 0;
+  z-index: 5;
+  min-width: 200px;
+  max-height: 240px;
+  overflow-y: auto;
+  margin: 0 0 2px;
+  padding: 2px;
+  list-style: none;
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 0.15);
+}
+.command-input [role="option"] {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 1px 8px;
+  border-radius: 4px;
+  font-family: ui-monospace, monospace;
+  cursor: pointer;
+}
+.command-input [role="option"][aria-selected="true"],
+.command-input [role="option"]:hover {
+  background: var(--accent-soft);
+}
+.command-input [role="option"] .target {
+  color: var(--muted);
 }

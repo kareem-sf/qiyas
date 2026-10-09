@@ -56,6 +56,7 @@ pub fn run() {
             commands::export_conflicts,
             commands::get_settings,
             commands::set_settings,
+            commands::aliases,
             commands::set_api_key,
             commands::has_api_key,
             commands::delete_api_key,

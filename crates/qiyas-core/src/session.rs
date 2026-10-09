@@ -6,14 +6,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use opencadcodec::entities::Insert;
 use opencadcodec::tables::normalize_name;
-use opencadcodec::{CadDocument, DwgWriter, DxfWriter, EntityType, Handle};
+use opencadcodec::{CadDocument, Color, DwgWriter, DxfWriter, EntityType, Handle};
+use opencadkernel::geom2d::Curve;
 use qiyas_geom::{
-    exact_area, exact_length, flatten_with, insert_instances, is_xref_block, Xform, XrefDocs,
-    MAX_XREF_DEPTH,
+    exact_area, exact_length, flatten_with, insert_instances, is_xref_block, snap_shapes, Xform,
+    XrefDocs, MAX_XREF_DEPTH,
 };
 use qiyas_render::{
-    add_images, add_pick_outlines, build_batch_with_xrefs, layer_shown, place_text, Batch,
-    PickIndex, TextEngine, TextOptions, Visibility, TEXT_BOX,
+    add_images, add_pick_outlines, build_batch_with_xrefs, layer_shown, place_text, resolve_color,
+    Batch, PickIndex, TextEngine, TextOptions, Visibility, TEXT_BOX,
 };
 use serde::{Deserialize, Serialize};
 
@@ -151,6 +152,23 @@ pub struct EntityInfo {
     pub block_path: Vec<String>,
     /// The xref the entity belongs to; its `handle` is then one of that drawing's.
     pub xref: Option<String>,
+    /// Its own colour: "ByLayer", "ByBlock", "None", "ACI n" or "#rrggbb".
+    pub color: String,
+    /// The colour it is drawn with: ByLayer takes its layer's, ByBlock its block reference's;
+    /// white when nothing gives one.
+    pub color_rgb: [u8; 3],
+    /// Its linetype name, or "ByLayer".
+    pub linetype: String,
+    /// Its lineweight in hundredths of a millimetre; -1 ByLayer, -2 ByBlock, -3 Default.
+    pub lineweight: i16,
+    /// A circle's or an arc's radius in drawing units, as placed in the world.
+    pub radius: Option<f64>,
+    /// A block reference's attributes, as (tag, value).
+    pub attributes: Vec<(String, String)>,
+    /// A text's height, in drawing units.
+    pub height: Option<f64>,
+    /// A text's style name.
+    pub style: Option<String>,
 }
 
 /// An entity found by handle and chain, with what places it in the world.
@@ -282,6 +300,17 @@ fn check_inside(doc: &CadDocument, handle: u64, block: Option<&str>) -> Result<(
         Err(CoreError::InvalidCommand(format!(
             "Entity {handle} is not inside block {block}"
         )))
+    }
+}
+
+/// An entity's own colour as the properties palette shows it.
+fn color_name(color: &Color) -> String {
+    match color {
+        Color::ByLayer => "ByLayer".into(),
+        Color::ByBlock => "ByBlock".into(),
+        Color::None => "None".into(),
+        Color::Index(i) => format!("ACI {i}"),
+        Color::Rgb { r, g, b } => format!("#{r:02x}{g:02x}{b:02x}"),
     }
 }
 
@@ -674,6 +703,38 @@ impl Session {
             EntityType::MText(t) => (None, Some(t.value.clone())),
             _ => (None, None),
         };
+        let (height, style) = match entity {
+            EntityType::Text(t) => (Some(t.height), Some(t.style.clone())),
+            EntityType::MText(t) => (Some(t.height), Some(t.style.clone())),
+            _ => (None, None),
+        };
+        let attributes = match entity {
+            EntityType::Insert(insert) => insert
+                .attributes
+                .iter()
+                .map(|a| (a.tag.clone(), a.value.clone()))
+                .collect(),
+            _ => Vec::new(),
+        };
+        let radius = match entity {
+            EntityType::Circle(_) | EntityType::Arc(_) => {
+                snap_shapes(located.doc, entity, &located.xf, MEASURE_TOL)
+                    .first()
+                    .and_then(|shape| match shape.pieces.first() {
+                        Some(Curve::Circle(c)) => Some(c.radius),
+                        Some(Curve::Arc(a)) => Some(a.radius),
+                        _ => None,
+                    })
+            }
+            _ => None,
+        };
+        let common = entity.common();
+        let linetype = if common.linetype.is_empty() {
+            "ByLayer".to_string()
+        } else {
+            common.linetype.clone()
+        };
+        let color_rgb = self.drawn_color(&common.color, chain, &located.layer);
         Ok(EntityInfo {
             handle,
             kind: variant_name(entity),
@@ -684,9 +745,46 @@ impl Session {
             text,
             inside_block: located.block_path.last().cloned(),
             chain: chain.to_vec(),
+            color: color_name(&common.color),
+            color_rgb,
+            linetype,
+            lineweight: common.line_weight.value(),
+            radius,
+            attributes,
+            height,
+            style,
             block_path: located.block_path,
             xref: located.xref,
         })
+    }
+
+    /// The colour an entity of colour `color`, inside the block references `chain`, on layer
+    /// `layer` (as drawn) is drawn with. ByBlock takes the innermost reference's colour, and so on
+    /// outwards; ByLayer takes the layer's.
+    fn drawn_color(&self, color: &Color, chain: &[u64], layer: &str) -> [u8; 3] {
+        let mut color = *color;
+        for &h in chain.iter().rev() {
+            if color != Color::ByBlock {
+                break;
+            }
+            if let Some(insert) = self.drawing.doc.get_entity(Handle::new(h)) {
+                color = insert.common().color;
+            }
+        }
+        let layer_color = match color {
+            Color::ByLayer => {
+                let name = normalize_name(layer);
+                self.layers()
+                    .into_iter()
+                    .find(|l| normalize_name(&l.name) == name)
+                    .map_or(Color::Index(7), |l| {
+                        let [r, g, b] = l.color;
+                        Color::Rgb { r, g, b }
+                    })
+            }
+            _ => Color::ByLayer,
+        };
+        resolve_color(&color, &layer_color)
     }
 
     /// Runs `cmd` for the user; see `run_as`.

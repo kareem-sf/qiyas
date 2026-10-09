@@ -46,6 +46,7 @@ fn round_trip() {
         mcp_port: 50000,
         language: "ar".into(),
         theme: "dark".into(),
+        aliases: [("LO".to_string(), "LAYOFF".to_string())].into(),
         ..Settings::default()
     };
     settings::save(dir.path(), &s).unwrap();
@@ -63,6 +64,7 @@ fn missing_fields_take_defaults() {
     assert_eq!(s.effort, "low");
     assert_eq!(s.model, "claude-opus-5-5");
     assert_eq!(s.mcp_token.len(), 32);
+    assert!(s.aliases.is_empty());
     // The new token was written back.
     assert!(read(dir.path()).contains(&s.mcp_token));
 }
@@ -94,6 +96,11 @@ fn validation_rejects_bad_values() {
         ..good.clone()
     };
     assert!(settings::validate(&effort).unwrap_err().contains("ultra"));
+    let alias = Settings {
+        aliases: [("L O".to_string(), "LAYOFF".to_string())].into(),
+        ..good.clone()
+    };
+    assert!(settings::validate(&alias).unwrap_err().contains("L O"));
     let token = Settings {
         mcp_token: "short".into(),
         ..good

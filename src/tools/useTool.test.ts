@@ -41,6 +41,14 @@ const door: EntityInfo = {
   inside_block: null,
   chain: [],
   block_path: [],
+  color: "ByLayer",
+  color_rgb: [0, 255, 0],
+  linetype: "ByLayer",
+  lineweight: -1,
+  radius: null,
+  attributes: [],
+  height: null,
+  style: null,
 };
 
 test("distance tool needs two points then a finish", () => {
@@ -57,6 +65,26 @@ test("distance tool needs two points then a finish", () => {
     ],
   });
   expect(two.points).toEqual([]);
+});
+
+test("typed points are placed as typed and never make a double click", () => {
+  // As `typePoint` sends them: snapped, with no screen position.
+  const typed = (world: Point, time: number): ToolEvent => ({
+    type: "click",
+    world,
+    time,
+    picked: null,
+    info: null,
+    screen: [Number.NaN, Number.NaN],
+    snapped: true,
+    track: { ortho: true, polar: false, polarStepDeg: 45 },
+  });
+  const s = run("distance", [typed([0, 0], 0), typed([3, 4], 10)]);
+  expect(s.points).toEqual([
+    [0, 0],
+    [3, 4],
+  ]);
+  expect(s.pendingCommand).toBeNull();
 });
 
 test("area tool rejects finish with two points", () => {

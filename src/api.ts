@@ -65,6 +65,21 @@ export type EntityInfo = {
   block_path: string[];
   /** The xref the entity is in; `handle` is then that drawing's. */
   xref?: string | null;
+  /** Its own colour: "ByLayer", "ByBlock", "None", "ACI n" or "#rrggbb". */
+  color: string;
+  /** The colour it is drawn with (ByLayer and ByBlock resolved). */
+  color_rgb: [number, number, number];
+  /** Its linetype name, or "ByLayer". */
+  linetype: string;
+  /** In hundredths of a millimetre; -1 ByLayer, -2 ByBlock, -3 Default. */
+  lineweight: number;
+  /** A circle's or an arc's radius, in drawing units. */
+  radius: number | null;
+  /** A block reference's attributes, as [tag, value]. */
+  attributes: [string, string][];
+  /** A text's height, in drawing units, and its style. */
+  height: number | null;
+  style: string | null;
 };
 
 /** What is under the cursor (`qiyas_core::Picked`): the entity, the block references it sits inside
@@ -574,12 +589,17 @@ export type Settings = {
   mcp_token: string;
   language: "en" | "ar";
   theme: "system" | "light" | "dark";
+  /** The user's command line aliases, alias to command, over the built-in ones. */
+  aliases: Record<string, string>;
 };
 
 export const getSettings = () => invoke<Settings>("get_settings");
 
 /** Rejects a port outside 1024–65535 or an unknown effort. */
 export const setSettings = (settings: Settings) => invoke<void>("set_settings", { settings });
+
+/** The user's command line aliases (alias to command). */
+export const aliases = () => invoke<Record<string, string>>("aliases");
 
 /** Stores the key in the OS keychain; it can't be read back from the window. */
 export const setApiKey = (provider: Provider, key: string) =>
