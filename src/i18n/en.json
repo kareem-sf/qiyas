@@ -740,6 +740,7 @@
   "insertField.block": "Block",
   "insertField.pickHint": "Click the object the field reads",
   "insertField.updated": "Fields updated",
+  "locked.skipped": "{n} locked entities were left as they are",
   "insert": "Insert",
   "block.group": "Block",
   "block.createTool": "Create block",

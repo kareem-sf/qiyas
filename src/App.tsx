@@ -798,8 +798,13 @@ export default function App() {
   /** UPDATEFIELD: works every field out again (one undo step when one changed), then draws it. */
   function updateFields() {
     run(async () => {
-      await runText({ type: "update_fields" });
-      setNotice(t("insertField.updated"));
+      const outcome = await runCommand({ type: "update_fields" });
+      await redraw();
+      await autosave();
+      const locked = outcome.type === "updated" ? outcome.skipped : 0;
+      const notes = [t("insertField.updated")];
+      if (locked > 0) notes.push(t("locked.skipped", { n: locked }));
+      setNotice(notes.join(" · "));
     });
   }
 
@@ -2971,8 +2976,11 @@ export default function App() {
             await runBlock({ type: "edit_att_def", block, tag, prompt, default: value });
           }}
           onSync={async (block) => {
-            await runBlock({ type: "sync_attributes", block });
-            setNotice(t("block.synced"));
+            const outcome = await runBlock({ type: "sync_attributes", block });
+            const locked = outcome.type === "updated" ? outcome.skipped : 0;
+            const notes = [t("block.synced")];
+            if (locked > 0) notes.push(t("locked.skipped", { n: locked }));
+            setNotice(notes.join(" · "));
           }}
           onClose={() => {
             setManagerBlocks(null);

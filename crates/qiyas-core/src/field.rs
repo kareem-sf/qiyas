@@ -333,10 +333,14 @@ impl Session {
 
     /// Works every field of the drawing out again (with `objects_only`, those reading an
     /// entity's area or length only), writing the texts and cells whose value changed; a table
-    /// changed gets its block drawn again. How many texts and tables changed.
-    pub(crate) fn update_fields(&mut self, objects_only: bool) -> Result<usize, CoreError> {
+    /// changed gets its block drawn again. A locked one (`Session::is_locked`) is left as it is. How
+    /// many texts and tables changed, and how many locked ones would have.
+    pub(crate) fn update_fields(
+        &mut self,
+        objects_only: bool,
+    ) -> Result<(usize, usize), CoreError> {
         if self.needs_field_app() {
-            return Ok(0);
+            return Ok((0, 0));
         }
         let wanted = |code: &str| !objects_only || has_object_fields(code);
         let holders: Vec<Handle> = self
@@ -347,16 +351,20 @@ impl Session {
             .map(|e| e.common().handle)
             .collect();
         let mut changed = 0;
+        let mut skipped = 0;
         for h in holders {
             let e = self.drawing.doc.get_entity(h).expect("listed above");
             let sheet = e.common().owner_handle;
+            let locked = self.is_locked(h);
             match e {
                 EntityType::Text(t) => {
                     let Some(code) = text_field(&t.common).filter(|c| wanted(c)) else {
                         continue;
                     };
                     let value = self.evaluate_fields(&code, sheet);
-                    if t.value != value {
+                    if t.value != value && locked {
+                        skipped += 1;
+                    } else if t.value != value {
                         if let Some(EntityType::Text(t)) = self.drawing.doc.get_entity_mut(h) {
                             t.value = value;
                             t.common.graphic_data = None;
@@ -369,7 +377,9 @@ impl Session {
                         continue;
                     };
                     let value = escape_mtext(&self.evaluate_fields(&code, sheet));
-                    if t.value != value {
+                    if t.value != value && locked {
+                        skipped += 1;
+                    } else if t.value != value {
                         if let Some(EntityType::MText(t)) = self.drawing.doc.get_entity_mut(h) {
                             t.value = value;
                             t.common.graphic_data = None;
@@ -390,7 +400,9 @@ impl Session {
                             any = true;
                         }
                     }
-                    if any {
+                    if any && locked {
+                        skipped += 1;
+                    } else if any {
                         *self.drawing.doc.get_entity_mut(h).expect("listed above") =
                             EntityType::Table(table);
                         self.rebuild_table(h)?;
@@ -400,7 +412,7 @@ impl Session {
                 _ => {}
             }
         }
-        Ok(changed)
+        Ok((changed, skipped))
     }
 
     /// After a modify, an edit or an erase: the fields reading an entity are worked out again,

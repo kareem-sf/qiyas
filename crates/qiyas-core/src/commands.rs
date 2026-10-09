@@ -809,6 +809,13 @@ pub enum Outcome {
         remeasured: usize,
         unlinked: usize,
     },
+    /// An update of fields or of block references' attributes that left locked entities as they
+    /// were (on a locked layer, or outside the block edited in place; `Changed` when none): how
+    /// many texts, tables or references changed, and how many locked ones were left.
+    Updated {
+        count: usize,
+        skipped: usize,
+    },
     /// An erase that the take-off followed (or a move, turn, scale, mirror, stretch or align that
     /// left a row unmeasurable; `Changed` otherwise): how many take-off rows that measured an erased entity and others too were measured again
     /// without it (a count counts one less), and how many rows lost their link (every entity
@@ -830,7 +837,8 @@ pub enum Outcome {
     },
     /// A find and replace: how many replacements, the entities changed (a block reference's,
     /// for an attribute), and how many entities with matches were left as they were because
-    /// the result would not fit (a blank text, a line break in a single line).
+    /// the result would not fit (a blank text, a line break in a single line) or they are locked
+    /// (a locked layer, or outside the block edited in place).
     Replaced {
         count: usize,
         handles: Vec<u64>,
@@ -1292,8 +1300,8 @@ impl Session {
                 return Ok(Outcome::Added { handles: vec![h] });
             }
             Command::UpdateFields => {
-                self.update_fields(false)?;
-                return Ok(Outcome::Changed);
+                let (count, skipped) = self.update_fields(false)?;
+                return Ok(Self::updated(count, skipped));
             }
             Command::CreateBlock {
                 name,
@@ -1347,8 +1355,8 @@ impl Session {
                 return Ok(Outcome::Changed);
             }
             Command::SyncAttributes { block } => {
-                self.sync_attributes(&block)?;
-                return Ok(Outcome::Changed);
+                let (count, skipped) = self.sync_attributes(&block)?;
+                return Ok(Self::updated(count, skipped));
             }
             Command::RedefineBlock { name, from_path } => {
                 self.redefine_block(&name, &from_path)?;
@@ -1752,6 +1760,32 @@ impl Session {
             }
         }
         Ok(handles)
+    }
+
+    /// The entity `h` is locked: on a locked layer, or on the sheet outside the block edited in
+    /// place. Commands that change entities they look for themselves (find and replace, update
+    /// fields, sync attributes) leave it as it is and count it.
+    pub(crate) fn is_locked(&self, h: Handle) -> bool {
+        let doc = &self.drawing.doc;
+        let on_locked_layer = doc.get_entity(h).is_some_and(|e| {
+            doc.layers
+                .get(&e.common().layer)
+                .is_some_and(|l| l.flags.locked)
+        });
+        on_locked_layer
+            || self
+                .block_edit
+                .as_ref()
+                .is_some_and(|e| e.outside.contains(&h.value()))
+    }
+
+    /// `Outcome::Changed`, or `Updated` when `skipped` locked entities were left as they were.
+    fn updated(count: usize, skipped: usize) -> Outcome {
+        if skipped == 0 {
+            Outcome::Changed
+        } else {
+            Outcome::Updated { count, skipped }
+        }
     }
 
     /// `sheet_targets`, locked layers allowed: for commands that only read what they are given

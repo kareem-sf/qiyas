@@ -1087,8 +1087,8 @@ fn discarding_drops_what_was_added_and_keeps_work_outside_the_block() {
             b: [1.0, 50.0],
         },
     );
-    // Find and replace reaches the title, outside the block.
-    session
+    // Find and replace leaves the title alone: outside the block, it is locked.
+    let replaced = session
         .run(Command::FindReplace {
             find: "GROUND".to_string(),
             replace: "FIRST".to_string(),
@@ -1097,6 +1097,17 @@ fn discarding_drops_what_was_added_and_keeps_work_outside_the_block() {
             whole_word: false,
         })
         .unwrap();
+    assert!(
+        matches!(
+            replaced,
+            Outcome::Replaced {
+                count: 0,
+                skipped: 1,
+                ..
+            }
+        ),
+        "{replaced:?}"
+    );
     let closed = session.run(Command::DiscardBlockEdits).unwrap();
     assert!(
         matches!(closed, Outcome::BlockEditClosed { saved: false, .. }),
@@ -1113,7 +1124,7 @@ fn discarding_drops_what_was_added_and_keeps_work_outside_the_block() {
             _ => None,
         })
         .unwrap();
-    assert_eq!(title, "FIRST FLOOR PLAN");
+    assert_eq!(title, "GROUND FLOOR PLAN");
 }
 
 #[test]

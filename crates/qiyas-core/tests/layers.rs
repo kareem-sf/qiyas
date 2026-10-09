@@ -733,3 +733,137 @@ fn an_xrefs_entities_never_join_a_group() {
     // The take-off stays as it was through all of this.
     assert!(s.takeoff.items.iter().all(|m| m.kind != Kind::Item));
 }
+
+#[test]
+fn find_replace_update_fields_and_sync_attributes_leave_locked_entities_and_count_them() {
+    let (_dir, mut s) = open(&qiyas_core::fixtures::schedule_doc(), "locked.dxf");
+    let added = |o: Outcome| match o {
+        Outcome::Added { handles } => handles[0],
+        other => panic!("{other:?}"),
+    };
+    let text = added(
+        s.run(Command::Text {
+            at: [100.0, 90.0],
+            height: 0.25,
+            rotation: 0.0,
+            value: "ZQX".into(),
+            style: None,
+        })
+        .unwrap(),
+    );
+    let rect = added(
+        s.run(Command::Draw(qiyas_core::DrawSpec::Rectangle {
+            a: [100.0, 100.0],
+            b: [102.0, 101.0],
+        }))
+        .unwrap(),
+    );
+    let field = added(
+        s.run(Command::Field {
+            at: [100.0, 95.0],
+            height: 0.25,
+            field: qiyas_core::FieldKind::Area { target: t(rect) },
+        })
+        .unwrap(),
+    );
+    let tag = s
+        .drawing
+        .doc
+        .entities_in_block(MODEL)
+        .find(|e| matches!(e, EntityType::Insert(i) if i.block_name == "TAG"))
+        .map(|e| e.common().handle.value())
+        .unwrap();
+    for h in [text, field, tag] {
+        s.run(Command::SetProperty {
+            target: t(h),
+            prop: qiyas_core::EntityProp::Layer,
+            value: json!("A-DOOR"),
+        })
+        .unwrap();
+    }
+    set_layer(&mut s, "A-DOOR", LayerProp::Locked, json!(true));
+    let value = |s: &Session, h: u64| match s.drawing.doc.get_entity(Handle::new(h)).unwrap() {
+        EntityType::Text(t) => t.value.clone(),
+        other => panic!("{other:?}"),
+    };
+
+    let out = s
+        .run(Command::FindReplace {
+            find: "ZQX".into(),
+            replace: "DONE".into(),
+            scope: qiyas_core::TextScope::Drawing,
+            match_case: true,
+            whole_word: false,
+        })
+        .unwrap();
+    assert!(
+        matches!(
+            out,
+            Outcome::Replaced {
+                count: 0,
+                skipped: 1,
+                ..
+            }
+        ),
+        "{out:?}"
+    );
+    assert_eq!(value(&s, text), "ZQX");
+
+    // The rectangle (layer 0) grows; its locked field keeps its value until it is unlocked.
+    assert_eq!(value(&s, field), "2.000");
+    s.run(Command::Modify(qiyas_core::ModifySpec::Scale {
+        targets: vec![t(rect)],
+        base: [100.0, 100.0],
+        factor: 2.0,
+        copy: false,
+    }))
+    .unwrap();
+    assert_eq!(value(&s, field), "2.000");
+    let out = s.run(Command::UpdateFields).unwrap();
+    assert!(
+        matches!(
+            out,
+            Outcome::Updated {
+                count: 0,
+                skipped: 1
+            }
+        ),
+        "{out:?}"
+    );
+    assert_eq!(value(&s, field), "2.000");
+
+    // TAG has no MARK definition: syncing would drop the locked reference's MARK.
+    let out = s
+        .run(Command::SyncAttributes {
+            block: "TAG".into(),
+        })
+        .unwrap();
+    assert!(
+        matches!(
+            out,
+            Outcome::Updated {
+                count: 0,
+                skipped: 1
+            }
+        ),
+        "{out:?}"
+    );
+    let marks = |s: &Session| match s.drawing.doc.get_entity(Handle::new(tag)).unwrap() {
+        EntityType::Insert(i) => i.attributes.len(),
+        _ => unreachable!(),
+    };
+    assert_eq!(marks(&s), 1);
+
+    // Unlocked, all three go through.
+    set_layer(&mut s, "A-DOOR", LayerProp::Locked, json!(false));
+    assert!(matches!(
+        s.run(Command::UpdateFields).unwrap(),
+        Outcome::Changed
+    ));
+    assert_eq!(value(&s, field), "8.000");
+    s.run(Command::SyncAttributes {
+        block: "TAG".into(),
+    })
+    .unwrap();
+    assert_eq!(marks(&s), 0);
+}

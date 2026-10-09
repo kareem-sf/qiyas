@@ -604,6 +604,8 @@ impl Session {
                 .get_entity(h)
                 .expect("listed from the drawing");
             match Self::replaced(finder, e, Some(with)) {
+                // Locked: left as it is, counted.
+                Some(hit) if hit.count > 0 && self.is_locked(h) => skipped += 1,
                 Some(hit) if hit.fits => {
                     skipped += hit.skipped;
                     if hit.count == 0 {

@@ -1034,6 +1034,9 @@ export type Outcome =
   /** An explode's parts, how many entities picked had none and were left as they are, and the
    *  take-off rows that followed (as `takeoff_followed`). */
   | { type: "exploded"; handles: number[]; left_alone: number; remeasured: number; unlinked: number }
+  /** An update of fields or attributes that left locked entities as they were: how many changed,
+   *  how many locked ones were left. */
+  | { type: "updated"; count: number; skipped: number }
   /** An erase (or a move, turn, scale... that left a row unmeasurable): take-off rows measured
    *  again without an erased entity, and rows that lost their link (their values stay). */
   | { type: "takeoff_followed"; remeasured: number; unlinked: number }

@@ -740,6 +740,7 @@
   "insertField.block": "البلوك",
   "insertField.pickHint": "انقر العنصر الذي يقرؤه الحقل",
   "insertField.updated": "حُدِّثت الحقول",
+  "locked.skipped": "تُركت {n} من العناصر المقفلة كما هي",
   "insert": "إدراج",
   "block.group": "البلوك",
   "block.createTool": "إنشاء بلوك",

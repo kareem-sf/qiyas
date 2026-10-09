@@ -1110,8 +1110,9 @@ impl Session {
 
     /// `Command::SyncAttributes` (AutoCAD's ATTSYNC): every reference to `block` on any sheet gets
     /// the block's attributes as its definitions place and style them, keeping the value of each
-    /// tag it had; tags the block no longer has go. How many references changed.
-    pub(crate) fn sync_attributes(&mut self, block: &str) -> Result<usize, CoreError> {
+    /// tag it had; tags the block no longer has go. A locked reference (`Session::is_locked`) is
+    /// left as it is. How many references changed, and how many locked ones were left.
+    pub(crate) fn sync_attributes(&mut self, block: &str) -> Result<(usize, usize), CoreError> {
         let doc = &self.drawing.doc;
         let record = named_block(doc, block)?;
         let references: Vec<Handle> = doc
@@ -1122,6 +1123,7 @@ impl Session {
             .map(|e| e.common().handle)
             .collect();
         let mut changed = 0;
+        let mut skipped = 0;
         for h in references {
             let doc = &self.drawing.doc;
             let Some(EntityType::Insert(insert)) = doc.get_entity(h) else {
@@ -1158,6 +1160,10 @@ impl Session {
             if attributes == insert.attributes {
                 continue;
             }
+            if self.is_locked(h) {
+                skipped += 1;
+                continue;
+            }
             let doc = &mut self.drawing.doc;
             for a in &mut attributes {
                 if a.common.handle.is_null() {
@@ -1170,7 +1176,7 @@ impl Session {
             }
             changed += 1;
         }
-        Ok(changed)
+        Ok((changed, skipped))
     }
 
     /// `Command::RedefineBlock`: the block `name` holds what the block of that name holds in the
