@@ -254,7 +254,7 @@ fn attributes_for(
 /// Copies block definitions, and the layers, linetypes, text and dimension styles their entities
 /// use, from one drawing into another. A block or table entry the target has already (by name)
 /// is kept as it is; an anonymous block gets a free name of its own.
-struct Importer<'a> {
+pub(crate) struct Importer<'a> {
     src: &'a CadDocument,
     dst: &'a mut CadDocument,
     /// Blocks copied, source name to the name in `dst`.
@@ -264,7 +264,7 @@ struct Importer<'a> {
 }
 
 impl<'a> Importer<'a> {
-    fn new(src: &'a CadDocument, dst: &'a mut CadDocument) -> Self {
+    pub(crate) fn new(src: &'a CadDocument, dst: &'a mut CadDocument) -> Self {
         Importer {
             src,
             dst,
@@ -341,7 +341,7 @@ impl<'a> Importer<'a> {
 
     /// `e` ready to go into `dst`: what it uses copied first, the blocks it draws renamed when
     /// they had to be. `None` for an image or underlay.
-    fn entity(&mut self, e: &EntityType) -> Result<Option<EntityType>, CoreError> {
+    pub(crate) fn entity(&mut self, e: &EntityType) -> Result<Option<EntityType>, CoreError> {
         let mut e = e.clone();
         let c = e.common();
         let (layer, linetype) = (c.layer.clone(), c.linetype.clone());
@@ -382,6 +382,15 @@ impl<'a> Importer<'a> {
         Ok(Some(e))
     }
 
+    /// Copies the source entity `e` (with what it uses) into the `dst` block `owner`; its new
+    /// handle, or `None` for an image or underlay (left out).
+    pub(crate) fn copy(&mut self, e: &EntityType, owner: Handle) -> Result<Option<u64>, CoreError> {
+        match self.entity(e)? {
+            Some(e) => add_fresh_to(self.dst, e, Some(owner)).map(Some),
+            None => Ok(None),
+        }
+    }
+
     /// The name in `dst` of the source block `name`, copied over (with what it uses) when `dst`
     /// has no block of that name; an anonymous one always gets a fresh name.
     fn block(&mut self, name: &str) -> Result<String, CoreError> {
@@ -412,7 +421,11 @@ impl<'a> Importer<'a> {
     }
 
     /// Adds an empty block record `name` to `dst` like `source` (flags, base point, description).
-    fn new_record(&mut self, name: &str, source: &BlockRecord) -> Result<Handle, CoreError> {
+    pub(crate) fn new_record(
+        &mut self,
+        name: &str,
+        source: &BlockRecord,
+    ) -> Result<Handle, CoreError> {
         let mut record = BlockRecord::new(name);
         record.handle = self.dst.allocate_handle();
         record.block_entity_handle = self.dst.allocate_handle();
@@ -429,7 +442,12 @@ impl<'a> Importer<'a> {
 
     /// Copies the entities of the source block `name` into the `dst` block `owner`, moved by
     /// `shift`.
-    fn fill(&mut self, name: &str, owner: Handle, shift: Vector3) -> Result<(), CoreError> {
+    pub(crate) fn fill(
+        &mut self,
+        name: &str,
+        owner: Handle,
+        shift: Vector3,
+    ) -> Result<(), CoreError> {
         let src = self.src;
         let moved = Transform::from_translation(shift);
         for e in src.entities_in_block(name) {

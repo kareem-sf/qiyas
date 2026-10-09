@@ -581,6 +581,48 @@ pub enum Command {
         prop: EntityProp,
         value: serde_json::Value,
     },
+    /// The clipboard text for the entities `targets` at the top of the sheet, their coordinates
+    /// taken from `base` (by default the lower left corner of what they draw): a small DXF
+    /// drawing with the layers, blocks and styles they use (see `crate::clipboard`). Not an undo
+    /// step; `Outcome::Clipboard`.
+    CopyToClipboard {
+        targets: Vec<Target>,
+        #[serde(default)]
+        base: Option<[f64; 2]>,
+    },
+    /// Pastes the clipboard `text` (the desktop app fills it from the system clipboard) on the
+    /// sheet on screen, its base point at `at`: Qiyas's entities with new handles (the layers,
+    /// blocks and styles the drawing lacks come along), as one block reference with `as_block`;
+    /// plain text as a text `height` tall (2.5 mm at the annotation scale by default).
+    /// `Outcome::Added`.
+    PasteFromClipboard {
+        at: [f64; 2],
+        #[serde(default)]
+        text: Option<String>,
+        #[serde(default)]
+        as_block: bool,
+        #[serde(default)]
+        height: Option<f64>,
+    },
+    /// A paper-space viewport on the layout on screen with the corners `corner1` and
+    /// `corner2`, showing all of model space (see `crate::viewports`); on the current layer.
+    /// `Outcome::Added`.
+    #[serde(rename = "mview")]
+    MView {
+        corner1: [f64; 2],
+        corner2: [f64; 2],
+    },
+    /// The user coordinate system becomes the one at `origin` with its x axis along `x_axis`
+    /// (`[1, 0]` from `[0, 0]` is the world's). View state: not an undo step (see `crate::ucs`).
+    Ucs {
+        origin: [f64; 2],
+        x_axis: [f64; 2],
+    },
+    /// The user coordinate system becomes the entity `target`'s (AutoCAD's UCS OB; see
+    /// `Session::ucs_of_entity`). Not an undo step.
+    UcsObject {
+        target: Target,
+    },
 }
 
 /// `InsertBlock`'s scale when none is given.
@@ -630,7 +672,10 @@ impl Command {
             | Command::WriteBlock { .. }
             | Command::EditBlockInPlace { .. }
             | Command::SaveBlockEdits
-            | Command::DiscardBlockEdits => None,
+            | Command::DiscardBlockEdits
+            | Command::CopyToClipboard { .. }
+            | Command::Ucs { .. }
+            | Command::UcsObject { .. } => None,
             Command::SetBoq { .. } | Command::SetBoqTolerance { .. } => Some(Part::Boq),
             Command::SetConflicts { .. } | Command::ResolveConflict { .. } => Some(Part::Conflicts),
             // Entities only.
@@ -667,7 +712,9 @@ impl Command {
             | Command::UpdateFields
             // A new or changed block record (and what a copied one uses).
             | Command::CreateBlock { .. }
-            | Command::RedefineBlock { .. } => Some(Part::Document {
+            | Command::RedefineBlock { .. }
+            // The layers, linetypes, styles and blocks the pasted entities bring.
+            | Command::PasteFromClipboard { .. } => Some(Part::Document {
                 tables: true,
                 takeoff: false,
             }),
@@ -723,7 +770,8 @@ impl Command {
                 })
             }
             // The tables and take-off when a target needs them (`document_extras`).
-            Command::SetViewportFrozen { .. }
+            Command::MView { .. }
+            | Command::SetViewportFrozen { .. }
             | Command::MatchProperties { .. }
             | Command::SetProperty { .. } => Some(Part::Document {
                 tables: false,
@@ -795,6 +843,12 @@ pub enum Outcome {
     Table {
         columns: Vec<String>,
         rows: Vec<Vec<String>>,
+    },
+    /// The clipboard text `CopyToClipboard` made, and how many entities it holds. The desktop
+    /// app puts the text on the system clipboard and sends it on empty.
+    Clipboard {
+        text: String,
+        count: usize,
     },
     /// An edit in place of the block `name` ended, `saved` into the block or not: how many
     /// take-off rows lost their link, and how many undo steps left the history with it.
@@ -1362,6 +1416,31 @@ impl Session {
                 self.match_properties(&source, &targets, &props)?;
                 self.follow_fields()?;
                 return Ok(Outcome::Changed);
+            }
+            Command::Ucs { origin, x_axis } => {
+                self.ucs = crate::Ucs::new(origin, x_axis)?;
+                return Ok(Outcome::Changed);
+            }
+            Command::UcsObject { target } => {
+                self.ucs = self.ucs_of_entity(&target)?;
+                return Ok(Outcome::Changed);
+            }
+            Command::MView { corner1, corner2 } => {
+                let h = self.mview(corner1, corner2)?;
+                return Ok(Outcome::Added { handles: vec![h] });
+            }
+            Command::CopyToClipboard { targets, base } => {
+                let (text, count) = self.copy_to_clipboard(&targets, base)?;
+                return Ok(Outcome::Clipboard { text, count });
+            }
+            Command::PasteFromClipboard {
+                at,
+                text,
+                as_block,
+                height,
+            } => {
+                let handles = self.paste_from_clipboard(at, text.as_deref(), as_block, height)?;
+                return Ok(Outcome::Added { handles });
             }
             Command::SetProperty {
                 target,

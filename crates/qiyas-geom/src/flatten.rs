@@ -426,6 +426,20 @@ impl Walk<'_> {
                 ),
                 sweep(e.start_parameter, e.end_parameter) == TAU,
             ),
+            // A paper-space viewport's frame (the sheet's own, number 1, is no frame).
+            EntityType::Viewport(v) if v.id != 1 && depth == 0 => {
+                let (cx, cy) = (v.center.x, v.center.y);
+                let (w, h) = (v.width / 2.0, v.height / 2.0);
+                (
+                    vec![
+                        [cx - w, cy - h],
+                        [cx + w, cy - h],
+                        [cx + w, cy + h],
+                        [cx - w, cy + h],
+                    ],
+                    true,
+                )
+            }
             EntityType::Spline(e) => {
                 let control: Vec<[f64; 2]> = e.control_points.iter().map(xy).collect();
                 let weights = (e.weights.len() == control.len()).then(|| e.weights.clone());

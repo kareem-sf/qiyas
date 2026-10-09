@@ -27,7 +27,8 @@ use crate::{CoreError, Session, Target};
 /// false) and `global_width` (0 or more) of a polyline; `insert_scale` (the size of its x scale:
 /// all three axes scale together about the insertion point, a mirrored reference stays mirrored)
 /// and `insert_rotation` (degrees) of a block reference, its attributes following; `dim_style` a dimension style of
-/// the drawing.
+/// the drawing; `viewport_scale` (above 0) and `viewport_centre` (`[x, y]` in model space) of a
+/// paper-space viewport.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EntityProp {
@@ -45,6 +46,10 @@ pub enum EntityProp {
     InsertScale,
     InsertRotation,
     DimStyle,
+    /// A paper-space viewport's scale: layout units per model unit (above 0).
+    ViewportScale,
+    /// The model point a paper-space viewport shows at its centre, `[x, y]`.
+    ViewportCentre,
 }
 
 /// What `Command::MatchProperties` copies. Text style and height go text to text, dimension
@@ -365,6 +370,28 @@ impl Session {
                     }
                 }
                 after.reshaped = true;
+            }
+            EntityProp::ViewportScale => {
+                let scale = positive(value)?;
+                match e {
+                    EntityType::Viewport(v) if v.id != 1 => v.set_scale(scale),
+                    other => return Err(no_such(other, "viewport scale")),
+                }
+            }
+            EntityProp::ViewportCentre => {
+                let at = value
+                    .as_array()
+                    .filter(|a| a.len() == 2)
+                    .and_then(|a| Some([a[0].as_f64()?, a[1].as_f64()?]))
+                    .filter(|p| p.iter().all(|v| v.is_finite()))
+                    .ok_or_else(|| invalid(format!("{value} is not a point [x, y]")))?;
+                match e {
+                    EntityType::Viewport(v) if v.id != 1 => {
+                        v.view_center =
+                            Vector3::new(at[0] - v.view_target.x, at[1] - v.view_target.y, 0.0);
+                    }
+                    other => return Err(no_such(other, "viewport centre")),
+                }
             }
             EntityProp::DimStyle => {
                 let name = text(value)?.trim();

@@ -2,10 +2,13 @@
 //! raster images, inquiry (geometry, divide and measure along, data extraction), drawing new
 //! entities and modifying them, text and find and replace, dimensions, leaders and tolerances,
 //! tables and fields, blocks and attributes, layer properties, layer states and the layer
-//! translator, groups, and editing and matching entity properties.
+//! translator, groups, editing and matching entity properties, the clipboard, paper-space
+//! viewports, the user coordinate system, sheet sets, and autosave and recovery.
 
+mod autosave;
 mod blocks;
 mod boq;
+mod clipboard;
 mod commands;
 mod conflict;
 mod dimension;
@@ -26,20 +29,27 @@ mod project;
 mod props;
 mod query;
 mod session;
+mod sheetset;
 mod snap;
 mod table;
 mod tables;
 mod takeoff;
 mod text;
+mod ucs;
 mod underlay;
 mod undo;
 mod units;
+mod viewports;
 mod views;
 mod xref;
 
 pub use self::image::{draw_picture, image_size, ImageDisplay, IMAGE_EXTENSIONS, IMAGE_LAYER};
+pub use autosave::{
+    autosave_path, discard_autosave, recoverable, Dropped, ReadReport, Recoverable,
+};
 pub use blocks::{drawing_blocks, AttDefInfo, BlockInfo};
 pub use boq::{Boq, BoqItem};
+pub use clipboard::CLIPBOARD_MARK;
 pub use commands::{Command, Outcome, Target};
 pub use conflict::{Conflict, ConflictKind, ConflictStatus};
 pub use dimension::{DimEditOp, DimSpec, DimStyleFields, DimStyleInfo};
@@ -57,12 +67,15 @@ pub use project::{project_path, Project};
 pub use props::{EntityProp, MatchProp};
 pub use query::{BlockCount, DimRow, EntityFilter, EntityRow, Page, TextRow};
 pub use session::{DrawingInfo, EntityInfo, Picked, Session, BATCH_TOL, EMPTY_MODEL};
+pub use sheetset::{sheet_set_entries, sheet_set_entry, SheetSet, SheetSetDrawing, SheetSetEntry};
 pub use snap::{Drafting, Snap, SnapKind, SnapModes};
 pub use table::TableInfo;
 pub use tables::Schedule;
 pub use takeoff::{Kind, Measurement, Source, Takeoff, Total};
 pub use text::{TextMatch, TextScope};
+pub use ucs::Ucs;
 pub use underlay::{AttachMode, PictureSource, PreparedPdf, UnderlayImage, UNDERLAY_LAYER};
 pub use units::Units;
+pub use viewports::PaperView;
 pub use views::NamedView;
 pub use xref::{candidates as xref_candidates, Xref, XrefInfo, XrefSet};

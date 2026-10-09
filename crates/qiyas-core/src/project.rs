@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Boq, Conflict, CoreError, Current, Drafting, Schedule, Takeoff};
+use crate::{Boq, Conflict, CoreError, Current, Drafting, Schedule, Takeoff, Ucs};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Project {
@@ -43,6 +43,10 @@ pub struct Project {
     /// state keeps the drawing's layer settings in the drawing, and Qiyas's hidden layers here.
     #[serde(default)]
     pub qiyas_hidden: BTreeMap<String, Vec<String>>,
+    /// The user coordinate system (`Session::ucs`); `None` in files saved before it, which then
+    /// take the drawing's own.
+    #[serde(default)]
+    pub ucs: Option<Ucs>,
 }
 
 /// The project file of `drawing`: same folder, same stem, extension `qiyas`.
@@ -146,6 +150,7 @@ mod tests {
             xref_overrides: HashMap::new(),
             current: Current::default(),
             qiyas_hidden: Default::default(),
+            ucs: None,
         };
         assert!(save(&path, &project).is_err());
         assert!(!dir.path().join("villa.qiyas.tmp").exists());

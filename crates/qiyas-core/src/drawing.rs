@@ -15,6 +15,8 @@ pub struct Drawing {
     /// What the reader had to skip or repair, in its own words.
     pub problems: Vec<String>,
     pub units: Units,
+    /// What the failsafe reader read and dropped (see `crate::autosave::ReadReport`).
+    pub report: crate::ReadReport,
 }
 
 /// Model space or one paper layout.
@@ -68,6 +70,7 @@ impl Drawing {
                 "no usable drawing data found".to_string(),
             ));
         }
+        let report = crate::ReadReport::from_stats(&outcome.stats);
         let problems = outcome
             .stats
             .diagnostics
@@ -80,6 +83,7 @@ impl Drawing {
             doc: outcome.document,
             problems,
             units,
+            report,
         })
     }
 

@@ -29,7 +29,7 @@ use crate::undo::{DocChange, History, Parts, Step, TablesSnapshot, ViewRefs};
 use crate::xref::{XrefInfo, XrefSet};
 use crate::{
     Boq, Command, Conflict, CoreError, Current, DimStyleInfo, Drafting, Drawing, LayerInfo,
-    Outcome, Schedule, Sheet, Source, TableInfo, Takeoff, Units,
+    Outcome, Schedule, Sheet, Source, TableInfo, Takeoff, Ucs, Units,
 };
 
 /// Flatten tolerance for drawing on screen, in drawing units.
@@ -80,6 +80,9 @@ pub struct Session {
     pub current: Current,
     /// The hidden layers kept with each layer state, by state name. Saved in the project file.
     pub(crate) state_hidden: BTreeMap<String, Vec<String>>,
+    /// The user coordinate system (see `crate::ucs`). Saved in the project file and the
+    /// drawing; not an undo step.
+    pub ucs: Ucs,
     pub(crate) history: History,
     /// The block being edited in place, if one is (see `crate::blocks`).
     pub(crate) block_edit: Option<BlockEdit>,
@@ -95,6 +98,9 @@ pub struct Session {
     empty_model: bool,
     /// Batch and pick index of the last sheet and visibility drawn; rebuilt when either changes.
     cache: RefCell<Option<Cached>>,
+    /// Model space drawn for the paper-space viewports of a layout on screen, with the version
+    /// it was drawn at (`version_of` model space); see `crate::viewports`.
+    pub(crate) model: RefCell<Option<(u64, Batch)>>,
     /// Fonts, glyph atlas and glyph cache, kept across batches so the atlas pages the window
     /// holds stay valid.
     text: RefCell<TextEngine>,
@@ -242,6 +248,10 @@ pub struct EntityInfo {
     pub global_width: Option<f64>,
     /// A block reference's scale along its x axis, negative when it is mirrored.
     pub scale: Option<f64>,
+    /// A paper-space viewport's scale (layout units per model unit) and the model point at its
+    /// centre.
+    pub viewport_scale: Option<f64>,
+    pub viewport_centre: Option<[f64; 2]>,
 }
 
 /// An entity found by handle and chain, with what places it in the world.
@@ -412,6 +422,15 @@ impl Session {
     /// (with the files the project chose for them); a missing xref is a problem, not a failure.
     /// Measurements embedded inside xrefs are never read.
     pub fn open(path: &Path) -> Result<Session, CoreError> {
+        Session::open_with(path, &project_path(path), &project::file_name(path))
+    }
+
+    /// `open`, with the project file at `project_file`, saved for the drawing named `name`.
+    pub(crate) fn open_with(
+        path: &Path,
+        project_file: &Path,
+        name: &str,
+    ) -> Result<Session, CoreError> {
         let mut drawing = Drawing::open(path)?;
         let sheet = drawing.sheets()[0].block.clone();
         let mut takeoff = Takeoff::default();
@@ -423,14 +442,11 @@ impl Session {
         let mut xref_overrides = HashMap::new();
         let mut current = Current::default();
         let mut state_hidden = BTreeMap::new();
-        let project_file = project_path(path);
+        let mut ucs = None;
         if project_file.exists() {
-            match project::load(&project_file) {
+            match project::load(project_file) {
                 Ok(project) => {
-                    if !project
-                        .drawing
-                        .eq_ignore_ascii_case(&project::file_name(path))
-                    {
+                    if !project.drawing.eq_ignore_ascii_case(name) {
                         drawing
                             .problems
                             .push(format!("Project file was saved for {}", project.drawing));
@@ -443,6 +459,7 @@ impl Session {
                     drafting = project.drafting.clamped();
                     xref_overrides = project.xref_overrides;
                     state_hidden = project.qiyas_hidden;
+                    ucs = project.ucs;
                     // A layer gone from the drawing since: back to layer "0".
                     if drawing.doc.layers.contains(&project.current.layer) {
                         current = project.current;
@@ -454,20 +471,21 @@ impl Session {
                     }
                 }
                 // Keep a copy, since the next save replaces the unreadable file.
-                Err(e) => drawing
-                    .problems
-                    .push(match project::back_up(&project_file) {
-                        Ok(bak) => {
-                            format!("Project file could not be read (backed up to {bak}): {e}")
-                        }
-                        Err(_) => format!("Project file could not be read: {e}"),
-                    }),
+                Err(e) => drawing.problems.push(match project::back_up(project_file) {
+                    Ok(bak) => {
+                        format!("Project file could not be read (backed up to {bak}): {e}")
+                    }
+                    Err(_) => format!("Project file could not be read: {e}"),
+                }),
             }
         } else {
             takeoff.items = read_embedded(&drawing.doc);
         }
         let xrefs = XrefSet::load(&drawing, &xref_overrides, MAX_XREF_DEPTH);
         let empty_model = model_is_empty(&drawing);
+        let ucs = ucs
+            .or_else(|| Ucs::from_header(&drawing.doc))
+            .unwrap_or_default();
         Ok(Session {
             drawing,
             sheet,
@@ -482,6 +500,7 @@ impl Session {
             xref_overrides,
             current,
             state_hidden,
+            ucs,
             history: History::default(),
             block_edit: None,
             epoch: NEXT_EPOCH.fetch_add(1, Ordering::Relaxed),
@@ -489,6 +508,7 @@ impl Session {
             saved_revision: 0,
             empty_model,
             cache: RefCell::new(None),
+            model: RefCell::new(None),
             text: RefCell::new(TextEngine::new()),
             underlays: RefCell::new(Underlays::default()),
         })
@@ -498,7 +518,13 @@ impl Session {
     /// and returns its path.
     pub fn save_project(&self) -> Result<PathBuf, CoreError> {
         let path = project_path(&self.drawing.path);
-        let project = Project {
+        project::save(&path, &self.project())?;
+        Ok(path)
+    }
+
+    /// The project file's contents for the session as it is.
+    pub(crate) fn project(&self) -> Project {
+        Project {
             version: 2,
             drawing: project::file_name(&self.drawing.path),
             takeoff: self.takeoff.clone(),
@@ -510,9 +536,8 @@ impl Session {
             xref_overrides: self.xref_overrides.clone(),
             current: self.current.clone(),
             qiyas_hidden: self.state_hidden.clone(),
-        };
-        project::save(&path, &project)?;
-        Ok(path)
+            ucs: Some(self.ucs),
+        }
     }
 
     /// Saves the drawing over its own file; see `save_as`.
@@ -549,6 +574,8 @@ impl Session {
         // Embedded into a copy, so a failed write leaves the drawing in memory as it was.
         let mut doc = self.drawing.doc.clone();
         embed_measurements(&mut doc, &self.takeoff.items);
+        // AutoCAD opens with the same UCS.
+        self.ucs.write_to(&mut doc);
         // PDF underlay and image links stay right from the new folder.
         rebase_links(&mut doc, &self.drawing.path, path);
         let bytes = if dwg {
@@ -563,6 +590,9 @@ impl Session {
         // The embedded entities are part of the drawing now: draw and pick them too.
         self.drawing_changed();
         self.saved_revision = self.document_revision;
+        // Saved: the autosaves of the old file and the new one are stale (best effort).
+        let _ = crate::discard_autosave(&self.drawing.path);
+        let _ = crate::discard_autosave(path);
         self.drawing.path = path.to_path_buf();
         self.save_project().map_err(|e| {
             CoreError::Unwritable(format!(
@@ -693,9 +723,14 @@ impl Session {
     /// Arabic setting, document revision and xrefs (name, file found, when it was last changed
     /// and its size, each), cut to 53 bits so it survives a trip through a JavaScript number.
     pub fn batch_version(&self) -> u64 {
+        self.version_of(&self.sheet)
+    }
+
+    /// `batch_version` for the sheet `sheet`.
+    pub(crate) fn version_of(&self, sheet: &str) -> u64 {
         let mut hash = Fnv::new();
         hash.write(&self.epoch.to_le_bytes());
-        hash.write(self.sheet.as_bytes());
+        hash.write(sheet.as_bytes());
         hash.write(&[0xFF]);
         let mut hidden: Vec<String> = self
             .visibility
@@ -756,7 +791,14 @@ impl Session {
 
     /// The entity nearest to `p` (drawing coordinates) within `tol`, among what is drawn, down
     /// to the entity inside any blocks (while a block is edited in place, among its entities).
+    /// On a layout, a click inside a viewport with nothing of the layout near it picks the
+    /// viewport (never the model entities it shows).
     pub fn pick(&self, p: [f64; 2], tol: f64) -> Option<Picked> {
+        self.pick_drawn(p, tol).or_else(|| self.viewport_at(p))
+    }
+
+    /// `pick` among what the sheet on screen draws.
+    fn pick_drawn(&self, p: [f64; 2], tol: f64) -> Option<Picked> {
         self.with_cache(None, |cached| {
             let i = match self.locked() {
                 None => cached.index.pick(p, tol)?,
@@ -847,7 +889,7 @@ impl Session {
     }
 
     /// The kind of the drawing's entity `handle` ("Line", "Insert"…).
-    fn kind_of(&self, handle: u64) -> Option<String> {
+    pub(crate) fn kind_of(&self, handle: u64) -> Option<String> {
         self.drawing
             .doc
             .get_entity(Handle::new(handle))
@@ -1009,6 +1051,16 @@ impl Session {
             EntityType::Insert(i) => Some(i.x_scale().abs() * (i.x_scale() * i.y_scale()).signum()),
             _ => None,
         };
+        let (viewport_scale, viewport_centre) = match entity {
+            EntityType::Viewport(v) if v.id != 1 => (
+                Some(v.scale()),
+                Some([
+                    v.view_target.x + v.view_center.x,
+                    v.view_target.y + v.view_center.y,
+                ]),
+            ),
+            _ => (None, None),
+        };
         let common = entity.common();
         let linetype = if common.linetype.is_empty() {
             "ByLayer".to_string()
@@ -1046,6 +1098,8 @@ impl Session {
             closed,
             global_width,
             scale,
+            viewport_scale,
+            viewport_centre,
         })
     }
 
@@ -1186,6 +1240,11 @@ impl Session {
         }
     }
 
+    /// The drawing counts as having changes not saved yet (a recovered autosave).
+    pub(crate) fn mark_unsaved(&mut self) {
+        self.document_revision += 1;
+    }
+
     /// The drawing counts as saved as it is now.
     pub(crate) fn mark_saved(&mut self) {
         self.saved_revision = self.document_revision;
@@ -1195,6 +1254,7 @@ impl Session {
     /// drawing hold hundreds of MB); the next draw or pick builds them again.
     pub fn park(&mut self) {
         *self.cache.get_mut() = None;
+        *self.model.get_mut() = None;
     }
 
     /// The batch and pick index are built and kept (see `park`).
@@ -1296,6 +1356,45 @@ impl Session {
             area,
             self_intersecting,
         }
+    }
+
+    /// Runs `f` on model space as drawn for the viewports of the layout on screen (the batch on
+    /// screen itself when that is model space), rebuilt when model space would draw differently
+    /// (`version_of`), its glyphs drawn again for `px_per_unit` when given and new. No pick
+    /// index: a click inside a viewport picks the viewport.
+    pub(crate) fn with_model<R>(&self, px_per_unit: Option<f64>, f: impl FnOnce(&Batch) -> R) -> R {
+        const MODEL: &str = "*Model_Space";
+        if self.sheet.eq_ignore_ascii_case(MODEL) {
+            return self.with_cache(px_per_unit, |c| f(&c.batch));
+        }
+        let version = self.version_of(MODEL);
+        let mut model = self.model.borrow_mut();
+        let mut text = self.text.borrow_mut();
+        if model.as_ref().is_none_or(|(v, _)| *v != version) {
+            let options = TextOptions {
+                arabic_reversed: self.arabic_reversed,
+                px_per_unit,
+            };
+            let batch = build_batch_with_xrefs(
+                &self.drawing.doc,
+                &self.xref_docs(),
+                MODEL,
+                &self.visibility,
+                BATCH_TOL,
+                &mut text,
+                options,
+            );
+            // Model space's pictures are not drawn inside viewports yet.
+            *model = Some((version, batch));
+        }
+        let (_, batch) = model.as_mut().expect("just filled");
+        if let Some(px) = px_per_unit.filter(|p| *p > 0.0 && p.is_finite()) {
+            if !batch.texts.is_empty() && px != batch.px_per_unit {
+                place_text(batch, &mut text, px);
+            }
+        }
+        drop(text);
+        f(batch)
     }
 
     /// Runs `f` on the cached batch, rebuilding it first if the sheet, visibility or Arabic
