@@ -82,9 +82,11 @@ fn export_table_writes_one_data_sheet() {
     let columns = ["Handle", "Block", "MARK", "Length (m)"].map(String::from);
     let long = "x".repeat(100);
     let rows = vec![
-        ["2A", "DOOR", "D1", " 2.313 "].map(String::from).to_vec(),
-        vec!["43".into(), "DOOR".into(), long.clone(), "-0.5e1".into()],
+        ["2A", "DOOR", "D1", "2.313"].map(String::from).to_vec(),
+        vec!["43".into(), "DOOR".into(), long.clone(), "-0.5".into()],
         ["inf", "1,200", "NaN", ""].map(String::from).to_vec(),
+        ["007", "1e3", "+5", " 2 "].map(String::from).to_vec(),
+        ["0", "1.", ".5", "-"].map(String::from).to_vec(),
     ];
     qiyas_boq::export_table(&path, &columns, &rows).unwrap();
 
@@ -97,13 +99,26 @@ fn export_table_writes_one_data_sheet() {
     assert_eq!(header, columns);
     assert_eq!(sheet.get((1, 2)), Some(&Data::String("D1".into())));
     assert_eq!(sheet.get((2, 2)), Some(&Data::String(long)));
-    // Numbers are written as numbers; the rest, and what is not a finite number, as text.
+    // Plain decimals are written as numbers; everything else as text.
+    let text = |s: &str| Some(Data::String(s.into()));
     assert_eq!(sheet.get((1, 3)), Some(&Data::Float(2.313)));
-    assert_eq!(sheet.get((2, 3)), Some(&Data::Float(-5.0)));
+    assert_eq!(sheet.get((2, 3)), Some(&Data::Float(-0.5)));
     assert_eq!(sheet.get((2, 0)), Some(&Data::Float(43.0)));
-    assert_eq!(sheet.get((1, 0)), Some(&Data::String("2A".into())));
-    assert_eq!(sheet.get((3, 0)), Some(&Data::String("inf".into())));
-    assert_eq!(sheet.get((3, 1)), Some(&Data::String("1,200".into())));
-    assert_eq!(sheet.get((3, 2)), Some(&Data::String("NaN".into())));
-    assert_eq!(sheet.height(), 4);
+    assert_eq!(sheet.get((5, 0)), Some(&Data::Float(0.0)));
+    for (row, col, s) in [
+        (1, 0, "2A"),
+        (3, 0, "inf"),
+        (3, 1, "1,200"),
+        (3, 2, "NaN"),
+        (4, 0, "007"),
+        (4, 1, "1e3"),
+        (4, 2, "+5"),
+        (4, 3, " 2 "),
+        (5, 1, "1."),
+        (5, 2, ".5"),
+        (5, 3, "-"),
+    ] {
+        assert_eq!(sheet.get((row, col)).cloned(), text(s), "{s:?}");
+    }
+    assert_eq!(sheet.height(), 6);
 }

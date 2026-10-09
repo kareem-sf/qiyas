@@ -104,7 +104,7 @@ fn circle_arc_and_line_geometry() {
     assert_eq!(value(&rows, "layer"), "A-WALL");
     assert_eq!(value(&rows, "radius"), "1.5000 m");
     assert_eq!(value(&rows, "diameter"), "3.0000 m");
-    assert_eq!(value(&rows, "centre"), "3.5000, 4.5000");
+    assert_eq!(value(&rows, "centre"), "3.5000, 4.5000 m");
     assert_eq!(value(&rows, "perimeter"), format!("{:.4} m", TAU * 1.5));
     assert_eq!(value(&rows, "area"), format!("{:.4} m²", PI * 2.25));
 
@@ -112,7 +112,7 @@ fn circle_arc_and_line_geometry() {
     let (title, rows) = geometry(&mut s, arc);
     assert_eq!(title, "Arc");
     assert_eq!(value(&rows, "radius"), "2.0000 m");
-    assert_eq!(value(&rows, "centre"), "20.0000, 0.0000");
+    assert_eq!(value(&rows, "centre"), "20.0000, 0.0000 m");
     assert_eq!(value(&rows, "start_angle"), "0.0000°");
     assert_eq!(value(&rows, "end_angle"), "180.0000°");
     assert_eq!(value(&rows, "included_angle"), "180.0000°");
@@ -161,7 +161,7 @@ fn block_reference_and_text_geometry() {
     let (title, rows) = geometry(&mut s, door);
     assert_eq!(title, "Insert");
     assert_eq!(value(&rows, "block_name"), "DOOR");
-    assert_eq!(value(&rows, "insertion"), "1.0000, 1.0000");
+    assert_eq!(value(&rows, "insertion"), "1.0000, 1.0000 m");
     assert_eq!(value(&rows, "scale"), "1.0000, 1.0000");
     assert_eq!(value(&rows, "rotation"), "0.0000°");
     assert_eq!(value(&rows, "attribute"), "MARK = D1");

@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
 // `::image` is the image crate; this module is `crate::image`.
+use ::image::error::{LimitError, LimitErrorKind};
 use ::image::imageops::{self, FilterType};
 use ::image::metadata::Orientation;
 use ::image::{DynamicImage, ImageDecoder, ImageReader, Limits, RgbaImage};
@@ -106,6 +107,19 @@ fn reader(path: &Path) -> Result<ImageReader<BufReader<File>>, CoreError> {
     Ok(reader)
 }
 
+/// The decoder for the image at `path`, its header read. The `image` crate checks `max_alloc`
+/// only for some formats (PNG, TIFF), so the decoded size is checked here for all.
+fn decoder(path: &Path) -> Result<impl ImageDecoder, CoreError> {
+    let decoder = reader(path)?
+        .into_decoder()
+        .map_err(|e| decode_error(path, e))?;
+    if decoder.total_bytes() > MAX_DECODE_BYTES {
+        let e = LimitError::from_kind(LimitErrorKind::InsufficientMemory);
+        return Err(decode_error(path, ::image::ImageError::Limits(e)));
+    }
+    Ok(decoder)
+}
+
 /// Whether `o` turns the image a quarter, swapping its width and height.
 fn turns(o: Orientation) -> bool {
     matches!(
@@ -120,9 +134,7 @@ fn turns(o: Orientation) -> bool {
 /// Width and height in pixels of the image at `path` as it is shown (turned by its EXIF
 /// orientation). Reads the file's header only.
 pub fn image_size(path: &Path) -> Result<(u32, u32), CoreError> {
-    let mut decoder = reader(path)?
-        .into_decoder()
-        .map_err(|e| decode_error(path, e))?;
+    let mut decoder = decoder(path)?;
     let (w, h) = decoder.dimensions();
     let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
     Ok(if turns(orientation) { (h, w) } else { (w, h) })
@@ -131,9 +143,7 @@ pub fn image_size(path: &Path) -> Result<(u32, u32), CoreError> {
 /// The image at `path` decoded, turned by its EXIF orientation, and cut to `MAX_DECODED_PX` on
 /// its long side.
 fn decode(path: &Path) -> Result<RgbaImage, CoreError> {
-    let mut decoder = reader(path)?
-        .into_decoder()
-        .map_err(|e| decode_error(path, e))?;
+    let mut decoder = decoder(path)?;
     let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
     let mut image = DynamicImage::from_decoder(decoder).map_err(|e| decode_error(path, e))?;
     let (w, h) = (image.width(), image.height());
@@ -469,6 +479,7 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ::image::{ImageFormat, RgbImage};
 
     fn with_clip(vertices: [(f64, f64); 2]) -> RasterImage {
         let mut image = RasterImage::new("a.png", Vector3::new(0.0, 0.0, 0.0), 200.0, 100.0);
@@ -525,6 +536,19 @@ mod tests {
         png
     }
 
+    /// An 8 x 8 baseline JPEG whose frame header (SOF0) claims `w` x `h` pixels.
+    fn jpeg_claiming(w: u16, h: u16) -> Vec<u8> {
+        let mut jpg = Vec::new();
+        RgbImage::new(8, 8)
+            .write_to(&mut std::io::Cursor::new(&mut jpg), ImageFormat::Jpeg)
+            .unwrap();
+        let sof = jpg.windows(2).position(|m| m == [0xFF, 0xC0]).unwrap();
+        // Marker, length, precision, then height and width.
+        jpg[sof + 5..sof + 7].copy_from_slice(&h.to_be_bytes());
+        jpg[sof + 7..sof + 9].copy_from_slice(&w.to_be_bytes());
+        jpg
+    }
+
     #[test]
     fn an_image_past_the_limits_is_refused_before_decoding() {
         let dir = tempfile::tempdir().unwrap();
@@ -535,6 +559,13 @@ mod tests {
             for e in [image_size(&path).unwrap_err(), decode(&path).unwrap_err()] {
                 assert!(e.to_string().contains("too large"), "{w}x{h}: {e}");
             }
+        }
+        // 20,000 x 20,000 is within the sides but 1.2 GB decoded; the JPEG decoder does not
+        // check `max_alloc` itself.
+        let path = dir.path().join("big.jpg");
+        std::fs::write(&path, jpeg_claiming(20_000, 20_000)).unwrap();
+        for e in [image_size(&path).unwrap_err(), decode(&path).unwrap_err()] {
+            assert!(e.to_string().contains("too large"), "jpeg: {e}");
         }
         // Within the limits the same header is read (and only the missing pixels fail).
         let path = dir.path().join("small.png");

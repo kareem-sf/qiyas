@@ -60,7 +60,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pick_index_one_million_segments_under_a_second() {
+    fn pick_index_one_million_segments_in_0_6_s() {
         // Short segments scattered over 1 km, as a big drawing has them.
         let mut seed = 0x2545_f491_4f6c_dd1du64;
         let mut next = || {
@@ -81,7 +81,7 @@ mod tests {
         let secs = t.elapsed().as_secs_f64();
         assert!(index.pick([0.0, 0.0], 1000.0).is_some());
         assert!(
-            secs < 1.0,
+            secs < 0.6,
             "PickIndex::new took {secs:.2} s for 1 M segments"
         );
     }

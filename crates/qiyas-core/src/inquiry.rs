@@ -101,7 +101,7 @@ impl Shown {
         format!("{} m²", self.fixed(v * self.metres * self.metres))
     }
     fn point(&self, p: [f64; 2]) -> String {
-        format!("{}, {}", self.number(p[0]), self.number(p[1]))
+        format!("{}, {} m", self.number(p[0]), self.number(p[1]))
     }
     /// An angle in radians as degrees from 0 up to 360.
     fn angle(&self, radians: f64) -> String {

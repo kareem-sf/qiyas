@@ -91,8 +91,8 @@ pub fn export_takeoff(
 const MAX_WIDTH: usize = 60;
 
 /// Writes a table (data extracted from the drawing) to the workbook at `path`: one sheet "Data",
-/// `columns` as a bold header row, then `rows`: a cell that reads as a number (spaces trimmed)
-/// as a number, the rest as text. Each column is as wide as its longest cell, up to 60
+/// `columns` as a bold header row, then `rows`: a cell that is a plain decimal (see
+/// `plain_decimal`) as a number, the rest as text. Each column is as wide as its longest cell, up to 60
 /// characters.
 pub fn export_table(path: &Path, columns: &[String], rows: &[Vec<String>]) -> Result<(), BoqError> {
     let mut book = Workbook::new();
@@ -103,9 +103,9 @@ pub fn export_table(path: &Path, columns: &[String], rows: &[Vec<String>]) -> Re
         let r = RowNum::try_from(r + 1).map_err(|_| BoqError::Xlsx("Too many rows".into()))?;
         for (c, cell) in cells.iter().enumerate() {
             let c = u16::try_from(c).map_err(|_| BoqError::Xlsx("Too many columns".into()))?;
-            match cell.trim().parse::<f64>() {
-                Ok(n) if n.is_finite() => sheet.write_number(r, c, n)?,
-                _ => sheet.write_string(r, c, cell)?,
+            match plain_decimal(cell) {
+                Some(n) => sheet.write_number(r, c, n)?,
+                None => sheet.write_string(r, c, cell)?,
             };
         }
     }
@@ -120,6 +120,22 @@ pub fn export_table(path: &Path, columns: &[String], rows: &[Vec<String>]) -> Re
     }
     book.save(path)?;
     Ok(())
+}
+
+/// The number `s` spells as a plain decimal (`-?(0|[1-9][0-9]*)(\.[0-9]+)?`): no leading zero,
+/// exponent or plus sign, so a code like "007" or "1e3" stays text.
+fn plain_decimal(s: &str) -> Option<f64> {
+    let digits = s.strip_prefix('-').unwrap_or(s);
+    let (whole, fraction) = match digits.split_once('.') {
+        Some((w, f)) => (w, Some(f)),
+        None => (digits, None),
+    };
+    let all_digits = |p: &str| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit());
+    let whole_ok = all_digits(whole) && (whole == "0" || !whole.starts_with('0'));
+    if !whole_ok || fraction.is_some_and(|f| !all_digits(f)) {
+        return None;
+    }
+    s.parse().ok()
 }
 
 /// Writes the totals header at `row` and one row per total below it.
