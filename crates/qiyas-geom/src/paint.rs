@@ -101,6 +101,9 @@ pub(crate) fn pattern_spans(
         let period: f64 = line.dash_lengths.iter().map(|v| v.abs()).sum();
         let mut k = k0;
         while k <= k1 {
+            if out.len() >= MAX_PATTERN_SPANS {
+                return out;
+            }
             let origin = [base[0] + k * offset[0], base[1] + k * offset[1]];
             for [t0, t1] in inside_spans(rings, origin, d, n) {
                 if line.dash_lengths.is_empty() || period < 1e-12 {
@@ -252,4 +255,34 @@ pub(crate) fn mline_paths(doc: &CadDocument, m: &MLine) -> (Vec<Vec<[f64; 2]>>, 
         })
         .collect();
     (paths, m.is_closed())
+}
+
+#[cfg(test)]
+mod tests {
+    use opencadcodec::Vector2;
+
+    use super::*;
+
+    #[test]
+    fn pattern_spans_stop_once_the_cap_is_full() {
+        // A 40,000-corner ring 100 across, crossed by about 19,600 lines of 0.01 dashes: the cap
+        // is full after the first few lines, and the rest are never looked at.
+        let ring: Vec<[f64; 2]> = (0..40_000)
+            .map(|i| {
+                let a = i as f64 * std::f64::consts::TAU / 40_000.0;
+                [50.0 * a.cos(), 50.0 * a.sin()]
+            })
+            .collect();
+        let line = HatchPatternLine {
+            angle: 0.0,
+            base_point: Vector2::new(0.0, 0.0),
+            offset: Vector2::new(0.0, 0.0051),
+            dash_lengths: vec![0.01, -0.01],
+        };
+        let t = std::time::Instant::now();
+        let spans = pattern_spans(&[line], &[ring]);
+        let secs = t.elapsed().as_secs_f64();
+        assert_eq!(spans.len(), MAX_PATTERN_SPANS);
+        assert!(secs < 0.25, "{secs:.2} s");
+    }
 }
