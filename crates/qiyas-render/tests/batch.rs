@@ -6,7 +6,7 @@ use qiyas_core::fixtures::sample_doc;
 use qiyas_render::{
     add_images, add_pick_outlines, build_batch, image_flags, resolve_color, section, Batch,
     ImageEntry, ImagePlacement, PickIndex, Quad, Range, Visibility, IMAGE_ADJUSTED, IMAGE_FADED,
-    IMAGE_MONOCHROME, MAGIC, NO_CHAIN, TEXT_BOX, VERSION,
+    IMAGE_MONOCHROME, MAGIC, MAX_SHEET_WORK, NO_CHAIN, TEXT_BOX, VERSION,
 };
 
 const MODEL: &str = "*Model_Space";
@@ -618,4 +618,29 @@ fn image_flags_pack_brightness_contrast_and_fade() {
     );
     // Cut to 100.
     assert_eq!(image_flags(255, 200, 101), image_flags(100, 100, 100));
+}
+
+#[test]
+fn a_big_block_inserted_many_times_stops_at_the_sheet_budget() {
+    // 200,000 lines in one block, inserted 1,000 times: 200 M paths without a shared budget.
+    let mut doc = CadDocument::new();
+    let mut block = BlockRecord::new("BIG");
+    block.handle = doc.allocate_handle();
+    let owner = block.handle;
+    doc.block_records.add(block).unwrap();
+    for i in 0..200_000 {
+        let x = f64::from(i) * 0.01;
+        let mut e = EntityType::Line(Line::from_coords(x, 0.0, 0.0, x, 1.0, 0.0));
+        e.common_mut().owner_handle = owner;
+        doc.add_entity(e).unwrap();
+    }
+    for i in 0..1_000 {
+        let at = Vector3::new(0.0, f64::from(i) * 2.0, 0.0);
+        doc.add_entity(EntityType::Insert(Insert::new("BIG", at)))
+            .unwrap();
+    }
+    let batch = build_batch(&doc, MODEL, &Visibility::default(), 1e-3);
+    assert!(batch.truncated, "\"Drawing too complex\" is reported");
+    let drawn = batch.segments.len() / 4;
+    assert!(drawn > 0 && drawn <= MAX_SHEET_WORK, "{drawn} segments");
 }

@@ -17,8 +17,9 @@ const MAX_DEPTH: usize = 32;
 /// Upper bound on segments per curve, so a zero or tiny `tol` cannot exhaust memory.
 const MAX_SEGMENTS: usize = 1 << 16;
 /// Most block instances plus paths one `flatten` call produces; past it, output stops.
-/// Keeps a block that inserts itself, or a huge nested array, from hanging the app.
-const MAX_WORK: usize = 1_000_000;
+/// Keeps a block that inserts itself, or a huge nested array, from hanging the app. A caller
+/// flattening many entities shares one budget through `flatten_within`.
+pub const MAX_WORK: usize = 1_000_000;
 /// Bulges smaller than this are straight segments.
 const MIN_BULGE: f64 = 1e-12;
 /// Deepest xref nesting drawn: an xref inside an xref inside ... four levels down.
@@ -186,13 +187,26 @@ pub fn flatten_with(
     xf: &Xform,
     tol: f64,
 ) -> FlattenOutcome {
+    flatten_within(doc, xrefs, entity, xf, tol, &mut MAX_WORK.clone())
+}
+
+/// `flatten_with`, spending `budget` (block instances plus paths) and leaving what is left in
+/// it, so a caller flattening many entities (a whole sheet) stops at one budget for all.
+pub fn flatten_within(
+    doc: &CadDocument,
+    xrefs: &XrefDocs,
+    entity: &EntityType,
+    xf: &Xform,
+    tol: f64,
+    budget: &mut usize,
+) -> FlattenOutcome {
     let mut walk = Walk {
         host: doc,
         xrefs,
         doc,
         tol,
         out: Vec::new(),
-        budget: MAX_WORK,
+        budget: *budget,
         truncated: false,
         chain: Vec::new(),
         layer_colors: HashMap::new(),
@@ -202,6 +216,7 @@ pub fn flatten_with(
     };
     let style = walk.style(entity.common(), None);
     walk.entity(entity, xf, &style, 0);
+    *budget = walk.budget;
     FlattenOutcome {
         paths: walk.out,
         truncated: walk.truncated,

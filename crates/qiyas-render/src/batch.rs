@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use opencadcodec::{CadDocument, Color, Handle};
-use qiyas_geom::{flatten_with, Path, Xform, XrefDocs};
+use qiyas_geom::{flatten_within, Path, Xform, XrefDocs};
 
 use crate::color::resolve_color;
 use crate::text::{LaidText, Quad, TextEngine};
@@ -13,6 +13,11 @@ pub const MAGIC: u32 = 0x5149_5942;
 pub const VERSION: u32 = 2;
 /// `Range::chain` of an entity drawn at the top level, outside any block.
 pub const NO_CHAIN: u32 = u32::MAX;
+
+/// Most block instances plus paths one sheet's batch flattens; past it the batch is cut and
+/// marked `truncated` ("Drawing too complex"). The biggest real drawing tried (1.4 M segments)
+/// spends about 0.4 M.
+pub const MAX_SHEET_WORK: usize = 5 * qiyas_geom::MAX_WORK;
 
 /// Section kinds of `Batch::to_bytes`. Later layouts add kinds; readers skip unknown ones.
 /// Kinds 1 and 2 (per-segment handles) are not used: the ranges carry the handles.
@@ -314,13 +319,15 @@ fn build(
     let mut chain_shown: HashMap<Vec<u64>, bool> = HashMap::new();
     // Absolute `x0 y0 x1 y1` per segment; made relative once the bounds are known.
     let mut absolute: Vec<[f64; 4]> = Vec::new();
+    // One budget for the whole sheet, so a big block inserted many times stops too.
+    let mut budget = MAX_SHEET_WORK;
     for entity in doc.entities_in_block(sheet_block) {
         let common = entity.common();
         if common.invisible || !shown(&common.layer) {
             continue;
         }
         let top = common.handle.value();
-        let outcome = flatten_with(doc, xrefs, entity, &Xform::identity(), tol);
+        let outcome = flatten_within(doc, xrefs, entity, &Xform::identity(), tol, &mut budget);
         batch.truncated |= outcome.truncated;
         for flat in &outcome.paths {
             if !shown(&flat.layer) {
