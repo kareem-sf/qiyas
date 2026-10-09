@@ -31,6 +31,6 @@ pub use session::{DrawingInfo, EntityInfo, Picked, Session, BATCH_TOL};
 pub use snap::{Drafting, Snap, SnapKind, SnapModes};
 pub use tables::Schedule;
 pub use takeoff::{Kind, Measurement, Source, Takeoff, Total};
-pub use underlay::{AttachMode, UnderlayImage, UNDERLAY_LAYER};
+pub use underlay::{AttachMode, PreparedPdf, UnderlayImage, UNDERLAY_LAYER};
 pub use units::Units;
 pub use xref::{candidates as xref_candidates, Xref, XrefInfo, XrefSet};

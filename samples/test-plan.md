@@ -75,3 +75,10 @@ measurements the way the BOQ does.
 
 The AI tools only open files beside the drawing (its folder or a subfolder), so the assistant
 imports `test-boq.xlsx` when it sits next to `test-plan.dwg`, as it does in `samples/`.
+
+## PDF underlays (check once in AutoCAD)
+
+Qiyas stores a PDF underlay the way AutoCAD documents it: at scale 1 the page is drawn at its paper
+size in the drawing's units (INSUNITS; unitless drawings count as millimetres). Founder: attach a
+PDF to `test-plan.dwg` in AutoCAD once, open that DWG in Qiyas (and a Qiyas-attached one in
+AutoCAD) and check the page lands at the same size and place in both.

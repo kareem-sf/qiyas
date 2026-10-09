@@ -1,14 +1,14 @@
 //! IPC for PDFs: page count and size, thumbnails, attaching a page (underlay or import),
 //! calibrating an underlay, and an underlay's picture. pdfium runs on its own thread
-//! (`qiyas_pdf`); reading a PDF here never holds the session lock, except while an import adds its
-//! entities. Without pdfium every command answers "PDF support is not installed: run
+//! (`qiyas_pdf`); reading a PDF here never holds the session lock: a page is read first, then the
+//! session is locked briefly to add it. Without pdfium every command answers "PDF support is not installed: run
 //! scripts/pdfium.sh".
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, PoisonError};
 
-use qiyas_core::{AttachMode, CoreError, UnderlayImage};
+use qiyas_core::{AttachMode, CoreError, PreparedPdf, UnderlayImage};
 use tauri::ipc::Response;
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
@@ -17,15 +17,35 @@ use crate::state::AppState;
 
 /// Event with the percent drawn of the underlay picture being rendered.
 pub const PROGRESS: &str = "pdf:progress";
-/// Pictures kept, newest last.
-const KEPT: usize = 6;
+/// Pictures kept, most recently used last.
+const KEPT: usize = 4;
 /// Thumbnails asked for at once, at most.
 const MAX_THUMBNAILS: u32 = 40;
 
-/// Underlay pictures drawn lately, by image id, version and resolution: zooming back and forth
-/// does not draw a page again.
+/// The last `KEPT` underlay pictures used, by image id, version and resolution, so zooming back and
+/// forth does not draw a page again; the least recently used goes first.
 #[derive(Default)]
 pub struct PictureCache(VecDeque<(PictureKey, Arc<Vec<u8>>)>);
+
+impl PictureCache {
+    /// The picture under `key`, now the most recently used.
+    fn get(&mut self, key: PictureKey) -> Option<Arc<Vec<u8>>> {
+        let at = self.0.iter().position(|(k, _)| *k == key)?;
+        let entry = self.0.remove(at)?;
+        let bytes = entry.1.clone();
+        self.0.push_back(entry);
+        Some(bytes)
+    }
+
+    /// Keeps `bytes` under `key`, letting go of the least recently used beyond `KEPT`.
+    fn put(&mut self, key: PictureKey, bytes: Arc<Vec<u8>>) {
+        self.0.retain(|(k, _)| *k != key);
+        while self.0.len() >= KEPT {
+            self.0.pop_front();
+        }
+        self.0.push_back((key, bytes));
+    }
+}
 
 /// Image id, version, and the resolution (`f64::to_bits` of the dpi).
 type PictureKey = (u32, u64, u64);
@@ -110,9 +130,22 @@ pub async fn attach_pdf(
     mode: AttachMode,
     state: State<'_, AppState>,
 ) -> Result<u64, String> {
-    with_session(&state, |s| {
-        s.attach_pdf(Path::new(&path), page, [x, y], scale, mode)
+    // The slow part, reading the page, without the session.
+    let prepared = blocking(move || {
+        PreparedPdf::read(Path::new(&path), page, scale, mode).map_err(|e| e.to_string())
     })
+    .await?;
+    let handles = with_session(&state, |s| s.apply_pdf(prepared, [x, y]))?;
+    Ok(match mode {
+        AttachMode::Underlay => handles.first().copied().unwrap_or(0),
+        AttachMode::Import => handles.len() as u64,
+    })
+}
+
+/// True when the drawing itself has changes not saved yet (PDF imports, underlays, calibration).
+#[tauri::command]
+pub async fn is_dirty(state: State<'_, AppState>) -> Result<bool, String> {
+    with_session(&state, |s| Ok(s.is_dirty()))
 }
 
 /// Rescales an underlay (or image) about the first point so that the two points are `distance`
@@ -156,7 +189,7 @@ pub async fn underlay_image<R: Runtime>(
         version,
     } = with_session(&state, |s| s.underlay_image(id, px_per_unit))?;
     let key = (id, version, dpi.to_bits());
-    if let Some(bytes) = cached(&state, key) {
+    if let Some(bytes) = pictures(&state).get(key) {
         return Ok(Response::new(bytes.as_ref().clone()));
     }
     let emitter = app.clone();
@@ -173,13 +206,7 @@ pub async fn underlay_image<R: Runtime>(
     })
     .await?;
     let bytes = Arc::new(bytes);
-    let state = app.state::<AppState>();
-    let mut cache = pictures(&state);
-    cache.0.retain(|(k, _)| *k != key);
-    if cache.0.len() == KEPT {
-        cache.0.pop_front();
-    }
-    cache.0.push_back((key, bytes.clone()));
+    pictures(&app.state::<AppState>()).put(key, bytes.clone());
     Ok(Response::new(bytes.as_ref().clone()))
 }
 
@@ -190,10 +217,28 @@ fn pictures(state: &AppState) -> std::sync::MutexGuard<'_, PictureCache> {
         .unwrap_or_else(PoisonError::into_inner)
 }
 
-fn cached(state: &AppState, key: PictureKey) -> Option<Arc<Vec<u8>>> {
-    pictures(state)
-        .0
-        .iter()
-        .find(|(k, _)| *k == key)
-        .map(|(_, b)| b.clone())
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_cache_keeps_the_four_most_recently_used_pictures() {
+        let mut cache = PictureCache::default();
+        let key = |id| (id, 1, 0);
+        for id in 0..4 {
+            cache.put(key(id), Arc::new(vec![id as u8]));
+        }
+        // Using picture 0 makes picture 1 the oldest.
+        assert_eq!(cache.get(key(0)).as_deref(), Some(&vec![0]));
+        cache.put(key(4), Arc::new(vec![4]));
+        assert!(cache.get(key(1)).is_none());
+        for id in [0, 2, 3, 4] {
+            assert!(cache.get(key(id)).is_some(), "{id}");
+        }
+        assert_eq!(cache.0.len(), KEPT);
+        // Putting a key again replaces it.
+        cache.put(key(4), Arc::new(vec![9]));
+        assert_eq!(cache.get(key(4)).as_deref(), Some(&vec![9]));
+        assert_eq!(cache.0.len(), KEPT);
+    }
 }

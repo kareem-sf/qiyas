@@ -2,6 +2,7 @@ import { useEffect, useImperativeHandle, useRef, useState, type PointerEvent, ty
 import {
   glyphsNeedRedraw,
   picturesToFetch,
+  picturesToRelease,
   type AtlasPage,
   type Batch,
   type HeldPicture,
@@ -27,6 +28,8 @@ export type ViewportHandle = {
   fitTo(bounds: Bounds): void;
   /** Screen (device) pixels per drawing unit at the current zoom. */
   pxPerUnit(): number;
+  /** The drawing area in view. */
+  visible(): Bounds;
 };
 
 type Props = {
@@ -49,9 +52,10 @@ type Props = {
   onZoomHint?(pxPerUnit: number): void;
   /** The underlay pictures held, by image id. */
   pictures?: Map<number, HeldPicture>;
-  /** Some underlay picture of the batch is missing or was drawn for a zoom too far off: fetch
-   *  the pictures for `pxPerUnit`. Called once the zoom settles. */
-  onPictureHint?(pxPerUnit: number): void;
+  /** Some underlay picture in view is missing or was drawn for a zoom too far off, or one held is
+   *  out of view: fetch and let go for `pxPerUnit` and the area `visible`. Called once the view
+   *  settles. */
+  onPictureHint?(pxPerUnit: number, visible: Bounds): void;
   ref?: Ref<ViewportHandle>;
 };
 
@@ -120,15 +124,20 @@ export function Viewport({
     }, ZOOM_SETTLE_MS);
   }
 
-  /** Asks for underlay pictures at the current zoom once it has rested, when some are missing or
-   *  were drawn for a zoom over 2x off. */
+  /** Asks for underlay pictures once the view has rested, when some in view are missing or were
+   *  drawn for a zoom over 2x off, or some held are out of view. */
   function checkPictures() {
-    const stale = () =>
-      picturesToFetch(batchRef.current, picturesRef.current, pxPerUnit()).length > 0;
+    const stale = () => {
+      const [b, held, visible] = [batchRef.current, picturesRef.current, visibleBounds(camera.current)];
+      return (
+        picturesToFetch(b, held, pxPerUnit(), visible).length > 0 ||
+        picturesToRelease(b, held, visible).length > 0
+      );
+    };
     if (!stale()) return;
     clearTimeout(pictureTimer.current);
     pictureTimer.current = window.setTimeout(() => {
-      if (stale()) onPictureHintRef.current?.(pxPerUnit());
+      if (stale()) onPictureHintRef.current?.(pxPerUnit(), visibleBounds(camera.current));
     }, ZOOM_SETTLE_MS);
   }
 
@@ -159,6 +168,7 @@ export function Viewport({
       fitExtents,
       fitTo: (b) => setCamera(fitBounds(camera.current, b, FIT_MARGIN_PX)),
       pxPerUnit,
+      visible: () => visibleBounds(camera.current),
     }),
     [],
   );

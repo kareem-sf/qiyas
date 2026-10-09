@@ -2,7 +2,9 @@
 //! `QIYAS_PDFIUM`); without it they are ignored (see build.rs).
 
 use opencadcodec::EntityType;
-use qiyas_pdf::fixtures::{write_many, write_wall, PAGE_PT, RECT_PT, WALL_AT_PT, WALL_SIZE_PT};
+use qiyas_pdf::fixtures::{
+    write_many, write_rotated, write_wall, PAGE_PT, RECT_PT, WALL_AT_PT, WALL_SIZE_PT,
+};
 use qiyas_pdf::{
     extract_vectors, page_count, page_size, render_page, thumbnails, PdfError, TEXT_LAYER,
 };
@@ -143,4 +145,37 @@ fn page_1999_of_2000_is_read_without_the_others() {
     assert_eq!(image.dimensions(), (200, 100));
     let rss = resident_bytes();
     assert!(rss < 300 << 20, "{} MB resident", rss >> 20);
+}
+
+#[test]
+#[cfg_attr(not(pdfium), ignore = "needs pdfium: run scripts/pdfium.sh")]
+fn a_turned_page_imports_and_renders_as_it_is_shown() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_rotated(dir.path());
+    // 200 x 100 turned a quarter: shown 100 wide, 200 high.
+    let (w, h) = page_size(&path, 1).unwrap();
+    assert!(close(w, 100.0, 0.01) && close(h, 200.0, 0.01), "{w} x {h}");
+    // (x, y) on the page shows at (y, 200 - x): the line runs down from (10, 190) to (10, 140).
+    let entities = extract_vectors(&path, 1, 1.0).unwrap();
+    let EntityType::Line(line) = &entities[0] else {
+        panic!("{entities:?}")
+    };
+    assert!(
+        close(line.start.x, 10.0, 1e-3) && close(line.start.y, 190.0, 1e-3),
+        "{line:?}"
+    );
+    assert!(
+        close(line.end.x, 10.0, 1e-3) && close(line.end.y, 140.0, 1e-3),
+        "{line:?}"
+    );
+    assert_eq!(line.common.layer, "PDF-FF0000");
+    // Rendered the same way: rows from the top, so the line is in rows 10 to 60 at x 9 to 10.
+    let image = render_page(&path, 1, 72.0, |_| {}).unwrap();
+    assert_eq!(image.dimensions(), (100, 200));
+    let red = |x: u32, y: u32| {
+        let p = image.get_pixel(x, y).0;
+        p[0] > 200 && p[1] < 150 && p[2] < 150
+    };
+    assert!(red(9, 35) || red(10, 35));
+    assert!(!red(35, 10) && !red(35, 190), "not drawn unturned");
 }

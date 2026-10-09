@@ -13,11 +13,11 @@ use std::path::{Path, PathBuf};
 
 use opencadcodec::entities::{Underlay, UnderlayDefinition};
 use opencadcodec::objects::{Dictionary, ObjectType};
-use opencadcodec::{Color, EntityType, Handle, Layer, Vector3};
+use opencadcodec::{CadDocument, Color, EntityType, Handle, Layer, Vector3};
 use qiyas_render::{layer_shown, ImagePlacement, IMAGE_FADED, IMAGE_MONOCHROME};
 use serde::{Deserialize, Serialize};
 
-use crate::{Command, CoreError, Outcome, Session, Units};
+use crate::{Command, CoreError, Outcome, Session, Source, Units};
 
 /// How `Session::attach_pdf` brings a page in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,7 +44,7 @@ pub(crate) struct Underlays {
     /// The underlay handle of each image id (the index).
     ids: Vec<u64>,
     /// Page sizes in points by file and page; the error text when it could not be read.
-    pages: HashMap<(PathBuf, u32), Result<(f64, f64), String>>,
+    pages: HashMap<(PathBuf, u32), Result<(f64, f64), qiyas_pdf::PdfError>>,
     /// What went wrong drawing the underlays of the last batch.
     pub problems: Vec<String>,
 }
@@ -167,6 +167,94 @@ fn translate(entity: &mut EntityType, d: [f64; 2]) {
             }
         }
         _ => {}
+    }
+}
+
+/// A PDF page read and ready to add (`Session::apply_pdf`): its entities for an import, or its
+/// size for an underlay. Reading needs no session, so it can run without holding one.
+#[derive(Debug, Clone)]
+pub struct PreparedPdf {
+    /// Absolute.
+    path: PathBuf,
+    page: u32,
+    scale: f64,
+    content: Content,
+}
+
+#[derive(Debug, Clone)]
+enum Content {
+    Entities(Vec<EntityType>),
+    Size((f64, f64)),
+}
+
+impl PreparedPdf {
+    /// Reads page `page` (from 1) of the PDF at `path` for `mode`, `scale` drawing units per
+    /// point: its vectors and texts (import) or its size (underlay; the file and page are checked).
+    pub fn read(path: &Path, page: u32, scale: f64, mode: AttachMode) -> Result<Self, CoreError> {
+        check_scale(scale)?;
+        let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+        let content = match mode {
+            AttachMode::Import => {
+                Content::Entities(qiyas_pdf::extract_vectors(&path, page, scale)?)
+            }
+            AttachMode::Underlay => Content::Size(qiyas_pdf::page_size(&path, page)?),
+        };
+        Ok(PreparedPdf {
+            path,
+            page,
+            scale,
+            content,
+        })
+    }
+}
+
+/// The file a stored link (an underlay's or image's definition) names, for a drawing at
+/// `drawing`: as written when that file exists, else relative to the drawing's folder, else by
+/// its file name in the drawing's folder.
+pub(crate) fn resolve_link(drawing: &Path, stored: &str) -> Option<PathBuf> {
+    let normalized = if cfg!(windows) {
+        stored.to_string()
+    } else {
+        stored.replace('\\', "/")
+    };
+    let as_written = PathBuf::from(&normalized);
+    let folder = drawing.parent().unwrap_or(Path::new("."));
+    let mut tries = vec![];
+    if as_written.is_absolute() {
+        tries.push(as_written.clone());
+    } else {
+        tries.push(folder.join(&as_written));
+    }
+    if let Some(name) = as_written.file_name() {
+        tries.push(folder.join(name));
+    }
+    tries.into_iter().find(|p| p.is_file())
+}
+
+/// `file` as a link of a drawing at `drawing` stores it: relative to the drawing's folder when
+/// inside it, else absolute.
+pub(crate) fn stored_link(drawing: &Path, file: &Path) -> String {
+    let absolute = std::path::absolute(file).unwrap_or_else(|_| file.to_path_buf());
+    let folder = drawing.parent().and_then(|f| std::path::absolute(f).ok());
+    match folder.and_then(|f| absolute.strip_prefix(f).ok().map(Path::to_path_buf)) {
+        Some(relative) => relative.display().to_string(),
+        None => absolute.display().to_string(),
+    }
+}
+
+/// Rewrites the PDF underlay and image links of `doc`, written for a drawing at `from`, for the
+/// same drawing saved at `to`: each file found from `from` is stored relative to `to`'s folder
+/// when inside it, else by its absolute path. A link whose file is not found is kept as it is.
+pub(crate) fn rebase_links(doc: &mut CadDocument, from: &Path, to: &Path) {
+    for object in doc.objects.values_mut() {
+        let stored = match object {
+            ObjectType::UnderlayDefinition(def) => &mut def.file_path,
+            ObjectType::ImageDefinition(def) => &mut def.file_name,
+            _ => continue,
+        };
+        if let Some(file) = resolve_link(from, stored) {
+            *stored = stored_link(to, &file);
+        }
     }
 }
 
@@ -311,7 +399,7 @@ impl Session {
             if def.unloaded {
                 continue;
             }
-            let Some(file) = self.find_pdf(&def.file_path) else {
+            let Some(file) = resolve_link(&self.drawing.path, &def.file_path) else {
                 underlays
                     .problems
                     .push(format!("PDF underlay file not found: {}", def.file_path));
@@ -321,10 +409,9 @@ impl Session {
             let size = match underlays.pages.get(&(file.clone(), page)) {
                 Some(found) => found.clone(),
                 None => {
-                    let found = qiyas_pdf::page_size(&file, page).map_err(|e| e.to_string());
+                    let found = qiyas_pdf::page_size(&file, page);
                     // Not kept when pdfium is missing, so installing it is seen without reopening.
-                    if !matches!(&found, Err(e) if *e == qiyas_pdf::PdfError::NotInstalled.to_string())
-                    {
+                    if !matches!(found, Err(qiyas_pdf::PdfError::NotInstalled)) {
                         underlays.pages.insert((file.clone(), page), found.clone());
                     }
                     found
@@ -362,42 +449,6 @@ impl Session {
         out
     }
 
-    /// The PDF a definition names: as written when that file exists, else relative to the
-    /// drawing's folder, else by its file name in the drawing's folder.
-    fn find_pdf(&self, stored: &str) -> Option<PathBuf> {
-        let normalized = if cfg!(windows) {
-            stored.to_string()
-        } else {
-            stored.replace('\\', "/")
-        };
-        let as_written = PathBuf::from(&normalized);
-        let folder = self.drawing.path.parent().unwrap_or(Path::new("."));
-        let mut tries = vec![];
-        if as_written.is_absolute() {
-            tries.push(as_written.clone());
-        } else {
-            tries.push(folder.join(&as_written));
-        }
-        if let Some(name) = as_written.file_name() {
-            tries.push(folder.join(name));
-        }
-        tries.into_iter().find(|p| p.is_file())
-    }
-
-    /// `path` as a definition stores it: relative to the drawing's folder when inside it.
-    fn stored_path(&self, path: &Path) -> String {
-        let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
-        let folder = self
-            .drawing
-            .path
-            .parent()
-            .and_then(|f| std::path::absolute(f).ok());
-        match folder.and_then(|f| absolute.strip_prefix(f).ok().map(Path::to_path_buf)) {
-            Some(relative) => relative.display().to_string(),
-            None => absolute.display().to_string(),
-        }
-    }
-
     /// The handle of the sheet on screen's block record.
     fn sheet_owner(&self) -> Option<Handle> {
         self.drawing
@@ -418,16 +469,44 @@ impl Session {
         }
     }
 
-    /// Adds the page's entities (`Command::ImportPdf`).
-    pub(crate) fn import_pdf(
+    /// Adds a page read by `PreparedPdf::read` at `insert_at`: its entities, or an underlay of it
+    /// and its definition. One undo step. The handles added: the underlay's, or the entities'.
+    /// Reading the PDF (slow) and adding it (quick) are apart so a caller can read without
+    /// holding the session.
+    pub fn apply_pdf(
         &mut self,
-        path: &Path,
-        page: u32,
+        prepared: PreparedPdf,
         insert_at: [f64; 2],
-        scale: f64,
     ) -> Result<Vec<u64>, CoreError> {
-        check_scale(scale)?;
-        let entities = qiyas_pdf::extract_vectors(path, page, scale)?;
+        self.record_document_change(Source::User, |s| s.apply_prepared(prepared, insert_at))
+    }
+
+    /// `apply_pdf` without the undo step (the command bus records it).
+    pub(crate) fn apply_prepared(
+        &mut self,
+        prepared: PreparedPdf,
+        insert_at: [f64; 2],
+    ) -> Result<Vec<u64>, CoreError> {
+        let PreparedPdf {
+            path,
+            page,
+            scale,
+            content,
+        } = prepared;
+        match content {
+            Content::Entities(entities) => self.import_entities(entities, insert_at),
+            Content::Size(size) => self
+                .attach_underlay(&path, page, size, insert_at, scale)
+                .map(|h| vec![h]),
+        }
+    }
+
+    /// Adds imported entities moved by `insert_at`, on their layers.
+    fn import_entities(
+        &mut self,
+        entities: Vec<EntityType>,
+        insert_at: [f64; 2],
+    ) -> Result<Vec<u64>, CoreError> {
         let owner = self.sheet_owner();
         let mut handles = Vec::with_capacity(entities.len());
         for mut entity in entities {
@@ -447,23 +526,20 @@ impl Session {
         Ok(handles)
     }
 
-    /// Adds an underlay of the page and its definition (`Command::AttachPdfUnderlay`).
-    pub(crate) fn attach_underlay(
+    /// Adds an underlay of page `page` of `path` (`size` points) and its definition.
+    fn attach_underlay(
         &mut self,
         path: &Path,
         page: u32,
+        size: (f64, f64),
         insert_at: [f64; 2],
         scale: f64,
     ) -> Result<u64, CoreError> {
-        check_scale(scale)?;
-        // Reads the page's size: the file is a PDF and has the page.
-        let size = qiyas_pdf::page_size(path, page)?;
-        let file = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
         self.underlays
             .get_mut()
             .pages
-            .insert((file, page), Ok(size));
-        let stored = self.stored_path(path);
+            .insert((path.to_path_buf(), page), Ok(size));
+        let stored = stored_link(&self.drawing.path, path);
         let page_name = page.to_string();
         self.ensure_layer(UNDERLAY_LAYER, Color::Index(8));
         let owner = self.sheet_owner();

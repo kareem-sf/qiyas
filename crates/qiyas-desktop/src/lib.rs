@@ -70,6 +70,7 @@ pub fn run() {
             pdf::pdf_page_size,
             pdf::pdf_thumbnails,
             pdf::attach_pdf,
+            pdf::is_dirty,
             pdf::calibrate,
             pdf::underlay_image,
         ])

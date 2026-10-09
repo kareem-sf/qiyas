@@ -210,6 +210,10 @@ export const attachPdf = (
   mode: AttachMode,
 ) => invoke<number>("attach_pdf", { path, page, x: at[0], y: at[1], scale, mode });
 
+/** True when the drawing itself has changes not saved yet (PDF imports, underlays, calibration);
+ *  the take-off is saved in the project file after every command. */
+export const isDirty = () => invoke<boolean>("is_dirty");
+
 /** Rescales the PDF underlay under `p1` about `p1` so that `p1` to `p2` is `distance` drawing
  *  units. One undo step. */
 export const calibrate = (p1: [number, number], p2: [number, number], distance: number) =>

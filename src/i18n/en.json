@@ -267,5 +267,9 @@
   "snap.node": "Node",
   "snap.intersection": "Intersection",
   "snap.nearest": "Nearest",
-  "snap.perpendicular": "Perpendicular"
+  "snap.perpendicular": "Perpendicular",
+  "unsaved.question": "Save changes to the drawing?",
+  "unsaved.yes": "Yes",
+  "unsaved.no": "No",
+  "unsaved.cancel": "Cancel"
 }

@@ -267,5 +267,9 @@
   "snap.node": "عقدة",
   "snap.intersection": "تقاطع",
   "snap.nearest": "أقرب نقطة",
-  "snap.perpendicular": "عمودي"
+  "snap.perpendicular": "عمودي",
+  "unsaved.question": "هل تريد حفظ التغييرات على الرسم؟",
+  "unsaved.yes": "نعم",
+  "unsaved.no": "لا",
+  "unsaved.cancel": "إلغاء"
 }

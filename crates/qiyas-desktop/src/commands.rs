@@ -681,6 +681,7 @@ mod tests {
                     crate::pdf::pdf_page_count,
                     crate::pdf::pdf_thumbnails,
                     crate::pdf::attach_pdf,
+                    crate::pdf::is_dirty,
                     crate::pdf::calibrate,
                     crate::pdf::underlay_image
                 ])
@@ -1074,8 +1075,10 @@ mod tests {
         let attach = json!({
             "path": pdf, "page": 1, "x": 0.0, "y": 0.0, "scale": 0.01, "mode": "underlay"
         });
+        assert_eq!(ipc.call("is_dirty", json!({})), Ok(json!(false)));
         let handle = ipc.call("attach_pdf", attach).unwrap();
         assert!(handle.as_u64().unwrap() > 0);
+        assert_eq!(ipc.call("is_dirty", json!({})), Ok(json!(true)));
         let batch = qiyas_render_batch(&ipc.bytes("render_batch", json!({})));
         assert_eq!(batch, vec![(0, true)]);
 

@@ -393,19 +393,58 @@ export function parseThumbnails(buf: ArrayBuffer): (Picture & { page: number })[
  *  drawing unit. */
 export type HeldPicture = Picture & { version: number; pxPerUnit: number };
 
-/** The picture ids of `batch` the window should fetch for a zoom of `now`: not held, held at
- *  another version, or held for a zoom too far off (`pictureNeedsRedraw`). */
+/** `[[min x, min y], [max x, max y]]` in absolute drawing coordinates. */
+export type WorldBounds = [[number, number], [number, number]];
+
+/** How far past the view, as a share of its size each way, a picture still counts as in view. */
+export const PICTURE_MARGIN = 0.25;
+
+/** The picture ids of `batch` with a quad that meets `visible` grown by `PICTURE_MARGIN`. */
+export function picturesInView(batch: Batch | null, visible: WorldBounds): Set<number> {
+  const out = new Set<number>();
+  if (!batch) return out;
+  const [[x0, y0], [x1, y1]] = visible;
+  const [mx, my] = [(x1 - x0) * PICTURE_MARGIN, (y1 - y0) * PICTURE_MARGIN];
+  const [ox, oy] = batch.origin;
+  const q = batch.images;
+  for (let i = 0; i < q.length; i++) {
+    let [lx, ly, hx, hy] = [Infinity, Infinity, -Infinity, -Infinity];
+    for (let k = 0; k < 4; k++) {
+      const [x, y] = [q.x(i, k) + ox, q.y(i, k) + oy];
+      [lx, ly, hx, hy] = [Math.min(lx, x), Math.min(ly, y), Math.max(hx, x), Math.max(hy, y)];
+    }
+    if (hx >= x0 - mx && lx <= x1 + mx && hy >= y0 - my && ly <= y1 + my) out.add(q.id(i));
+  }
+  return out;
+}
+
+/** The picture ids of `batch` in view (`picturesInView`) the window should fetch for a zoom of
+ *  `now`: not held, held at another version, or held for a zoom too far off
+ *  (`pictureNeedsRedraw`). Pictures out of view are never fetched. */
 export function picturesToFetch(
   batch: Batch | null,
   held: Map<number, HeldPicture>,
   now: number,
+  visible: WorldBounds,
 ): number[] {
+  const inView = picturesInView(batch, visible);
   return (batch?.imageTable ?? [])
     .filter((e) => {
+      if (!inView.has(e.id)) return false;
       const p = held.get(e.id);
       return !p || p.version !== e.version || pictureNeedsRedraw(p.pxPerUnit, now, p);
     })
     .map((e) => e.id);
+}
+
+/** The held picture ids to let go of: out of view (or gone from `batch`). */
+export function picturesToRelease(
+  batch: Batch | null,
+  held: Map<number, HeldPicture>,
+  visible: WorldBounds,
+): number[] {
+  const inView = picturesInView(batch, visible);
+  return [...held.keys()].filter((id) => !inView.has(id));
 }
 
 /** The longest side the core draws an underlay picture at. */

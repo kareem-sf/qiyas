@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 use crate::session::{effective_block_name, locate, variant_name, Located};
 use crate::takeoff::in_metres;
 use crate::{
-    Boq, Conflict, ConflictStatus, CoreError, Drafting, Kind, Measurement, Schedule, Session,
-    Source,
+    AttachMode, Boq, Conflict, ConflictStatus, CoreError, Drafting, Kind, Measurement, PreparedPdf,
+    Schedule, Session, Source,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -362,7 +362,8 @@ impl Session {
                 insert_at,
                 scale,
             } => {
-                let handles = self.import_pdf(path.as_ref(), page, insert_at, scale)?;
+                let read = PreparedPdf::read(path.as_ref(), page, scale, AttachMode::Import)?;
+                let handles = self.apply_prepared(read, insert_at)?;
                 return Ok(Outcome::Added { handles });
             }
             Command::AttachPdfUnderlay {
@@ -371,10 +372,9 @@ impl Session {
                 insert_at,
                 scale,
             } => {
-                let handle = self.attach_underlay(path.as_ref(), page, insert_at, scale)?;
-                return Ok(Outcome::Added {
-                    handles: vec![handle],
-                });
+                let read = PreparedPdf::read(path.as_ref(), page, scale, AttachMode::Underlay)?;
+                let handles = self.apply_prepared(read, insert_at)?;
+                return Ok(Outcome::Added { handles });
             }
             Command::Calibrate {
                 handle,

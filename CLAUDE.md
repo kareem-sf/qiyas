@@ -55,7 +55,9 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
 - PDFs are read through pdfium (BSD-3), a shared library loaded at run time through
   `pdfium-render`. `scripts/pdfium.sh` downloads the build for this computer from
   bblanchon/pdfium-binaries into `crates/qiyas-desktop/resources/pdfium/` (git-ignored) and its
-  licence into `LICENSES/pdfium-BSD-3.txt`. Run it once per machine. Without it the PDF commands
+  licence into `LICENSES/pdfium-BSD-3.txt`. It installs the tested release only (`TESTED_TAG`,
+  chromium/8086) and checks the download against `scripts/pdfium.sha256`; a mismatch installs
+  nothing. Run it once per machine. Without it the PDF commands
   answer "PDF support is not installed: run scripts/pdfium.sh" and the PDF tests are ignored, so
   `scripts/check.sh` runs them only where the script has been run (no CI checks them).
 - `QIYAS_PDFIUM` (the library or its folder) overrides where it is looked for.
@@ -64,7 +66,9 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
 - pdfium is not thread-safe: every call runs on one worker thread (`qiyas_pdf`).
 - View tab: "Attach PDF…" (underlay or import, scale, page, insert point) and "Calibrate".
   Underlays are kept in the DWG/DXF as AutoCAD PDF underlays on layer `PDF-UNDERLAY`; imports
-  go on `PDF-RRGGBB`, `PDF-FILL-RRGGBB` and `PDF-TEXT`.
+  go on `PDF-RRGGBB`, `PDF-FILL-RRGGBB` and `PDF-TEXT`. Save As rewrites underlay and image
+  links for the new folder. Opening another drawing or closing the window with unsaved drawing
+  changes asks "Save changes to the drawing?".
 
 ## AI assistant and settings
 

@@ -1,10 +1,12 @@
 import { listen } from "@tauri-apps/api/event";
-import { ask, open, save } from "@tauri-apps/plugin-dialog";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { ask, message as messageDialog, open, save } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   aiUndo,
   attachPdf,
   calibrate,
+  isDirty,
   PDF_PROGRESS,
   pdfPageCount,
   pdfPageSize,
@@ -66,6 +68,7 @@ import { SheetTabs } from "./shell/SheetTabs";
 import { StatusBar } from "./shell/StatusBar";
 import { TakeoffPanel } from "./shell/TakeoffPanel";
 import { XrefManager } from "./shell/XrefManager";
+import { leaveDrawing, readChoice } from "./shell/unsaved";
 import {
   handlesBounds,
   measurementBounds,
@@ -80,6 +83,7 @@ import {
   parsePicture,
   parseThumbnails,
   picturesToFetch,
+  picturesToRelease,
   type AtlasPage,
   type Batch,
   type HeldPicture,
@@ -360,17 +364,17 @@ export default function App() {
     setBatch(next);
   }
 
-  /** Fetches the underlay pictures `next` needs for a zoom of `pxPerUnit` that the window doesn't
-   *  hold at that version and about that zoom, and lets go of those it no longer shows. One fetch
-   *  runs at a time; the viewport asks again when the zoom settles. */
-  async function syncPictures(next: Batch | null, pxPerUnit: number) {
+  /** Fetches the underlay pictures in `visible` that `next` needs for a zoom of `pxPerUnit` and
+   *  the window doesn't hold at that version and about that zoom, and lets go of those out of view
+   *  (their textures go too). One fetch runs at a time; the viewport asks again when the view
+   *  settles. */
+  async function syncPictures(next: Batch | null, pxPerUnit: number, visible: Bounds) {
     if (picturesBusy.current) return;
     picturesBusy.current = true;
     try {
       const held = picturesHeld.current;
-      const wanted = new Set(next?.imageTable.map((e) => e.id) ?? []);
-      for (const id of held.keys()) if (!wanted.has(id)) held.delete(id);
-      for (const id of picturesToFetch(next, held, pxPerUnit)) {
+      for (const id of picturesToRelease(next, held, visible)) held.delete(id);
+      for (const id of picturesToFetch(next, held, pxPerUnit, visible)) {
         const entry = next!.imageTable.find((e) => e.id === id)!;
         const picture = parsePicture(await underlayImage(id, pxPerUnit));
         held.set(id, { ...picture, version: entry.version, pxPerUnit });
@@ -513,7 +517,56 @@ export default function App() {
 
   const openSettings = useCallback(() => setSettingsOpen(true), []);
 
+  /** Before the open drawing is left: asks "Save changes to the drawing?" when the drawing itself
+   *  has unsaved changes, and saves when told to. False when the user cancels. */
+  async function leaveOpenDrawing(): Promise<boolean> {
+    if (!info) return true;
+    const labels = { yes: t("unsaved.yes"), no: t("unsaved.no"), cancel: t("unsaved.cancel") };
+    return leaveDrawing({
+      isDirty,
+      ask: async () =>
+        readChoice(
+          await messageDialog(t("unsaved.question"), {
+            title: t("appName"),
+            kind: "warning",
+            buttons: labels,
+          }),
+          labels,
+        ),
+      save: saveDrawing,
+    });
+  }
+  const leaveRef = useRef(leaveOpenDrawing);
+  leaveRef.current = leaveOpenDrawing;
+
+  // Closing the window with unsaved drawing changes asks first; a failed save keeps it open.
+  useEffect(() => {
+    let gone = false;
+    let off: (() => void) | null = null;
+    getCurrentWindow()
+      .onCloseRequested(async (event) => {
+        try {
+          if (!(await leaveRef.current())) event.preventDefault();
+        } catch (e) {
+          event.preventDefault();
+          setError(t("save.failed", { error: String(e) }));
+        }
+      })
+      .then((unlisten) => (gone ? unlisten() : (off = unlisten)))
+      .catch(() => {});
+    return () => {
+      gone = true;
+      off?.();
+    };
+  }, []);
+
   async function openFile() {
+    try {
+      if (!(await leaveOpenDrawing())) return;
+    } catch (e) {
+      setError(t("save.failed", { error: String(e) }));
+      return;
+    }
     const path = await open({ filters: [{ name: "Drawings", extensions: ["dwg", "dxf"] }] });
     if (typeof path !== "string") return;
     setOpening(true);
@@ -752,8 +805,9 @@ export default function App() {
     const added = await attachPdf(r.path, r.page, r.at, r.scale, r.mode);
     setInfo(await drawingInfo());
     await redraw();
-    if (r.mode === "underlay") {
-      await syncPictures(batchHeld.current, viewport.current?.pxPerUnit() ?? 1);
+    const view = viewport.current;
+    if (r.mode === "underlay" && view) {
+      await syncPictures(batchHeld.current, view.pxPerUnit(), view.visible());
     } else {
       setNotice(t("attachPdf.imported", { n: added }));
     }
@@ -1117,7 +1171,7 @@ export default function App() {
               atlas={atlas}
               onZoomHint={redrawGlyphs}
               pictures={pictures}
-              onPictureHint={(px) => run(() => syncPictures(batchHeld.current, px))}
+              onPictureHint={(px, visible) => run(() => syncPictures(batchHeld.current, px, visible))}
               highlight={highlight}
               overlay={overlay}
               tool={tool}

@@ -10,7 +10,10 @@ import {
   parsePicture,
   parseThumbnails,
   pictureNeedsRedraw,
+  picturesToFetch,
+  picturesToRelease,
   rangeMatcher,
+  type HeldPicture,
   TEXT_BOX,
 } from "./batch";
 
@@ -304,4 +307,28 @@ test("pictures and thumbnails decode, and a picture at its largest is not fetche
   expect(pictureNeedsRedraw(100, 250, small)).toBe(true);
   expect(pictureNeedsRedraw(100, 250, largest)).toBe(false);
   expect(pictureNeedsRedraw(100, 40, largest)).toBe(true);
+});
+
+test("only pictures in view (with a quarter margin) are fetched, and those out of view let go", () => {
+  // Picture 3 covers x 0 to 20, y 0 to 10.
+  const b = parseBatch(fromHex(IMAGES_FROM_RUST));
+  const none = new Map<number, HeldPicture>();
+  expect(picturesToFetch(b, none, 10, [[0, 0], [20, 10]])).toEqual([3]);
+  expect(picturesToFetch(b, none, 10, [[100, 100], [110, 110]])).toEqual([]);
+  // A view 10 wide starting at x 22: its margin (2.5) reaches back to 19.5, over the picture.
+  expect(picturesToFetch(b, none, 10, [[22, 0], [32, 10]])).toEqual([3]);
+  expect(picturesToFetch(b, none, 10, [[26, 0], [36, 10]])).toEqual([]);
+
+  const held = new Map<number, HeldPicture>([
+    [3, { width: 512, height: 256, data: new Uint8Array(), version: 2 ** 53 - 1, pxPerUnit: 10 }],
+  ]);
+  // Held at this version and zoom: nothing to fetch; zoomed 4x: fetched again; new version too.
+  expect(picturesToFetch(b, held, 12, [[0, 0], [20, 10]])).toEqual([]);
+  expect(picturesToFetch(b, held, 40, [[0, 0], [20, 10]])).toEqual([3]);
+  held.get(3)!.version = 1;
+  expect(picturesToFetch(b, held, 12, [[0, 0], [20, 10]])).toEqual([3]);
+  // Out of view: let go; a picture of another batch: let go too.
+  expect(picturesToRelease(b, held, [[0, 0], [20, 10]])).toEqual([]);
+  expect(picturesToRelease(b, held, [[100, 100], [110, 110]])).toEqual([3]);
+  expect(picturesToRelease(null, held, [[0, 0], [20, 10]])).toEqual([3]);
 });

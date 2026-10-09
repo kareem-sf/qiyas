@@ -95,3 +95,42 @@ pub fn write_many(dir: &Path, count: u32) -> PathBuf {
         .collect();
     save(&mut PdfDocument::new("many"), pages, &dir.join("many.pdf"))
 }
+
+/// One 200 x 100 point page shown turned a quarter clockwise (`/Rotate 90`, so 100 wide and 200
+/// high), with a red line 2 pt wide from (10, 10) to (60, 10) in the page's own coordinates.
+/// Written by hand: printpdf has no page rotation.
+pub fn write_rotated(dir: &Path) -> PathBuf {
+    let content = "1 0 0 RG 2 w 10 10 m 60 10 l S";
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Rotate 90 /Contents 4 0 R \
+         /Resources << >> >>"
+            .to_string(),
+        format!(
+            "<< /Length {} >>\nstream\n{content}\nendstream",
+            content.len()
+        ),
+    ];
+    let mut pdf = String::from("%PDF-1.4\n");
+    let mut offsets = Vec::new();
+    for (i, body) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.push_str(&format!("{} 0 obj\n{body}\nendobj\n", i + 1));
+    }
+    let xref = pdf.len();
+    pdf.push_str(&format!(
+        "xref\n0 {}\n0000000000 65535 f \n",
+        objects.len() + 1
+    ));
+    for at in offsets {
+        pdf.push_str(&format!("{at:010} 00000 n \n"));
+    }
+    pdf.push_str(&format!(
+        "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+        objects.len() + 1
+    ));
+    let path = dir.join("rotated.pdf");
+    std::fs::write(&path, pdf).expect("write the test PDF");
+    path
+}

@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use crate::commands::Part;
 use crate::embed::{embed_measurements, read_embedded};
 use crate::project::{self, project_path, Project};
-use crate::underlay::Underlays;
+use crate::underlay::{rebase_links, Underlays};
 use crate::undo::{History, Parts, Snapshot};
 use crate::xref::{XrefInfo, XrefSet};
 use crate::{
@@ -66,6 +66,9 @@ pub struct Session {
     epoch: u64,
     /// Counts the changes to the drawing itself (not the take-off), which is all a batch shows.
     document_revision: u64,
+    /// `document_revision` at the last save (or the open): the drawing has unsaved changes
+    /// when they differ.
+    saved_revision: u64,
     /// Batch and pick index of the last sheet and visibility drawn; rebuilt when either changes.
     cache: RefCell<Option<Cached>>,
     /// Fonts, glyph atlas and glyph cache, kept across batches so the atlas pages the window
@@ -365,6 +368,7 @@ impl Session {
             history: History::default(),
             epoch: NEXT_EPOCH.fetch_add(1, Ordering::Relaxed),
             document_revision: 0,
+            saved_revision: 0,
             cache: RefCell::new(None),
             text: RefCell::new(TextEngine::new()),
             underlays: RefCell::new(Underlays::default()),
@@ -419,6 +423,8 @@ impl Session {
         // Embedded into a copy, so a failed write leaves the drawing in memory as it was.
         let mut doc = self.drawing.doc.clone();
         embed_measurements(&mut doc, &self.takeoff.items);
+        // PDF underlay and image links stay right from the new folder.
+        rebase_links(&mut doc, &self.drawing.path, path);
         let bytes = if dwg {
             DwgWriter::write_to_vec(&doc)
         } else {
@@ -430,6 +436,7 @@ impl Session {
         self.drawing.doc = doc;
         // The embedded entities are part of the drawing now: draw and pick them too.
         self.drawing_changed();
+        self.saved_revision = self.document_revision;
         self.drawing.path = path.to_path_buf();
         self.save_project().map_err(|e| {
             CoreError::Unwritable(format!(
@@ -728,6 +735,36 @@ impl Session {
             self.drawing_changed();
         }
         undone
+    }
+
+    /// True when the drawing itself (not the take-off, which is saved after every command) has
+    /// changed since it was opened or last saved: PDF imports, underlays, calibrations, and their
+    /// undo and redo.
+    pub fn is_dirty(&self) -> bool {
+        self.document_revision != self.saved_revision
+    }
+
+    /// Runs `f`, a change to the drawing, as one undo step made by `source`; on failure the
+    /// drawing is put back as it was.
+    pub(crate) fn record_document_change<T>(
+        &mut self,
+        source: Source,
+        f: impl FnOnce(&mut Self) -> Result<T, CoreError>,
+    ) -> Result<T, CoreError> {
+        let before = self.drawing.doc.clone();
+        match f(self) {
+            Ok(done) => {
+                self.drawing_changed();
+                self.history
+                    .record(Snapshot::Document(Box::new(before)), source);
+                Ok(done)
+            }
+            Err(e) => {
+                self.drawing.doc = before;
+                *self.cache.get_mut() = None;
+                Err(e)
+            }
+        }
     }
 
     /// The drawing itself changed: the batch is drawn again and its version moves on.

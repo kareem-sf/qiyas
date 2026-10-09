@@ -7,7 +7,7 @@ use opencadcodec::entities::Underlay;
 use opencadcodec::objects::ObjectType;
 use opencadcodec::EntityType;
 use qiyas_core::fixtures::write_sample;
-use qiyas_core::{AttachMode, CoreError, Session};
+use qiyas_core::{AttachMode, CoreError, PreparedPdf, Session};
 use qiyas_pdf::fixtures::{write_many, write_wall, PAGE_PT, RECT_PT};
 use qiyas_render::Batch;
 
@@ -192,8 +192,113 @@ fn an_underlay_survives_a_dwg_save() {
     let out = dir.path().join("with-underlay.dwg");
     session.save_as(&out).unwrap();
     let reopened = Session::open(&out).unwrap();
-    assert_eq!(underlays(&reopened).len(), 1);
+    let u = underlays(&reopened);
+    assert_eq!(u.len(), 1);
+    assert!((u[0].x_scale - 0.01 * 72.0 / 0.0254).abs() < 1e-9);
+    assert!((u[0].y_scale - 0.01 * 72.0 / 0.0254).abs() < 1e-9);
+    assert!(near(
+        [u[0].insertion_point.x, u[0].insertion_point.y],
+        [10.0, 20.0],
+        1e-9
+    ));
+    let Some(ObjectType::UnderlayDefinition(def)) =
+        reopened.drawing.doc.objects.get(&u[0].definition_handle)
+    else {
+        panic!("the definition is gone");
+    };
+    assert_eq!(def.file_path, "wall.pdf");
+    assert_eq!(def.page_name, "1");
     assert_eq!(reopened.batch().images.len(), 1);
+}
+
+#[test]
+fn save_as_in_another_folder_keeps_the_underlay_linked() {
+    if !pdfium() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let jobs = dir.path().join("jobs");
+    std::fs::create_dir_all(&jobs).unwrap();
+    let mut session = Session::open(&write_sample(&jobs, "dxf")).unwrap();
+    let pdf = write_wall(&jobs);
+    session
+        .attach_pdf(&pdf, 1, [0.0, 0.0], 0.01, AttachMode::Underlay)
+        .unwrap();
+    let definition = |s: &Session| {
+        let u = underlays(s)[0].definition_handle;
+        match s.drawing.doc.objects.get(&u) {
+            Some(ObjectType::UnderlayDefinition(def)) => def.file_path.clone(),
+            _ => panic!("no definition"),
+        }
+    };
+    assert_eq!(definition(&session), "wall.pdf");
+
+    // Out of the PDF's folder: the link becomes absolute and still finds it.
+    let tender = dir.path().join("tender");
+    std::fs::create_dir_all(&tender).unwrap();
+    let out = jobs.join("../tender/a.dxf");
+    session.save_as(&out).unwrap();
+    let reopened = Session::open(&out).unwrap();
+    let stored = definition(&reopened);
+    assert!(Path::new(&stored).is_absolute(), "{stored}");
+    assert_eq!(reopened.batch().images.len(), 1);
+    assert!(
+        reopened.info().problems.is_empty(),
+        "{:?}",
+        reopened.info().problems
+    );
+
+    // Back beside it: relative again.
+    let mut reopened = reopened;
+    reopened.save_as(&jobs.join("b.dxf")).unwrap();
+    assert_eq!(
+        definition(&Session::open(&jobs.join("b.dxf")).unwrap()),
+        "wall.pdf"
+    );
+}
+
+#[test]
+fn drawing_changes_mark_the_drawing_unsaved_until_it_is_saved() {
+    if !pdfium() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::open(&write_sample(dir.path(), "dxf")).unwrap();
+    let pdf = write_wall(dir.path());
+    assert!(!session.is_dirty());
+    // A take-off change is saved in the project file, not the drawing.
+    session
+        .run(qiyas_core::Command::MeasureDistance {
+            points: vec![[0.0, 0.0], [1.0, 0.0]],
+        })
+        .unwrap();
+    assert!(!session.is_dirty());
+    session
+        .attach_pdf(&pdf, 1, [0.0, 0.0], 0.01, AttachMode::Import)
+        .unwrap();
+    assert!(session.is_dirty());
+    session.save().unwrap();
+    assert!(!session.is_dirty());
+    assert!(session.undo());
+    assert!(session.is_dirty());
+}
+
+#[test]
+fn a_page_read_first_is_added_in_one_undo_step() {
+    if !pdfium() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::open(&write_sample(dir.path(), "dxf")).unwrap();
+    let pdf = write_wall(dir.path());
+    let read = PreparedPdf::read(&pdf, 1, 0.01, AttachMode::Underlay).unwrap();
+    let handles = session.apply_pdf(read, [5.0, 5.0]).unwrap();
+    assert_eq!(handles.len(), 1);
+    assert_eq!(underlays(&session).len(), 1);
+    assert!(session.undo());
+    assert!(underlays(&session).is_empty());
+    assert!(PreparedPdf::read(&pdf, 9, 0.01, AttachMode::Import).is_err());
+    assert!(PreparedPdf::read(&pdf, 1, -1.0, AttachMode::Import).is_err());
 }
 
 #[test]

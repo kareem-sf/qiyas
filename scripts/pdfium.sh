@@ -4,10 +4,16 @@
 # LICENSES/pdfium-BSD-3.txt and the licences of the libraries built into it beside the library.
 # Qiyas reads PDFs through it; without it the PDF commands say "PDF support is not installed".
 # Run it once per machine, and before bundling a release.
-#   scripts/pdfium.sh                 the latest release
-#   PDFIUM_TAG=chromium/8086 scripts/pdfium.sh
+#
+# The release is pinned to the one Qiyas was tested with, and the download must match its
+# SHA-256 in scripts/pdfium.sha256, or nothing is installed. To move to another release, add its
+# four assets' sums to that file and change TESTED_TAG (then run scripts/check.sh).
+#   scripts/pdfium.sh
+#   PDFIUM_TAG=chromium/NNNN scripts/pdfium.sh   (needs that tag's sums in pdfium.sha256)
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+TESTED_TAG=chromium/8086
 
 case "$(uname -s)-$(uname -m)" in
   Linux-x86_64) asset=pdfium-linux-x64.tgz lib=lib/libpdfium.so ;;
@@ -20,17 +26,30 @@ case "$(uname -s)-$(uname -m)" in
     ;;
 esac
 
-tag="${PDFIUM_TAG:-latest}"
-if [[ "$tag" == latest ]]; then
-  url="https://github.com/bblanchon/pdfium-binaries/releases/latest/download/$asset"
-else
-  url="https://github.com/bblanchon/pdfium-binaries/releases/download/$tag/$asset"
+tag="${PDFIUM_TAG:-$TESTED_TAG}"
+expected="$(awk -v t="$tag" -v a="$asset" '$1 == t && $2 == a { print $3 }' scripts/pdfium.sha256)"
+if [[ -z "$expected" ]]; then
+  echo "No SHA-256 for $asset of $tag in scripts/pdfium.sha256: refusing to install it." >&2
+  exit 1
 fi
+url="https://github.com/bblanchon/pdfium-binaries/releases/download/$tag/$asset"
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 echo "Downloading $url"
 curl -fsSL "$url" -o "$work/$asset"
+if command -v sha256sum > /dev/null; then
+  actual="$(sha256sum "$work/$asset" | cut -d' ' -f1)"
+else
+  actual="$(shasum -a 256 "$work/$asset" | cut -d' ' -f1)"
+fi
+if [[ "$actual" != "$expected" ]]; then
+  echo "SHA-256 MISMATCH for $asset of $tag:" >&2
+  echo "  expected $expected" >&2
+  echo "  got      $actual" >&2
+  echo "Nothing was installed." >&2
+  exit 1
+fi
 tar -xzf "$work/$asset" -C "$work"
 
 dest=crates/qiyas-desktop/resources/pdfium
@@ -41,4 +60,4 @@ cp "$work/licenses/pdfium.txt" LICENSES/pdfium-BSD-3.txt
 rm -rf "$dest/licenses"
 cp -R "$work/licenses" "$dest/licenses"
 if [[ -f "$work/VERSION" ]]; then cp "$work/VERSION" "$dest/VERSION"; fi
-echo "$dest/$(basename "$lib")"
+echo "$dest/$(basename "$lib") ($tag, SHA-256 checked)"
