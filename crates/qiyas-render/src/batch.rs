@@ -634,7 +634,11 @@ const POINT_SHARE: f64 = 0.01;
 /// `size` across or `side * POINT_SHARE` without one, after the segments already there.
 fn add_marks(batch: &mut Batch, absolute: &mut Vec<[f64; 4]>, marks: &[Mark], side: f64) {
     for m in marks {
-        let half = if m.size > 0.0 { m.size } else { side * POINT_SHARE } / 2.0;
+        let half = if m.size > 0.0 {
+            m.size
+        } else {
+            side * POINT_SHARE
+        } / 2.0;
         let [x, y] = m.at;
         let first = absolute.len() as u32;
         absolute.push([x - half, y, x + half, y]);

@@ -6,9 +6,7 @@ use std::f64::consts::{FRAC_PI_2, PI};
 use opencadcodec::entities::{BoundaryEdge, HatchPatternType};
 use opencadcodec::{Color, EntityType, Handle, LineWeight};
 use qiyas_core::fixtures::write_sample;
-use qiyas_core::{
-    Boundary, Command, CoreError, Current, DrawSpec, HatchPattern, Outcome, Session,
-};
+use qiyas_core::{Boundary, Command, CoreError, Current, DrawSpec, HatchPattern, Outcome, Session};
 
 const MODEL: &str = "*Model_Space";
 
@@ -1136,10 +1134,7 @@ fn drawn_hatches_solids_and_wipeouts_fill_in_the_batch() {
 
 /// A closed square polyline from `lo` to `hi`.
 fn square(s: &mut Session, lo: [f64; 2], hi: [f64; 2]) {
-    draw(
-        s,
-        DrawSpec::Rectangle { a: lo, b: hi },
-    );
+    draw(s, DrawSpec::Rectangle { a: lo, b: hi });
 }
 
 #[test]
@@ -1204,7 +1199,10 @@ fn too_much_line_work_around_the_point_is_refused_never_searched_in_part() {
     // The wire form names what was found.
     let json = serde_json::to_value(Boundary::TooDense).unwrap();
     assert_eq!(json["found"], "too_dense");
-    assert_eq!(serde_json::to_value(Boundary::None).unwrap()["found"], "none");
+    assert_eq!(
+        serde_json::to_value(Boundary::None).unwrap()["found"],
+        "none"
+    );
 }
 
 #[test]
@@ -1225,7 +1223,14 @@ fn a_multiline_measures_along_its_centre_line() {
 #[test]
 fn the_current_lineweight_is_a_standard_one_and_the_linetype_takes_the_drawing_spelling() {
     let (_dir, mut s) = sample_session();
-    for (weight, ok) in [(25, true), (211, true), (-1, true), (-3, true), (26, false), (1, false)] {
+    for (weight, ok) in [
+        (25, true),
+        (211, true),
+        (-1, true),
+        (-3, true),
+        (26, false),
+        (1, false),
+    ] {
         let result = s.run(Command::SetCurrent {
             current: Current {
                 lineweight: weight,

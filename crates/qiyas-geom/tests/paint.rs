@@ -329,7 +329,11 @@ fn a_spline_is_drawn_and_measured_along_its_curve_not_its_fit_points() {
                 .iter()
                 .any(|p| (p[0] - f[0]).hypot(p[1] - f[1]) < 1e-3));
         }
-        assert!(measured[0].length() > fit_length + 0.1, "{}", measured[0].length());
+        assert!(
+            measured[0].length() > fit_length + 0.1,
+            "{}",
+            measured[0].length()
+        );
         // Half way between the first two fit points the curve is off their chord.
         let mid = points
             .iter()

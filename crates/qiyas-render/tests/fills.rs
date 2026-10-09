@@ -224,7 +224,9 @@ fn a_point_is_a_cross_sized_from_the_sheet() {
     let picked = index.pick([30.1, 20.1], 0.5).unwrap();
     assert_eq!(b.range_of(picked).unwrap().entity, handles[1]);
     // A point alone still shows.
-    let (alone, _) = batch_of(vec![EntityType::Point(Point::at(Vector3::new(1.0, 1.0, 0.0)))]);
+    let (alone, _) = batch_of(vec![EntityType::Point(Point::at(Vector3::new(
+        1.0, 1.0, 0.0,
+    )))]);
     assert_eq!(alone.segments.len(), 8);
 }
 

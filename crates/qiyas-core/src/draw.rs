@@ -5,9 +5,9 @@
 use std::f64::consts::{PI, TAU};
 
 use opencadcodec::entities::{
-    BoundaryEdge, BoundaryPath, BoundaryPathFlags, CircularArcEdge, Hatch, HatchPattern as CodecPattern,
-    HatchPatternLine, HatchPatternType, MLine, MLineJustification, PolylineEdge, Ray, Solid,
-    Wipeout, XLine,
+    BoundaryEdge, BoundaryPath, BoundaryPathFlags, CircularArcEdge, Hatch,
+    HatchPattern as CodecPattern, HatchPatternLine, HatchPatternType, MLine, MLineJustification,
+    PolylineEdge, Ray, Solid, Wipeout, XLine,
 };
 use opencadcodec::objects::ObjectType;
 use opencadcodec::{
@@ -979,7 +979,11 @@ fn region_around(
         .collect();
     let holes = inner
         .iter()
-        .filter(|&&i| !inner.iter().any(|&o| o != i && within(&faces[o], &faces[i])))
+        .filter(|&&i| {
+            !inner
+                .iter()
+                .any(|&o| o != i && within(&faces[o], &faces[i]))
+        })
         .map(|&i| faces[i].clone())
         .collect();
     Some(Boundary::Ring {
