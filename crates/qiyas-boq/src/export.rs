@@ -91,8 +91,9 @@ pub fn export_takeoff(
 const MAX_WIDTH: usize = 60;
 
 /// Writes a table (data extracted from the drawing) to the workbook at `path`: one sheet "Data",
-/// `columns` as a bold header row, then `rows` as text. Each column is as wide as its longest
-/// cell, up to 60 characters.
+/// `columns` as a bold header row, then `rows`: a cell that reads as a number (spaces trimmed)
+/// as a number, the rest as text. Each column is as wide as its longest cell, up to 60
+/// characters.
 pub fn export_table(path: &Path, columns: &[String], rows: &[Vec<String>]) -> Result<(), BoqError> {
     let mut book = Workbook::new();
     let bold = Format::new().set_bold();
@@ -100,7 +101,13 @@ pub fn export_table(path: &Path, columns: &[String], rows: &[Vec<String>]) -> Re
     sheet.write_row_with_format(0, 0, columns, &bold)?;
     for (r, cells) in rows.iter().enumerate() {
         let r = RowNum::try_from(r + 1).map_err(|_| BoqError::Xlsx("Too many rows".into()))?;
-        sheet.write_row(r, 0, cells)?;
+        for (c, cell) in cells.iter().enumerate() {
+            let c = u16::try_from(c).map_err(|_| BoqError::Xlsx("Too many columns".into()))?;
+            match cell.trim().parse::<f64>() {
+                Ok(n) if n.is_finite() => sheet.write_number(r, c, n)?,
+                _ => sheet.write_string(r, c, cell)?,
+            };
+        }
     }
     for (c, heading) in columns.iter().enumerate() {
         let widest = std::iter::once(heading)

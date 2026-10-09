@@ -82,8 +82,9 @@ fn export_table_writes_one_data_sheet() {
     let columns = ["Handle", "Block", "MARK", "Length (m)"].map(String::from);
     let long = "x".repeat(100);
     let rows = vec![
-        ["42", "DOOR", "D1", ""].map(String::from).to_vec(),
-        vec!["43".into(), "DOOR".into(), long.clone(), String::new()],
+        ["2A", "DOOR", "D1", " 2.313 "].map(String::from).to_vec(),
+        vec!["43".into(), "DOOR".into(), long.clone(), "-0.5e1".into()],
+        ["inf", "1,200", "NaN", ""].map(String::from).to_vec(),
     ];
     qiyas_boq::export_table(&path, &columns, &rows).unwrap();
 
@@ -96,5 +97,13 @@ fn export_table_writes_one_data_sheet() {
     assert_eq!(header, columns);
     assert_eq!(sheet.get((1, 2)), Some(&Data::String("D1".into())));
     assert_eq!(sheet.get((2, 2)), Some(&Data::String(long)));
-    assert_eq!(sheet.height(), 3);
+    // Numbers are written as numbers; the rest, and what is not a finite number, as text.
+    assert_eq!(sheet.get((1, 3)), Some(&Data::Float(2.313)));
+    assert_eq!(sheet.get((2, 3)), Some(&Data::Float(-5.0)));
+    assert_eq!(sheet.get((2, 0)), Some(&Data::Float(43.0)));
+    assert_eq!(sheet.get((1, 0)), Some(&Data::String("2A".into())));
+    assert_eq!(sheet.get((3, 0)), Some(&Data::String("inf".into())));
+    assert_eq!(sheet.get((3, 1)), Some(&Data::String("1,200".into())));
+    assert_eq!(sheet.get((3, 2)), Some(&Data::String("NaN".into())));
+    assert_eq!(sheet.height(), 4);
 }
