@@ -69,6 +69,29 @@ test("a changed cell is written when Enter is pressed or it loses focus; an unch
   );
 });
 
+test("text typed into the next cell while the table reloads is kept", async () => {
+  const onRun = vi.fn(async (_cmd: Command) => {});
+  const view = (table: TableInfo) => (
+    <LanguageProvider>
+      <TableEditor handle={42} table={table} cell={[0, 0]} onRun={onRun} onField={() => {}} onClose={() => {}} />
+    </LanguageProvider>
+  );
+  const { rerender } = render(view(plain));
+  fireEvent.change(cellInput(1, 0), { target: { value: "Lobby" } });
+  fireEvent.keyDown(cellInput(1, 0), { key: "Enter" });
+  await waitFor(() => expect(onRun).toHaveBeenCalledTimes(1));
+  // Typing in the next cell before the table comes back.
+  fireEvent.change(cellInput(0, 1), { target: { value: "Area m2" } });
+  rerender(view({ ...plain, cells: [["Room", "Area"], ["Lobby", "12.000"]] }));
+  expect(cellInput(1, 0).value).toBe("Lobby");
+  expect(cellInput(0, 1).value).toBe("Area m2");
+  // Still written when it loses focus.
+  fireEvent.blur(cellInput(0, 1));
+  await waitFor(() =>
+    expect(onRun).toHaveBeenLastCalledWith({ type: "edit_cell", target, row: 0, col: 1, text: "Area m2" }),
+  );
+});
+
 test("rows and columns go in beside the chosen cell and come out with it", async () => {
   const { onRun } = editor(plain, [1, 0]);
   const click = (name: string) => fireEvent.click(screen.getByRole("button", { name }));

@@ -74,10 +74,26 @@ export function TableEditor(props: EditorProps) {
     }
   }, [picking]);
 
-  // The table as it is now: what was typed is in it.
+  // The table as it is now. A cell written and now showing what was typed drops its draft; text
+  // typed meanwhile into another cell is kept. When rows or columns came or went, cells moved:
+  // every draft goes.
+  const shape = `${rows}x${cols}`;
+  const lastShape = useRef(shape);
   useEffect(() => {
-    setDrafts({});
-    sent.current = {};
+    const reshaped = lastShape.current !== shape;
+    lastShape.current = shape;
+    const kept: Record<string, string> = {};
+    if (!reshaped) {
+      for (const [k, v] of Object.entries(drafts)) {
+        const [r, c] = k.split(",").map(Number);
+        const written = sent.current[k] === v && table.cells[r]?.[c] === v;
+        if (!written) kept[k] = v;
+      }
+    }
+    setDrafts(kept);
+    for (const k of Object.keys(sent.current)) {
+      if (reshaped || !(k in kept)) delete sent.current[k];
+    }
     const inside = (c: Cell) => [Math.min(c[0], rows - 1), Math.min(c[1], cols - 1)] as Cell;
     setAnchor((a) => inside(a));
     setEnd((e) => inside(e));
