@@ -21,6 +21,7 @@ import {
   type Point,
 } from "./camera";
 import { isClick } from "./click";
+import type { DimKind } from "../tools/dimTools";
 import type { DrawKind } from "../tools/drawTools";
 import type { EditKind } from "../tools/editTools";
 import type { ModifyKind } from "../tools/modifyTools";
@@ -37,6 +38,8 @@ export type Tool =
   | EditKind
   /** The text tools (`TEXT_TOOLS`): TEXT and MTEXT. */
   | TextKind
+  /** The annotate tools (`DIM_TOOLS`): dimensions, their edits, leaders and tolerances. */
+  | DimKind
   /** Click a text to edit it. */
   | "textEdit"
   | "select"

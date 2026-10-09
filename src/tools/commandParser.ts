@@ -42,7 +42,8 @@ export type Run =
   | "xrefs"
   | "calibrate"
   | "extract"
-  | "find";
+  | "find"
+  | "dimStyle";
 
 export type Action =
   /** An empty line where a command is expected: run the last command again. */
@@ -89,6 +90,7 @@ const RUNS: Partial<Record<CommandName, Run>> = {
   CALIBRATE: "calibrate",
   EXTRACT: "extract",
   FIND: "find",
+  DIMSTYLE: "dimStyle",
 };
 
 const TOOLS: Partial<Record<CommandName, Tool>> = {
@@ -133,6 +135,23 @@ const TOOLS: Partial<Record<CommandName, Tool>> = {
   TEXT: "text",
   MTEXT: "mtext",
   TEXTEDIT: "textEdit",
+  DIMLINEAR: "dimLinear",
+  DIMALIGNED: "dimAligned",
+  DIMANGULAR: "dimAngular",
+  DIMRADIUS: "dimRadius",
+  DIMDIAMETER: "dimDiameter",
+  DIMARC: "dimArc",
+  DIMORDINATE: "dimOrdinate",
+  DIMBASELINE: "dimBaseline",
+  DIMCONTINUE: "dimContinue",
+  QDIM: "qdim",
+  DIMEDIT: "dimEdit",
+  DIMBREAK: "dimBreak",
+  DIMSPACE: "dimSpace",
+  DIMJOGLINE: "dimJogLine",
+  LEADER: "leader",
+  MLEADER: "mleader",
+  TOLERANCE: "tolerance",
 };
 
 /** The draws typed whole on one line. */

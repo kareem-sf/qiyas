@@ -144,12 +144,11 @@ test("file, view and drafting commands", () => {
 
 test("suggestions list commands, then aliases, the exact match first", () => {
   expect(suggest("la", aliases).map((s) => s.name)).toEqual(["LAYALL", "LAYISO", "LAYOFF", "LAYON"]);
-  expect(suggest("di", aliases)).toEqual([
-    { name: "DI", target: "DIST" },
-    { name: "DIST" },
-    { name: "DIVIDE" },
-    { name: "DISTANCE", target: "DIST" },
-    { name: "DIV", target: "DIVIDE" },
+  expect(suggest("dis", aliases)).toEqual([{ name: "DIST" }, { name: "DISTANCE", target: "DIST" }]);
+  expect(suggest("do", aliases)).toEqual([
+    { name: "DO", target: "DONUT" },
+    { name: "DONUT" },
+    { name: "DOR", target: "DIMORDINATE" },
   ]);
   expect(suggest("LAYOFF A", aliases)).toEqual([]);
   expect(suggest("", aliases)).toEqual([]);
@@ -230,6 +229,31 @@ test("the text commands and their aliases start the text tools, FIND opens its d
   expect(parse("find", cmd)).toEqual({ type: "run", what: "find" });
   // TEXT's R and H are options while it waits for a point.
   expect(parse("r", { ...at("point"), options: ["H", "R"] })).toEqual({ type: "option", option: "R" });
+});
+
+test("the dimension commands and their aliases start the annotate tools, D opens the style", () => {
+  const tools: [string, string][] = [
+    ["DLI", "dimLinear"],
+    ["DAL", "dimAligned"],
+    ["DAN", "dimAngular"],
+    ["DRA", "dimRadius"],
+    ["DDI", "dimDiameter"],
+    ["DAR", "dimArc"],
+    ["DOR", "dimOrdinate"],
+    ["DBA", "dimBaseline"],
+    ["DCO", "dimContinue"],
+    ["QDIM", "qdim"],
+    ["DED", "dimEdit"],
+    ["LE", "leader"],
+    ["MLD", "mleader"],
+    ["TOL", "tolerance"],
+    ["DIMBREAK", "dimBreak"],
+    ["DIMSPACE", "dimSpace"],
+    ["DIMJOGLINE", "dimJogLine"],
+  ];
+  for (const [line, tool] of tools) expect(parse(line, cmd)).toEqual({ type: "tool", tool });
+  expect(parse("D", cmd)).toEqual({ type: "run", what: "dimStyle" });
+  expect(parse("dimstyle", cmd)).toEqual({ type: "run", what: "dimStyle" });
 });
 
 test("a draw tool's options and typed distances", () => {

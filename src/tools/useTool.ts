@@ -53,6 +53,21 @@ import {
   type TextRequest,
   type TextState,
 } from "./textTools";
+import {
+  dimBoxes,
+  dimHighlight,
+  dimOptions,
+  dimPicks,
+  dimPreview,
+  dimReducer,
+  initialDimState,
+  isDimTool,
+  lastDimPoint,
+  takesDimNumber,
+  type DimInput,
+  type DimRequest,
+  type DimState,
+} from "./dimTools";
 import { constrain, gridRound, NO_TRACK, type Track } from "./tracking";
 
 /** Two clicks this close in time and on screen are a double click. */
@@ -93,6 +108,8 @@ export type ToolState = {
   edit: EditState | null;
   /** A text tool's own state (TEXT, MTEXT); null for the other tools. */
   text: TextState | null;
+  /** An annotate tool's own state (dimensions, leaders, tolerances); null for the others. */
+  dim: DimState | null;
   /** Set by the click that asks to edit a text (the text edit tool's, or the select tool's
    *  double click on a text): the top-level handle; the hook hands it to the app. */
   pendingEdit: number | null;
@@ -172,7 +189,9 @@ const promptOf = (tool: Tool): string =>
         ? initialEditState(tool).hint
         : isTextTool(tool)
           ? initialTextState(tool).hint
-          : (PROMPT[tool] ?? "");
+          : isDimTool(tool)
+            ? initialDimState(tool).hint
+            : (PROMPT[tool] ?? "");
 
 /** The draw tools that take points until Enter, which a double click also ends. */
 const MANY_POINTS = new Set(["polyline", "spline", "revcloud", "wipeout"]);
@@ -186,12 +205,13 @@ export const initialToolState = (
 ): ToolState => {
   const modify = isModifyTool(tool) ? initialModifyState(tool, selection, kinds) : null;
   const edit = isEditTool(tool) ? initialEditState(tool, selection) : null;
-  const own = modify ?? edit;
+  const dim = isDimTool(tool) ? initialDimState(tool, selection) : null;
+  const own = modify ?? edit ?? dim;
   const text = isTextTool(tool) ? initialTextState(tool) : null;
   return {
     tool,
     points: [],
-    pendingCommand: own?.command ?? null,
+    pendingCommand: modify?.command ?? edit?.command ?? null,
     hint: own ? own.hint : tool === "select" ? "" : promptOf(tool),
     hintArgs: own ? own.hintArgs : (text?.hintArgs ?? null),
     selected: null,
@@ -203,6 +223,7 @@ export const initialToolState = (
     modify,
     edit,
     text,
+    dim,
     pendingEdit: null,
     selection: own ? [] : selection,
     kinds: own ? {} : kinds,
@@ -235,6 +256,13 @@ function editStep(s: ToolState, input: EditInput): ToolState {
   if (!s.edit) return s;
   const edit = editReducer(s.edit, input);
   return { ...s, edit, hint: edit.hint, hintArgs: edit.hintArgs, pendingCommand: edit.command };
+}
+
+/** Hands `input` to the annotate tool; a change it finishes becomes the pending command. */
+function dimStep(s: ToolState, input: DimInput): ToolState {
+  if (!s.dim) return s;
+  const dim = dimReducer(s.dim, input);
+  return { ...s, dim, hint: dim.hint, hintArgs: dim.hintArgs, pendingCommand: dim.command };
 }
 
 /** Hands `input` to the text tool. */
@@ -297,6 +325,7 @@ function measureSelected(s: ToolState): ToolState {
 function finish(s: ToolState): ToolState {
   if (s.modify) return modifyStep(s, { type: "finish" });
   if (s.edit) return editStep(s, { type: "finish" });
+  if (s.dim) return dimStep(s, { type: "finish" });
   if (s.text) return textStep(s, { type: "finish" });
   if (s.tool === "select") return measureSelected(s);
   if (s.draw) return { ...drawStep(s, { type: "finish" }), lastClick: null };
@@ -315,11 +344,12 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
       // The selection set goes along; with none, the entity the select tool picked (whole).
       const carried = s.selection.length > 0 ? s.selection : s.selected ? [s.selected.picked.top] : [];
       const next = initialToolState(event.tool, carried, s.kinds);
-      return next.modify || next.edit ? next : { ...next, hint: promptOf(event.tool) };
+      return next.modify || next.edit || next.dim ? next : { ...next, hint: promptOf(event.tool) };
     }
     case "draw":
       if (s.modify && event.input.type !== "ring") return modifyStep(s, event.input);
       if (s.edit && event.input.type !== "ring") return editStep(s, event.input);
+      if (s.dim && event.input.type !== "ring") return dimStep(s, event.input);
       if (s.text && event.input.type !== "ring") return textStep(s, event.input);
       return drawStep(s, event.input);
     case "modify":
@@ -327,6 +357,7 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
     case "selected": {
       if (s.modify) return modifyStep(s, { type: "picked", handles: event.handles, kinds: event.kinds });
       if (s.edit) return editStep(s, { type: "picked", handles: event.handles });
+      if (s.dim) return dimStep(s, { type: "picked", handles: event.handles });
       if (s.tool !== "select") return s;
       const kinds = withKinds(event.add ? s.kinds : {}, event.handles, event.kinds);
       return { ...s, selection: event.add ? union(s.selection, event.handles) : event.handles, kinds };
@@ -339,7 +370,12 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
         handles: s.edit.handles.filter(event.present),
         first: s.edit.first && event.present(s.edit.first.handle) ? s.edit.first : null,
       };
-      return { ...s, selection, modify, edit };
+      const dim = s.dim && {
+        ...s.dim,
+        handles: s.dim.handles.filter(event.present),
+        first: s.dim.first !== null && event.present(s.dim.first) ? s.dim.first : null,
+      };
+      return { ...s, selection, modify, edit, dim };
     }
     case "cancel":
       return initialToolState(s.tool);
@@ -383,6 +419,15 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
         }
         const point = event.snapped ? event.world : constrain(lastEditPoint(s), event.world, event.track ?? NO_TRACK);
         return editStep(clicked, { type: "point", p: point });
+      }
+      if (s.dim) {
+        if (dimPicks(s.dim)) {
+          const picked = event.picked;
+          if (!picked) return clicked;
+          return dimStep(clicked, { type: "pick", handle: picked.top, kind: picked.kind, at: event.world });
+        }
+        const point = event.snapped ? event.world : constrain(lastDimPoint(s.dim), event.world, event.track ?? NO_TRACK);
+        return dimStep(clicked, { type: "point", p: point });
       }
       if (s.modify) {
         if (s.modify.phase === "select") {
@@ -521,6 +566,8 @@ export type ToolApi = {
   placeText?(request: TextRequest): void;
   /** Edit the text of the top-level entity `handle` (a text, an MText, a block's attributes). */
   editText?(handle: number): void;
+  /** An annotate tool needs typed text: a leader's, a tolerance's frame, a dimension's. */
+  dimText?(request: DimRequest): void;
   onError(e: unknown): void;
 };
 
@@ -552,7 +599,7 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
     ),
   );
   const modifyPhase = state.modify?.phase ?? null;
-  const editPicking = state.edit ? editPicks(state.edit) : null;
+  const editPicking = state.edit ? editPicks(state.edit) : state.dim ? dimPicks(state.dim) : null;
   /** Clicks place snapped points, pick an entity, or neither (corners). */
   const snapsNow = snaps(tool) || modifyPhase === "points" || editPicking === false;
   const picksNow = picksEntity(tool) || modifyPhase === "select" || editPicking === true;
@@ -569,7 +616,9 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
       ? lastModifyPoint(state)
       : state.edit
         ? lastEditPoint(state)
-        : state.points.length > 0
+        : state.dim
+          ? lastDimPoint(state.dim)
+          : state.points.length > 0
         ? state.points[state.points.length - 1]
         : null;
 
@@ -599,6 +648,11 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
     const request = state.text?.request;
     if (request) api.placeText?.(request);
   }, [state.text]);
+
+  useEffect(() => {
+    const request = state.dim?.request;
+    if (request) api.dimText?.(request);
+  }, [state.dim]);
 
   useEffect(() => {
     if (state.pendingEdit !== null) api.editText?.(state.pendingEdit);
@@ -708,7 +762,7 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
       dispatch({ type: "modify", input: { type: "box", bounds } });
       return;
     }
-    const editBox = state.edit ? editBoxes(state.edit) : false;
+    const editBox = state.edit ? editBoxes(state.edit) : state.dim ? dimBoxes(state.dim) : false;
     if (tool !== "select" && modifyPhase !== "select" && !editBox) return;
     try {
       const picked = await api.pickWindow(bounds, crossing);
@@ -734,6 +788,7 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
   const modify = state.modify;
   const edit = state.edit;
   const text = state.text;
+  const dim = state.dim;
   return {
     points: state.points,
     /** A draw tool's state (null for the others), the option words and whether a typed distance
@@ -746,6 +801,8 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
     edit,
     /** A text tool's state (TEXT, MTEXT); null for the other tools. */
     text,
+    /** An annotate tool's state; null for the other tools. */
+    dim,
     drawOptions: draw
       ? drawOptions(draw)
       : modify
@@ -754,7 +811,9 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
           ? editOptions(edit)
           : text
             ? textOptions(text)
-            : [],
+            : dim
+              ? dimOptions(dim)
+              : [],
     takesNumber: draw
       ? takesNumber(draw)
       : modify
@@ -763,8 +822,15 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
           ? takesEditNumber(edit)
           : text
             ? takesTextNumber(text)
-            : false,
-    lastDrawPoint: lastDrawPoint(state) ?? lastModifyPoint(state) ?? lastEditPoint(state) ?? text?.corner ?? null,
+            : dim
+              ? takesDimNumber(dim)
+              : false,
+    lastDrawPoint:
+      lastDrawPoint(state) ??
+      lastModifyPoint(state) ??
+      lastEditPoint(state) ??
+      text?.corner ??
+      (dim ? lastDimPoint(dim) : null),
     preview: useMemo(
       () =>
         draw
@@ -773,8 +839,10 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
             ? modifyPreview(modify, cursor)
             : text
               ? textPreview(text, cursor)
-              : null,
-      [draw, modify, text, cursor],
+              : dim
+                ? dimPreview(dim, cursor)
+                : null,
+      [draw, modify, text, dim, cursor],
     ),
     /** The entities selected, to draw highlighted: the modify tool's, or the selection set (less
      *  the select tool's own pick, which is highlighted as picked, maybe inside a block). */
@@ -782,7 +850,9 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
       ? modify.handles
       : edit
         ? editHighlight(edit)
-        : state.selection.filter((h) => !state.selected || h !== state.selected.picked.top),
+        : dim
+          ? dimHighlight(dim)
+          : state.selection.filter((h) => !state.selected || h !== state.selected.picked.top),
     /** Dimensions and tables the modify tool just left out: say how many. */
     skipped,
     /** The drawing changed: keep only the selected handles `present`. */
@@ -792,7 +862,8 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
       tool === "select" ||
       modifyPhase === "select" ||
       modifyPhase === "window" ||
-      (edit !== null && editBoxes(edit)),
+      (edit !== null && editBoxes(edit)) ||
+      (dim !== null && dimBoxes(dim)),
     onBox,
     /** Hands a typed option or distance to the draw or modify tool. */
     drawInput: (input: DrawInput) => dispatch({ type: "draw", input }),

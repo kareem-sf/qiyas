@@ -148,3 +148,41 @@ test("the Home tab has the Text group with Find and replace", () => {
   fireEvent.click(within(group).getByRole("button", { name: "Find and replace" }));
   expect(onFind).toHaveBeenCalled();
 });
+
+test("the Annotate tab has the Dimensions group, the dimension style and the Leaders group", () => {
+  const onTool = vi.fn();
+  const onDimStyle = vi.fn();
+  render(<Ribbon {...props} onTool={onTool} onDimStyle={onDimStyle} />);
+  fireEvent.click(screen.getByRole("tab", { name: "Annotate" }));
+  const dims = screen.getByRole("group", { name: "Dimensions" });
+  for (const [name, tool] of [
+    ["Linear", "dimLinear"],
+    ["Aligned", "dimAligned"],
+    ["Angular", "dimAngular"],
+    ["Radius", "dimRadius"],
+    ["Diameter", "dimDiameter"],
+    ["Arc length", "dimArc"],
+    ["Ordinate", "dimOrdinate"],
+    ["Baseline", "dimBaseline"],
+    ["Continue", "dimContinue"],
+    ["Quick", "qdim"],
+    ["Edit dimension", "dimEdit"],
+    ["Break", "dimBreak"],
+    ["Space", "dimSpace"],
+    ["Jog line", "dimJogLine"],
+  ]) {
+    fireEvent.click(within(dims).getByRole("button", { name }));
+    expect(onTool).toHaveBeenLastCalledWith(tool);
+  }
+  fireEvent.click(within(dims).getByRole("button", { name: "Dimension style…" }));
+  expect(onDimStyle).toHaveBeenCalled();
+  const notes = screen.getByRole("group", { name: "Leaders" });
+  for (const [name, tool] of [
+    ["Leader", "leader"],
+    ["Multileader", "mleader"],
+    ["Tolerance", "tolerance"],
+  ]) {
+    fireEvent.click(within(notes).getByRole("button", { name }));
+    expect(onTool).toHaveBeenLastCalledWith(tool);
+  }
+});

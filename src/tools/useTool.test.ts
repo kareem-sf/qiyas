@@ -622,3 +622,24 @@ test("a double click on a text edits it; the edit tool asks on each click", () =
   expect(edit.pendingEdit).toBe(9);
   expect(toolReducer(edit, click([5, 5], 2000, null)).pendingEdit).toBeNull();
 });
+
+test("an annotate tool places snapped points, picks dimensions and asks for text", () => {
+  const linear = run("dimLinear", [click([0, 0], 0), click([10, 0], 1000), click([5, 2], 2000)]);
+  expect(linear.pendingCommand).toEqual({
+    type: "dimension",
+    kind: "linear",
+    p1: [0, 0],
+    p2: [10, 0],
+    line_point: [5, 2],
+    rotation: null,
+  });
+  expect(linear.hint).toBe("dim.prompt.dimLinear0");
+
+  const dimension: Picked = { ...onSheet(7), kind: "Dimension" };
+  const edit = run("dimEdit", [click([1, 1], 0, dimension), { type: "draw", input: { type: "option", option: "T" } }]);
+  expect(edit.dim?.request).toEqual({ kind: "override", handle: 7 });
+
+  const qdim = toolReducer(initialToolState("qdim", [3]), { type: "selected", handles: [4], add: true });
+  expect(qdim.dim?.handles).toEqual([3, 4]);
+  expect(qdim.selection).toEqual([]);
+});

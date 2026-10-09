@@ -1,6 +1,7 @@
 import { useState, type KeyboardEvent } from "react";
 import type { NamedView, Recent } from "../api";
 import { useT } from "../i18n";
+import { DIM_TOOLS } from "../tools/dimTools";
 import { DRAW_TOOLS } from "../tools/drawTools";
 import { EDIT_TOOLS } from "../tools/editTools";
 import { MODIFY_TOOLS } from "../tools/modifyTools";
@@ -40,6 +41,8 @@ type Props = {
   onExtract?(): void;
   /** Opens the Find and replace dialog. */
   onFind?(): void;
+  /** Opens the dimension style panel. */
+  onDimStyle?(): void;
   onUndo?(): void;
   onRedo?(): void;
   /** The drawing holds its Arabic text backwards; the checkbox is disabled without a handler. */
@@ -52,8 +55,11 @@ type Props = {
   onDeleteView?(name: string): Promise<void>;
 };
 
-type Tab = "home" | "measure" | "view";
-const TABS: Tab[] = ["home", "measure", "view"];
+type Tab = "home" | "measure" | "annotate" | "view";
+const TABS: Tab[] = ["home", "measure", "annotate", "view"];
+
+/** The Annotate tab's Leaders group; the rest of `DIM_TOOLS` are the Dimensions group. */
+const NOTE_TOOLS = ["leader", "mleader", "tolerance"] as const;
 
 // Space is the viewport's pan key: it must never press a focused ribbon button.
 const ignoreSpace = (e: KeyboardEvent) => {
@@ -154,6 +160,18 @@ export function Ribbon(props: Props) {
           <span key="sep" className="sep" />,
           ...(["geometry", "divide", "measureAlong", "idPoint"] as Tool[]).map((name) => tool(name)),
           action("extract", props.onExtract),
+        ]}
+        {tab === "annotate" && [
+          <span key="dims" className="ribbon-group" role="group" aria-label={t("dim.group")}>
+            {DIM_TOOLS.filter((name) => !(NOTE_TOOLS as readonly string[]).includes(name)).map((name) =>
+              tool(name, `dim.${name}`),
+            )}
+            {action("dim.styleButton", props.onDimStyle)}
+          </span>,
+          <span key="sep-notes" className="sep" />,
+          <span key="notes" className="ribbon-group" role="group" aria-label={t("dim.notes")}>
+            {NOTE_TOOLS.map((name) => tool(name, `dim.${name}`))}
+          </span>,
         ]}
         {tab === "view" && [
           action("zoomExtents", props.onZoomExtents),

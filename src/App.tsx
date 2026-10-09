@@ -105,7 +105,9 @@ import { LayersPanel } from "./shell/LayersPanel";
 import { PropertiesPanel } from "./shell/PropertiesPanel";
 import { Ribbon, type Tool } from "./shell/Ribbon";
 import { SettingsDialog } from "./shell/SettingsDialog";
+import { DimStylePanel } from "./shell/DimStylePanel";
 import { InPlaceText, TextDialog, type TextDraft } from "./shell/TextEditor";
+import { ToleranceDialog } from "./shell/ToleranceDialog";
 import { SheetTabs } from "./shell/SheetTabs";
 import { StatusBar } from "./shell/StatusBar";
 import { TakeoffPanel } from "./shell/TakeoffPanel";
@@ -124,6 +126,7 @@ import {
 import { mergeAliases } from "./tools/aliases";
 import type { Action, Expect, ParseState } from "./tools/commandParser";
 import { shortcutFor, type DraftingToggle } from "./tools/shortcuts";
+import type { DimRequest } from "./tools/dimTools";
 import type { TextRequest } from "./tools/textTools";
 import { useTool } from "./tools/useTool";
 import {
@@ -242,6 +245,9 @@ export default function App() {
   const [xrefsOpen, setXrefsOpen] = useState(false);
   const [extractOpen, setExtractOpen] = useState(false);
   const [findOpen, setFindOpen] = useState(false);
+  const [dimStyleOpen, setDimStyleOpen] = useState(false);
+  /** What an annotate tool asked the user to type: a leader's text, a tolerance, a dimension's. */
+  const [dimText, setDimText] = useState<DimRequest | null>(null);
   /** The text height and style new text takes: the last ones used; null until then (2.5 mm in
    *  drawing units, and the drawing's current style). */
   const [textHeight, setTextHeight] = useState<number | null>(null);
@@ -429,6 +435,14 @@ export default function App() {
         "mtext",
         "edit_text",
         "find_replace",
+        "dimension",
+        "dim_edit",
+        "dim_break",
+        "dim_space",
+        "dim_jog_line",
+        "leader",
+        "mleader",
+        "tolerance",
       ];
       if (drawingChanged.includes(cmd.type)) {
         await redraw();
@@ -471,12 +485,15 @@ export default function App() {
       onError: (e) => setError(String(e)),
       placeText,
       editText: (handle) => run(() => openTextEdit(handle)),
+      dimText: setDimText,
     },
     drafting,
   );
 
-  /** The height new text takes: the last one used, else 2.5 mm in drawing units. */
-  const currentTextHeight = textHeight ?? 0.0025 / metresPerUnit(info?.units ?? "unknown");
+  /** The height new text takes: the last one used, else 2.5 mm on paper in drawing units at the
+   *  annotation scale. */
+  const currentTextHeight =
+    textHeight ?? (0.0025 / metresPerUnit(info?.units ?? "unknown")) * (info?.annotation_factor ?? 1);
   /** The style new text takes: the last one used when the drawing has it, else its current one. */
   const currentTextStyle =
     textStyle !== null && info?.text_styles.includes(textStyle) ? textStyle : (info?.text_style ?? "Standard");
@@ -503,6 +520,27 @@ export default function App() {
     } else {
       setNotice(t("text.noText"));
     }
+  }
+
+  /** Runs a dimension style or annotation scale change from the style panel, then shows the
+   *  drawing's styles again; an error goes back to the panel. */
+  async function runDimStyle(cmd: Command) {
+    const gen = switchGen.current;
+    await runCommand(cmd);
+    const next = await drawingInfo();
+    if (!isStale(gen, switchGen.current)) setInfo(next);
+    await autosave();
+  }
+
+  /** Opens the dimension style panel on the drawing's styles as they are now. */
+  function openDimStyle() {
+    const gen = switchGen.current;
+    run(async () => {
+      const next = await drawingInfo();
+      if (isStale(gen, switchGen.current)) return;
+      setInfo(next);
+      setDimStyleOpen(true);
+    });
   }
 
   /** Runs a text command from a dialog, then draws it; an error goes back to the dialog. */
@@ -1533,6 +1571,8 @@ export default function App() {
         return setExtractOpen(true);
       case "find":
         return setFindOpen(true);
+      case "dimStyle":
+        return openDimStyle();
       case "calibrate":
         if (!batch || batch.imageTable.length === 0) {
           setError(t("cmd.notNow", { name: "CALIBRATE" }));
@@ -1820,7 +1860,7 @@ export default function App() {
   } else if (measure.asking) {
     expect = measure.asking === "divide" ? "count" : "step";
     promptKey = `cmd.prompt.${expect}`;
-  } else if (measure.draw || measure.modify || measure.edit || measure.text) {
+  } else if (measure.draw || measure.modify || measure.edit || measure.text || measure.dim) {
     expect = "point";
     promptKey = measure.hint;
   } else if (tool === "distance" || tool === "area") {
@@ -1905,6 +1945,7 @@ export default function App() {
           }
           onExtract={info ? () => setExtractOpen(true) : undefined}
           onFind={info ? () => setFindOpen(true) : undefined}
+          onDimStyle={info ? openDimStyle : undefined}
           arabicReversed={arabicReversed}
           onArabicReversed={info ? chooseArabicReversed : undefined}
           {...(onModel && {
@@ -2076,6 +2117,47 @@ export default function App() {
           }}
           onClose={() => {
             setTextDialog(null);
+            focusDrawing();
+          }}
+        />
+      )}
+      {dimStyleOpen && info && (
+        <DimStylePanel
+          styles={info.dim_styles}
+          current={info.dim_style}
+          annotationScale={info.annotation_scale}
+          onSave={(name, fields, current) => runDimStyle({ type: "set_dim_style", name, fields, current })}
+          onScale={(name) => runDimStyle({ type: "annotation_scale", name })}
+          onClose={() => {
+            setDimStyleOpen(false);
+            focusDrawing();
+          }}
+        />
+      )}
+      {(dimText?.kind === "leader" || dimText?.kind === "mleader" || dimText?.kind === "override") && (
+        <TextDialog
+          heading={dimText.kind === "override" ? "dim.text.override" : "dim.text.leader"}
+          value={dimText.kind === "override" ? "<>" : ""}
+          multiline={dimText.kind !== "override"}
+          onSubmit={async (d) => {
+            if (dimText.kind === "override") {
+              const target = { handle: dimText.handle, chain: [] };
+              await runText({ type: "dim_edit", target, op: { text_override: d.value } });
+            } else {
+              await runText({ type: dimText.kind, points: dimText.points, text: d.value });
+            }
+          }}
+          onClose={() => {
+            setDimText(null);
+            focusDrawing();
+          }}
+        />
+      )}
+      {dimText?.kind === "tolerance" && (
+        <ToleranceDialog
+          onSubmit={(frame) => runText({ type: "tolerance", at: dimText.at, frame })}
+          onClose={() => {
+            setDimText(null);
             focusDrawing();
           }}
         />

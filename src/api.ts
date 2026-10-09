@@ -54,7 +54,48 @@ export type DrawingInfo = {
   text_styles: string[];
   /** The style new text takes: the drawing's current one, or "Standard". */
   text_style: string;
+  /** The drawing's own dimension styles, sorted. */
+  dim_styles: DimStyleInfo[];
+  /** The style new dimensions take: the drawing's current one, or "Standard". */
+  dim_style: string;
+  /** The annotation scale (CANNOSCALE), e.g. "1:50". */
+  annotation_scale: string;
+  /** Drawing units per paper unit it gives (50 for "1:50"): new text and annotations are that
+   *  many times their paper size. */
+  annotation_factor: number;
 };
+
+/** A dimension style's common fields, in drawing units before its `scale` (DIMASZ, DIMTXT,
+ *  DIMDEC, DIMEXO, DIMEXE, DIMGAP, DIMSCALE). */
+export type DimStyleFields = {
+  arrow_size: number;
+  text_height: number;
+  precision: number;
+  ext_offset: number;
+  ext_extension: number;
+  gap: number;
+  scale: number;
+};
+
+export type DimStyleInfo = { name: string; fields: DimStyleFields };
+
+/** A dimension to add (`qiyas_core::DimSpec`); points in drawing units, `rotation` in degrees
+ *  (null: horizontal or vertical by where `line_point` is). */
+export type DimSpec =
+  | { kind: "linear"; p1: P; p2: P; line_point: P; rotation: number | null }
+  | { kind: "aligned"; p1: P; p2: P; offset: number }
+  | { kind: "angular"; vertex: P; p1: P; p2: P; arc_point: P }
+  | { kind: "radius"; target: EntityTarget; point: P }
+  | { kind: "diameter"; target: EntityTarget; point: P }
+  | { kind: "arc_length"; target: EntityTarget; point: P }
+  | { kind: "ordinate"; feature: P; leader_end: P }
+  | { kind: "baseline"; from: EntityTarget; points: P[] }
+  | { kind: "continue"; from: EntityTarget; points: P[] }
+  | { kind: "quick"; targets: EntityTarget[]; line_point: P };
+
+/** What a dimension edit changes: its text (`<>` is the measurement, "" clears), its arrows, or
+ *  where its text sits. */
+export type DimEditOp = { text_override: string } | "flip" | { move_text: P };
 
 /** In `problems` when the drawing opened with nothing in model space (`qiyas_core::EMPTY_MODEL`). */
 export const EMPTY_MODEL = "This drawing has no geometry in Model";
@@ -726,7 +767,28 @@ export type Command =
       whole_word: boolean;
     }
   /** The matches, without changing anything: a `found` outcome. */
-  | { type: "find_text"; find: string; scope: TextScope; match_case: boolean; whole_word: boolean };
+  | { type: "find_text"; find: string; scope: TextScope; match_case: boolean; whole_word: boolean }
+  /** Dimensions on the current layer in the current style, each with its block: an `added`
+   *  outcome, one undo step. */
+  | ({ type: "dimension" } & DimSpec)
+  | { type: "dim_edit"; target: EntityTarget; op: DimEditOp }
+  /** A gap in the dimension's lines where `cutter` crosses them. */
+  | { type: "dim_break"; target: EntityTarget; cutter: EntityTarget }
+  /** Parallel linear dimensions `spacing` apart going out from `base` (null: twice the text). */
+  | { type: "dim_space"; base: EntityTarget; targets: EntityTarget[]; spacing: number | null }
+  /** A jog in a linear dimension's line nearest `at`. */
+  | { type: "dim_jog_line"; target: EntityTarget; at: P }
+  /** A leader through `points` (arrow at the first) with `text` beside the last: `added` with
+   *  the leader, then the text. MLEADER adds a short landing. */
+  | { type: "leader"; points: P[]; text: string }
+  | { type: "mleader"; points: P[]; text: string }
+  /** A feature control frame (`{\Fgdt;p}` a symbol, `%%v` between fields) at `at`. */
+  | { type: "tolerance"; at: P; frame: string }
+  /** CANNOSCALE, "paper:drawing" such as "1:50". */
+  | { type: "annotation_scale"; name: string }
+  /** The style `name` (from the current one when new) takes `fields`; `current` makes it the one
+   *  new dimensions take. */
+  | { type: "set_dim_style"; name: string; fields: DimStyleFields; current: boolean };
 
 /** Where find and replace looks: the sheet on screen, or every sheet. */
 export type TextScope = "sheet" | "drawing";
