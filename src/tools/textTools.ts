@@ -1,21 +1,29 @@
 /** The text tools: TEXT places single-line text where it is clicked (H height, R rotation), MTEXT
- *  takes a box by two corners (H height). Pure state machines with their prompts (i18n keys), as
- *  the draw tools are; each placement becomes a `request` the app opens a text editor for (the
- *  in-place editor for TEXT, the MText dialog for MTEXT), and the tool waits for the next one. */
+ *  takes a box by two corners (H height), TABLE a table's top left corner and FIELD a field's text
+ *  (H height). Pure state machines with their prompts (i18n keys), as the draw tools are; each
+ *  placement becomes a `request` the app opens an editor or a dialog for (the in-place editor for
+ *  TEXT, the MText dialog for MTEXT, the new table dialog, the field dialog), and the tool waits
+ *  for the next one. */
 import type { Point } from "../viewport/camera";
 
 export const TEXT_TOOLS = ["text", "mtext"] as const;
+/** The Annotate tab's tools that place by one click too. */
+export const TABLE_TOOLS = ["table", "field"] as const;
 
-export type TextKind = (typeof TEXT_TOOLS)[number];
+export type TextKind = (typeof TEXT_TOOLS)[number] | (typeof TABLE_TOOLS)[number];
 
 export const isTextTool = (tool: string): tool is TextKind =>
-  (TEXT_TOOLS as readonly string[]).includes(tool);
+  (TEXT_TOOLS as readonly string[]).includes(tool) || (TABLE_TOOLS as readonly string[]).includes(tool);
 
 /** Where a new text goes; `height` is the one typed with H (null: the app's text height). */
 export type TextRequest =
   | { kind: "text"; at: Point; rotation: number; height: number | null }
   /** `at` is the box's top left corner; `width` its width (drawing units). */
-  | { kind: "mtext"; at: Point; width: number; height: number | null };
+  | { kind: "mtext"; at: Point; width: number; height: number | null }
+  /** A table's top left corner. */
+  | { kind: "table"; at: Point }
+  /** Where a field's one-line text goes. */
+  | { kind: "field"; at: Point; height: number | null };
 
 export type TextState = {
   kind: TextKind;
@@ -44,6 +52,8 @@ const fmt = (v: number) => String(Number(v.toPrecision(6)));
 /** The tool waiting for its next click, with its prompt. */
 function waiting(s: TextState): TextState {
   const base = { ...s, asking: null, request: null };
+  if (s.kind === "table") return { ...base, hint: "table.prompt.place", hintArgs: null };
+  if (s.kind === "field") return { ...base, hint: "table.prompt.field", hintArgs: null };
   if (s.kind === "mtext") {
     return s.corner
       ? { ...base, hint: "text.prompt.mtextOther", hintArgs: null }
@@ -81,6 +91,10 @@ export function textReducer(s: TextState, input: TextInput): TextState {
       return next;
     }
     case "point": {
+      if (s.kind === "table") return { ...waiting(next), request: { kind: "table", at: input.p } };
+      if (s.kind === "field") {
+        return { ...waiting(next), request: { kind: "field", at: input.p, height: s.height } };
+      }
       if (s.kind === "text") {
         return { ...waiting(next), request: { kind: "text", at: input.p, rotation: s.rotation, height: s.height } };
       }
@@ -104,7 +118,7 @@ export function textReducer(s: TextState, input: TextInput): TextState {
 
 /** The option words the command line takes now. */
 export function textOptions(s: TextState): string[] {
-  if (s.asking) return [];
+  if (s.asking || s.kind === "table") return [];
   return s.kind === "text" ? ["H", "R"] : ["H"];
 }
 

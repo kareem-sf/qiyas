@@ -77,3 +77,17 @@ test("MTEXT shows its box to the cursor and Enter drops the first corner", () =>
   expect(s.hint).toBe("text.prompt.mtextFirst");
   expect(textPreview(s, [2, 1]).length).toBe(0);
 });
+
+test("TABLE and FIELD place where clicked: a table's corner, a field's text", () => {
+  expect(isTextTool("table")).toBe(true);
+  expect(isTextTool("field")).toBe(true);
+  expect(requests("table", [pt([1, 2]), pt([3, 4])])).toEqual([
+    { kind: "table", at: [1, 2] },
+    { kind: "table", at: [3, 4] },
+  ]);
+  expect(initialTextState("table").hint).toBe("table.prompt.place");
+  expect(textOptions(initialTextState("table"))).toEqual([]);
+  expect(requests("field", [opt("H"), num(2), pt([5, 6])])).toEqual([{ kind: "field", at: [5, 6], height: 2 }]);
+  expect(initialTextState("field").hint).toBe("table.prompt.field");
+  expect(textOptions(initialTextState("field"))).toEqual(["H"]);
+});

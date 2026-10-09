@@ -43,6 +43,8 @@ type Props = {
   onFind?(): void;
   /** Opens the dimension style panel. */
   onDimStyle?(): void;
+  /** Works every field out again (UPDATEFIELD). */
+  onUpdateFields?(): void;
   onUndo?(): void;
   onRedo?(): void;
   /** The drawing holds its Arabic text backwards; the checkbox is disabled without a handler. */
@@ -171,6 +173,13 @@ export function Ribbon(props: Props) {
           <span key="sep-notes" className="sep" />,
           <span key="notes" className="ribbon-group" role="group" aria-label={t("dim.notes")}>
             {NOTE_TOOLS.map((name) => tool(name, `dim.${name}`))}
+          </span>,
+          <span key="sep-tables" className="sep" />,
+          <span key="tables" className="ribbon-group" role="group" aria-label={t("table.group")}>
+            {tool("table", "table.table")}
+            {tool("tableEdit", "table.tableEdit")}
+            {tool("field", "table.fieldTool")}
+            {action("table.updateFields", props.onUpdateFields)}
           </span>,
         ]}
         {tab === "view" && [

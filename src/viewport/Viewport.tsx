@@ -42,6 +42,8 @@ export type Tool =
   | DimKind
   /** Click a text to edit it. */
   | "textEdit"
+  /** Click a table to edit its cells. */
+  | "tableEdit"
   | "select"
   | "distance"
   | "area"

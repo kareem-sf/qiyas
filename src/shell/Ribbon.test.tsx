@@ -186,3 +186,21 @@ test("the Annotate tab has the Dimensions group, the dimension style and the Lea
     expect(onTool).toHaveBeenLastCalledWith(tool);
   }
 });
+
+test("the Annotate tab has the Tables group: table, edit, field and update fields", () => {
+  const onTool = vi.fn();
+  const onUpdateFields = vi.fn();
+  render(<Ribbon {...props} onTool={onTool} onUpdateFields={onUpdateFields} />);
+  fireEvent.click(screen.getByRole("tab", { name: "Annotate" }));
+  const group = screen.getByRole("group", { name: "Tables" });
+  for (const [name, tool] of [
+    ["Table", "table"],
+    ["Edit table", "tableEdit"],
+    ["Field", "field"],
+  ]) {
+    fireEvent.click(within(group).getByRole("button", { name }));
+    expect(onTool).toHaveBeenLastCalledWith(tool);
+  }
+  fireEvent.click(within(group).getByRole("button", { name: "Update fields" }));
+  expect(onUpdateFields).toHaveBeenCalled();
+});

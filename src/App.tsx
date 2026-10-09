@@ -29,6 +29,7 @@ import {
   conflicts as readConflicts,
   drawingInfo,
   entityInfo,
+  tableCellAt,
   getDrafting,
   setDrafting,
   snap,
@@ -65,8 +66,10 @@ import {
   type DrawingInfo,
   type EntityFilter,
   type EntityInfo,
+  type FieldKind,
   type Field,
   type ImageDisplay,
+  type TableInfo,
   type Measurement,
   type NamedView,
   type TabInfo,
@@ -108,6 +111,8 @@ import { SettingsDialog } from "./shell/SettingsDialog";
 import { DimStylePanel } from "./shell/DimStylePanel";
 import { InPlaceText, TextDialog, type TextDraft } from "./shell/TextEditor";
 import { ToleranceDialog } from "./shell/ToleranceDialog";
+import { NewTableDialog, TableEditor } from "./shell/TableEditor";
+import { FieldDialog, fieldCode } from "./shell/FieldDialog";
 import { SheetTabs } from "./shell/SheetTabs";
 import { StatusBar } from "./shell/StatusBar";
 import { TakeoffPanel } from "./shell/TakeoffPanel";
@@ -156,7 +161,11 @@ const TOGGLED: Record<DraftingToggle, "osnap" | "grid" | "ortho" | "polar"> = {
 
 /** A click in the drawing the window is waiting for instead of the tool's: the insert point of a
  *  PDF page or an image, or the two points of a calibration. */
-type Pending = { kind: "insert"; of: "pdf" | "image" } | { kind: "calibrate"; first: Point | null };
+type Pending =
+  | { kind: "insert"; of: "pdf" | "image" }
+  | { kind: "calibrate"; first: Point | null }
+  /** The entity a field reads: a click in the drawing picks it. */
+  | { kind: "fieldTarget" };
 
 /** Focus is in a text field: keys are typing, not shortcuts. */
 const typing = (e: KeyboardEvent) =>
@@ -248,6 +257,20 @@ export default function App() {
   const [dimStyleOpen, setDimStyleOpen] = useState(false);
   /** What an annotate tool asked the user to type: a leader's text, a tolerance, a dimension's. */
   const [dimText, setDimText] = useState<DimRequest | null>(null);
+  /** TABLE's click: where the new table's top left corner goes. */
+  const [newTableAt, setNewTableAt] = useState<Point | null>(null);
+  /** The table being edited: its handle, its cells as they are now, and the cell chosen first. */
+  const [tableEditing, setTableEditing] = useState<{
+    handle: number;
+    table: TableInfo;
+    cell: [number, number];
+  } | null>(null);
+  /** The field dialog: into a new text at a click, or into a cell of the table being edited; and
+   *  the entity an area or a length field reads, once picked. */
+  const [fieldAsk, setFieldAsk] = useState<
+    { mode: "text"; at: Point; height: number | null } | { mode: "cell"; cell: [number, number] } | null
+  >(null);
+  const [fieldTarget, setFieldTarget] = useState<{ handle: number; kind: string } | null>(null);
   /** The text height and style new text takes: the last ones used; null until then (2.5 mm in
    *  drawing units, and the drawing's current style). */
   const [textHeight, setTextHeight] = useState<number | null>(null);
@@ -484,7 +507,7 @@ export default function App() {
       undo: () => history(undo),
       onError: (e) => setError(String(e)),
       placeText,
-      editText: (handle) => run(() => openTextEdit(handle)),
+      editText: (handle, at) => run(() => openTextEdit(handle, at)),
       dimText: setDimText,
     },
     drafting,
@@ -505,15 +528,28 @@ export default function App() {
       setTextDialog({ kind: "mtext", request });
       return;
     }
+    if (request.kind === "table") {
+      setNewTableAt(request.at);
+      return;
+    }
+    if (request.kind === "field") {
+      setFieldTarget(null);
+      setFieldAsk({ mode: "text", at: request.at, height: request.height });
+      return;
+    }
     const at = viewport.current?.toScreen(request.at) ?? [0, 0];
     setTextEditor({ request, at, key: performance.now() });
   }
 
-  /** Opens the text edit dialog on the text of the top-level entity `handle`. */
-  async function openTextEdit(handle: number) {
+  /** Opens the text edit dialog on the text of the top-level entity `handle`, or the table editor
+   *  on a table (at the cell under `at`, the click). */
+  async function openTextEdit(handle: number, at: Point | null = null) {
     const e = await entityInfo(handle);
     const value = e.plain_text ?? e.text;
-    if ((e.kind === "Text" || e.kind === "MText") && value !== null) {
+    if (e.kind === "Table" && e.table) {
+      const cell = (at && (await tableCellAt(handle, at))) ?? [0, 0];
+      setTableEditing({ handle, table: e.table, cell });
+    } else if ((e.kind === "Text" || e.kind === "MText") && value !== null) {
       setTextDialog({ kind: "edit", handle, value, multiline: e.kind === "MText" });
     } else if (e.kind === "Insert" && e.attributes.length > 0) {
       setTextDialog({ kind: "edit", handle, value: "", multiline: false, attributes: e.attributes });
@@ -551,6 +587,38 @@ export default function App() {
     await runCommand(cmd);
     await redraw();
     await autosave();
+  }
+
+  /** Runs a command on the table being edited, draws it, and hands the editor its cells as they
+   *  are now; an error goes back to the editor. */
+  async function runTable(cmd: Command) {
+    const editing = tableEditing;
+    if (!editing) return;
+    await runText(cmd);
+    const e = await entityInfo(editing.handle);
+    if (e.table) setTableEditing({ ...editing, table: e.table });
+  }
+
+  /** Inserts the field the dialog chose: a new text where the user clicked, or the field's code
+   *  after the text of the table cell being edited. */
+  async function insertField(field: FieldKind) {
+    const ask = fieldAsk;
+    if (ask?.mode === "text") {
+      await runText({ type: "field", at: ask.at, height: ask.height ?? currentTextHeight, field });
+    } else if (ask?.mode === "cell" && tableEditing) {
+      const [row, col] = ask.cell;
+      const now = tableEditing.table.cells[row]?.[col] ?? "";
+      const text = now ? `${now} ${fieldCode(field)}` : fieldCode(field);
+      await runTable({ type: "edit_cell", target: { handle: tableEditing.handle, chain: [] }, row, col, text });
+    }
+  }
+
+  /** UPDATEFIELD: works every field out again (one undo step when one changed), then draws it. */
+  function updateFields() {
+    run(async () => {
+      await runText({ type: "update_fields" });
+      setNotice(t("insertField.updated"));
+    });
   }
 
   /** Places TEXT's text, remembering its height and style for the next one. */
@@ -1388,6 +1456,16 @@ export default function App() {
     // The drawing under the click may be about to go.
     if (switching.current > 0) return;
     lastPoint.current = world;
+    if (pending?.kind === "fieldTarget") {
+      // The entity at the top of the sheet a field reads.
+      run(async () => {
+        const picked = await pick(world[0], world[1], 6 * worldPerPixel);
+        if (!picked) return;
+        setFieldTarget({ handle: picked.top, kind: picked.kind ?? "" });
+        setPending(null);
+      });
+      return;
+    }
     if (!pendingPoint(world)) measure.onClick(world, screen, worldPerPixel, shift);
   }
 
@@ -1576,6 +1654,8 @@ export default function App() {
         return setFindOpen(true);
       case "dimStyle":
         return openDimStyle();
+      case "updateFields":
+        return updateFields();
       case "calibrate":
         if (!batch || batch.imageTable.length === 0) {
           setError(t("cmd.notNow", { name: "CALIBRATE" }));
@@ -1834,7 +1914,9 @@ export default function App() {
             ? pending.of === "image"
               ? "attachImage.pickHint"
               : "attachPdf.pickHint"
-            : pending.first
+            : pending.kind === "fieldTarget"
+              ? "insertField.pickHint"
+              : pending.first
               ? "calibrate.second"
               : "calibrate.first",
         )
@@ -1857,7 +1939,9 @@ export default function App() {
     promptKey =
       pending.kind === "insert"
         ? "cmd.prompt.insert"
-        : pending.first
+        : pending.kind === "fieldTarget"
+          ? "cmd.prompt.select"
+          : pending.first
           ? "cmd.prompt.calibrateSecond"
           : "cmd.prompt.calibrateFirst";
   } else if (measure.asking) {
@@ -1949,6 +2033,7 @@ export default function App() {
           onExtract={info ? () => setExtractOpen(true) : undefined}
           onFind={info ? () => setFindOpen(true) : undefined}
           onDimStyle={info ? openDimStyle : undefined}
+          onUpdateFields={info ? updateFields : undefined}
           arabicReversed={arabicReversed}
           onArabicReversed={info ? chooseArabicReversed : undefined}
           {...(onModel && {
@@ -2153,6 +2238,48 @@ export default function App() {
           onClose={() => {
             setDimText(null);
             focusDrawing();
+          }}
+        />
+      )}
+      {newTableAt && (
+        <NewTableDialog
+          textHeight={currentTextHeight}
+          onSubmit={(table) => runText({ type: "table", at: newTableAt, ...table, data: [] })}
+          onClose={() => {
+            setNewTableAt(null);
+            focusDrawing();
+          }}
+        />
+      )}
+      {tableEditing && (
+        <TableEditor
+          key={tableEditing.handle}
+          handle={tableEditing.handle}
+          table={tableEditing.table}
+          cell={tableEditing.cell}
+          picking={pending?.kind === "fieldTarget"}
+          onRun={runTable}
+          onField={(cell) => {
+            setFieldTarget(null);
+            setFieldAsk({ mode: "cell", cell });
+          }}
+          onClose={() => {
+            setTableEditing(null);
+            focusDrawing();
+          }}
+        />
+      )}
+      {fieldAsk && (
+        <FieldDialog
+          mode={fieldAsk.mode}
+          target={fieldTarget}
+          picking={pending?.kind === "fieldTarget"}
+          onPick={() => setPending({ kind: "fieldTarget" })}
+          onSubmit={insertField}
+          onClose={() => {
+            setFieldAsk(null);
+            setPending(null);
+            if (!tableEditing) focusDrawing();
           }}
         />
       )}

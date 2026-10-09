@@ -1990,3 +1990,46 @@ button.close {
   margin: 0;
   box-shadow: 0 4px 16px rgb(14 15 18 / 0.15);
 }
+
+/* The table editor: the grid keeps the drawing's column order (dir="ltr" on the table); each cell's
+   text runs its own way. */
+.table-editor {
+  max-width: min(90vw, 960px);
+}
+.table-grid {
+  max-height: 50vh;
+  overflow: auto;
+}
+.table-grid table {
+  border-collapse: collapse;
+}
+.table-grid td {
+  padding: 0;
+  border: 1px solid var(--rule);
+  min-width: 96px;
+}
+.table-grid td[aria-selected="true"] {
+  background: var(--accent-soft);
+}
+.table-grid input {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 4px 6px;
+}
+.table-grid input.field {
+  font-style: italic;
+  color: var(--accent);
+}
+.table-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-block: 8px;
+}
+.field-target {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}

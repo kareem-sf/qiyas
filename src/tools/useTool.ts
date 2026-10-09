@@ -110,9 +110,11 @@ export type ToolState = {
   text: TextState | null;
   /** An annotate tool's own state (dimensions, leaders, tolerances); null for the others. */
   dim: DimState | null;
-  /** Set by the click that asks to edit a text (the text edit tool's, or the select tool's
-   *  double click on a text): the top-level handle; the hook hands it to the app. */
+  /** Set by the click that asks to edit a text or a table (the text and table edit tools', or the
+   *  select tool's double click on one): the top-level handle; the hook hands it to the app. */
   pendingEdit: number | null;
+  /** Where that click was: a table opens at the cell under it. */
+  editAt: Point | null;
   /** The selection set: top-level handles the select tool picked (a click replaces it, Shift and
    *  boxes add). A modify tool takes it when it starts; Esc and resets clear it. */
   selection: number[];
@@ -168,6 +170,7 @@ const PROMPT: Partial<Record<Tool, string>> = {
   measureAlong: "inquiry.clickAlong",
   idPoint: "inquiry.clickPoint",
   textEdit: "text.prompt.edit",
+  tableEdit: "table.prompt.edit",
 };
 
 /** The tools that act on the entity clicked. */
@@ -177,7 +180,8 @@ const picksEntity = (tool: Tool) =>
   tool === "geometry" ||
   tool === "divide" ||
   tool === "measureAlong" ||
-  tool === "textEdit";
+  tool === "textEdit" ||
+  tool === "tableEdit";
 
 /** The first prompt of `tool`. */
 const promptOf = (tool: Tool): string =>
@@ -225,6 +229,7 @@ export const initialToolState = (
     text,
     dim,
     pendingEdit: null,
+    editAt: null,
     selection: own ? [] : selection,
     kinds: own ? {} : kinds,
   };
@@ -338,7 +343,7 @@ function finish(s: ToolState): ToolState {
 
 export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
   // A command or a zoom is pending for one state only: the hook sees it once.
-  const s = { ...state, pendingCommand: null, pendingZoom: null, pendingEdit: null };
+  const s = { ...state, pendingCommand: null, pendingZoom: null, pendingEdit: null, editAt: null };
   switch (event.type) {
     case "tool": {
       // The selection set goes along; with none, the entity the select tool picked (whole).
@@ -478,9 +483,10 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
             if (picked.chain.length > 0 && !double) {
               return selectHint(clicked, { ...current, whole: !current.whole, toggled: true });
             }
-            // A double click on a text edits it.
-            if (double && picked.chain.length === 0 && (picked.kind === "Text" || picked.kind === "MText")) {
-              return { ...clicked, pendingEdit: picked.top };
+            // A double click on a text or a table edits it.
+            const editable = picked.kind === "Text" || picked.kind === "MText" || picked.kind === "Table";
+            if (double && picked.chain.length === 0 && editable) {
+              return { ...clicked, pendingEdit: picked.top, editAt: event.world };
             }
             // The first click of a double click swapped: measure what was shown before the pair.
             const whole = double && current.toggled ? !current.whole : current.whole;
@@ -532,7 +538,11 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
         }
         case "textEdit":
           if (double || event.picked === null) return clicked;
-          return { ...clicked, pendingEdit: event.picked.top };
+          return { ...clicked, pendingEdit: event.picked.top, editAt: event.world };
+        case "tableEdit":
+          if (double || event.picked === null) return clicked;
+          if (event.picked.kind !== "Table") return { ...clicked, hint: "table.prompt.notTable" };
+          return { ...clicked, hint: promptOf("tableEdit"), pendingEdit: event.picked.top, editAt: event.world };
         case "idPoint":
           return {
             ...clicked,
@@ -564,8 +574,9 @@ export type ToolApi = {
   undo(): void;
   /** A text tool placed a text: open its editor. */
   placeText?(request: TextRequest): void;
-  /** Edit the text of the top-level entity `handle` (a text, an MText, a block's attributes). */
-  editText?(handle: number): void;
+  /** Edit the text of the top-level entity `handle` (a text, an MText, a block's attributes, a
+   *  table's cells), clicked at `at`. */
+  editText?(handle: number, at: Point | null): void;
   /** An annotate tool needs typed text: a leader's, a tolerance's frame, a dimension's. */
   dimText?(request: DimRequest): void;
   onError(e: unknown): void;
@@ -655,7 +666,7 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
   }, [state.dim]);
 
   useEffect(() => {
-    if (state.pendingEdit !== null) api.editText?.(state.pendingEdit);
+    if (state.pendingEdit !== null) api.editText?.(state.pendingEdit, state.editAt);
   }, [state.pendingEdit, state.lastClick]);
 
   // A hatch's click: find the ring around it, then hand it back.

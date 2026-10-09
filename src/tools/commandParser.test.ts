@@ -256,6 +256,18 @@ test("the dimension commands and their aliases start the annotate tools, D opens
   expect(parse("dimstyle", cmd)).toEqual({ type: "run", what: "dimStyle" });
 });
 
+test("the table and field commands start their tools, UPDATEFIELD runs", () => {
+  for (const [line, tool] of [
+    ["TABLE", "table"],
+    ["TB", "table"],
+    ["TABLEDIT", "tableEdit"],
+    ["FIELD", "field"],
+  ]) {
+    expect(parse(line, cmd)).toEqual({ type: "tool", tool });
+  }
+  expect(parse("updatefield", cmd)).toEqual({ type: "run", what: "updateFields" });
+});
+
 test("a draw tool's options and typed distances", () => {
   const pline = { ...at("point", [0, 0]), options: ["A", "L", "C", "U"] };
   expect(parse("a", pline)).toEqual({ type: "option", option: "A" });

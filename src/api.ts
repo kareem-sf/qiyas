@@ -138,7 +138,31 @@ export type EntityInfo = {
   /** A text's height, in drawing units, and its style. */
   height: number | null;
   style: string | null;
+  /** A table's cells. */
+  table?: TableInfo | null;
 };
+
+/** A table's cells for the table editor (`qiyas_core::TableInfo`). */
+export type TableInfo = {
+  /** Each cell's text as read (formatting codes gone), row by row. */
+  cells: string[][];
+  /** Column widths and row heights, in drawing units. */
+  widths: number[];
+  heights: number[];
+  /** Merged cells: [top row, left column, bottom row, right column]. */
+  merges: [number, number, number, number][];
+  /** The cells holding a field: [row, column]. */
+  fields: [number, number][];
+};
+
+/** A field (`qiyas_core::FieldKind`): today's date, the file name, an entity's area or length,
+ *  or a count of a block's references on the sheet. */
+export type FieldKind =
+  | { kind: "date" }
+  | { kind: "file_name" }
+  | { kind: "area"; target: EntityTarget }
+  | { kind: "length"; target: EntityTarget }
+  | { kind: "count"; block: string };
 
 /** What is under the cursor (`qiyas_core::Picked`): the entity, the block references it sits inside
  *  (outermost first, empty on the sheet) and the top-level entity on the sheet. Inside an xref,
@@ -438,6 +462,10 @@ export const setDrafting = (drafting: Drafting) => invoke<void>("set_drafting", 
 /** One entity; give `chain` for an entity inside blocks. */
 export const entityInfo = (handle: number, chain: number[] = []) =>
   invoke<EntityInfo>("entity_info", { handle, chain });
+
+/** The cell [row, column] of the table `handle` under `p`; a merged cell by its first. */
+export const tableCellAt = (handle: number, p: [number, number]) =>
+  invoke<[number, number] | null>("table_cell_at", { handle, x: p[0], y: p[1] });
 
 export type Kind = "length" | "area" | "count" | "volume" | "item";
 
@@ -788,7 +816,29 @@ export type Command =
   | { type: "annotation_scale"; name: string }
   /** The style `name` (from the current one when new) takes `fields`; `current` makes it the one
    *  new dimensions take. */
-  | { type: "set_dim_style"; name: string; fields: DimStyleFields; current: boolean };
+  | { type: "set_dim_style"; name: string; fields: DimStyleFields; current: boolean }
+  /** A table on the current layer, top left at `at`, cells filled from `data` (plain text): an
+   *  `added` outcome, one undo step. The others change a table, one undo step each. */
+  | {
+      type: "table";
+      at: P;
+      rows: number;
+      cols: number;
+      col_width: number;
+      row_height: number;
+      data: string[][];
+    }
+  | { type: "edit_cell"; target: EntityTarget; row: number; col: number; text: string }
+  | { type: "insert_row"; target: EntityTarget; at: number }
+  | { type: "insert_col"; target: EntityTarget; at: number }
+  | { type: "delete_row"; target: EntityTarget; row: number }
+  | { type: "delete_col"; target: EntityTarget; col: number }
+  /** One cell (`first` = `last`) unmerges the merged cell it is in. */
+  | { type: "merge_cells"; target: EntityTarget; first: [number, number]; last: [number, number] }
+  /** A one-line text holding the field: an `added` outcome. */
+  | { type: "field"; at: P; height: number; field: FieldKind }
+  /** Works every field out again: one undo step when one changes. */
+  | { type: "update_fields" };
 
 /** Where find and replace looks: the sheet on screen, or every sheet. */
 export type TextScope = "sheet" | "drawing";

@@ -43,7 +43,8 @@ export type Run =
   | "calibrate"
   | "extract"
   | "find"
-  | "dimStyle";
+  | "dimStyle"
+  | "updateFields";
 
 export type Action =
   /** An empty line where a command is expected: run the last command again. */
@@ -91,6 +92,7 @@ const RUNS: Partial<Record<CommandName, Run>> = {
   EXTRACT: "extract",
   FIND: "find",
   DIMSTYLE: "dimStyle",
+  UPDATEFIELD: "updateFields",
 };
 
 const TOOLS: Partial<Record<CommandName, Tool>> = {
@@ -152,6 +154,9 @@ const TOOLS: Partial<Record<CommandName, Tool>> = {
   LEADER: "leader",
   MLEADER: "mleader",
   TOLERANCE: "tolerance",
+  TABLE: "table",
+  TABLEDIT: "tableEdit",
+  FIELD: "field",
 };
 
 /** The draws typed whole on one line. */

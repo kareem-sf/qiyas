@@ -643,3 +643,27 @@ test("an annotate tool places snapped points, picks dimensions and asks for text
   expect(qdim.dim?.handles).toEqual([3, 4]);
   expect(qdim.selection).toEqual([]);
 });
+
+test("a double click on a table, or TABLEDIT's click, opens its editor at the cell clicked", () => {
+  const table = { ...onSheet(7), kind: "Table" };
+  const twice = run("select", [click([1, 2], 0, table), click([1, 2], 100, table)]);
+  expect(twice.pendingEdit).toBe(7);
+  expect(twice.editAt).toEqual([1, 2]);
+  expect(twice.pendingCommand).toBeNull();
+
+  const edit = run("tableEdit", [click([3, 4], 0, table)]);
+  expect(edit.hint).toBe("table.prompt.edit");
+  expect(edit.pendingEdit).toBe(7);
+  expect(edit.editAt).toEqual([3, 4]);
+  // Anything else is no table.
+  const line = run("tableEdit", [click([3, 4], 0, { ...onSheet(8), kind: "Line" })]);
+  expect(line.pendingEdit).toBeNull();
+  expect(line.hint).toBe("table.prompt.notTable");
+});
+
+test("TABLE and FIELD hand their click to the app", () => {
+  const table = run("table", [click([1, 2], 0)]);
+  expect(table.text?.request).toEqual({ kind: "table", at: [1, 2] });
+  const field = run("field", [click([3, 4], 0)]);
+  expect(field.text?.request).toEqual({ kind: "field", at: [3, 4], height: null });
+});
