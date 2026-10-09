@@ -3,7 +3,7 @@ use std::f64::consts::TAU;
 
 use opencadcodec::entities::{
     AttributeEntity, BoundaryEdge, Dimension, EntityCommon, EntityType, HorizontalAlignment,
-    Insert, MText, Text, TextHorizontalAlignment, TextVerticalAlignment, VerticalAlignment,
+    Insert, MText, Table, Text, TextHorizontalAlignment, TextVerticalAlignment, VerticalAlignment,
 };
 use opencadcodec::tables::normalize_name;
 use opencadcodec::types::Matrix3;
@@ -13,6 +13,7 @@ use opencadkernel::geom2d::NurbsCurve;
 use crate::dimension::{dimension_entities, leader_entities, tolerance_entities};
 use crate::paint::{mline_paths, pattern_spans, solid_outline, wipeout_outline, FlatFill, Paint};
 use crate::path::same_point;
+use crate::table::{table_entities, table_xform};
 use crate::{Path, Xform};
 
 /// Deepest block nesting followed; deeper inserts (or cycles) are skipped.
@@ -538,6 +539,10 @@ impl Walk<'_> {
                 self.dimension(d, xf, style, depth);
                 return;
             }
+            EntityType::Table(t) => {
+                self.table(t, xf, style, depth);
+                return;
+            }
             EntityType::Leader(l) => {
                 let parts = leader_entities(self.doc, l);
                 self.owned(handle, &parts.iter().collect::<Vec<_>>(), xf, style, depth);
@@ -648,6 +653,37 @@ impl Walk<'_> {
             );
         } else {
             self.owned(handle, &inside, &xf, style, depth);
+        }
+    }
+
+    /// A table: its `*T` block when it has one with something in it, else the grid and texts
+    /// generated from its cells. Both are in table coordinates and drawn as the table itself.
+    fn table(&mut self, t: &Table, xf: &Xform, style: &Style, depth: usize) {
+        let doc = self.doc;
+        let place = table_xform(t).then(xf);
+        let record = if t.block_name.is_empty() {
+            t.block_record_handle
+                .and_then(|h| doc.block_records.iter().find(|b| b.handle == h))
+        } else {
+            doc.block_records.get(&t.block_name)
+        };
+        let inside: Vec<&EntityType> = record
+            .map(|b| {
+                doc.entities_in_block(&b.name)
+                    .filter(|c| !c.common().invisible)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let handle = t.common.handle.value();
+        if inside.is_empty() {
+            let generated = table_entities(t);
+            let parts: Vec<&EntityType> = generated.iter().collect();
+            self.owned(handle, &parts, &place, style, depth);
+        } else {
+            let base = record.map_or_else(Xform::identity, |b| {
+                Xform::translate(-b.base_point.x, -b.base_point.y)
+            });
+            self.owned(handle, &inside, &base.then(&place), style, depth);
         }
     }
 
