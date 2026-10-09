@@ -13,8 +13,8 @@ pub struct ToolSpec {
     pub description: &'static str,
     /// JSON Schema of the input: an object, `additionalProperties: false`, with `required`.
     pub input_schema: Value,
-    /// Whether the tool changes the take-off or the BOQ work (an undo step, and the take-off
-    /// panel must refresh). Showing another sheet or hiding layers is not counted.
+    /// Whether the tool changes the take-off, the BOQ work or the drawing (an undo step, and the
+    /// take-off panel must refresh). Showing another sheet or hiding layers is not counted.
     pub mutating: bool,
 }
 
@@ -347,6 +347,96 @@ pub fn catalogue() -> Vec<ToolSpec> {
             true,
         ),
         tool(
+            "measure_geometry",
+            "The geometry of one entity as drawn, in metres and degrees: an arc's or circle's \
+             radius, diameter, centre, angles and length (a circle's area); an ellipse's centre \
+             and radii; a line's length, angle from the X axis and deltas; for a polyline, the \
+             segment nearest at (its first when at is left out) and the whole length; a block \
+             reference's block, insertion point, scale, rotation and attributes; a text's \
+             content, height and style. Changes nothing.",
+            json!({
+                "handle": handle("The entity, from find_entities."),
+                "chain": chain(),
+                "at": point_described("For a polyline: a point near the segment wanted, in \
+                                       drawing coordinates.")
+            }),
+            &["handle"],
+            false,
+        ),
+        tool(
+            "divide_along",
+            "Divide an entity's path (line, arc, circle, polyline, ellipse, spline) into count \
+             equal parts by true length: places point entities on layer QIYAS-POINT at the \
+             divisions (count - 1 points on an open path, count on a closed one) and adds their \
+             count to the take-off in pieces. The user can undo it.",
+            json!({
+                "handle": handle("The entity to divide, from find_entities."),
+                "chain": chain(),
+                "count": { "type": "integer", "description": "Equal parts, 2 to 1000." }
+            }),
+            &["handle", "count"],
+            true,
+        ),
+        tool(
+            "measure_along",
+            "Place a point entity every step along an entity's path from its start, by true \
+             length, on layer QIYAS-POINT (none at the very end), and add their count to the \
+             take-off in pieces, e.g. posts every 2.5 m along a fence. At most 1000 points. The \
+             user can undo it.",
+            json!({
+                "handle": handle("The entity, from find_entities."),
+                "chain": chain(),
+                "step": { "type": "number", "description": "Spacing in metres, above 0." }
+            }),
+            &["handle", "step"],
+            true,
+        ),
+        tool(
+            "id_point",
+            "The coordinates of a point in metres (X and Y), as the user would read them.",
+            json!({ "point": point_described("[x, y] in drawing coordinates.") }),
+            &["point"],
+            false,
+        ),
+        tool(
+            "extract_data",
+            "A table of entity data on a sheet: one row per entity the filters find (as \
+             find_entities), one column per field, values as text (length and area in metres \
+             and square metres, X and Y where it sits in metres; empty when it has none; block \
+             references have no length). attributes adds one column per block attribute tag, \
+             e.g. MARK for door marks. Paged: total counts every match; pass next_offset as \
+             offset for the next page.",
+            json!({
+                "sheet": sheet("Sheet name or block name; the sheet shown when left out."),
+                "layer": { "type": "string", "description": "Only entities on this layer." },
+                "kind": { "type": "string", "description": "Only this entity type, e.g. Insert, Line, LwPolyline, Text." },
+                "block_name": { "type": "string", "description": "Only references of this block." },
+                "text_contains": {
+                    "type": "string",
+                    "description": "Only Text, MText or block references whose text or attribute values contain this."
+                },
+                "within": bbox("Only entities with at least one point inside this box."),
+                "fields": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": ["handle", "kind", "layer", "block_name", "text", "length",
+                                 "area", "x", "y", "sheet", "xref"]
+                    },
+                    "description": "The columns, in order."
+                },
+                "attributes": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Attribute tags to add as columns after fields, e.g. [\"MARK\"]."
+                },
+                "offset": offset(),
+                "limit": { "type": "integer", "description": "Rows per page, at most 5000. Default 200." }
+            }),
+            &["fields"],
+            false,
+        ),
+        tool(
             "zoom_to",
             "Zoom the user's view to entities or to a box on the sheet shown. Give handles or \
              bounds, not both.",
@@ -428,6 +518,10 @@ fn offset() -> Value {
 /// An `[x, y]` point in drawing coordinates.
 fn point() -> Value {
     json!({ "type": "array", "items": { "type": "number" }, "description": "[x, y]" })
+}
+
+fn point_described(description: &str) -> Value {
+    json!({ "type": "array", "items": { "type": "number" }, "description": description })
 }
 
 fn points(description: &str) -> Value {

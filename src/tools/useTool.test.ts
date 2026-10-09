@@ -252,3 +252,52 @@ test("a snapped point is placed as it is, ortho or not", () => {
   ]);
   expect(s.points[1]).toEqual([4, 3]);
 });
+
+test("geometry asks about the entity clicked, inside its blocks, with the click point", () => {
+  const inBlock: Picked = { top: 7, entity: 42, chain: [7], xref: null };
+  const s = run("geometry", [click([3, 4], 0, inBlock)]);
+  expect(s.pendingCommand).toEqual({ type: "measure_geometry", handle: 42, chain: [7], at: [3, 4] });
+  const nothing = run("geometry", [click([3, 4], 0, null)]);
+  expect(nothing.pendingCommand).toBeNull();
+  expect(nothing.hint).toBe("inquiry.clickGeometry");
+});
+
+test("divide waits for the number of parts, then divides", () => {
+  const asked = run("divide", [click([5, 0], 0, 9)]);
+  expect(asked.pendingCommand).toBeNull();
+  expect(asked.asking).toEqual({ kind: "divide", target: { handle: 9, chain: [] } });
+  expect(asked.hint).toBe("inquiry.askCount");
+  const done = toolReducer(asked, { type: "answer", value: 5 });
+  expect(done.pendingCommand).toEqual({ type: "divide_along", handle: 9, chain: [], count: 5 });
+  expect(done.asking).toBeNull();
+  // Nothing typed yet, or a bad number: still waiting.
+  expect(toolReducer(asked, { type: "answer", value: 0 }).asking).not.toBeNull();
+  expect(toolReducer(asked, { type: "escape" }).asking).toBeNull();
+  // A click on nothing lets go of the entity.
+  expect(toolReducer(asked, click([50, 50], 1000, null)).asking).toBeNull();
+});
+
+test("measure along waits for the step, given in drawing units", () => {
+  const asked = run("measureAlong", [click([5, 0], 0, 9)]);
+  expect(asked.hint).toBe("inquiry.askStep");
+  const done = toolReducer(asked, { type: "answer", value: 2.5 });
+  expect(done.pendingCommand).toEqual({ type: "measure_along", handle: 9, chain: [], step: 2.5 });
+});
+
+test("ID point names the point clicked and the snap that found it", () => {
+  const onEnd: ToolEvent = {
+    type: "click",
+    world: [1, 2],
+    screen: [10, 20],
+    time: 0,
+    picked: null,
+    info: null,
+    snapped: true,
+    snapKind: "end",
+  };
+  const snapped = run("idPoint", [onEnd]);
+  expect(snapped.pendingCommand).toEqual({ type: "id_point", p: [1, 2], kind: "end" });
+  const loose = run("idPoint", [click([1.25, 2], 0)]);
+  expect(loose.pendingCommand).toEqual({ type: "id_point", p: [1.25, 2], kind: null });
+  expect(initialToolState("idPoint").hint).toBe("inquiry.clickPoint");
+});

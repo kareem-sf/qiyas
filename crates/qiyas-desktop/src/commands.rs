@@ -253,6 +253,17 @@ pub async fn export_takeoff(path: String, state: State<'_, AppState>) -> Result<
     qiyas_boq::export_takeoff(Path::new(&path), &items, &totals, &title).map_err(|e| e.to_string())
 }
 
+/// Writes a table of extracted data (`Command::ExtractData`) to an Excel workbook at `path`, one
+/// sheet "Data".
+#[tauri::command]
+pub async fn export_table(
+    path: String,
+    columns: Vec<String>,
+    rows: Vec<Vec<String>>,
+) -> Result<(), String> {
+    qiyas_boq::export_table(Path::new(&path), &columns, &rows).map_err(|e| e.to_string())
+}
+
 /// Reads the BOQ in the Excel workbook at `path` and makes it the drawing's BOQ (an undo step);
 /// returns it.
 #[tauri::command]

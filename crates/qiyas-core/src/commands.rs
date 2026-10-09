@@ -7,11 +7,12 @@ use qiyas_geom::{object_to_world, Path};
 use qiyas_render::layer_shown_with;
 use serde::{Deserialize, Serialize};
 
+use crate::inquiry::{Field, Spacing};
 use crate::session::{effective_block_name, locate, variant_name, Located};
 use crate::takeoff::in_metres;
 use crate::{
-    AttachMode, Boq, Conflict, ConflictStatus, CoreError, Drafting, Kind, Measurement, PreparedPdf,
-    Schedule, Session, Source,
+    AttachMode, Boq, Conflict, ConflictStatus, CoreError, Drafting, EntityFilter, Kind,
+    Measurement, PreparedPdf, Schedule, Session, SnapKind, Source,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -163,6 +164,46 @@ pub enum Command {
         contrast: u8,
         fade: u8,
     },
+    /// The geometry of one entity as placed in the world (radius, diameter, centre and angles of
+    /// an arc, circle or ellipse; length, angle and deltas of a line; a polyline's segment nearest
+    /// `at`; a block reference's insertion, scale and rotation; a text's content, height and
+    /// style), in metres and degrees. `Outcome::Info`; not an undo step.
+    MeasureGeometry {
+        handle: u64,
+        #[serde(default)]
+        chain: Vec<u64>,
+        #[serde(default)]
+        at: Option<[f64; 2]>,
+    },
+    /// Divides the entity's path into `count` equal parts (2 to 1000) with point entities on
+    /// layer `QIYAS-POINT`, and counts them in the take-off: one undo step.
+    DivideAlong {
+        handle: u64,
+        #[serde(default)]
+        chain: Vec<u64>,
+        count: usize,
+    },
+    /// Places a point entity every `step` drawing units along the entity's path from its start,
+    /// on layer `QIYAS-POINT`, and counts them in the take-off: one undo step.
+    MeasureAlong {
+        handle: u64,
+        #[serde(default)]
+        chain: Vec<u64>,
+        step: f64,
+    },
+    /// Where the point `p` (drawing coordinates) is, in metres, and the snap `kind` that found it.
+    /// `Outcome::Info`; not an undo step.
+    IdPoint {
+        p: [f64; 2],
+        #[serde(default)]
+        kind: Option<SnapKind>,
+    },
+    /// One row of `fields` per entity `filter` finds (up to 5,000; `limit` says how many).
+    /// `Outcome::Table`; not an undo step.
+    ExtractData {
+        filter: EntityFilter,
+        fields: Vec<Field>,
+    },
 }
 
 /// The part of the session a command changes, kept whole in its undo step.
@@ -171,7 +212,7 @@ pub(crate) enum Part {
     Boq,
     /// The conflicts and the schedules.
     Conflicts,
-    /// The drawing itself.
+    /// The drawing itself, kept with the take-off (divide and measure along change both).
     Document,
 }
 
@@ -183,14 +224,19 @@ impl Command {
             Command::SetLayerHidden { .. }
             | Command::SetSheet { .. }
             | Command::SetArabicReversed { .. }
-            | Command::SetDrafting { .. } => None,
+            | Command::SetDrafting { .. }
+            | Command::MeasureGeometry { .. }
+            | Command::IdPoint { .. }
+            | Command::ExtractData { .. } => None,
             Command::SetBoq { .. } | Command::SetBoqTolerance { .. } => Some(Part::Boq),
             Command::SetConflicts { .. } | Command::ResolveConflict { .. } => Some(Part::Conflicts),
             Command::ImportPdf { .. }
             | Command::AttachPdfUnderlay { .. }
             | Command::Calibrate { .. }
             | Command::AttachImage { .. }
-            | Command::SetImageDisplay { .. } => Some(Part::Document),
+            | Command::SetImageDisplay { .. }
+            | Command::DivideAlong { .. }
+            | Command::MeasureAlong { .. } => Some(Part::Document),
             _ => Some(Part::Takeoff),
         }
     }
@@ -212,6 +258,17 @@ pub enum Outcome {
     },
     /// The command named a measurement or BOQ item that does not exist.
     Nothing,
+    /// Facts to show: a title (an entity type, or "Point") and label-value rows. Labels are keys
+    /// such as "radius" or "centre"; values are written out in metres and degrees.
+    Info {
+        title: String,
+        rows: Vec<(String, String)>,
+    },
+    /// A table: its column headings and its rows of text.
+    Table {
+        columns: Vec<String>,
+        rows: Vec<Vec<String>>,
+    },
 }
 
 impl Session {
@@ -427,6 +484,34 @@ impl Session {
                 };
                 self.apply_image_display(handle, display)?;
                 return Ok(Outcome::Changed);
+            }
+            Command::MeasureGeometry { handle, chain, at } => {
+                let (title, rows) = self.geometry_info(handle, &chain, at)?;
+                return Ok(Outcome::Info { title, rows });
+            }
+            Command::DivideAlong {
+                handle,
+                chain,
+                count,
+            } => self.place_along(handle, chain, Spacing::Count(count))?,
+            Command::MeasureAlong {
+                handle,
+                chain,
+                step,
+            } => self.place_along(handle, chain, Spacing::Step(step))?,
+            Command::IdPoint { p, kind } => {
+                if !p.iter().all(|c| c.is_finite()) {
+                    return Err(invalid("The point must have finite coordinates"));
+                }
+                let rows = self.point_info(p, kind);
+                return Ok(Outcome::Info {
+                    title: "Point".to_string(),
+                    rows,
+                });
+            }
+            Command::ExtractData { filter, fields } => {
+                let (columns, rows) = self.extract(&filter, &fields)?;
+                return Ok(Outcome::Table { columns, rows });
             }
         };
         measurement.source = source.name().to_string();
@@ -670,7 +755,7 @@ impl Session {
 
 /// Where a located block reference sits in the world: its insertion point (in its own object
 /// coordinates) placed by the chain. `None` for anything else.
-fn insert_point(located: &Located) -> Option<[f64; 2]> {
+pub(crate) fn insert_point(located: &Located) -> Option<[f64; 2]> {
     let EntityType::Insert(insert) = located.entity else {
         return None;
     };

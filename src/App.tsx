@@ -25,6 +25,7 @@ import {
   setDrafting,
   snap,
   exportConflicts,
+  exportTable,
   exportTakeoff,
   importBoq,
   openDrawing,
@@ -52,6 +53,8 @@ import {
   type Conflict,
   type Drafting,
   type DrawingInfo,
+  type EntityFilter,
+  type Field,
   type ImageDisplay,
   type Measurement,
   type Total,
@@ -72,6 +75,8 @@ import {
 } from "./shell/AttachImageDialog";
 import { AttachPdfDialog, CalibrateDialog, type AttachRequest } from "./shell/AttachPdfDialog";
 import { DraftingSettings } from "./shell/DraftingSettings";
+import { ExtractDialog } from "./shell/ExtractDialog";
+import { AlongPrompt, InfoCard, type Info } from "./shell/InfoCard";
 import { LayersPanel } from "./shell/LayersPanel";
 import { Ribbon, type Tool } from "./shell/Ribbon";
 import { SettingsDialog } from "./shell/SettingsDialog";
@@ -82,9 +87,11 @@ import { XrefManager } from "./shell/XrefManager";
 import { leaveDrawing, readChoice } from "./shell/unsaved";
 import {
   handlesBounds,
+  markSize,
   measurementBounds,
   measurementTargets,
   overlaySegments,
+  pointMarks,
 } from "./tools/overlay";
 import { shortcutFor, type DraftingToggle } from "./tools/shortcuts";
 import { useTool } from "./tools/useTool";
@@ -197,6 +204,9 @@ export default function App() {
   const [aboutOpen, setAboutOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [xrefsOpen, setXrefsOpen] = useState(false);
+  const [extractOpen, setExtractOpen] = useState(false);
+  /** What the last inquiry (geometry, ID point) found, shown until closed. */
+  const [infoCard, setInfoCard] = useState<Info | null>(null);
   const [error, setError] = useState<string | null>(null);
   /** A one-off status bar message, e.g. after an export; the next action clears it. */
   const [notice, setNotice] = useState<string | null>(null);
@@ -292,14 +302,21 @@ export default function App() {
     }
   }
 
-  /** Runs a take-off command; a new measurement becomes the selected row. */
+  /** Runs a take-off command; a new measurement becomes the selected row. An inquiry's answer
+   *  shows in the info card. */
   async function apply(cmd: Command) {
     let changed = false;
     await run(async () => {
       const outcome = await runCommand(cmd);
       if (outcome.type === "nothing") return;
+      if (outcome.type === "info") {
+        setInfoCard({ title: outcome.title, rows: outcome.rows });
+        return;
+      }
       changed = true;
       await refreshTakeoffAndBoq();
+      // Divide and measure along add points to the drawing itself.
+      if (cmd.type === "divide_along" || cmd.type === "measure_along") await redraw();
       if (outcome.type === "measured") setSelectedId(outcome.measurement.id);
     });
     if (changed) await autosave();
@@ -461,10 +478,14 @@ export default function App() {
 
   const assistant = useAssistant({
     lang,
-    // The drawing itself is unchanged: the take-off is drawn from `items`, so no new batch.
+    // The take-off is drawn from `items`; the batch is fetched again only when the drawing
+    // itself changed (divide_along, measure_along).
     onMutated: async (tool) => {
       if (tool === "compare_boq") setCompared(true);
-      await run(refreshTakeoffAndBoq);
+      await run(async () => {
+        await refreshTakeoffAndBoq();
+        await redraw();
+      });
       await autosave();
     },
     onUi: applyAiUi,
@@ -475,7 +496,10 @@ export default function App() {
   // the assistant's changes. The listener is set up once and calls the latest code through this.
   const onMcpChange = useRef<() => Promise<void>>(async () => {});
   onMcpChange.current = async () => {
-    await run(refreshTakeoffAndBoq);
+    await run(async () => {
+      await refreshTakeoffAndBoq();
+      await redraw();
+    });
     await autosave();
   };
   // An outside AI app showed another sheet, hid or showed layers, or asked for a zoom: follow it,
@@ -519,7 +543,10 @@ export default function App() {
       let undone = false;
       await run(async () => {
         undone = await aiUndo();
-        if (undone) await refreshTakeoffAndBoq();
+        if (undone) {
+          await refreshTakeoffAndBoq();
+          await redraw();
+        }
       });
       if (undone) {
         markUndone(card.id);
@@ -609,6 +636,7 @@ export default function App() {
       setAiHighlight([]);
       setConflictIds([]);
       setCompared(false);
+      setInfoCard(null);
       measure.escape();
       await refreshTakeoffAndBoq();
       await redraw(true);
@@ -693,6 +721,30 @@ export default function App() {
       });
       setNotice(t("export.done", { path }));
     });
+  }
+
+  /** Extract data: runs each filter on the sheet shown and gathers the rows. */
+  async function extractRows(filters: EntityFilter[], fields: Field[]): Promise<string[][]> {
+    const rows: string[][] = [];
+    for (const filter of filters) {
+      const outcome = await runCommand({ type: "extract_data", filter, fields });
+      if (outcome.type === "table") rows.push(...outcome.rows);
+    }
+    return rows;
+  }
+
+  /** Asks where to save the extracted table, next to the drawing by default, and writes it. */
+  async function exportExtract(columns: string[], rows: string[][]) {
+    if (!info) return;
+    const path = await save({
+      defaultPath: `${info.path.replace(/\.[^.\\/]*$/, "")}-data.xlsx`,
+      filters: [{ name: "Excel", extensions: ["xlsx"] }],
+    });
+    if (!path) return;
+    await exportTable(path, columns, rows).catch((e) => {
+      throw t("export.failed", { error: String(e) });
+    });
+    setNotice(t("extract.done", { path }));
   }
 
   /** Asks for an Excel BOQ and makes it the drawing's BOQ (an undo step), then shows it. */
@@ -884,6 +936,7 @@ export default function App() {
         e.preventDefault();
       } else if (action === "escape") {
         setPending(null);
+        setInfoCard(null);
         measure.escape();
         setSelectedId(null);
         setBoqCode(null);
@@ -1021,15 +1074,21 @@ export default function App() {
   }, [selected, boqLinked, conflictLinked, measure.highlighted, aiHighlight]);
 
   const selectedOverlay = useMemo(() => {
-    // A count's points are the counted places, not a line to draw.
-    const outlines = (selected ? [selected] : [...boqLinked, ...conflictLinked])
-      .filter((m) => m.kind !== "count" && m.points.length > 0)
-      .map((m) => overlaySegments(m.points, null, m.kind === "area" ? "area" : "distance"));
+    const rows = selected ? [selected] : [...boqLinked, ...conflictLinked];
+    // A count's points are the counted places: small crosses, not a line.
+    const size = markSize(batch?.bounds ?? null);
+    const outlines = rows
+      .filter((m) => m.points.length > 0)
+      .map((m) =>
+        m.kind === "count"
+          ? pointMarks(m.points, size)
+          : overlaySegments(m.points, null, m.kind === "area" ? "area" : "distance"),
+      );
     if (outlines.length === 0) return null;
     const all = new Float64Array(outlines.reduce((n, o) => n + o.length, 0));
     outlines.reduce((at, o) => (all.set(o, at), at + o.length), 0);
     return all;
-  }, [selected, boqLinked, conflictLinked]);
+  }, [selected, boqLinked, conflictLinked, batch]);
   const rubberBand = useMemo(
     () =>
       measure.points.length > 0 ? overlaySegments(measure.points, measure.cursor, tool) : null,
@@ -1114,6 +1173,7 @@ export default function App() {
                 }
               : undefined
           }
+          onExtract={info ? () => setExtractOpen(true) : undefined}
           arabicReversed={arabicReversed}
           onArabicReversed={info ? chooseArabicReversed : undefined}
         />
@@ -1220,6 +1280,14 @@ export default function App() {
           onClose={() => setCalibration(null)}
         />
       )}
+      {extractOpen && info && (
+        <ExtractDialog
+          layers={info.layers.map((l) => l.name)}
+          onRun={extractRows}
+          onExport={exportExtract}
+          onClose={() => setExtractOpen(false)}
+        />
+      )}
       {draftingOpen && drafting && (
         <DraftingSettings
           drafting={drafting}
@@ -1260,6 +1328,21 @@ export default function App() {
               grid={drafting?.grid ? drafting.grid_spacing : null}
               onMove={measure.onMove}
             />
+            {measure.asking && info && (
+              <AlongPrompt
+                key={measure.asking}
+                kind={measure.asking}
+                units={info.units}
+                onAnswer={(value) => {
+                  measure.answer(value);
+                  focusDrawing();
+                }}
+                onCancel={() => {
+                  measure.escape();
+                  focusDrawing();
+                }}
+              />
+            )}
             {imageChosen && (
               <ImageDisplayPanel
                 value={imageChosen.display}
@@ -1325,6 +1408,7 @@ export default function App() {
               {assistant.busy && <span className="spinner" aria-hidden="true" />}
             </button>
           </div>
+          {infoCard && <InfoCard info={infoCard} onClose={() => setInfoCard(null)} />}
           {/* All stay mounted, so a draft, a search or a running answer survives a tab switch. */}
           <div
             className="side-panel"

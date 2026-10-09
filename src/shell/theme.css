@@ -1481,3 +1481,120 @@ button.link {
   justify-content: flex-end;
   gap: 6px;
 }
+
+/* Inquiry: the info card at the top of the right panel, the divide / measure along prompt over
+   the drawing, and the Extract data dialog. */
+.info-card {
+  margin: 8px 8px 0;
+  padding: 8px 10px;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+}
+.info-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.info-card h2 {
+  margin: 0;
+  font-size: 13px;
+}
+.info-card header button {
+  padding: 0 6px;
+  line-height: 1.4;
+}
+.info-card dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 12px;
+  margin: 6px 0 0;
+}
+.info-card dl > div {
+  display: contents;
+}
+.info-card dt {
+  color: var(--muted);
+}
+.info-card dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  text-align: end;
+  overflow-wrap: anywhere;
+}
+.along-prompt {
+  position: absolute;
+  inset-block-start: 10px;
+  inset-inline-end: 10px;
+  width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgb(14 15 18 / 0.15);
+}
+.along-prompt label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--muted);
+}
+.along-prompt input {
+  color: var(--fg);
+}
+.along-prompt .buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.along-prompt .primary {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+.settings.extract {
+  width: min(900px, 92vw);
+}
+.extract-filters {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.extract-filters > div {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.extract-fields {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px 12px;
+}
+.extract-table {
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+}
+.extract-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+.extract-table th,
+.extract-table td {
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--rule);
+  text-align: start;
+  white-space: nowrap;
+}
+.extract-table th {
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+}

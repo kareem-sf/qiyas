@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 
 use qiyas_core::{
-    Command, ConflictStatus, CoreError, EntityFilter, Kind, Outcome, Session, Source,
+    Command, ConflictStatus, CoreError, EntityFilter, Field, Kind, Outcome, Session, Source,
 };
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
@@ -17,6 +17,9 @@ use crate::image::{height_for, normalized, render_png, MAX_SIDE};
 const MAX_OUTPUT: usize = 40_960;
 /// `find_entities` rows per page when the model gives no limit.
 const DEFAULT_LIMIT: usize = 100;
+/// `extract_data` rows per page when the model gives no limit, and the most it may ask for.
+const EXTRACT_LIMIT: usize = 200;
+const MAX_EXTRACT: usize = 5000;
 const DEFAULT_WIDTH: u32 = 800;
 const MIN_WIDTH: u32 = 16;
 /// Margin around the whole sheet in `view_image`, as a share of its size.
@@ -209,6 +212,51 @@ pub fn execute(
             }
         }
         "add_markup" => (add_markup(session, parse(input)?, source)?, 0),
+        "measure_geometry" => {
+            let GeometryInput { handle, chain, at } = parse(input)?;
+            let cmd = Command::MeasureGeometry { handle, chain, at };
+            (info(session.run_as(cmd, source)?)?, 0)
+        }
+        "divide_along" => {
+            let DivideInput {
+                handle,
+                chain,
+                count,
+            } = parse(input)?;
+            let cmd = Command::DivideAlong {
+                handle,
+                chain,
+                count,
+            };
+            (placed(session.run_as(cmd, source)?)?, 0)
+        }
+        "measure_along" => {
+            let AlongInput {
+                handle,
+                chain,
+                step,
+            } = parse(input)?;
+            let step = step / session.drawing.units.to_metres();
+            let cmd = Command::MeasureAlong {
+                handle,
+                chain,
+                step,
+            };
+            (placed(session.run_as(cmd, source)?)?, 0)
+        }
+        "id_point" => {
+            let PointInput { point } = parse(input)?;
+            let cmd = Command::IdPoint {
+                p: point,
+                kind: None,
+            };
+            (info(session.run_as(cmd, source)?)?, 0)
+        }
+        "extract_data" => {
+            let input: ExtractInput = parse(input)?;
+            let offset = input.offset.unwrap_or(0);
+            (extract_data(session, input, source)?, offset)
+        }
         "zoom_to" => (zoom_to(session, parse(input)?)?, 0),
         "view_image" => return view_image(session, parse(input)?),
         _ => return Err(ToolError::UnknownTool(name.to_string())),
@@ -379,6 +427,56 @@ struct MarkupInput {
 struct ZoomInput {
     handles: Option<Vec<u64>>,
     bounds: Option<[[f64; 2]; 2]>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GeometryInput {
+    handle: u64,
+    #[serde(default)]
+    chain: Vec<u64>,
+    at: Option<[f64; 2]>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DivideInput {
+    handle: u64,
+    #[serde(default)]
+    chain: Vec<u64>,
+    count: usize,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AlongInput {
+    handle: u64,
+    #[serde(default)]
+    chain: Vec<u64>,
+    /// Metres.
+    step: f64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PointInput {
+    point: [f64; 2],
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExtractInput {
+    sheet: Option<String>,
+    layer: Option<String>,
+    kind: Option<String>,
+    block_name: Option<String>,
+    text_contains: Option<String>,
+    within: Option<[[f64; 2]; 2]>,
+    fields: Vec<Field>,
+    #[serde(default)]
+    attributes: Vec<String>,
+    offset: Option<usize>,
+    limit: Option<usize>,
 }
 
 #[derive(Deserialize)]
@@ -660,6 +758,56 @@ fn add_markup(
     Ok(out)
 }
 
+/// One page of the data table; `total` counts every entity the filters find.
+fn extract_data(
+    session: &mut Session,
+    input: ExtractInput,
+    source: Source,
+) -> Result<Value, ToolError> {
+    if input
+        .fields
+        .iter()
+        .any(|f| matches!(f, Field::Attribute(_)))
+    {
+        return Err(bad("Give attribute tags in attributes, not in fields"));
+    }
+    let sheet = match input.sheet {
+        Some(name) => Some(sheet_block(session, Some(&name))?),
+        None => None,
+    };
+    let offset = input.offset.unwrap_or(0);
+    let filter = EntityFilter {
+        sheet,
+        layer: input.layer,
+        kind: input.kind,
+        block_name: input.block_name,
+        text_contains: input.text_contains,
+        within: input.within,
+        offset,
+        limit: input.limit.unwrap_or(EXTRACT_LIMIT).min(MAX_EXTRACT),
+    };
+    let total = session
+        .find_entities(&EntityFilter {
+            limit: 0,
+            ..filter.clone()
+        })
+        .total;
+    let mut fields = input.fields;
+    fields.extend(input.attributes.into_iter().map(Field::Attribute));
+    match session.run_as(Command::ExtractData { filter, fields }, source)? {
+        Outcome::Table { columns, rows } => {
+            let end = offset.saturating_add(rows.len());
+            Ok(json!({
+                "columns": columns,
+                "rows": rows,
+                "total": total,
+                "next_offset": (end < total && !rows.is_empty()).then_some(end),
+            }))
+        }
+        _ => Err(ToolError::Failed("No table was made".to_string())),
+    }
+}
+
 fn zoom_to(session: &Session, input: ZoomInput) -> Result<Value, ToolError> {
     let (bounds, handles) = match (input.handles, input.bounds) {
         (None, Some(bounds)) => (normalized(bounds), Vec::new()),
@@ -835,6 +983,20 @@ fn measured(outcome: Outcome) -> Result<Value, ToolError> {
         Outcome::Measured { measurement } => Ok(json!({ "measurement": measurement })),
         _ => Err(ToolError::Failed("Nothing was measured".to_string())),
     }
+}
+
+fn info(outcome: Outcome) -> Result<Value, ToolError> {
+    match outcome {
+        Outcome::Info { title, rows } => Ok(json!({ "title": title, "rows": rows })),
+        _ => Err(ToolError::Failed("Nothing was found".to_string())),
+    }
+}
+
+/// The count of points just placed, with a redraw for the window (the drawing changed).
+fn placed(outcome: Outcome) -> Result<Value, ToolError> {
+    let mut out = measured(outcome)?;
+    out["ui"] = json!({ "action": "redraw" });
+    Ok(out)
 }
 
 /// Runs an edit of the measurement `id` and returns it as it is now.

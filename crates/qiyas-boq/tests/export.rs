@@ -74,3 +74,27 @@ fn export_is_readable_by_calamine() {
     assert_eq!(totals.get((3, 0)), Some(&Data::String("count".into())));
     assert_eq!(totals.get((3, 3)), Some(&Data::Float(3.0)));
 }
+
+#[test]
+fn export_table_writes_one_data_sheet() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("doors.xlsx");
+    let columns = ["Handle", "Block", "MARK", "Length (m)"].map(String::from);
+    let long = "x".repeat(100);
+    let rows = vec![
+        ["42", "DOOR", "D1", ""].map(String::from).to_vec(),
+        vec!["43".into(), "DOOR".into(), long.clone(), String::new()],
+    ];
+    qiyas_boq::export_table(&path, &columns, &rows).unwrap();
+
+    let mut book: Xlsx<_> = open_workbook(&path).unwrap();
+    assert_eq!(book.sheet_names(), ["Data"]);
+    let sheet = book.worksheet_range("Data").unwrap();
+    let header: Vec<String> = (0..4)
+        .map(|c| sheet.get((0, c)).unwrap().to_string())
+        .collect();
+    assert_eq!(header, columns);
+    assert_eq!(sheet.get((1, 2)), Some(&Data::String("D1".into())));
+    assert_eq!(sheet.get((2, 2)), Some(&Data::String(long)));
+    assert_eq!(sheet.height(), 3);
+}

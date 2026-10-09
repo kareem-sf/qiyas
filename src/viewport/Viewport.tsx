@@ -21,7 +21,16 @@ import {
 } from "./camera";
 import { createRenderer, type Renderer, type Theme } from "./gl";
 
-export type Tool = "select" | "distance" | "area" | "count" | "zoomWindow";
+export type Tool =
+  | "select"
+  | "distance"
+  | "area"
+  | "count"
+  | "zoomWindow"
+  | "geometry"
+  | "divide"
+  | "measureAlong"
+  | "idPoint";
 
 export type ViewportHandle = {
   fitExtents(): void;

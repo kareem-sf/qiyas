@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import type { Measurement } from "../api";
 import { NO_CHAIN, Ranges, type Batch, type Range } from "../viewport/batch";
-import { measurementBounds, overlaySegments } from "./overlay";
+import { markSize, measurementBounds, overlaySegments, pointMarks } from "./overlay";
 
 test("distance overlay follows the points to the cursor", () => {
   const s = overlaySegments(
@@ -83,3 +83,15 @@ function rangesOf(list: Range[]): Ranges {
   });
   return new Ranges(new BigUint64Array(buf), new Uint32Array(buf));
 }
+
+test("a count's places are drawn as small crosses sized to the sheet", () => {
+  expect(Array.from(pointMarks([[2, 0]], 1))).toEqual([1.5, -0.5, 2.5, 0.5, 1.5, 0.5, 2.5, -0.5]);
+  expect(pointMarks([], 1)).toHaveLength(0);
+  expect(
+    markSize([
+      [0, 0],
+      [200, 50],
+    ]),
+  ).toBe(2);
+  expect(markSize(null)).toBe(1);
+});

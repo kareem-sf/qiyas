@@ -87,6 +87,34 @@ pub fn export_takeoff(
     Ok(())
 }
 
+/// Widest a column of `export_table` gets, in characters.
+const MAX_WIDTH: usize = 60;
+
+/// Writes a table (data extracted from the drawing) to the workbook at `path`: one sheet "Data",
+/// `columns` as a bold header row, then `rows` as text. Each column is as wide as its longest
+/// cell, up to 60 characters.
+pub fn export_table(path: &Path, columns: &[String], rows: &[Vec<String>]) -> Result<(), BoqError> {
+    let mut book = Workbook::new();
+    let bold = Format::new().set_bold();
+    let sheet = book.add_worksheet().set_name("Data")?;
+    sheet.write_row_with_format(0, 0, columns, &bold)?;
+    for (r, cells) in rows.iter().enumerate() {
+        let r = RowNum::try_from(r + 1).map_err(|_| BoqError::Xlsx("Too many rows".into()))?;
+        sheet.write_row(r, 0, cells)?;
+    }
+    for (c, heading) in columns.iter().enumerate() {
+        let widest = std::iter::once(heading)
+            .chain(rows.iter().filter_map(|r| r.get(c)))
+            .map(|s| s.chars().count())
+            .max()
+            .unwrap_or(0);
+        let col = u16::try_from(c).map_err(|_| BoqError::Xlsx("Too many columns".into()))?;
+        sheet.set_column_width(col, (widest + 1).clamp(4, MAX_WIDTH) as f64)?;
+    }
+    book.save(path)?;
+    Ok(())
+}
+
 /// Writes the totals header at `row` and one row per total below it.
 fn write_totals(
     sheet: &mut Worksheet,

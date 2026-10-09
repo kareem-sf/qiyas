@@ -702,7 +702,9 @@ impl Session {
             Part::Takeoff => Snapshot::Takeoff(self.takeoff.clone()),
             Part::Boq => Snapshot::Boq(self.boq.clone()),
             Part::Conflicts => Snapshot::Conflicts(self.conflicts.clone(), self.schedules.clone()),
-            Part::Document => Snapshot::Document(Box::new(self.drawing.doc.clone())),
+            Part::Document => {
+                Snapshot::Document(Box::new(self.drawing.doc.clone()), self.takeoff.clone())
+            }
         });
         // A command that changes the drawing (PDF import, underlays, calibration) bumps
         // `document_revision`, or the window keeps showing the old batch. Xrefs change outside
@@ -710,7 +712,7 @@ impl Session {
         let outcome = self.execute(cmd, source)?;
         if let Some(before) = before {
             if !matches!(outcome, Outcome::Nothing) {
-                if matches!(before, Snapshot::Document(_)) {
+                if matches!(before, Snapshot::Document(..)) {
                     self.drawing_changed();
                 }
                 self.history.record(before, source);
@@ -752,11 +754,12 @@ impl Session {
         f: impl FnOnce(&mut Self) -> Result<T, CoreError>,
     ) -> Result<T, CoreError> {
         let before = self.drawing.doc.clone();
+        let takeoff = self.takeoff.clone();
         match f(self) {
             Ok(done) => {
                 self.drawing_changed();
                 self.history
-                    .record(Snapshot::Document(Box::new(before)), source);
+                    .record(Snapshot::Document(Box::new(before), takeoff), source);
                 Ok(done)
             }
             Err(e) => {

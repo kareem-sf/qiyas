@@ -72,7 +72,7 @@ export type EntityInfo = {
  *  `chain` ends with the xref's reference and `xref` names it. */
 export type Picked = { top: number; entity: number; chain: number[]; xref: string | null };
 
-/** Filter for the session's `find_entities` query (no IPC command yet). Names match case-insensitively. */
+/** Filter for the session's `find_entities` query and `extract_data`. Names match case-insensitively. */
 export type EntityFilter = {
   /** Sheet block or layout name; the current sheet when null. */
   sheet?: string | null;
@@ -83,9 +83,24 @@ export type EntityFilter = {
   /** [[min_x, min_y], [max_x, max_y]]: entities with at least one point inside. */
   within?: [[number, number], [number, number]] | null;
   offset?: number;
-  /** Rows per page, at most 500; 100 when left out. */
+  /** Rows per page, at most 500 (5,000 for `extract_data`); 100 when left out. */
   limit?: number;
 };
+
+/** One column of `extract_data` (`qiyas_core::Field`): lengths, areas, X and Y in metres. */
+export type Field =
+  | "handle"
+  | "kind"
+  | "layer"
+  | "block_name"
+  | "text"
+  | "length"
+  | "area"
+  | "x"
+  | "y"
+  | "sheet"
+  | "xref"
+  | { attribute: string };
 
 /** One entity found. Length and area in drawing units; bounds in world coordinates. */
 export type EntityRow = {
@@ -464,7 +479,17 @@ export type Command =
       brightness: number;
       contrast: number;
       fade: number;
-    };
+    }
+  /** The entity's geometry as an `info` outcome; `at` picks a polyline's nearest segment. */
+  | { type: "measure_geometry"; handle: number; chain: number[]; at: [number, number] | null }
+  /** Points on layer QIYAS-POINT dividing the path into `count` parts (2 to 1000), counted. */
+  | { type: "divide_along"; handle: number; chain: number[]; count: number }
+  /** A point every `step` drawing units along the path from its start, counted. */
+  | { type: "measure_along"; handle: number; chain: number[]; step: number }
+  /** Where `p` is, in metres, and the snap that found it, as an `info` outcome. */
+  | { type: "id_point"; p: [number, number]; kind: SnapKind | null }
+  /** A `table` outcome: one row of `fields` per entity `filter` finds (up to 5,000). */
+  | { type: "extract_data"; filter: EntityFilter; fields: Field[] };
 
 export type Outcome =
   | { type: "measured"; measurement: Measurement }
@@ -472,7 +497,10 @@ export type Outcome =
   | { type: "changed" }
   /** Entities added to the drawing (PDF import or underlay). */
   | { type: "added"; handles: number[] }
-  | { type: "nothing" };
+  | { type: "nothing" }
+  /** Facts to show: rows of a label key ("radius", "centre"…) and its value written out. */
+  | { type: "info"; title: string; rows: [string, string][] }
+  | { type: "table"; columns: string[]; rows: string[][] };
 
 export const runCommand = (cmd: Command) => invoke<Outcome>("run_command", { cmd });
 
@@ -497,6 +525,10 @@ export const saveDrawingAs = (path: string) => invoke<void>("save_drawing_as", {
 
 /** Writes the take-off and its totals to an Excel workbook at `path`. */
 export const exportTakeoff = (path: string) => invoke<void>("export_takeoff", { path });
+
+/** Writes a table (from `extract_data`) to an Excel workbook at `path`: one sheet "Data". */
+export const exportTable = (path: string, columns: string[], rows: string[][]) =>
+  invoke<void>("export_table", { path, columns, rows });
 
 /** Reads the BOQ in the Excel workbook at `path` (English or Arabic headers) and makes it the
  *  drawing's BOQ, as an undo step. Rejects with "No BOQ header found. …" when no sheet has one. */

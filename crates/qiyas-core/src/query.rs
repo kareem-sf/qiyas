@@ -153,15 +153,15 @@ impl XrefAt<'_> {
 }
 
 /// An entity `find_entities` looks at: one on the sheet, or one at the top of a sheet's xref.
-struct Candidate<'a> {
-    entity: &'a EntityType,
+pub(crate) struct Candidate<'a> {
+    pub entity: &'a EntityType,
     /// The drawing it is in.
-    doc: &'a CadDocument,
-    layer: Cow<'a, str>,
+    pub doc: &'a CadDocument,
+    pub layer: Cow<'a, str>,
     /// Its drawing's model space to world (identity on the sheet).
-    xf: Xform,
-    chain: Vec<u64>,
-    xref: Option<&'a str>,
+    pub xf: Xform,
+    pub chain: Vec<u64>,
+    pub xref: Option<&'a str>,
 }
 
 impl Session {
@@ -187,12 +187,35 @@ impl Session {
     /// The entities of a sheet that pass `f`, in drawing order, one page at a time; then those at
     /// the top of each xref on the sheet (a block reference inside an xref is one row).
     pub fn find_entities(&self, f: &EntityFilter) -> Page<EntityRow> {
+        let xrefs = self.xref_docs();
+        let matches = self.matching(f, &xrefs);
+        let total = matches.len();
+        let limit = f.limit.min(MAX_LIMIT);
+        let rows: Vec<EntityRow> = matches
+            .into_iter()
+            .skip(f.offset)
+            .take(limit)
+            .map(|c| self.entity_row(&xrefs, c))
+            .collect();
+        let end = f.offset.saturating_add(rows.len());
+        Page {
+            next_offset: (end < total && !rows.is_empty()).then_some(end),
+            rows,
+            total,
+        }
+    }
+
+    /// Every entity `find_entities` would list for `f`, before paging.
+    pub(crate) fn matching<'a>(
+        &'a self,
+        f: &EntityFilter,
+        xrefs: &XrefDocs<'a>,
+    ) -> Vec<Candidate<'a>> {
         let layer = f.layer.as_deref().map(normalize_name);
         let block = f.block_name.as_deref().map(normalize_name);
         let needle = f.text_contains.as_deref().map(str::to_lowercase);
         let within = f.within.map(normalized_box);
         let sheet = self.sheet_block(f.sheet.as_deref());
-        let xrefs = self.xref_docs();
         let host = &self.drawing.doc;
         let mut candidates: Vec<Candidate> = self
             .drawing
@@ -218,7 +241,7 @@ impl Session {
                 });
             }
         }
-        let matches: Vec<Candidate> = candidates
+        candidates
             .into_iter()
             .filter(|c| {
                 layer
@@ -248,23 +271,9 @@ impl Session {
                 })
             })
             .filter(|c| {
-                within.is_none_or(|b| self.points_of(&xrefs, c).iter().any(|p| inside(*p, b)))
+                within.is_none_or(|b| self.points_of(xrefs, c).iter().any(|p| inside(*p, b)))
             })
-            .collect();
-        let total = matches.len();
-        let limit = f.limit.min(MAX_LIMIT);
-        let rows: Vec<EntityRow> = matches
-            .into_iter()
-            .skip(f.offset)
-            .take(limit)
-            .map(|c| self.entity_row(&xrefs, c))
-            .collect();
-        let end = f.offset.saturating_add(rows.len());
-        Page {
-            next_offset: (end < total && !rows.is_empty()).then_some(end),
-            rows,
-            total,
-        }
+            .collect()
     }
 
     /// Every Text, MText (formatting stripped) and insert attribute on a sheet, including those
@@ -430,7 +439,7 @@ impl Session {
 
     /// The entity's flattened points in world coordinates; for an entity that does not
     /// flatten (a dimension or table), the corners of its own bounding box.
-    fn points_of(&self, xrefs: &XrefDocs, c: &Candidate) -> Vec<[f64; 2]> {
+    pub(crate) fn points_of(&self, xrefs: &XrefDocs, c: &Candidate) -> Vec<[f64; 2]> {
         let paths = flatten_with(c.doc, xrefs, c.entity, &c.xf, BATCH_TOL).into_paths();
         let points: Vec<[f64; 2]> = paths.into_iter().flat_map(|p| p.points).collect();
         if !points.is_empty() {
@@ -449,7 +458,7 @@ impl Session {
 }
 
 /// The text an entity carries: a Text's value, an MText's plain text, an insert's attribute values.
-fn texts_of(e: &EntityType) -> Vec<String> {
+pub(crate) fn texts_of(e: &EntityType) -> Vec<String> {
     match e {
         EntityType::Text(t) => vec![t.value.clone()],
         EntityType::MText(t) => vec![plain_text(&t.value)],
@@ -594,7 +603,7 @@ fn inside(p: [f64; 2], [lo, hi]: [[f64; 2]; 2]) -> bool {
 }
 
 /// `[[min_x, min_y], [max_x, max_y]]` of `points`; all zeros when there are none.
-fn bounds(points: &[[f64; 2]]) -> [[f64; 2]; 2] {
+pub(crate) fn bounds(points: &[[f64; 2]]) -> [[f64; 2]; 2] {
     let Some(&first) = points.first() else {
         return [[0.0; 2]; 2];
     };

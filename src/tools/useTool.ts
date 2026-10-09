@@ -1,7 +1,7 @@
 /** The measure tools: which clicks become which take-off command. The rules live in a pure reducer;
  *  the hook does the async picking around it and hands each finished command to the app. */
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
-import type { Command, Drafting, EntityInfo, Picked, Snap } from "../api";
+import type { Command, Drafting, EntityInfo, Picked, Snap, SnapKind } from "../api";
 import type { Target } from "../viewport/batch";
 import type { Point } from "../viewport/camera";
 import { markerSegments } from "../viewport/snapMarker";
@@ -32,6 +32,9 @@ export type ToolState = {
    *  true when the last click swapped `whole`, so a double click can take that swap back. */
   selected: { picked: Picked; path: string[]; whole: boolean; toggled: boolean } | null;
   lastClick: { screen: Point; time: number } | null;
+  /** `divide` and `measureAlong`: the entity clicked, waiting for the number of parts or the
+   *  step to be typed. */
+  asking: { kind: "divide" | "measureAlong"; target: Target } | null;
 };
 
 export type ToolEvent =
@@ -46,12 +49,16 @@ export type ToolEvent =
       info: EntityInfo | null;
       /** `world` is an object snap's point: placed as it is, without ortho or polar. */
       snapped?: boolean;
+      /** The kind of that snap, for `idPoint`. */
+      snapKind?: SnapKind | null;
       /** Ortho and polar tracking for `distance` and `area`'s second and later points. */
       track?: Track;
     }
   | { type: "finish" }
   | { type: "escape" }
-  | { type: "tool"; tool: Tool };
+  | { type: "tool"; tool: Tool }
+  /** The number of parts (`divide`) or the step in drawing units (`measureAlong`) was typed. */
+  | { type: "answer"; value: number };
 
 const PROMPT: Record<Tool, string> = {
   select: "measure.clickEntity",
@@ -59,7 +66,19 @@ const PROMPT: Record<Tool, string> = {
   area: "measure.needThree",
   count: "measure.clickBlock",
   zoomWindow: "",
+  geometry: "inquiry.clickGeometry",
+  divide: "inquiry.clickDivide",
+  measureAlong: "inquiry.clickAlong",
+  idPoint: "inquiry.clickPoint",
 };
+
+/** The tools that act on the entity clicked. */
+const picksEntity = (tool: Tool) =>
+  tool === "select" ||
+  tool === "count" ||
+  tool === "geometry" ||
+  tool === "divide" ||
+  tool === "measureAlong";
 
 /** `select` starts quiet, so the status bar shows the file name. */
 export const initialToolState = (tool: Tool): ToolState => ({
@@ -70,6 +89,7 @@ export const initialToolState = (tool: Tool): ToolState => ({
   hintArgs: null,
   selected: null,
   lastClick: null,
+  asking: null,
 });
 
 const samePick = (a: Picked, b: Picked) =>
@@ -119,6 +139,16 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
       return initialToolState(s.tool);
     case "finish":
       return finish(s);
+    case "answer": {
+      const asking = s.asking;
+      if (!asking || !(event.value > 0) || !Number.isFinite(event.value)) return s;
+      const { handle, chain } = asking.target;
+      const pendingCommand: Command =
+        asking.kind === "divide"
+          ? { type: "divide_along", handle, chain, count: Math.round(event.value) }
+          : { type: "measure_along", handle, chain, step: event.value };
+      return { ...s, asking: null, hint: PROMPT[s.tool], pendingCommand };
+    }
     case "click": {
       const last = s.lastClick;
       const double =
@@ -162,6 +192,31 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
             hint: PROMPT.count,
             pendingCommand: { type: "count_block", block_name: event.info.block_name, layer: null },
           };
+        case "geometry": {
+          if (double) return clicked;
+          const picked = event.picked;
+          if (picked === null) return { ...clicked, hint: PROMPT.geometry };
+          const pendingCommand: Command = {
+            type: "measure_geometry",
+            handle: picked.entity,
+            chain: picked.chain,
+            at: event.world,
+          };
+          return { ...clicked, hint: PROMPT.geometry, pendingCommand };
+        }
+        case "divide":
+        case "measureAlong": {
+          const picked = event.picked;
+          if (picked === null) return { ...clicked, asking: null, hint: PROMPT[s.tool] };
+          const target = { handle: picked.entity, chain: picked.chain };
+          const hint = s.tool === "divide" ? "inquiry.askCount" : "inquiry.askStep";
+          return { ...clicked, asking: { kind: s.tool, target }, hint };
+        }
+        case "idPoint":
+          return {
+            ...clicked,
+            pendingCommand: { type: "id_point", p: event.world, kind: event.snapKind ?? null },
+          };
         default:
           return clicked;
       }
@@ -181,6 +236,8 @@ export type ToolApi = {
 
 /** The tools that place points, and so snap and track. */
 const placesPoints = (tool: Tool) => tool === "distance" || tool === "area";
+/** The tools that snap: those that place points, and `idPoint`. */
+const snaps = (tool: Tool) => placesPoints(tool) || tool === "idPoint";
 
 type SnapAsk = { p: Point; tol: number; from: Point | null; wpp: number };
 
@@ -202,7 +259,7 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
       () => setHover(null),
     ),
   );
-  const snapping = placesPoints(tool) && !!drafting?.osnap;
+  const snapping = snaps(tool) && !!drafting?.osnap;
   const track: Track = drafting
     ? { ortho: drafting.ortho, polar: drafting.polar, polarStepDeg: drafting.polar_step_deg }
     : NO_TRACK;
@@ -233,7 +290,7 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
 
   async function onClick(world: Point, screen: Point, worldPerPixel: number) {
     const time = performance.now();
-    if (placesPoints(tool)) {
+    if (snaps(tool)) {
       let found: Snap | null = null;
       try {
         if (snapping) found = await api.snap(world[0], world[1], SNAP_PX * worldPerPixel, prev);
@@ -242,13 +299,23 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
         return;
       }
       const at = found ? found.point : onGrid(world);
-      dispatch({ type: "click", world: at, screen, time, picked: null, info: null, snapped: !!found, track });
+      dispatch({
+        type: "click",
+        world: at,
+        screen,
+        time,
+        picked: null,
+        info: null,
+        snapped: !!found,
+        snapKind: found?.kind ?? null,
+        track,
+      });
       return;
     }
     let picked: Picked | null = null;
     let info: EntityInfo | null = null;
     try {
-      if (tool === "select" || tool === "count") {
+      if (picksEntity(tool)) {
         picked = await api.pick(world[0], world[1], PICK_PX * worldPerPixel);
       }
       if (tool === "count" && picked !== null) info = await api.entityInfo(picked.top);
@@ -286,8 +353,13 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
     onMove,
     hint: state.hint,
     hintArgs: state.hintArgs,
-    /** What `select` would measure now, to draw highlighted. */
-    highlighted: selectedTarget(state.selected),
+    /** What `select` would measure now, or what `divide` and `measureAlong` will place points
+     *  along, to draw highlighted. */
+    highlighted: selectedTarget(state.selected) ?? state.asking?.target ?? null,
+    /** `divide` or `measureAlong` waits for its number: which one. */
+    asking: state.asking?.kind ?? null,
+    /** Hands the typed number of parts or step (drawing units) to `divide` or `measureAlong`. */
+    answer: (value: number) => dispatch({ type: "answer", value }),
     onClick,
     finish: () => dispatch({ type: "finish" }),
     escape: () => dispatch({ type: "escape" }),

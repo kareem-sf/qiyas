@@ -17,7 +17,7 @@ qiyas/
                     (conflicts); the BOQ, schedule and conflict types live in qiyas-core
     qiyas-boq       Excel in and out (calamine to read, rust_xlsxwriter to write)
     qiyas-pdf       PDF import as vectors and text, PDF underlay pages, PDF plot (later phase)
-    qiyas-ai        the 27 AI tools over the command bus, the agent loop, the Claude and
+    qiyas-ai        the 32 AI tools over the command bus, the agent loop, the Claude and
                     OpenAI-compatible clients, the MCP server
     qiyas-mcp       the stdio bridge Claude Desktop and Claude Code start (bundled beside the app)
     qiyas-desktop   the Tauri app: IPC, file dialogs, settings, keychain, assistant, MCP switch
@@ -84,6 +84,18 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
   window gets a picture per zoom (64 to 2048 px) through the same `underlay_image` IPC as PDFs.
 - Picking an image (Select tool, click its frame) shows brightness, contrast and fade sliders
   (`set_image_display`, one undo step per release).
+
+## Inquiry
+
+- Measure tab: Geometry (click an entity: radius, diameter, centre, angles, lengths, block and text
+  facts in an Info card at the top of the right panel), Divide (click, then the number of parts),
+  Measure along (click, then the step in metres), ID point (snapped coordinates in metres), and
+  Extract data (filter by layers, type, block, text; pick fields and attribute tags; copy as TSV
+  or export one "Data" sheet to Excel).
+- Divide and measure along place point entities on layer `QIYAS-POINT` by true arc length and
+  count them in the take-off; points and count are one undo step (a drawing change: Save asks).
+- The same five are AI tools: `measure_geometry`, `divide_along`, `measure_along` (step in
+  metres), `id_point`, `extract_data` (paged under 40 KB).
 
 ## AI assistant and settings
 

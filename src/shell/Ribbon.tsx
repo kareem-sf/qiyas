@@ -24,6 +24,8 @@ type Props = {
   onAttachImage?(): void;
   /** Starts calibrating a PDF underlay or image: two points, then their real distance. */
   onCalibrate?(): void;
+  /** Opens the Extract data dialog. */
+  onExtract?(): void;
   onUndo?(): void;
   onRedo?(): void;
   /** The drawing holds its Arabic text backwards; the checkbox is disabled without a handler. */
@@ -101,7 +103,12 @@ export function Ribbon(props: Props) {
           action("undo", props.onUndo),
           action("redo", props.onRedo),
         ]}
-        {tab === "measure" && (["select", "distance", "area", "count"] as Tool[]).map(tool)}
+        {tab === "measure" && [
+          ...(["select", "distance", "area", "count"] as Tool[]).map(tool),
+          <span key="sep" className="sep" />,
+          ...(["geometry", "divide", "measureAlong", "idPoint"] as Tool[]).map(tool),
+          action("extract", props.onExtract),
+        ]}
         {tab === "view" && [
           action("zoomExtents", props.onZoomExtents),
           tool("zoomWindow"),

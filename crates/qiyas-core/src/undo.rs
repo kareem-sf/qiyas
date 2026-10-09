@@ -17,8 +17,9 @@ pub(crate) enum Snapshot {
     Takeoff(Takeoff),
     Boq(Option<Boq>),
     Conflicts(Vec<Conflict>, Vec<Schedule>),
-    /// The drawing (PDF import, underlays, calibration).
-    Document(Box<CadDocument>),
+    /// The drawing (PDF import, underlays, calibration), with the take-off: dividing a path adds
+    /// points to the drawing and their count to the take-off in one step.
+    Document(Box<CadDocument>, Takeoff),
 }
 
 /// The parts of the session undo and redo put back.
@@ -42,9 +43,12 @@ impl Snapshot {
                 std::mem::replace(parts.conflicts, c),
                 std::mem::replace(parts.schedules, s),
             ),
-            Snapshot::Document(d) => {
+            Snapshot::Document(d, t) => {
                 *parts.doc_changed = true;
-                Snapshot::Document(Box::new(std::mem::replace(parts.doc, *d)))
+                Snapshot::Document(
+                    Box::new(std::mem::replace(parts.doc, *d)),
+                    std::mem::replace(parts.takeoff, t),
+                )
             }
         }
     }

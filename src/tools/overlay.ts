@@ -58,3 +58,21 @@ function around(points: Point[], entities: Target[], batch: Batch | null): Bound
   }
   return min[0] <= max[0] ? [min, max] : null;
 }
+
+/** A small cross `size` drawing units wide at each point, as segments `x0 y0 x1 y1`: where a
+ *  count's places are (points are not drawn otherwise). */
+export function pointMarks(points: Point[], size: number): Float64Array {
+  const h = size / 2;
+  const out = new Float64Array(8 * points.length);
+  points.forEach(([x, y], i) =>
+    out.set([x - h, y - h, x + h, y + h, x - h, y + h, x + h, y - h], 8 * i),
+  );
+  return out;
+}
+
+/** How big `pointMarks` crosses are on a sheet of `bounds`: a hundredth of its larger side. */
+export function markSize(bounds: Bounds | null): number {
+  if (!bounds) return 1;
+  const side = Math.max(bounds[1][0] - bounds[0][0], bounds[1][1] - bounds[0][1]);
+  return side > 0 && Number.isFinite(side) ? side / 100 : 1;
+}

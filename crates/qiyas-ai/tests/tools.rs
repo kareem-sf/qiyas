@@ -98,6 +98,11 @@ fn catalogue_schemas_are_strict_objects() {
             "list_conflicts",
             "resolve_conflict",
             "add_markup",
+            "measure_geometry",
+            "divide_along",
+            "measure_along",
+            "id_point",
+            "extract_data",
             "zoom_to",
             "view_image",
         ]
@@ -198,6 +203,124 @@ fn execute_find_entities_truncates_at_40kb() {
         "{}",
         next["rows"][0]
     );
+}
+
+#[test]
+fn extract_data_is_paged_under_40kb() {
+    let mut doc = CadDocument::new();
+    doc.header.insertion_units = 6;
+    for i in 0..3000 {
+        let y = i as f64;
+        let line = Line::from_coords(0.0, y, 0.0, 10.0, y, 0.0);
+        doc.add_entity(EntityType::Line(line)).unwrap();
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lines.dxf");
+    DxfWriter::new(&doc).write_to_file(&path).unwrap();
+    let mut session = Session::open(&path).unwrap();
+    let fields = json!(["handle", "kind", "layer", "length", "x", "y", "sheet"]);
+
+    let out = run(
+        &mut session,
+        "extract_data",
+        json!({ "fields": fields, "limit": 5000 }),
+    )
+    .unwrap();
+    assert_eq!(out["truncated"], true);
+    assert_eq!(out["total"], 3000);
+    assert_eq!(
+        out["columns"],
+        json!([
+            "Handle",
+            "Kind",
+            "Layer",
+            "Length (m)",
+            "X (m)",
+            "Y (m)",
+            "Sheet"
+        ])
+    );
+    let rows = out["rows"].as_array().unwrap().len();
+    assert!(rows > 0 && rows < 3000, "{rows}");
+    assert_eq!(out["next_offset"], rows);
+    assert!(serde_json::to_vec(&out).unwrap().len() <= 40_960);
+    assert_eq!(out["rows"][0][3], "10.000");
+
+    let next = run(
+        &mut session,
+        "extract_data",
+        json!({ "fields": ["handle"], "limit": 2, "offset": rows }),
+    )
+    .unwrap();
+    assert_eq!(next["rows"][0][0], handles_at(&session, rows).to_string());
+    assert_eq!(next["next_offset"], rows + 2);
+    assert!(next.get("truncated").is_none());
+    assert!(session.takeoff.items.is_empty());
+}
+
+#[test]
+fn inquiry_tools_measure_divide_and_extract() {
+    let (_dir, mut session) = sample();
+    let line = handles_of(&session, "Line")[0];
+    let out = run(&mut session, "measure_geometry", json!({ "handle": line })).unwrap();
+    assert_eq!(out["title"], "Line");
+    assert!(out["rows"]
+        .as_array()
+        .unwrap()
+        .contains(&json!(["length", "10.000 m"])));
+
+    let out = run(&mut session, "id_point", json!({ "point": [2.5, 1] })).unwrap();
+    assert_eq!(out["rows"], json!([["x", "2.500 m"], ["y", "1.000 m"]]));
+
+    let out = run(
+        &mut session,
+        "divide_along",
+        json!({ "handle": line, "count": 4 }),
+    )
+    .unwrap();
+    assert_eq!(out["measurement"]["value"], 3.0);
+    assert_eq!(out["measurement"]["source"], "ai");
+    assert_eq!(out["ui"]["action"], "redraw");
+    assert!(session.undo_if(Source::Ai));
+    assert!(session.takeoff.items.is_empty());
+
+    // The step is in metres: every 2.5 m along the 10 m line.
+    let out = run(
+        &mut session,
+        "measure_along",
+        json!({ "handle": line, "step": 2.5 }),
+    )
+    .unwrap();
+    assert_eq!(
+        out["measurement"]["points"],
+        json!([[2.5, 0.0], [5.0, 0.0], [7.5, 0.0]])
+    );
+
+    let out = run(
+        &mut session,
+        "extract_data",
+        json!({ "block_name": "DOOR", "fields": ["block_name", "x"], "attributes": ["MARK"] }),
+    )
+    .unwrap();
+    assert_eq!(out["columns"], json!(["Block", "X (m)", "MARK"]));
+    assert_eq!(out["total"], 3);
+    assert_eq!(out["rows"][0], json!(["DOOR", "1.000", ""]));
+    assert!(out["next_offset"].is_null());
+
+    let err = run(
+        &mut session,
+        "extract_data",
+        json!({ "fields": [{ "attribute": "MARK" }] }),
+    )
+    .unwrap_err();
+    assert!(matches!(err, ToolError::BadInput(_)));
+    let err = run(
+        &mut session,
+        "divide_along",
+        json!({ "handle": line, "count": 1 }),
+    )
+    .unwrap_err();
+    assert!(matches!(err, ToolError::BadInput(_)));
 }
 
 /// The handle of the `offset`-th entity of the current sheet.
