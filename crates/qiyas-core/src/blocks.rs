@@ -261,7 +261,12 @@ pub(crate) struct Importer<'a> {
     blocks: HashMap<String, String>,
     /// Images and PDF underlays left out (their files are not copied along).
     skipped: usize,
+    /// How many blocks deep the copy is now (see `MAX_IMPORT_DEPTH`).
+    depth: usize,
 }
+
+/// Most blocks nested inside one another that an import copies, as flatten draws them.
+const MAX_IMPORT_DEPTH: usize = 32;
 
 impl<'a> Importer<'a> {
     pub(crate) fn new(src: &'a CadDocument, dst: &'a mut CadDocument) -> Self {
@@ -270,6 +275,7 @@ impl<'a> Importer<'a> {
             dst,
             blocks: HashMap::new(),
             skipped: 0,
+            depth: 0,
         }
     }
 
@@ -415,8 +421,16 @@ impl<'a> Importer<'a> {
             source.name.clone()
         };
         self.blocks.insert(name.to_uppercase(), fresh.clone());
+        if self.depth >= MAX_IMPORT_DEPTH {
+            return Err(invalid(format!(
+                "Blocks nest more than {MAX_IMPORT_DEPTH} deep there: they can't be copied"
+            )));
+        }
+        self.depth += 1;
         let handle = self.new_record(&fresh, source)?;
-        self.fill(&source.name, handle, Vector3::ZERO)?;
+        let filled = self.fill(&source.name, handle, Vector3::ZERO);
+        self.depth -= 1;
+        filled?;
         Ok(fresh)
     }
 

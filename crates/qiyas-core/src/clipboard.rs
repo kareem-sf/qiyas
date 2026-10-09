@@ -14,7 +14,7 @@ use opencadcodec::{CadDocument, DxfReader, DxfReaderConfiguration, DxfWriter, En
 use qiyas_geom::{flatten_with, is_xref_block, Xform};
 
 use crate::blocks::Importer;
-use crate::modify::{place, place_keeping_blocks, Placing};
+use crate::modify::{place, place_keeping_blocks, Placing, MAX_NEW};
 use crate::session::BATCH_TOL;
 use crate::{CoreError, Session, Target};
 
@@ -22,6 +22,10 @@ use crate::{CoreError, Session, Target};
 pub const CLIPBOARD_MARK: &str = "999\nQIYAS CLIPBOARD 1\n";
 
 const MODEL: &str = "*Model_Space";
+/// Longest clipboard drawing pasted, in bytes.
+const MAX_CLIPBOARD_DXF: usize = 32 << 20;
+/// Longest plain text pasted as a text, in bytes.
+const MAX_CLIPBOARD_TEXT: usize = 64 << 10;
 
 fn invalid(why: impl Into<String>) -> CoreError {
     CoreError::InvalidCommand(why.into())
@@ -135,8 +139,20 @@ impl Session {
         }
         let text = text.unwrap_or_default();
         let Some(dxf) = text.strip_prefix(CLIPBOARD_MARK) else {
+            if text.len() > MAX_CLIPBOARD_TEXT {
+                return Err(invalid(format!(
+                    "The clipboard text is longer than {} KB: paste less at a time",
+                    MAX_CLIPBOARD_TEXT >> 10
+                )));
+            }
             return self.paste_text(at, text, height);
         };
+        if dxf.len() > MAX_CLIPBOARD_DXF {
+            return Err(invalid(format!(
+                "The clipboard drawing is larger than {} MB: copy less at a time",
+                MAX_CLIPBOARD_DXF >> 20
+            )));
+        }
         let config = DxfReaderConfiguration {
             failsafe: true,
             ..Default::default()
@@ -145,8 +161,14 @@ impl Session {
             .and_then(|r| r.with_configuration(config).read_with_stats())
             .map_err(|e| invalid(format!("The clipboard could not be read: {e}")))?;
         let src = read.document;
-        if src.entities_in_block(MODEL).next().is_none() {
+        let count = src.entities_in_block(MODEL).count();
+        if count == 0 {
             return Err(invalid("The clipboard holds no entities"));
+        }
+        if count > MAX_NEW {
+            return Err(invalid(format!(
+                "The clipboard holds more than {MAX_NEW} entities: copy fewer at a time"
+            )));
         }
         if as_block {
             let name = (1u32..)

@@ -25,7 +25,7 @@ use crate::takeoff::in_metres;
 use crate::{Command, CoreError, Kind, Measurement, Outcome, Session, Target};
 
 /// Most entities one command may add.
-const MAX_NEW: usize = 100_000;
+pub(crate) const MAX_NEW: usize = 100_000;
 
 /// What `Command::Modify` does, to the entities `targets` (as picked, see `Target`). Points are
 /// in drawing coordinates, angles in degrees counter-clockwise.

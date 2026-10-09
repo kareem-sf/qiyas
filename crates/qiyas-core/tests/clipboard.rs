@@ -269,3 +269,111 @@ fn an_xref_reference_stays_out_of_the_clipboard() {
         }
     }
 }
+
+/// A drawing whose blocks D0, D1, ... D{depth - 1} each hold a reference to the next (the last
+/// a line), with a reference to D0 in model space.
+fn deep_doc(depth: usize) -> CadDocument {
+    use opencadcodec::entities::Insert;
+    use opencadcodec::{BlockRecord, Vector3};
+    let mut doc = plain_doc();
+    for i in 0..depth {
+        let mut block = BlockRecord::new(format!("D{i}"));
+        block.handle = doc.allocate_handle();
+        let owner = block.handle;
+        doc.block_records.add(block).unwrap();
+        let mut e = if i + 1 < depth {
+            EntityType::Insert(Insert::new(format!("D{}", i + 1), Vector3::ZERO))
+        } else {
+            EntityType::Line(Line::from_coords(0.0, 0.0, 0.0, 1.0, 0.0, 0.0))
+        };
+        e.common_mut().owner_handle = owner;
+        doc.add_entity(e).unwrap();
+    }
+    doc.add_entity(EntityType::Insert(Insert::new("D0", Vector3::ZERO)))
+        .unwrap();
+    doc
+}
+
+#[test]
+fn blocks_nested_too_deep_and_oversized_pastes_are_refused_and_nothing_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = open(&plain_doc(), dir.path(), "target.dxf");
+    let before = (handles(&s), s.drawing.doc.block_records.len());
+    let refused = |s: &mut Session, cmd: Command| {
+        let why = match s.run(cmd) {
+            Err(qiyas_core::CoreError::InvalidCommand(why)) => why,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!((handles(s), s.drawing.doc.block_records.len()), before);
+        why
+    };
+    // Design Center: a block 40 deep from another drawing.
+    let deep = write_drawing(&deep_doc(40), &dir.path().join("deep.dxf"));
+    let why = refused(
+        &mut s,
+        Command::InsertBlock {
+            name: "D0".into(),
+            at: [0.0, 0.0],
+            scale: 1.0,
+            rotation: 0.0,
+            attribute_values: Default::default(),
+            from_path: Some(deep.display().to_string()),
+        },
+    );
+    assert!(why.contains("32 deep"), "{why}");
+    // Copying it is refused the same way; a clipboard drawing holding it, pasted, too.
+    let mut other = Session::open(&deep).unwrap();
+    let top: Vec<Target> = other
+        .drawing
+        .doc
+        .entities_in_block(MODEL)
+        .filter(|e| matches!(e, EntityType::Insert(_)))
+        .map(|e| t(e.common().handle.value()))
+        .collect();
+    let copying = other.run(Command::CopyToClipboard {
+        targets: top,
+        base: None,
+    });
+    assert!(copying.is_err(), "{copying:?}");
+    let bytes = opencadcodec::DxfWriter::new(&deep_doc(40))
+        .write_to_vec()
+        .unwrap();
+    let text = format!("{CLIPBOARD_MARK}{}", String::from_utf8_lossy(&bytes));
+    let paste = |text: String| Command::PasteFromClipboard {
+        at: [0.0, 0.0],
+        text: Some(text),
+        as_block: false,
+        height: None,
+    };
+    let why = refused(&mut s, paste(text));
+    assert!(why.contains("32 deep"), "{why}");
+    // 32 deep is fine.
+    let ok = write_drawing(&deep_doc(32), &dir.path().join("ok.dxf"));
+    let mut fine = Session::open(&ok).unwrap();
+    let top: Vec<Target> = fine
+        .drawing
+        .doc
+        .entities_in_block(MODEL)
+        .map(|e| t(e.common().handle.value()))
+        .collect();
+    let text = copy(&mut fine, top, Some([0.0, 0.0]));
+    assert!(!paste_ok(&mut s, text).is_empty());
+    let before = (handles(&s), s.drawing.doc.block_records.len());
+    let refused = |s: &mut Session, cmd: Command| {
+        let why = match s.run(cmd) {
+            Err(qiyas_core::CoreError::InvalidCommand(why)) => why,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!((handles(s), s.drawing.doc.block_records.len()), before);
+        why
+    };
+    // Over 32 MB of clipboard drawing, over 64 KB of plain text.
+    let huge = format!("{CLIPBOARD_MARK}{}", " ".repeat(33 << 20));
+    assert!(refused(&mut s, paste(huge)).contains("32 MB"));
+    let long = "x".repeat(65 << 10);
+    assert!(refused(&mut s, paste(long)).contains("64 KB"));
+}
+
+fn paste_ok(s: &mut Session, text: String) -> Vec<u64> {
+    paste(s, [0.0, 0.0], &text, false)
+}
