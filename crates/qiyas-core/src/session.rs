@@ -151,6 +151,9 @@ pub struct Picked {
     /// Name of the xref the entity belongs to (the outermost, for a nested xref).
     #[serde(default)]
     pub xref: Option<String>,
+    /// The kind of the entity at the top (`top`), e.g. "Line", "Insert", "Dimension".
+    #[serde(default)]
+    pub kind: Option<String>,
 }
 
 /// What the user sees about one picked entity. Length and area are in drawing units, in world
@@ -691,6 +694,7 @@ impl Session {
                 entity: range.entity,
                 xref: xref_of_chain(&self.drawing.doc, &chain),
                 chain,
+                kind: self.kind_of(range.top),
             })
         })
     }
@@ -747,9 +751,18 @@ impl Session {
                     entity: top,
                     chain: Vec::new(),
                     xref: None,
+                    kind: self.kind_of(top),
                 })
                 .collect()
         })
+    }
+
+    /// The kind of the drawing's entity `handle` ("Line", "Insert"…).
+    fn kind_of(&self, handle: u64) -> Option<String> {
+        self.drawing
+            .doc
+            .get_entity(Handle::new(handle))
+            .map(variant_name)
     }
 
     /// Up to `max_entities` drawn entities with a segment within `tol` of `p`, nearest first (by
@@ -932,8 +945,13 @@ impl Session {
         let before = match cmd.changes() {
             None => return self.execute(cmd, source),
             Some(Part::Document { tables, takeoff }) => {
-                return self
-                    .record_document_change(source, tables, takeoff, |s| s.execute(cmd, source))
+                let (more_tables, more_takeoff) = self.document_extras(&cmd);
+                return self.record_document_change(
+                    source,
+                    tables || more_tables,
+                    takeoff || more_takeoff,
+                    |s| s.execute(cmd, source),
+                );
             }
             Some(Part::Takeoff) => Step::Takeoff(self.takeoff.clone()),
             Some(Part::Boq) => Step::Boq(self.boq.clone()),

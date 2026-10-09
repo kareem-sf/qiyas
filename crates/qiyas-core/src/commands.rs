@@ -1,6 +1,7 @@
 //! The command bus: every change to the take-off, the BOQ, the conflicts or the drawing goes
 //! through `Session::run` (the user) or `Session::run_as` (the AI, or an outside AI through MCP).
 
+use opencadcodec::objects::ObjectType;
 use opencadcodec::tables::normalize_name;
 use opencadcodec::{EntityType, Handle};
 use qiyas_geom::{object_to_world, Path};
@@ -320,6 +321,12 @@ pub enum Outcome {
     /// Entities added to the drawing, by handle.
     Added {
         handles: Vec<u64>,
+    },
+    /// An explode's parts, by handle, and how many entities picked had no parts and were left
+    /// as they are.
+    Exploded {
+        handles: Vec<u64>,
+        left_alone: usize,
     },
     /// The command named a measurement or BOQ item that does not exist.
     Nothing,
@@ -843,10 +850,31 @@ impl Session {
 
     /// Removes the entities `targets` from the sheet on screen, once every one is found at its
     /// top.
+    /// Images and PDF underlays leave their definitions' links; take-off rows measuring a
+    /// deleted entity keep their value without the link.
     fn delete_entities(&mut self, targets: &[Target]) -> Result<(), CoreError> {
-        for h in self.sheet_targets(targets)? {
+        let handles = self.sheet_targets(targets)?;
+        for &h in &handles {
+            let doc = &mut self.drawing.doc;
+            match doc.get_entity(h) {
+                Some(EntityType::RasterImage(image)) => {
+                    if let Some(reactor) = image.definition_reactor_handle {
+                        doc.objects.remove(&reactor);
+                    }
+                }
+                Some(EntityType::Underlay(underlay)) => {
+                    let definition = underlay.definition_handle;
+                    if let Some(ObjectType::UnderlayDefinition(def)) =
+                        doc.objects.get_mut(&definition)
+                    {
+                        def.reactors.retain(|r| *r != h);
+                    }
+                }
+                _ => {}
+            }
             self.drawing.doc.remove_entity_arc(h);
         }
+        self.follow_takeoff(&[], &handles);
         Ok(())
     }
 

@@ -17,8 +17,12 @@ use opencadcodec::{Circle, EntityType, Handle, Vector3};
 use qiyas_geom::{flatten, is_xref_block, Xform};
 use serde::{Deserialize, Serialize};
 
-use crate::session::{variant_name, BATCH_TOL};
-use crate::{CoreError, Outcome, Session, Target};
+use std::collections::HashSet;
+
+use crate::commands::insert_point;
+use crate::session::{locate, variant_name, BATCH_TOL};
+use crate::takeoff::in_metres;
+use crate::{Command, CoreError, Kind, Measurement, Outcome, Session, Target};
 
 /// Most entities one command may add.
 const MAX_NEW: usize = 100_000;
@@ -121,10 +125,12 @@ impl ModifySpec {
 }
 
 /// A transform of the plan and whether it mirrors (then the mirror's line angle, for texts).
+/// `shift` is set for a plain translation: dimensions and tables take only those.
 #[derive(Clone, Copy)]
 struct Placing {
     transform: Transform,
     mirror_line: Option<f64>,
+    shift: Option<[f64; 2]>,
 }
 
 impl Placing {
@@ -132,6 +138,15 @@ impl Placing {
         Placing {
             transform,
             mirror_line: None,
+            shift: None,
+        }
+    }
+
+    fn shift(d: [f64; 2]) -> Placing {
+        Placing {
+            transform: translation(d),
+            mirror_line: None,
+            shift: Some(d),
         }
     }
 }
@@ -165,14 +180,15 @@ fn finite(values: &[f64]) -> Result<(), CoreError> {
     }
 }
 
-/// Whether `e` can be moved, turned, scaled or mirrored (and with `copying`, copied); why not.
-fn check_placeable(e: &EntityType, copying: bool) -> Result<(), CoreError> {
+/// Whether `e` can be placed (and with `copying`, copied); why not. Dimensions and tables are
+/// drawn from a block of their own, which isn't made again yet: they only move or copy by a
+/// `translation` (their block moving with them).
+fn check_placeable(e: &EntityType, copying: bool, translation: bool) -> Result<(), CoreError> {
     let h = e.common().handle.value();
     let refuse = |why: &str| Err(invalid(format!("{} {h:X} {why}", variant_name(e))));
     match e {
-        // Drawn from a block of its own, which isn't made again yet.
-        EntityType::Dimension(_) | EntityType::Table(_) => {
-            refuse("can't be changed yet: its block is not drawn again")
+        EntityType::Dimension(_) | EntityType::Table(_) if !translation => {
+            refuse("can only be moved or copied yet: its block is not drawn again")
         }
         EntityType::Viewport(_)
         | EntityType::Light(_)
@@ -187,13 +203,7 @@ fn check_placeable(e: &EntityType, copying: bool) -> Result<(), CoreError> {
     }
 }
 
-/// `e` placed by `p`, its stored DWG graphics dropped (they would show it where it was).
-fn placed(e: &EntityType, p: &Placing) -> EntityType {
-    let mut e = e.clone();
-    place(&mut e, p);
-    e
-}
-
+/// Places `e` by `p`, its stored DWG graphics dropped (they would show it where it was).
 fn place(e: &mut EntityType, p: &Placing) {
     match p.mirror_line {
         Some(line) => {
@@ -203,6 +213,23 @@ fn place(e: &mut EntityType, p: &Placing) {
         None => e.apply_transform(&p.transform),
     }
     e.common_mut().graphic_data = None;
+}
+
+/// `place`, keeping a dimension's own block placement (its insertion point): the block is moved
+/// with it by the caller. The name of that block, for a dimension.
+fn place_keeping_blocks(e: &mut EntityType, p: &Placing) -> Option<String> {
+    let kept = match e {
+        EntityType::Dimension(d) => Some(d.base().insertion_point),
+        _ => None,
+    };
+    place(e, p);
+    match (e, kept) {
+        (EntityType::Dimension(d), Some(at)) => {
+            d.base_mut().insertion_point = at;
+            Some(d.base().block_name.clone())
+        }
+        _ => None,
+    }
 }
 
 /// A text's justification by DXF codes (horizontal 0 left, 1 centre, 2 right, 3 aligned,
@@ -374,7 +401,7 @@ impl Session {
         match spec {
             ModifySpec::Move { delta, .. } => {
                 finite(&delta)?;
-                self.place_all(&handles, Placing::plain(translation(delta)))
+                self.place_all(&handles, Placing::shift(delta))
             }
             ModifySpec::Copy { delta, count, .. } => {
                 finite(&delta)?;
@@ -382,12 +409,7 @@ impl Session {
                     return Err(invalid("Make 1 copy or more"));
                 }
                 let copies = (1..=count)
-                    .map(|i| {
-                        Placing::plain(translation([
-                            delta[0] * f64::from(i),
-                            delta[1] * f64::from(i),
-                        ]))
-                    })
+                    .map(|i| Placing::shift([delta[0] * f64::from(i), delta[1] * f64::from(i)]))
                     .collect();
                 self.copy_all(&handles, copies)
             }
@@ -419,6 +441,7 @@ impl Session {
                 let p = Placing {
                     transform: Transform::from_mirror_line(v3(p1), v3(p2)),
                     mirror_line: Some((p2[1] - p1[1]).atan2(p2[0] - p1[0])),
+                    shift: None,
                 };
                 self.place_or_copy(&handles, p, keep)
             }
@@ -517,39 +540,119 @@ impl Session {
         }
     }
 
-    /// Places every entity `handles` by `p`, in place.
+    /// Places every entity `handles` by `p`, in place; the take-off rows measuring them follow.
     fn place_all(&mut self, handles: &[Handle], p: Placing) -> Result<Outcome, CoreError> {
         for &h in handles {
-            check_placeable(self.entity(h), false)?;
+            check_placeable(self.entity(h), false, p.shift.is_some())?;
         }
         for &h in handles {
             let e = self.drawing.doc.get_entity_mut(h).expect("checked above");
-            place(e, &p);
+            let dimension_block = place_keeping_blocks(e, &p);
+            if let (Some(name), Some(d)) = (dimension_block, p.shift) {
+                self.shift_block(&name, d);
+            }
         }
+        self.follow_takeoff(handles, &[]);
         Ok(Outcome::Changed)
+    }
+
+    /// Moves every entity of the block `name` by `d`.
+    fn shift_block(&mut self, name: &str, d: [f64; 2]) {
+        let inside: Vec<Handle> = self
+            .drawing
+            .doc
+            .block_records
+            .get(name)
+            .map(|b| b.entity_handles.clone())
+            .unwrap_or_default();
+        for h in inside {
+            if let Some(e) = self.drawing.doc.get_entity_mut(h) {
+                place(e, &Placing::shift(d));
+            }
+        }
     }
 
     /// Adds a copy of every entity `handles` placed by each of `copies`.
     fn copy_all(&mut self, handles: &[Handle], copies: Vec<Placing>) -> Result<Outcome, CoreError> {
         self.check_count(handles, copies.len() as u64)?;
         for &h in handles {
-            check_placeable(self.entity(h), true)?;
+            let translations = copies.iter().all(|p| p.shift.is_some());
+            check_placeable(self.entity(h), true, translations)?;
         }
+        let owner = self.sheet_owner();
         let mut added = Vec::with_capacity(handles.len() * copies.len());
         for p in &copies {
             for &h in handles {
-                let copy = placed(self.entity(h), p);
-                added.push(self.add_fresh(copy)?);
+                let mut copy = self.entity(h).clone();
+                let dimension_block = place_keeping_blocks(&mut copy, p);
+                // A dimension or a table gets a block of its own: a dimension's is drawn in world
+                // coordinates and moves with it; a table's sits where the table refers to it.
+                match &mut copy {
+                    EntityType::Dimension(d) => {
+                        let name = dimension_block.unwrap_or_default();
+                        if let Some((name, _)) = self.copy_block(&name, "*D", p.shift)? {
+                            d.base_mut().block_name = name;
+                        }
+                    }
+                    EntityType::Table(t) => {
+                        let name = t.block_name.clone();
+                        if let Some((name, handle)) = self.copy_block(&name, "*T", None)? {
+                            t.block_name = name;
+                            t.block_record_handle = Some(handle);
+                        }
+                    }
+                    _ => {}
+                }
+                added.push(self.add_fresh(copy, owner)?);
             }
         }
         Ok(Outcome::Added { handles: added })
     }
 
-    /// Adds `e` (a copy of an entity, or a part of one) to the sheet on screen as a new entity:
-    /// new handles for it and its attributes, and nothing that ties it to the one it came from
-    /// (reactors, extension dictionary, hatch boundary links).
-    fn add_fresh(&mut self, mut e: EntityType) -> Result<u64, CoreError> {
-        let owner = self.sheet_owner();
+    /// A copy of the anonymous block `name` under the first free `prefix`N name, its entities
+    /// moved by `shift`; its name and record handle. `None` when there is no such block.
+    fn copy_block(
+        &mut self,
+        name: &str,
+        prefix: &str,
+        shift: Option<[f64; 2]>,
+    ) -> Result<Option<(String, Handle)>, CoreError> {
+        let Some(source) = self.drawing.doc.block_records.get(name).cloned() else {
+            return Ok(None);
+        };
+        let doc = &mut self.drawing.doc;
+        let fresh = (1..)
+            .map(|n| format!("{prefix}{n}"))
+            .find(|n| doc.block_records.get(n).is_none())
+            .expect("a free name");
+        let mut record = opencadcodec::BlockRecord::new(fresh.clone());
+        record.handle = doc.allocate_handle();
+        record.block_entity_handle = doc.allocate_handle();
+        record.block_end_handle = doc.allocate_handle();
+        record.flags.anonymous = true;
+        record.base_point = source.base_point;
+        let handle = record.handle;
+        doc.block_records
+            .add(record)
+            .map_err(|e| invalid(e.to_string()))?;
+        for h in source.entity_handles {
+            let Some(e) = self.drawing.doc.get_entity(h) else {
+                continue;
+            };
+            let mut e = e.clone();
+            if let Some(d) = shift {
+                place(&mut e, &Placing::shift(d));
+            }
+            self.add_fresh(e, Some(handle))?;
+        }
+        Ok(Some((fresh, handle)))
+    }
+
+    /// Adds `e` (a copy of an entity, or a part of one) to the block `owner` (the sheet on
+    /// screen) as a new entity: new handles for it and its attributes, none of its parts' old
+    /// handles (vertices, faces, the sequence end), and nothing that ties it to the one it came
+    /// from (reactors, extension dictionary, hatch boundary links).
+    fn add_fresh(&mut self, mut e: EntityType, owner: Option<Handle>) -> Result<u64, CoreError> {
         let doc = &mut self.drawing.doc;
         let c = e.common_mut();
         c.handle = Handle::NULL;
@@ -577,6 +680,26 @@ impl Session {
                     path.boundary_handles.clear();
                 }
             }
+            // The writers give a null handle a new one, and write any other as it is.
+            EntityType::Polyline3D(pl) => {
+                for v in &mut pl.vertices {
+                    v.handle = Handle::NULL;
+                }
+            }
+            EntityType::PolyfaceMesh(mesh) => {
+                for v in &mut mesh.vertices {
+                    v.common.handle = Handle::NULL;
+                }
+                for f in &mut mesh.faces {
+                    f.common.handle = Handle::NULL;
+                }
+                mesh.seqend_handle = None;
+            }
+            EntityType::PolygonMesh(mesh) => {
+                for v in &mut mesh.vertices {
+                    v.common.handle = Handle::NULL;
+                }
+            }
             _ => {}
         }
         let h = doc.add_entity(e).map_err(|e| invalid(e.to_string()))?;
@@ -591,7 +714,7 @@ impl Session {
         delta: [f64; 2],
     ) -> Result<Outcome, CoreError> {
         for &h in handles {
-            check_placeable(self.entity(h), false)?;
+            check_placeable(self.entity(h), false, false)?;
         }
         let [lo, hi] = window;
         let inside = |p: Vector3| lo[0] <= p.x && p.x <= hi[0] && lo[1] <= p.y && p.y <= hi[1];
@@ -703,11 +826,11 @@ impl Session {
                 }
             }
         }
-        Ok(if moved {
-            Outcome::Changed
-        } else {
-            Outcome::Nothing
-        })
+        if !moved {
+            return Ok(Outcome::Nothing);
+        }
+        self.follow_takeoff(handles, &[]);
+        Ok(Outcome::Changed)
     }
 
     /// Every point of `e` as drawn lies in `window`.
@@ -720,7 +843,8 @@ impl Session {
                 .all(|p| lo[0] <= p[0] && p[0] <= hi[0] && lo[1] <= p[1] && p[1] <= hi[1])
     }
 
-    /// `ModifySpec::Explode`.
+    /// `ModifySpec::Explode`. `Exploded` with the parts' handles and how many entities picked had
+    /// no parts and were left as they are.
     fn explode(&mut self, handles: &[Handle]) -> Result<Outcome, CoreError> {
         let doc = &self.drawing.doc;
         let mut parts: Vec<(Handle, Vec<EntityType>)> = Vec::new();
@@ -753,41 +877,245 @@ impl Session {
                 "Nothing picked can explode: only block references, polylines and multilines do",
             ));
         }
+        if parts.iter().map(|(_, p)| p.len()).sum::<usize>() > MAX_NEW {
+            return Err(invalid(format!(
+                "That makes more than {MAX_NEW} entities: explode fewer at a time"
+            )));
+        }
+        let left_alone = handles.len() - parts.len();
+        let owner = self.sheet_owner();
         let mut added = Vec::new();
+        let mut removed = Vec::with_capacity(parts.len());
         for (h, pieces) in parts {
             self.drawing.doc.remove_entity_arc(h);
+            removed.push(h);
             for piece in pieces {
-                added.push(self.add_fresh(piece)?);
+                added.push(self.add_fresh(piece, owner)?);
             }
         }
-        Ok(Outcome::Added { handles: added })
+        self.follow_takeoff(&[], &removed);
+        Ok(Outcome::Exploded {
+            handles: added,
+            left_alone,
+        })
     }
 }
 
-/// The entities of `insert`'s block placed where it draws them (every cell of an array), one
-/// level deep, layer "0" and ByBlock resolved to the reference's. A circle stays a circle under
-/// an even scale (the codec makes every circle an ellipse).
+/// The entities of `insert`'s block placed where it draws them (every cell of an array, its
+/// offsets turned with the reference, from the block's base point), one level deep, layer "0"
+/// and ByBlock resolved to the reference's; its visible attributes as texts (or multiline texts)
+/// holding their values. A circle stays a circle under an even scale (the codec makes every
+/// circle an ellipse).
 fn explode_insert(doc: &opencadcodec::CadDocument, insert: &Insert) -> Vec<EntityType> {
     let even = (insert.x_scale().abs() - insert.y_scale().abs()).abs() < 1e-10;
-    let mut out = Vec::new();
-    for child in doc.entities_in_block(&insert.block_name) {
-        for mut piece in insert.explode(std::slice::from_ref(child)) {
-            if let (true, EntityType::Circle(_), EntityType::Ellipse(el)) = (even, child, &piece) {
-                let mut circle = Circle::from_center_radius(Vector3::ZERO, el.major_axis.length());
-                circle.common = el.common.clone();
-                circle.normal = el.normal;
-                circle.center = to_object(el.normal, el.center);
-                if let EntityType::Circle(c) = child {
-                    circle.thickness = c.thickness;
-                }
-                piece = EntityType::Circle(circle);
-            }
-            let c = piece.common_mut();
-            if c.linetype.eq_ignore_ascii_case("ByBlock") {
-                c.linetype = insert.common.linetype.clone();
-            }
-            out.push(piece);
+    let base = doc
+        .block_records
+        .get(&insert.block_name)
+        .map_or(Vector3::ZERO, |b| b.base_point);
+    let from_base = Transform::from_translation(Vector3::new(-base.x, -base.y, -base.z));
+    // One reference per array cell: the codec's own array offsets don't turn with the reference.
+    let (sin, cos) = insert.rotation.sin_cos();
+    let mut cells = Vec::new();
+    for col in 0..insert.column_count.max(1) {
+        for row in 0..insert.row_count.max(1) {
+            let (x, y) = (
+                f64::from(col) * insert.column_spacing,
+                f64::from(row) * insert.row_spacing,
+            );
+            let mut cell = insert.clone();
+            cell.column_count = 1;
+            cell.row_count = 1;
+            cell.column_spacing = 0.0;
+            cell.row_spacing = 0.0;
+            cell.insert_point.x += x * cos - y * sin;
+            cell.insert_point.y += x * sin + y * cos;
+            cells.push(cell);
         }
     }
+    let mut out = Vec::new();
+    for child in doc.entities_in_block(&insert.block_name) {
+        let mut moved = child.clone();
+        moved.apply_transform(&from_base);
+        for cell in &cells {
+            for mut piece in cell.explode(std::slice::from_ref(&moved)) {
+                if let (true, EntityType::Circle(c), EntityType::Ellipse(el)) =
+                    (even, child, &piece)
+                {
+                    let mut circle =
+                        Circle::from_center_radius(Vector3::ZERO, el.major_axis.length());
+                    circle.common = el.common.clone();
+                    circle.normal = el.normal;
+                    circle.center = to_object(el.normal, el.center);
+                    circle.thickness = c.thickness;
+                    piece = EntityType::Circle(circle);
+                }
+                by_block_linetype(piece.common_mut(), insert);
+                out.push(piece);
+            }
+        }
+    }
+    for a in &insert.attributes {
+        if a.common.invisible || a.flags.invisible || a.value.is_empty() {
+            continue;
+        }
+        let mut common = a.common.clone();
+        if common.layer == "0" {
+            common.layer = insert.common.layer.clone();
+        }
+        if common.color == opencadcodec::Color::ByBlock {
+            common.color = insert.common.color;
+        }
+        if common.line_weight == opencadcodec::LineWeight::ByBlock {
+            common.line_weight = insert.common.line_weight;
+        }
+        by_block_linetype(&mut common, insert);
+        if let Some(mtext) = a.embedded_mtext.as_deref().filter(|_| a.is_multiline) {
+            let mut m = mtext.clone();
+            m.common = common;
+            out.push(EntityType::MText(m));
+            continue;
+        }
+        use TextHorizontalAlignment as H;
+        use TextVerticalAlignment as V;
+        let (h, v) = (a.horizontal_alignment as u8, a.vertical_alignment as u8);
+        out.push(EntityType::Text(opencadcodec::Text {
+            common,
+            value: a.value.clone(),
+            insertion_point: a.insertion_point,
+            alignment_point: (h != 0 || v != 0).then_some(a.alignment_point),
+            height: a.height,
+            rotation: a.rotation,
+            width_factor: a.width_factor,
+            oblique_angle: a.oblique_angle,
+            style: a.text_style.clone(),
+            horizontal_alignment: [H::Left, H::Center, H::Right, H::Aligned, H::Middle, H::Fit]
+                [usize::from(h.min(5))],
+            vertical_alignment: [V::Baseline, V::Bottom, V::Middle, V::Top][usize::from(v.min(3))],
+            normal: a.normal,
+            thickness: 0.0,
+            generation_flags: a.text_generation_flags,
+        }));
+    }
     out
+}
+
+/// A ByBlock linetype takes the reference's.
+fn by_block_linetype(c: &mut opencadcodec::entities::EntityCommon, insert: &Insert) {
+    if c.linetype.eq_ignore_ascii_case("ByBlock") {
+        c.linetype = insert.common.linetype.clone();
+    }
+}
+
+/// The take-off row `m` measures the entity `h` at the top of the sheet: one of its handles, or
+/// the block (or xref) reference its chain starts with.
+fn measures(m: &Measurement, h: u64) -> bool {
+    match m.chain.first() {
+        Some(&top) => top == h,
+        None => m.handles.contains(&h),
+    }
+}
+
+impl Session {
+    /// Besides the entities, what `cmd` changes and so keeps in its undo step: the drawing's
+    /// tables (a copied dimension's or table's block; an erased image's or underlay's definition
+    /// link) and the take-off (rows measuring a target).
+    pub(crate) fn document_extras(&self, cmd: &Command) -> (bool, bool) {
+        let (targets, copying, erasing) = match cmd {
+            Command::DeleteEntities { targets } => (targets.as_slice(), false, true),
+            Command::Modify(spec) => (
+                spec.targets(),
+                matches!(spec, ModifySpec::Copy { .. }),
+                false,
+            ),
+            _ => return (false, false),
+        };
+        let doc = &self.drawing.doc;
+        let tables = targets
+            .iter()
+            .any(|t| match doc.get_entity(Handle::new(t.handle)) {
+                Some(EntityType::Dimension(_) | EntityType::Table(_)) => copying,
+                Some(EntityType::RasterImage(_) | EntityType::Underlay(_)) => erasing,
+                _ => false,
+            });
+        let takeoff = targets
+            .iter()
+            .any(|t| self.takeoff.items.iter().any(|m| measures(m, t.handle)));
+        (tables, takeoff)
+    }
+
+    /// The take-off follows a drawing edit: rows measuring an entity `removed` keep their value
+    /// and points but lose the link; rows measuring an entity `changed` are measured again.
+    pub(crate) fn follow_takeoff(&mut self, changed: &[Handle], removed: &[Handle]) {
+        let removed: HashSet<u64> = removed.iter().map(|h| h.value()).collect();
+        for m in &mut self.takeoff.items {
+            if !removed.iter().any(|&h| measures(m, h)) {
+                continue;
+            }
+            if m.chain.is_empty() {
+                m.handles.retain(|h| !removed.contains(h));
+            } else {
+                m.handles.clear();
+                m.chain.clear();
+                m.block_path.clear();
+                m.xref = None;
+            }
+        }
+        let again: Vec<usize> = (0..self.takeoff.items.len())
+            .filter(|&i| {
+                let m = &self.takeoff.items[i];
+                changed.iter().any(|h| measures(m, h.value()))
+            })
+            .collect();
+        for i in again {
+            if let Some(m) = self.remeasured(&self.takeoff.items[i]) {
+                self.takeoff.items[i] = m;
+            }
+        }
+    }
+
+    /// `m` measured again from its entities as they are now, as a new measurement of them would
+    /// be; `None` when it can't be (an entity gone, an item).
+    fn remeasured(&self, m: &Measurement) -> Option<Measurement> {
+        let xrefs = self.xref_docs();
+        let located = m
+            .handles
+            .iter()
+            .map(|&h| locate(&self.drawing.doc, &xrefs, h, &m.chain))
+            .collect::<Result<Vec<_>, _>>()
+            .ok()?;
+        let mut out = m.clone();
+        match m.kind {
+            Kind::Length => {
+                out.value = located
+                    .iter()
+                    .map(|e| self.extent(e.doc, e.entity, &e.xf).length)
+                    .sum::<Option<f64>>()?;
+            }
+            Kind::Area | Kind::Volume => {
+                let mut crossing = false;
+                let area = located
+                    .iter()
+                    .map(|e| {
+                        let extent = self.extent(e.doc, e.entity, &e.xf);
+                        crossing |= extent.self_intersecting;
+                        extent.area
+                    })
+                    .sum::<Option<f64>>()?;
+                out.self_intersecting = crossing;
+                out.value = area * m.height.unwrap_or(1.0);
+            }
+            // The count stays; an xref's references are kept as their places.
+            Kind::Count => {
+                if m.xref.is_some() {
+                    out.points = located.iter().filter_map(insert_point).collect();
+                }
+                return Some(out);
+            }
+            Kind::Item => return None,
+        }
+        let (unit, shown) = in_metres(out.kind, out.value, self.drawing.units);
+        out.unit = unit.to_string();
+        out.shown = shown;
+        Some(out)
+    }
 }

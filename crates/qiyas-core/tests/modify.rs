@@ -152,7 +152,7 @@ fn run(s: &mut Session, spec: ModifySpec) -> Outcome {
 /// Runs a modify that adds entities and returns their handles.
 fn added(s: &mut Session, spec: ModifySpec) -> Vec<u64> {
     match run(s, spec) {
-        Outcome::Added { handles } => handles,
+        Outcome::Added { handles } | Outcome::Exploded { handles, .. } => handles,
         other => panic!("expected new entities, got {other:?}"),
     }
 }
@@ -884,7 +884,8 @@ fn bad_numbers_and_unsupported_entities_are_refused() {
     );
     assert!(message.contains("copies"), "{message}");
 
-    // A dimension draws from a block of its own that isn't made again yet: refused.
+    // A dimension draws from a block of its own that isn't made again yet: it only moves or
+    // copies; turning it is refused.
     let dir = tempfile::tempdir().unwrap();
     let mut s = Session::open(&qiyas_core::fixtures::write_schedule(dir.path(), "dxf")).unwrap();
     let dimension = s
@@ -896,9 +897,11 @@ fn bad_numbers_and_unsupported_entities_are_refused() {
         .unwrap();
     let message = refused(
         &mut s,
-        ModifySpec::Move {
+        ModifySpec::Rotate {
             targets: targets(&[dimension]),
-            delta: [1.0, 0.0],
+            base: [0.0, 0.0],
+            angle: 10.0,
+            copy: false,
         },
     );
     assert!(message.contains("Dimension"), "{message}");
@@ -1080,4 +1083,496 @@ fn mirrored_attributes_and_multiline_texts_still_read_forwards() {
         m.rotation
     );
     assert_eq!(m.attachment_point as u8, 3, "top left becomes top right");
+}
+
+// ---- Fix round 1 ----
+
+use opencadcodec::entities::{
+    Dimension, DimensionLinear, PolyfaceFace, PolyfaceMesh, Polyline3D, Table, TableColumn,
+    TableRow, Vertex3DPolyline,
+};
+use opencadcodec::Arc as CadArc;
+use qiyas_core::{Kind, Measurement};
+
+/// Adds an anonymous block `name` holding `entities`; returns the record's handle.
+fn add_anonymous(doc: &mut CadDocument, name: &str, entities: Vec<EntityType>) -> Handle {
+    let mut record = BlockRecord::new(name);
+    record.handle = doc.allocate_handle();
+    record.block_entity_handle = doc.allocate_handle();
+    record.block_end_handle = doc.allocate_handle();
+    record.flags.anonymous = true;
+    let owner = record.handle;
+    doc.block_records.add(record).unwrap();
+    for mut e in entities {
+        e.common_mut().owner_handle = owner;
+        doc.add_entity(e).unwrap();
+    }
+    owner
+}
+
+fn open_doc(doc: &CadDocument, name: &str) -> (tempfile::TempDir, Session) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_drawing(doc, &dir.path().join(name));
+    let s = Session::open(&path).unwrap();
+    (dir, s)
+}
+
+/// Every drawn point of the entities `tops`, together.
+fn drawn_all(s: &Session, tops: &[u64]) -> Vec<[f64; 2]> {
+    tops.iter().flat_map(|&h| drawn(s, h)).collect()
+}
+
+#[test]
+fn explode_places_the_parts_where_the_reference_drew_them_base_point_and_array_included() {
+    let mut doc = CadDocument::new();
+    doc.header.insertion_units = 6;
+    let mut record = BlockRecord::new("BP");
+    record.handle = doc.allocate_handle();
+    record.block_entity_handle = doc.allocate_handle();
+    record.block_end_handle = doc.allocate_handle();
+    record.base_point = Vector3::new(5.0, 5.0, 0.0);
+    let owner = record.handle;
+    doc.block_records.add(record).unwrap();
+    for mut e in [
+        EntityType::Line(Line::from_coords(5.0, 5.0, 0.0, 6.0, 5.0, 0.0)),
+        EntityType::Arc(CadArc::from_center_radius_angles(
+            Vector3::new(5.0, 6.0, 0.0),
+            0.5,
+            0.0,
+            PI_HALF,
+        )),
+    ] {
+        e.common_mut().owner_handle = owner;
+        doc.add_entity(e).unwrap();
+    }
+    let single = doc
+        .add_entity(EntityType::Insert(
+            Insert::new("BP", Vector3::new(20.0, 20.0, 0.0))
+                .with_rotation(30f64.to_radians())
+                .with_scale(2.0, 2.0, 2.0),
+        ))
+        .unwrap()
+        .value();
+    let mut array = Insert::new("BP", Vector3::new(-20.0, 0.0, 0.0)).with_rotation(FRAC_PI_2);
+    array.column_count = 2;
+    array.column_spacing = 3.0;
+    let array = doc.add_entity(EntityType::Insert(array)).unwrap().value();
+    let (_dir, mut s) = open_doc(&doc, "base.dxf");
+    for reference in [single, array] {
+        let before = drawn(&s, reference);
+        let parts = added(
+            &mut s,
+            ModifySpec::Explode {
+                targets: targets(&[reference]),
+            },
+        );
+        let after = drawn_all(&s, &parts);
+        assert!(
+            same_points(&before, &after),
+            "{reference:X}: {before:?} != {after:?}"
+        );
+    }
+}
+
+const PI_HALF: f64 = FRAC_PI_2;
+
+#[test]
+fn copies_of_3d_polylines_and_polyface_meshes_save_without_shared_handles() {
+    let mut doc = CadDocument::new();
+    doc.header.insertion_units = 6;
+    let mut pl = Polyline3D::new();
+    for (x, y) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)] {
+        pl.vertices
+            .push(Vertex3DPolyline::new(Vector3::new(x, y, 0.0)));
+    }
+    doc.add_entity(EntityType::Polyline3D(pl)).unwrap();
+    let mut mesh = PolyfaceMesh::new();
+    for (x, y) in [(5.0, 0.0), (6.0, 0.0), (6.0, 1.0)] {
+        mesh.add_vertex_xyz(x, y, 0.0);
+    }
+    mesh.add_face(PolyfaceFace::triangle(1, 2, 3));
+    doc.add_entity(EntityType::PolyfaceMesh(mesh)).unwrap();
+    // Read back from DWG, so the vertices carry handles of their own.
+    let (dir, mut s) = open_doc(&doc, "meshes.dwg");
+    let originals = sheet_handles(&s);
+    let copies = added(
+        &mut s,
+        ModifySpec::Copy {
+            targets: targets(&originals),
+            delta: [0.0, 10.0],
+            count: 1,
+        },
+    );
+    assert_eq!(copies.len(), 2);
+    let path = dir.path().join("copied.dwg");
+    s.save_as(&path).unwrap();
+    let again = Session::open(&path).unwrap();
+    let mut all = Vec::new();
+    for e in again.drawing.doc.entities_in_block(MODEL) {
+        all.push(e.common().handle.value());
+        match e {
+            EntityType::Polyline3D(p) => all.extend(p.vertices.iter().map(|v| v.handle.value())),
+            EntityType::PolyfaceMesh(m) => {
+                all.extend(m.vertices.iter().map(|v| v.common.handle.value()));
+                all.extend(m.faces.iter().map(|f| f.common.handle.value()));
+                all.extend(m.seqend_handle.map(|h| h.value()));
+            }
+            _ => {}
+        }
+    }
+    let real: Vec<u64> = all.iter().copied().filter(|&h| h != 0).collect();
+    let mut unique = real.clone();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!(unique.len(), real.len(), "no handle is used twice: {all:?}");
+    let kinds: Vec<String> = again
+        .drawing
+        .doc
+        .entities_in_block(MODEL)
+        .map(|e| match e {
+            EntityType::Polyline3D(p) => format!("pl{}", p.vertices.len()),
+            EntityType::PolyfaceMesh(m) => format!("mesh{}/{}", m.vertices.len(), m.faces.len()),
+            other => format!("{other:?}").chars().take(12).collect(),
+        })
+        .collect();
+    assert_eq!(kinds.iter().filter(|k| *k == "pl3").count(), 2, "{kinds:?}");
+    assert_eq!(
+        kinds.iter().filter(|k| *k == "mesh3/1").count(),
+        2,
+        "{kinds:?}"
+    );
+}
+
+/// A drawing with a linear dimension drawn by its own `*D1` block (a line at y 5), and a table
+/// drawn by its `*T1` block (a line from its insertion point).
+fn annotated_doc() -> (CadDocument, u64, u64) {
+    let mut doc = CadDocument::new();
+    doc.header.insertion_units = 6;
+    add_anonymous(
+        &mut doc,
+        "*D1",
+        vec![EntityType::Line(Line::from_coords(
+            0.0, 5.0, 0.0, 4.0, 5.0, 0.0,
+        ))],
+    );
+    let mut linear = DimensionLinear::new(Vector3::new(0.0, 0.0, 0.0), Vector3::new(4.0, 0.0, 0.0));
+    linear.definition_point = Vector3::new(0.0, 5.0, 0.0);
+    linear.base.definition_point = linear.definition_point;
+    linear.base.block_name = "*D1".to_string();
+    let dim = doc
+        .add_entity(EntityType::Dimension(Dimension::Linear(linear)))
+        .unwrap()
+        .value();
+    let t_block = add_anonymous(
+        &mut doc,
+        "*T1",
+        vec![EntityType::Line(Line::from_coords(
+            0.0, 0.0, 0.0, 2.0, 0.0, 0.0,
+        ))],
+    );
+    let mut table = Table::new(Vector3::new(20.0, 0.0, 0.0), 0, 0);
+    table.rows = vec![TableRow::from_texts(&["A"])];
+    table.columns = vec![TableColumn::with_width(2.0)];
+    table.block_name = "*T1".to_string();
+    table.block_record_handle = Some(t_block);
+    let table = doc.add_entity(EntityType::Table(table)).unwrap().value();
+    (doc, dim, table)
+}
+
+/// The line inside the block named `name`.
+fn block_line(s: &Session, name: &str) -> [[f64; 2]; 2] {
+    let h = s
+        .drawing
+        .doc
+        .entities_in_block(name)
+        .find(|e| matches!(e, EntityType::Line(_)))
+        .map(|e| e.common().handle.value())
+        .unwrap();
+    ends(s, h)
+}
+
+#[test]
+fn dimensions_and_tables_move_and_copy_with_their_blocks() {
+    let (doc, dim, table) = annotated_doc();
+    let (_dir, mut s) = open_doc(&doc, "annotated.dxf");
+    run(
+        &mut s,
+        ModifySpec::Move {
+            targets: targets(&[dim, table]),
+            delta: [1.0, 2.0],
+        },
+    );
+    let EntityType::Dimension(Dimension::Linear(d)) = entity(&s, dim) else {
+        panic!()
+    };
+    assert!(near([d.first_point.x, d.first_point.y], [1.0, 2.0]));
+    assert!(near(
+        [d.definition_point.x, d.definition_point.y],
+        [1.0, 7.0]
+    ));
+    assert!(
+        near(
+            [d.base.insertion_point.x, d.base.insertion_point.y],
+            [0.0, 0.0]
+        ),
+        "the block's own placement stays"
+    );
+    // The dimension's block is drawn in world coordinates: its line moves too.
+    let line = block_line(&s, "*D1");
+    assert!(
+        near(line[0], [1.0, 7.0]) && near(line[1], [5.0, 7.0]),
+        "{line:?}"
+    );
+    // A table is a reference to its block: the reference moves, the block stays.
+    let EntityType::Table(t) = entity(&s, table) else {
+        panic!()
+    };
+    assert!(near(
+        [t.insertion_point.x, t.insertion_point.y],
+        [21.0, 2.0]
+    ));
+    let line = block_line(&s, "*T1");
+    assert!(near(line[0], [0.0, 0.0]), "{line:?}");
+
+    // A copy gets a block of its own under a new anonymous name; undo takes both away.
+    let blocks_before = s.drawing.doc.block_records.iter().count();
+    let copies = added(
+        &mut s,
+        ModifySpec::Copy {
+            targets: targets(&[dim, table]),
+            delta: [0.0, 10.0],
+            count: 1,
+        },
+    );
+    let (EntityType::Dimension(copy), EntityType::Table(tcopy)) =
+        (entity(&s, copies[0]), entity(&s, copies[1]))
+    else {
+        panic!()
+    };
+    let name = copy.base().block_name.clone();
+    assert!(name.starts_with("*D") && name != "*D1", "{name}");
+    let line = block_line(&s, &name);
+    assert!(near(line[0], [1.0, 17.0]), "{line:?}");
+    assert_eq!(block_line(&s, "*D1")[0], [1.0, 7.0]);
+    assert!(tcopy.block_name.starts_with("*T") && tcopy.block_name != "*T1");
+    assert_eq!(
+        tcopy.block_record_handle,
+        s.drawing
+            .doc
+            .block_records
+            .get(&tcopy.block_name)
+            .map(|b| b.handle)
+    );
+    assert_eq!(
+        s.drawing.doc.block_records.iter().count(),
+        blocks_before + 2
+    );
+    // Saved and opened again, both copies keep their blocks.
+    s.save_as(&_dir.path().join("annotated-copy.dwg")).unwrap();
+    let again = Session::open(&_dir.path().join("annotated-copy.dwg")).unwrap();
+    assert!(again.drawing.doc.block_records.get(&name).is_some());
+    assert!(s.undo());
+    assert_eq!(s.drawing.doc.block_records.iter().count(), blocks_before);
+    assert!(s.drawing.doc.block_records.get(&name).is_none());
+
+    // Turning a dimension is still refused.
+    let message = refused(
+        &mut s,
+        ModifySpec::Rotate {
+            targets: targets(&[dim]),
+            base: [0.0, 0.0],
+            angle: 10.0,
+            copy: false,
+        },
+    );
+    assert!(message.contains("Dimension"), "{message}");
+}
+
+fn measure_line(s: &mut Session, h: u64) -> Measurement {
+    match s
+        .run(Command::MeasureEntity {
+            handle: h,
+            chain: vec![],
+        })
+        .unwrap()
+    {
+        Outcome::Measured { measurement } => *measurement,
+        other => panic!("{other:?}"),
+    }
+}
+
+fn row(s: &Session, id: &str) -> Measurement {
+    s.takeoff
+        .items
+        .iter()
+        .find(|m| m.id == id)
+        .cloned()
+        .unwrap()
+}
+
+#[test]
+fn the_take_off_follows_moves_scales_and_erases_in_the_same_step() {
+    let (_dir, mut s, ids) = modify_session();
+    let m = measure_line(&mut s, ids.line);
+    assert_eq!(m.kind, Kind::Length);
+    assert!((m.value - 1.0).abs() < 1e-9);
+    run(
+        &mut s,
+        ModifySpec::Move {
+            targets: targets(&[ids.line]),
+            delta: [5.0, 5.0],
+        },
+    );
+    let moved = row(&s, &m.id);
+    assert!((moved.value - 1.0).abs() < 1e-9);
+    assert_eq!(moved.handles, vec![ids.line]);
+    run(
+        &mut s,
+        ModifySpec::Scale {
+            targets: targets(&[ids.line]),
+            base: [0.0, 0.0],
+            factor: 3.0,
+            copy: false,
+        },
+    );
+    let scaled = row(&s, &m.id);
+    assert!((scaled.value - 3.0).abs() < 1e-9, "{}", scaled.value);
+    assert!(
+        (scaled.shown - 3.0).abs() < 1e-9,
+        "metres: {}",
+        scaled.shown
+    );
+    // One step: undo puts the line and the row back together.
+    assert!(s.undo());
+    assert!((row(&s, &m.id).value - 1.0).abs() < 1e-9);
+    assert!(s.redo());
+    // Erase keeps the row and its value, without the link.
+    s.run(Command::DeleteEntities {
+        targets: targets(&[ids.line]),
+    })
+    .unwrap();
+    let erased = row(&s, &m.id);
+    assert!(erased.handles.is_empty());
+    assert!((erased.value - 3.0).abs() < 1e-9);
+    assert!(s.undo());
+    assert_eq!(row(&s, &m.id).handles, vec![ids.line]);
+
+    // Explode of a counted block reference drops it from the count's links.
+    let count = match s
+        .run(Command::CountBlock {
+            block_name: "B".into(),
+            layer: None,
+        })
+        .unwrap()
+    {
+        Outcome::Measured { measurement } => *measurement,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(count.handles, vec![ids.insert]);
+    added(
+        &mut s,
+        ModifySpec::Explode {
+            targets: targets(&[ids.insert]),
+        },
+    );
+    let exploded = row(&s, &count.id);
+    assert!(exploded.handles.is_empty());
+    assert!((exploded.value - 1.0).abs() < 1e-9);
+}
+
+#[test]
+fn erasing_an_image_cleans_its_definition_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::open(&write_sample(dir.path(), "dxf")).unwrap();
+    let png = qiyas_core::fixtures::write_png(dir.path(), "pic.png");
+    let image = match s
+        .run(Command::AttachImage {
+            path: png.display().to_string(),
+            insert_at: [0.0, 0.0],
+            width_units: 2.0,
+        })
+        .unwrap()
+    {
+        Outcome::Added { handles } => handles[0],
+        other => panic!("{other:?}"),
+    };
+    let reactor = match entity(&s, image) {
+        EntityType::RasterImage(i) => i.definition_reactor_handle.unwrap(),
+        other => panic!("{other:?}"),
+    };
+    assert!(s.drawing.doc.objects.contains_key(&reactor));
+    s.run(Command::DeleteEntities {
+        targets: targets(&[image]),
+    })
+    .unwrap();
+    assert!(!s.drawing.doc.objects.contains_key(&reactor));
+    assert!(s.undo());
+    assert!(s.drawing.doc.objects.contains_key(&reactor));
+}
+
+#[test]
+fn explode_keeps_attribute_values_as_texts_and_says_what_it_left_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::open(&qiyas_core::fixtures::write_schedule(dir.path(), "dxf")).unwrap();
+    let tag = s
+        .drawing
+        .doc
+        .entities_in_block(MODEL)
+        .find(|e| matches!(e, EntityType::Insert(i) if !i.attributes.is_empty()))
+        .map(|e| e.common().handle.value())
+        .unwrap();
+    let a_text = s
+        .drawing
+        .doc
+        .entities_in_block(MODEL)
+        .find(|e| matches!(e, EntityType::Text(_)))
+        .map(|e| e.common().handle.value())
+        .unwrap();
+    let out = run(
+        &mut s,
+        ModifySpec::Explode {
+            targets: targets(&[tag, a_text]),
+        },
+    );
+    let Outcome::Exploded {
+        handles,
+        left_alone,
+    } = out
+    else {
+        panic!("{out:?}")
+    };
+    assert_eq!(left_alone, 1, "the text has no parts");
+    let texts: Vec<Text> = handles
+        .iter()
+        .filter_map(|&h| match entity(&s, h) {
+            EntityType::Text(t) => Some(t),
+            _ => None,
+        })
+        .collect();
+    let d9 = texts
+        .iter()
+        .find(|t| t.value == "D9")
+        .expect("the attribute value stays");
+    assert!(near(
+        [d9.insertion_point.x, d9.insertion_point.y],
+        [30.5, 10.0]
+    ));
+    assert!((d9.height - 0.2).abs() < 1e-9);
+    assert!(
+        texts.iter().any(|t| t.value == "T1"),
+        "the block's own text"
+    );
+}
+
+#[test]
+fn picks_say_what_kind_of_entity_they_are() {
+    let (_dir, s, ids) = modify_session();
+    let picked = s.pick_window([[0.5, -0.5], [2.5, 0.5]], false);
+    assert_eq!(picked.len(), 1);
+    assert_eq!(picked[0].top, ids.line);
+    assert_eq!(picked[0].kind.as_deref(), Some("Line"));
+    assert_eq!(
+        s.pick([1.5, 0.0], 0.1).unwrap().kind.as_deref(),
+        Some("Line")
+    );
 }

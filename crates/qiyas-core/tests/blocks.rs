@@ -66,7 +66,8 @@ fn pick_inside_the_door_returns_the_leaf_line() {
             top: scaled,
             entity: leaf,
             chain: vec![scaled],
-            xref: None
+            xref: None,
+            kind: Some("Insert".to_string()),
         }
     );
 
