@@ -1,7 +1,8 @@
 import { useEffect, useRef } from "react";
-import type { Drafting } from "../api";
+import type { Drafting, Ucs } from "../api";
 import { useT } from "../i18n";
 import type { DraftingToggle } from "../tools/shortcuts";
+import { isWorld, toUcs } from "../tools/ucs";
 import { useMenu } from "./useMenu";
 
 type Props = {
@@ -22,6 +23,8 @@ type Props = {
   onToggle?(toggle: DraftingToggle): void;
   /** Opens the drafting settings. */
   onDraftingSettings?(): void;
+  /** The user coordinate system: the cursor is shown in it, marked "UCS". */
+  ucs?: Ucs | null;
 };
 
 const TOGGLES: { toggle: DraftingToggle; key: string; on: (d: Drafting) => boolean }[] = [
@@ -45,9 +48,15 @@ export function StatusBar({
   drafting = null,
   onToggle,
   onDraftingSettings,
+  ucs = null,
 }: Props) {
   const t = useT();
   const metres = (v: number) => (v * metresPerUnit).toFixed(precision);
+  const shown = (p: [number, number]) => {
+    const [x, y] = ucs && !isWorld(ucs) ? toUcs(ucs, p) : p;
+    const xy = `${metres(x)}, ${metres(y)} ${t("qty.m")}`;
+    return ucs && !isWorld(ucs) ? `${t("status.ucs")} ${xy}` : xy;
+  };
   const { open, setOpen, ref } = useMenu<HTMLSpanElement>();
   const button = useRef<HTMLButtonElement>(null);
   const list = useRef<HTMLUListElement>(null);
@@ -128,7 +137,7 @@ export function StatusBar({
       </span>
       {/* Coordinates read left to right in both languages. */}
       <span className="cursor" dir="ltr">
-        {cursor ? `${metres(cursor[0])}, ${metres(cursor[1])} ${t("qty.m")}` : ""}
+        {cursor ? shown(cursor) : ""}
       </span>
     </footer>
   );

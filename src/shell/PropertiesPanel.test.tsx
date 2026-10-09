@@ -223,3 +223,24 @@ test("with nothing picked the palette edits what new entities are drawn with", (
   fireEvent.change(field("Lineweight"), { target: { value: "-3" } });
   expect(onSetCurrent).toHaveBeenLastCalledWith({ ...current, lineweight: -3 });
 });
+
+test("a paper-space viewport's scale and centre are edited in place", () => {
+  const onSet = vi.fn();
+  const vp: EntityInfo = {
+    ...door,
+    kind: "Viewport",
+    block_name: null,
+    attributes: [],
+    viewport_scale: 0.02,
+    viewport_centre: [11, 4.5],
+  };
+  render(<PropertiesPanel entity={vp} units="metres" precision={3} sheet="Layout1" {...editing} onSet={onSet} />);
+  enter("Viewport scale", "0.01");
+  expect(onSet).toHaveBeenLastCalledWith("viewport_scale", 0.01);
+  enter("View centre (x, y)", "20, 7.5");
+  expect(onSet).toHaveBeenLastCalledWith("viewport_centre", [20, 7.5]);
+  // Not a point: nothing sent.
+  onSet.mockClear();
+  enter("View centre (x, y)", "20");
+  expect(onSet).not.toHaveBeenCalled();
+});

@@ -714,3 +714,32 @@ test("INSERT and ATTDEF hand their click to the app", () => {
   const attdef = run("attdef", [click([3, 4], 0)]);
   expect(attdef.text?.request).toEqual({ kind: "attdef", at: [3, 4], height: null });
 });
+
+test("paste tools paste at each click, as a block for PASTEBLOCK", () => {
+  const s = run("pasteclip", [click([3, 4], 0)]);
+  expect(s.pendingCommand).toEqual({ type: "paste_from_clipboard", at: [3, 4], as_block: false });
+  expect(s.hint).toBe("clip.prompt.paste");
+  const b = run("pasteblock", [click([1, 2], 0)]);
+  expect(b.pendingCommand).toEqual({ type: "paste_from_clipboard", at: [1, 2], as_block: true });
+});
+
+test("MVIEW takes two corners", () => {
+  const first = run("mview", [click([0, 0], 0)]);
+  expect(first.pendingCommand).toBeNull();
+  expect(first.hint).toBe("vport.prompt.second");
+  const done = toolReducer(first, click([100, 80], 1000));
+  expect(done.pendingCommand).toEqual({ type: "mview", corner1: [0, 0], corner2: [100, 80] });
+  expect(done.hint).toBe("vport.prompt.first");
+});
+
+test("UCS takes an origin and a point on its x axis; UCS OB an entity", () => {
+  const first = run("ucs", [click([10, 5], 0)]);
+  expect(first.hint).toBe("ucs.prompt.xAxis");
+  // The same point again gives no axis.
+  expect(toolReducer(first, click([10, 5], 1000)).pendingCommand).toBeNull();
+  const done = toolReducer(first, click([10, 7], 2000));
+  expect(done.pendingCommand).toEqual({ type: "ucs", origin: [10, 5], x_axis: [0, 2] });
+  const ob = run("ucsObject", [click([1, 1], 0, 9)]);
+  expect(ob.pendingCommand).toEqual({ type: "ucs_object", target: { handle: 9, chain: [] } });
+  expect(run("ucsObject", [click([1, 1], 0)]).pendingCommand).toBeNull();
+});

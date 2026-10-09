@@ -335,3 +335,18 @@ describe("groups and match properties", () => {
     expect(modifyReducer(s, finish).command).toBeNull();
   });
 });
+
+describe("the clipboard", () => {
+  it("COPYCLIP copies a selection made before at once, from its lower left", () => {
+    const s = initialModifyState("copyclip", [4, 5], { 5: "Dimension" });
+    expect(s.command).toEqual({ type: "copy_to_clipboard", targets: t([4, 5]), base: null });
+  });
+
+  it("COPYBASE asks for the base point once the entities are picked", () => {
+    const { s, commands } = feed(initialModifyState("copybase", []), [picked(7), finish]);
+    expect(s.hint).toBe("clip.prompt.base");
+    expect(commands).toEqual([]);
+    const done = modifyReducer(s, pt([2, 3]));
+    expect(done.command).toEqual({ type: "copy_to_clipboard", targets: t([7]), base: [2, 3] });
+  });
+});

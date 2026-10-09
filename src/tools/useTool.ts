@@ -4,7 +4,7 @@
  *  set: the entities a Shift click or a selection box picked with the select tool, which a modify
  *  tool then works on. */
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
-import type { Boundary, Command, Drafting, EntityInfo, Picked, Snap, SnapKind } from "../api";
+import type { Boundary, Command, Drafting, EntityInfo, Picked, Snap, SnapKind, Ucs } from "../api";
 import type { Target } from "../viewport/batch";
 import type { Bounds, Point } from "../viewport/camera";
 import { markerSegments } from "../viewport/snapMarker";
@@ -175,6 +175,11 @@ const PROMPT: Partial<Record<Tool, string>> = {
   textEdit: "text.prompt.edit",
   tableEdit: "table.prompt.edit",
   refedit: "block.prompt.refedit",
+  pasteclip: "clip.prompt.paste",
+  pasteblock: "clip.prompt.paste",
+  mview: "vport.prompt.first",
+  ucs: "ucs.prompt.origin",
+  ucsObject: "ucs.prompt.object",
 };
 
 /** The tools that act on the entity clicked. */
@@ -186,7 +191,8 @@ const picksEntity = (tool: Tool) =>
   tool === "measureAlong" ||
   tool === "textEdit" ||
   tool === "tableEdit" ||
-  tool === "refedit";
+  tool === "refedit" ||
+  tool === "ucsObject";
 
 /** The first prompt of `tool`. */
 const promptOf = (tool: Tool): string =>
@@ -566,6 +572,40 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
             ...clicked,
             pendingCommand: { type: "id_point", p: event.world, kind: event.snapKind ?? null },
           };
+        case "pasteclip":
+        case "pasteblock": {
+          if (double) return clicked;
+          const pendingCommand: Command = {
+            type: "paste_from_clipboard",
+            at: event.world,
+            as_block: s.tool === "pasteblock",
+          };
+          return { ...clicked, pendingCommand };
+        }
+        case "mview":
+        case "ucs": {
+          const prev = s.points.length > 0 ? s.points[0] : null;
+          const point = event.snapped ? event.world : constrain(prev, event.world, event.track ?? NO_TRACK);
+          if (!prev) {
+            const hint = s.tool === "mview" ? "vport.prompt.second" : "ucs.prompt.xAxis";
+            return { ...clicked, points: [point], hint };
+          }
+          if (point[0] === prev[0] && point[1] === prev[1]) return clicked;
+          const pendingCommand: Command =
+            s.tool === "mview"
+              ? { type: "mview", corner1: prev, corner2: point }
+              : { type: "ucs", origin: prev, x_axis: [point[0] - prev[0], point[1] - prev[1]] };
+          return { ...clicked, points: [], hint: promptOf(s.tool), pendingCommand };
+        }
+        case "ucsObject": {
+          const picked = event.picked;
+          if (double || picked === null) return clicked;
+          const pendingCommand: Command = {
+            type: "ucs_object",
+            target: { handle: picked.entity, chain: picked.chain },
+          };
+          return { ...clicked, pendingCommand };
+        }
         default:
           return clicked;
       }
@@ -606,15 +646,23 @@ export type ToolApi = {
 /** The tools that place points, and so snap and track. A hatch's click is inside an area, never
  *  snapped onto its edge. */
 const placesPoints = (tool: Tool) =>
-  tool === "distance" || tool === "area" || (isDrawTool(tool) && tool !== "hatch") || isTextTool(tool);
+  tool === "distance" ||
+  tool === "area" ||
+  (isDrawTool(tool) && tool !== "hatch") ||
+  isTextTool(tool) ||
+  tool === "pasteclip" ||
+  tool === "pasteblock" ||
+  tool === "mview" ||
+  tool === "ucs";
 /** The tools that snap: those that place points, and `idPoint`. */
 const snaps = (tool: Tool) => placesPoints(tool) || tool === "idPoint";
 
 type SnapAsk = { p: Point; tol: number; from: Point | null; wpp: number };
 
-/** Tool state for `tool`, following it as it changes. `drafting` gives the snaps, ortho, polar and
+/** Tool state for `tool`, following it as it changes. `ucs` is the user coordinate system ortho,
+ *  polar and the grid run along. `drafting` gives the snaps, ortho, polar and
  *  grid snap the point tools place their points with (none while it is null). */
-export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = null) {
+export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = null, ucs?: Ucs) {
   const [state, dispatch] = useReducer(toolReducer, tool, initialToolState);
   /** The cursor in drawing coordinates as it is, and drawing units per CSS pixel there. */
   const [raw, setRaw] = useState<{ p: Point; wpp: number } | null>(null);
@@ -638,7 +686,7 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
   const placesNow = placesPoints(tool) || modifyPhase === "points" || editPicking === false;
   const snapping = snapsNow && !!drafting?.osnap;
   const track: Track = drafting
-    ? { ortho: drafting.ortho, polar: drafting.polar, polarStepDeg: drafting.polar_step_deg }
+    ? { ortho: drafting.ortho, polar: drafting.polar, polarStepDeg: drafting.polar_step_deg, ucs }
     : NO_TRACK;
   const prev = state.text
     ? state.text.corner
@@ -738,7 +786,7 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
 
   /** Where an unsnapped point goes: to the grid when grid snap is on. */
   const onGrid = (p: Point): Point =>
-    drafting?.grid_snap ? gridRound(p, drafting.grid_spacing) : p;
+    drafting?.grid_snap ? gridRound(p, drafting.grid_spacing, ucs) : p;
 
   function onMove(world: Point, worldPerPixel: number) {
     setRaw({ p: world, wpp: worldPerPixel });
@@ -812,7 +860,7 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
     if (!raw) return null;
     if (snap) return snap.point;
     return placesNow ? constrain(prev, onGrid(raw.p), track) : raw.p;
-  }, [raw, snap, tool, prev, drafting, placesNow]);
+  }, [raw, snap, tool, prev, drafting, placesNow, ucs]);
   const marker = useMemo(
     () => (snap && hover ? markerSegments(snap.point, snap.kind, hover.wpp) : null),
     [snap, hover],

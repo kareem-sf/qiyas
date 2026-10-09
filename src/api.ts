@@ -43,7 +43,11 @@ export type EntityProp =
   | "global_width"
   | "insert_scale"
   | "insert_rotation"
-  | "dim_style";
+  | "dim_style"
+  /** A paper-space viewport's scale (layout units per model unit) and the model point at its
+   *  centre ([x, y]). */
+  | "viewport_scale"
+  | "viewport_centre";
 
 /** What match properties copies (`qiyas_core::MatchProp`). */
 export type MatchProp =
@@ -132,6 +136,25 @@ export type DrawingInfo = {
   groups?: GroupInfo[];
   /** The paper-space viewports of the sheet on screen. */
   viewports?: ViewportInfo[];
+  /** The user coordinate system (world when left out). */
+  ucs?: Ucs;
+};
+
+/** A user coordinate system: an origin and a unit x axis in the plan (`qiyas_core::Ucs`). */
+export type Ucs = { origin: P; x_axis: P };
+
+/** One viewport of a layout and how model space draws inside it (`qiyas_core::PaperView`):
+ *  its frame on the layout, the model point at its centre, layout units per model unit, and the
+ *  spans [first, count] of the model batch's segments, fills and glyph quads it draws (null:
+ *  all of them). */
+export type PaperView = {
+  handle: number;
+  rect: [P, P];
+  centre: P;
+  scale: number;
+  lines: [number, number][] | null;
+  fills: [number, number][] | null;
+  texts: [number, number][] | null;
 };
 
 /** A dimension style's common fields, in drawing units before its `scale` (DIMASZ, DIMTXT,
@@ -216,6 +239,10 @@ export type EntityInfo = {
   global_width?: number | null;
   /** A block reference's scale. */
   scale?: number | null;
+  /** A paper-space viewport's scale (layout units per model unit) and the model point at its
+   *  centre. */
+  viewport_scale?: number | null;
+  viewport_centre?: P | null;
 };
 
 /** A table's cells for the table editor (`qiyas_core::TableInfo`). */
@@ -393,6 +420,24 @@ export async function renderBatch(
   const bytes = await invoke<ArrayBuffer>("render_batch", { ifVersion, pxPerUnit });
   return isNotModified(bytes) ? null : bytes;
 }
+
+/** Names the batch of the sheet `sheet` (block name), which need not be the one on screen. */
+export const sheetBatchVersion = (sheet: string) => invoke<number>("sheet_batch_version", { sheet });
+
+/** `renderBatch` for the sheet `sheet`, which stays off screen: model space for a layout's
+ *  viewports, or a split window's second view. */
+export async function sheetBatch(
+  sheet: string,
+  ifVersion?: number,
+  pxPerUnit?: number,
+): Promise<ArrayBuffer | null> {
+  const bytes = await invoke<ArrayBuffer>("sheet_batch", { sheet, ifVersion, pxPerUnit });
+  return isNotModified(bytes) ? null : bytes;
+}
+
+/** The viewports of the sheet `sheet` (the one on screen when left out) and how model space
+ *  draws inside each. */
+export const paperViews = (sheet?: string) => invoke<PaperView[]>("paper_views", { sheet: sheet ?? null });
 
 /** Raw bytes of the glyph atlas pages changed after `sinceVersion` (all when left out); decode
  *  with `parseAtlas`. */
@@ -961,7 +1006,16 @@ export type Command =
   | { type: "delete_group"; name: string }
   | { type: "ungroup"; targets: EntityTarget[] }
   | { type: "match_properties"; source: EntityTarget; targets: EntityTarget[]; props: MatchProp[] }
-  | { type: "set_property"; target: EntityTarget; prop: EntityProp; value: boolean | string | number };
+  | { type: "set_property"; target: EntityTarget; prop: EntityProp; value: boolean | string | number | P }
+  /** The clipboard: the entities as Qiyas's clipboard text (base null: their lower left), and
+   *  a paste of the system clipboard at `at` (as one block reference with `as_block`). */
+  | { type: "copy_to_clipboard"; targets: EntityTarget[]; base: P | null }
+  | { type: "paste_from_clipboard"; at: P; as_block: boolean; height?: number | null }
+  /** A paper-space viewport on the layout on screen. */
+  | { type: "mview"; corner1: P; corner2: P }
+  /** The user coordinate system (not an undo step): an origin and an x axis, or an entity's. */
+  | { type: "ucs"; origin: P; x_axis: P }
+  | { type: "ucs_object"; target: EntityTarget };
 
 /** Where find and replace looks: the sheet on screen, or every sheet. */
 export type TextScope = "sheet" | "drawing";
@@ -998,7 +1052,9 @@ export type Outcome =
   | { type: "info"; title: string; rows: [string, string][] }
   | { type: "table"; columns: string[]; rows: string[][] }
   /** An edit in place ended: rows that lost their link, undo steps that left with it. */
-  | { type: "block_edit_closed"; name: string; saved: boolean; unlinked: number; dropped: number };
+  | { type: "block_edit_closed"; name: string; saved: boolean; unlinked: number; dropped: number }
+  /** A copy went onto the system clipboard: how many entities. */
+  | { type: "clipboard"; text: string; count: number };
 
 export const runCommand = (cmd: Command) => invoke<Outcome>("run_command", { cmd });
 
@@ -1076,7 +1132,65 @@ export type Settings = {
   aliases: Record<string, string>;
   /** The tool palette; changed only with `setToolPalette`. */
   tool_palette?: PaletteItem[];
+  /** Minutes between autosaves of drawings with unsaved changes; 0 off (5 when left out). */
+  autosave_minutes?: number;
 };
+
+/** What one autosave round did: the `.sv$` files written, and why others could not be. */
+export type AutosaveRun = { written: string[]; failed: string[] };
+
+/** Autosaves every open drawing with unsaved changes (`<name>.sv$` beside it). */
+export const autosaveDrawings = () => invoke<AutosaveRun>("autosave_drawings");
+
+/** An autosave newer than its drawing: the drawing, the autosave, when it was written (seconds
+ *  since 1970). */
+export type Recoverable = { drawing: string; autosave: string; saved_at: number };
+
+/** The autosaves of `paths` newer than their drawings. */
+export const recoverableDrawings = (paths: string[]) =>
+  invoke<Recoverable[]>("recoverable_drawings", { paths });
+
+/** Opens the autosave of the drawing `path` in a new tab, as a new unsaved drawing beside it. */
+export const recoverAutosave = (path: string) => invoke<DrawingInfo>("recover_autosave", { path });
+
+/** Deletes the autosave of the drawing `path`. */
+export const discardAutosave = (path: string) => invoke<void>("discard_autosave", { path });
+
+/** What the failsafe reader made of a file (`qiyas_core::ReadReport`). */
+export type ReadReport = {
+  records: number;
+  decoded: number;
+  skipped: number;
+  entities: number;
+  recovered_errors: number;
+  dropped: { kind: string; count: number }[];
+};
+
+/** RECOVER: opens a damaged drawing in a new tab and says what its reader dropped. */
+export const recoverDrawing = (path: string) =>
+  invoke<{ info: DrawingInfo; report: ReadReport }>("recover_drawing", { path });
+
+/** A sheet set (`.qss`): drawings by path relative to it, and their layouts (none: all). */
+export type SheetSet = { name: string; drawings: { path: string; layouts: string[] }[] };
+
+/** A sheet set drawing as listed: its path on this computer, and whether the file is missing. */
+export type SheetSetEntry = { path: string; layouts: string[]; full: string; missing: boolean };
+
+export type SheetSetView = { set: SheetSet; entries: SheetSetEntry[] };
+
+export const sheetSetOpen = (path: string) => invoke<SheetSetView>("sheet_set_open", { path });
+
+export const sheetSetSave = (path: string, set: SheetSet) =>
+  invoke<SheetSetView>("sheet_set_save", { path, set });
+
+/** The sheet set drawing for `drawing` (inside the set's folder) with all its layouts. */
+export const sheetSetEntry = (qss: string, drawing: string) =>
+  invoke<SheetSet["drawings"][number]>("sheet_set_entry", { qss, drawing });
+
+/** A new sheet set of the open drawings in the folder of `qss` (not written yet); `skipped` names
+ *  those outside it. */
+export const sheetSetFromTabs = (qss: string, name: string) =>
+  invoke<{ set: SheetSet; skipped: string[] }>("sheet_set_from_tabs", { qss, name });
 
 export const getSettings = () => invoke<Settings>("get_settings");
 

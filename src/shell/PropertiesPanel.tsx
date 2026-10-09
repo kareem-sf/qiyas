@@ -19,7 +19,7 @@ type Props = {
   /** Edits the picked entity: only a drawing's own entity at the top of the sheet (never an
    *  xref's or one inside a block). Without it the palette is read-only. Lengths go in drawing
    *  units, angles in degrees. */
-  onSet?(prop: EntityProp, value: boolean | string | number): void;
+  onSet?(prop: EntityProp, value: boolean | string | number | [number, number]): void;
   /** With nothing picked: what new entities are drawn with, and changing it. */
   current?: Current;
   onSetCurrent?(current: Current): void;
@@ -170,6 +170,25 @@ export const PropertiesPanel = memo(function PropertiesPanel({
     if (entity.block_name) row("props.block", entity.block_name, true);
     if (entity.kind === "Insert" && entity.scale !== null && entity.scale !== undefined) {
       row("props.scale", numberField("props.scale", entity.scale, "insert_scale"));
+    }
+    if (entity.viewport_scale !== null && entity.viewport_scale !== undefined) {
+      row("props.viewportScale", numberField("props.viewportScale", entity.viewport_scale, "viewport_scale"));
+    }
+    if (entity.viewport_centre) {
+      const [x, y] = entity.viewport_centre;
+      row(
+        "props.viewportCentre",
+        <Field
+          label={t("props.viewportCentre")}
+          value={`${Number(x.toFixed(6))}, ${Number(y.toFixed(6))}`}
+          onCommit={(s) => {
+            const parts = normalizeDigits(s).split(",").map(typedNumber);
+            if (parts.length === 2 && parts[0] !== null && parts[1] !== null) {
+              onSet("viewport_centre", [parts[0], parts[1]]);
+            }
+          }}
+        />,
+      );
     }
     if (textual && entity.text !== null) {
       row("props.text", <Field label={t("props.text")} dir="auto" value={entity.plain_text ?? entity.text} onCommit={(v) => onSet("text", v)} />, true);

@@ -26,6 +26,7 @@ import type { DrawKind } from "../tools/drawTools";
 import type { EditKind } from "../tools/editTools";
 import type { ModifyKind } from "../tools/modifyTools";
 import type { TextKind } from "../tools/textTools";
+import type { PaperView, Ucs } from "../api";
 import { createRenderer, type Renderer, type Theme } from "./gl";
 import { wheelFactor } from "./wheel";
 
@@ -54,7 +55,15 @@ export type Tool =
   | "geometry"
   | "divide"
   | "measureAlong"
-  | "idPoint";
+  | "idPoint"
+  /** PASTECLIP (Ctrl+V) and PASTEBLOCK: the clipboard pasted at each click. */
+  | "pasteclip"
+  | "pasteblock"
+  /** MVIEW: a paper-space viewport by two corners. */
+  | "mview"
+  /** UCS: an origin, then a point on its x axis; UCS OB: an entity's. */
+  | "ucs"
+  | "ucsObject";
 
 export type ViewportHandle = {
   fitExtents(): void;
@@ -80,6 +89,10 @@ type Props = {
   overlay?: Float64Array | null;
   /** Drawing units between the grid's dots; null or left out for no grid. */
   grid?: number | null;
+  /** The user coordinate system the grid runs along. */
+  ucs?: Ucs | null;
+  /** On a layout: model space (`batch`) drawn inside each of its viewports (`views`). */
+  inset?: { batch: Batch; views: PaperView[] } | null;
   /** A left click; `worldPerPixel` is the zoom at that moment, for pick tolerances; `shift` when
    *  Shift was held, `ctrl` when Ctrl (or Cmd) was. */
   onClick(world: Point, screen: Point, worldPerPixel: number, shift: boolean, ctrl?: boolean): void;
@@ -125,6 +138,8 @@ export function Viewport({
   theme,
   overlay = null,
   grid = null,
+  ucs = null,
+  inset = null,
   onClick,
   boxes = false,
   onBox,
@@ -342,9 +357,14 @@ export function Viewport({
   }, [overlay]);
 
   useEffect(() => {
-    renderer.current!.setGrid(grid);
+    renderer.current!.setGrid(grid, ucs);
     requestDraw();
-  }, [grid]);
+  }, [grid, ucs]);
+
+  useEffect(() => {
+    renderer.current!.setInset(inset?.batch ?? null, inset?.views ?? []);
+    requestDraw();
+  }, [inset]);
 
   const local = (e: PointerEvent): Point => {
     const r = e.currentTarget.getBoundingClientRect();

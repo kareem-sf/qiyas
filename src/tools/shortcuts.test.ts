@@ -63,3 +63,10 @@ test("Ctrl+Tab, Ctrl+Shift+Tab and Ctrl+W go through and close the file tabs", (
   expect(shortcutFor(keys("KeyW"))).toBeNull();
   expect(shortcutFor(keys("KeyW", { ctrlKey: true, shiftKey: true }))).toBeNull();
 });
+
+test("Ctrl+C copies to the clipboard and Ctrl+V pastes, Ctrl+Shift+V as a block", () => {
+  expect(shortcutFor(keys("KeyC", { ctrlKey: true }))).toBe("copyclip");
+  expect(shortcutFor(keys("KeyV", { ctrlKey: true }))).toBe("pasteclip");
+  expect(shortcutFor(keys("KeyV", { ctrlKey: true, shiftKey: true }))).toBe("pasteblock");
+  expect(shortcutFor(keys("KeyC", { ctrlKey: true, shiftKey: true }))).toBe("copybase");
+});

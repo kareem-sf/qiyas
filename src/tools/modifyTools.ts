@@ -29,6 +29,11 @@ export const MODIFY_TOOLS = [
   "ungroup",
   /** MA (MATCHPROP): the first entity picked is the source, the rest take its properties. */
   "matchprop",
+  /** COPYCLIP (Ctrl+C): the entities picked go onto the clipboard, from their lower left. On
+   *  the Home tab's Clipboard group, as is the one below. */
+  "copyclip",
+  /** COPYBASE: the entities picked go onto the clipboard, from the base point clicked. */
+  "copybase",
 ] as const;
 
 export type ModifyKind = (typeof MODIFY_TOOLS)[number];
@@ -97,6 +102,8 @@ const TAKES_BLOCK_DRAWN = new Set<ModifyKind>([
   "group",
   "ungroup",
   "matchprop",
+  "copyclip",
+  "copybase",
 ]);
 
 /** `handles` less the dimensions and tables `kind` can't change, and how many those were. */
@@ -180,6 +187,10 @@ function startPoints(s: ModifyState): ModifyState {
       return done(s, { type: "create_group", name: "", targets: targets(s) });
     case "ungroup":
       return done(s, { type: "ungroup", targets: targets(s) });
+    case "copyclip":
+      return done(s, { type: "copy_to_clipboard", targets: targets(s), base: null });
+    case "copybase":
+      return { ...p, hint: "clip.prompt.base" };
     case "matchprop":
       return done(s, {
         type: "match_properties",
@@ -290,6 +301,8 @@ function addPoint(s: ModifyState, q: Point): ModifyState {
     case "block":
       // The name comes from the app's dialog.
       return done(s, { type: "create_block", name: "", base: q, targets: t, convert_to_insert: true });
+    case "copybase":
+      return done(s, { type: "copy_to_clipboard", targets: t, base: q });
     default:
       return s;
   }

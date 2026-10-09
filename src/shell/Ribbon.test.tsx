@@ -273,3 +273,48 @@ test("Home has a Layers group: layer states, the translator, groups, match prope
   fireEvent.click(box);
   expect(onGroupSelect).toHaveBeenCalledWith(false);
 });
+
+test("the Home tab has the Clipboard group and Recover", () => {
+  const onTool = vi.fn();
+  const onRecover = vi.fn();
+  render(<Ribbon {...props} onTool={onTool} onRecover={onRecover} />);
+  const group = screen.getByRole("group", { name: "Clipboard" });
+  for (const [name, tool] of [
+    ["Copy to clipboard", "copyclip"],
+    ["Copy with base point", "copybase"],
+    ["Paste", "pasteclip"],
+    ["Paste as block", "pasteblock"],
+  ]) {
+    fireEvent.click(within(group).getByRole("button", { name }));
+    expect(onTool).toHaveBeenLastCalledWith(tool);
+  }
+  fireEvent.click(screen.getByRole("button", { name: "Recover…" }));
+  expect(onRecover).toHaveBeenCalled();
+});
+
+test("the View tab has the Viewports group: MVIEW, two views, the UCS and sheet sets", () => {
+  const onTool = vi.fn();
+  const onSplit = vi.fn();
+  const onUcsWorld = vi.fn();
+  const onSheetSet = vi.fn();
+  const { rerender } = render(
+    <Ribbon {...props} onTool={onTool} onSplit={onSplit} onUcsWorld={onUcsWorld} onSheetSet={onSheetSet} />,
+  );
+  fireEvent.click(screen.getByRole("tab", { name: "View" }));
+  const group = screen.getByRole("group", { name: "Viewports" });
+  fireEvent.click(within(group).getByRole("button", { name: "New viewport" }));
+  expect(onTool).toHaveBeenLastCalledWith("mview");
+  fireEvent.click(within(group).getByRole("button", { name: "UCS" }));
+  expect(onTool).toHaveBeenLastCalledWith("ucs");
+  fireEvent.click(within(group).getByRole("button", { name: "UCS from object" }));
+  expect(onTool).toHaveBeenLastCalledWith("ucsObject");
+  fireEvent.click(within(group).getByRole("button", { name: "World UCS" }));
+  expect(onUcsWorld).toHaveBeenCalled();
+  fireEvent.click(within(group).getByRole("button", { name: "Two viewports" }));
+  expect(onSplit).toHaveBeenCalledWith(true);
+  fireEvent.click(within(group).getByRole("button", { name: "Sheet set…" }));
+  expect(onSheetSet).toHaveBeenCalled();
+  rerender(<Ribbon {...props} split onSplit={onSplit} />);
+  fireEvent.click(screen.getByRole("button", { name: "One viewport" }));
+  expect(onSplit).toHaveBeenLastCalledWith(false);
+});

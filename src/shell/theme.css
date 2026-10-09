@@ -2173,3 +2173,59 @@ button.close {
 .attdefs input {
   width: 100%;
 }
+
+/* VPORTS: the main view and the second one side by side. */
+.views {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.views > .viewport {
+  min-width: 0;
+}
+.split-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border-inline-start: 1px solid var(--rule);
+}
+.split-bar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 6px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--rule);
+}
+.split-view {
+  flex: 1;
+  min-height: 0;
+}
+
+/* The recovery dialog and the sheet set manager: one drawing a row. */
+.recovery-list,
+.sheet-set-list {
+  list-style: none;
+  margin: 8px 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.recovery-list li,
+.sheet-set-list li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.recovery-list .actions {
+  margin-inline-start: auto;
+}
+.sheet-set-list button {
+  margin-inline-start: auto;
+}
+:is(.recovery, .sheet-set) .muted {
+  color: var(--muted);
+}

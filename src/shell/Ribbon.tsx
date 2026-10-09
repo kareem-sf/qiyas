@@ -69,10 +69,22 @@ type Props = {
    *  handler. */
   groupSelect?: boolean;
   onGroupSelect?(on: boolean): void;
+  /** VPORTS: two views side by side (`split`) or one. */
+  split?: boolean;
+  onSplit?(two: boolean): void;
+  /** UCS W: back to the world coordinate system. */
+  onUcsWorld?(): void;
+  /** Opens the sheet set manager (SHEETSET). */
+  onSheetSet?(): void;
+  /** RECOVER: opens a damaged drawing and says what was dropped. */
+  onRecover?(): void;
 };
 
 /** The modify tools on the Home tab's Layers group, not its Modify group. */
 const LAYER_TOOLS = ["group", "ungroup", "matchprop"] as const;
+
+/** The Home tab's Clipboard group: the copies are modify tools, the pastes click tools. */
+const CLIPBOARD_TOOLS = ["copyclip", "copybase", "pasteclip", "pasteblock"] as const;
 
 type Tab = "home" | "measure" | "annotate" | "insert" | "view";
 const TABS: Tab[] = ["home", "measure", "annotate", "insert", "view"];
@@ -150,6 +162,7 @@ export function Ribbon(props: Props) {
           ),
           action("save", props.onSave),
           action("saveAs", props.onSaveAs),
+          action("recover.button", props.onRecover),
           action("exportTakeoff", props.onExport),
           action("importBoq", props.onImportBoq),
           action("compare", props.onCompare),
@@ -163,12 +176,19 @@ export function Ribbon(props: Props) {
           </span>,
           <span key="sep-modify" className="sep" />,
           <span key="modify" className="ribbon-group" role="group" aria-label={t("modify.group")}>
-            {MODIFY_TOOLS.filter((name) => name !== "block" && !(LAYER_TOOLS as readonly string[]).includes(name)).map(
-              (name) => tool(name, `modify.${name}`),
-            )}
+            {MODIFY_TOOLS.filter(
+              (name) =>
+                name !== "block" &&
+                !(LAYER_TOOLS as readonly string[]).includes(name) &&
+                !(CLIPBOARD_TOOLS as readonly string[]).includes(name),
+            ).map((name) => tool(name, `modify.${name}`))}
             {/* The second row of Modify: trim, extend, fillet… */}
             <span className="ribbon-break" />
             {EDIT_TOOLS.map((name) => tool(name, `edit.${name}`))}
+          </span>,
+          <span key="sep-clipboard" className="sep" />,
+          <span key="clipboard" className="ribbon-group" role="group" aria-label={t("clip.group")}>
+            {CLIPBOARD_TOOLS.map((name) => tool(name, `clip.${name}`))}
           </span>,
           <span key="sep-text" className="sep" />,
           <span key="text" className="ribbon-group" role="group" aria-label={t("text.group")}>
@@ -250,6 +270,15 @@ export function Ribbon(props: Props) {
           action("attachPdf", props.onAttachPdf),
           action("attachImage", props.onAttachImage),
           action("calibrate", props.onCalibrate),
+          <span key="sep-vports" className="sep" />,
+          <span key="vports" className="ribbon-group" role="group" aria-label={t("vport.group")}>
+            {tool("mview", "vport.mview")}
+            {action(props.split ? "vport.one" : "vport.two", props.onSplit && (() => props.onSplit!(!props.split)))}
+            {tool("ucs", "ucs.tool")}
+            {tool("ucsObject", "ucs.object")}
+            {action("ucs.world", props.onUcsWorld)}
+            {action("sheetSet.button", props.onSheetSet)}
+          </span>,
           <span key="sep" className="sep" />,
           <label key="arabicReversed" className="ribbon-check">
             <input

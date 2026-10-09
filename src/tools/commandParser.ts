@@ -4,11 +4,12 @@
  *  Command names and aliases match in any case. Numbers take Arabic-Indic digits and the Arabic
  *  decimal separator (٫); points take `,` or `،` between x and y. Points are in drawing units:
  *  `x,y` absolute, `@dx,dy` from the last point, `@distance<angle` (degrees) from the last point. */
-import type { DrawSpec } from "../api";
+import type { DrawSpec, Ucs } from "../api";
 import type { Point } from "../viewport/camera";
 import type { Tool } from "../viewport/Viewport";
 import { COMMANDS, type CommandName } from "./aliases";
 import type { DraftingToggle } from "./shortcuts";
+import { dirToWorld, toWorld, ucsDegrees, WORLD } from "./ucs";
 
 /** What the command line is waiting for: a command, a point (which a command may replace), or the
  *  number of parts or the step (metres) of a divide or measure along. */
@@ -25,6 +26,8 @@ export type ParseState = {
   /** Where a point is expected, a lone number is a distance (a radius, an axis, an arc length,
    *  above 0) or, with "angle", an angle in degrees (any sign). */
   numberToo?: boolean | "distance" | "angle";
+  /** The user coordinate system typed points are in (the world's when left out). */
+  ucs?: Ucs;
 };
 
 /** One of the app's own actions, run from the command line. */
@@ -53,7 +56,15 @@ export type Run =
   | "layerStates"
   | "layerTranslate"
   | "vpLayer"
-  | "properties";
+  | "properties"
+  /** VPORTS: two views side by side and back (`vports2` two, `vports1` one). */
+  | "vports"
+  | "vports1"
+  | "vports2"
+  /** UCS W: back to the world coordinate system. */
+  | "ucsWorld"
+  | "sheetSet"
+  | "recover";
 
 export type Action =
   /** An empty line where a command is expected: run the last command again. */
@@ -111,6 +122,8 @@ const RUNS: Partial<Record<CommandName, Run>> = {
   LAYTRANS: "layerTranslate",
   VPLAYER: "vpLayer",
   PROPERTIES: "properties",
+  SHEETSET: "sheetSet",
+  RECOVER: "recover",
 };
 
 const TOOLS: Partial<Record<CommandName, Tool>> = {
@@ -183,6 +196,11 @@ const TOOLS: Partial<Record<CommandName, Tool>> = {
   BEDIT: "refedit",
   ATTDEF: "attdef",
   ATTEDIT: "textEdit",
+  COPYCLIP: "copyclip",
+  COPYBASE: "copybase",
+  PASTECLIP: "pasteclip",
+  PASTEBLOCK: "pasteblock",
+  MVIEW: "mview",
 };
 
 /** The draws typed whole on one line. */
@@ -224,8 +242,10 @@ function readNumber(text: string): number | null {
 /** Looks like a try at a point or a number rather than a command. */
 const numeric = (text: string) => /^[-+.@\d]/.test(normalizeDigits(text.trim()));
 
-/** A typed point, an error for a malformed one, or null when `text` is no point at all. */
-function readPoint(text: string, last: Point | null): Point | ParseError | null {
+/** A typed point, an error for a malformed one, or null when `text` is no point at all. Read in
+ *  `ucs`: `x,y` from its origin along its axes, `@dx,dy` along its axes, `@d<a` with `a` from
+ *  its x axis. */
+function readPoint(text: string, last: Point | null, ucs: Ucs = WORLD): Point | ParseError | null {
   const t = normalizeDigits(text.trim());
   if (!numeric(t)) return null;
   const bad: ParseError = { type: "error", key: "cmd.badPoint" };
@@ -235,14 +255,16 @@ function readPoint(text: string, last: Point | null): Point | ParseError | null 
   if (relative && body.includes("<")) {
     const [d, a] = body.split("<").map((s) => readNumber(s));
     if (d === null || a === null || body.split("<").length !== 2) return bad;
-    const rad = (a * Math.PI) / 180;
+    const rad = ((a + ucsDegrees(ucs)) * Math.PI) / 180;
     return [last![0] + d * Math.cos(rad), last![1] + d * Math.sin(rad)];
   }
   const parts = body.split(",");
   if (parts.length !== 2) return bad;
   const [x, y] = parts.map((s) => readNumber(s));
   if (x === null || y === null) return bad;
-  return relative ? [last![0] + x, last![1] + y] : [x, y];
+  if (!relative) return toWorld(ucs, [x, y]);
+  const [dx, dy] = dirToWorld(ucs, [x, y]);
+  return [last![0] + dx, last![1] + dy];
 }
 
 /** Splits on spaces; double quotes keep a name with spaces in one word. */
@@ -277,7 +299,12 @@ function expand(line: string, aliases: Record<string, string>): { name: string; 
 
 /** Reads the words of a typed draw: numbers and points, `@` from the point before (the first from
  *  `last`). Null when a word is not what `pattern` asks for ("n" a number, "p" a point). */
-function readWords(words: string[], pattern: string, last: Point | null): (number | Point)[] | null {
+function readWords(
+  words: string[],
+  pattern: string,
+  last: Point | null,
+  ucs?: Ucs,
+): (number | Point)[] | null {
   if (words.length !== pattern.length) return null;
   const out: (number | Point)[] = [];
   for (let i = 0; i < words.length; i++) {
@@ -286,7 +313,7 @@ function readWords(words: string[], pattern: string, last: Point | null): (numbe
       if (n === null) return null;
       out.push(n);
     } else {
-      const p = readPoint(words[i], last);
+      const p = readPoint(words[i], last, ucs);
       if (!Array.isArray(p)) return null;
       out.push(p);
       last = p;
@@ -298,26 +325,26 @@ function readWords(words: string[], pattern: string, last: Point | null): (numbe
 /** The draw a whole line describes (see `TYPED_DRAWS`), or null when it is malformed:
  *  POLYGON sides centre radius [I|C], DONUT inner outer centre, RAY and XLINE point through,
  *  SOLID 3 or 4 points, TRACE width points, MLINE and SKETCH points. */
-function typedDraw(cmd: string, rest: string, last: Point | null): Action | null {
+function typedDraw(cmd: string, rest: string, last: Point | null, ucs?: Ucs): Action | null {
   const words = tokenize(rest);
   const draw = (spec: DrawSpec): Action => ({ type: "draw", spec });
   const points = (from: number, min: number, max = Infinity) => {
     const n = words.length - from;
     if (n < min || n > max) return null;
-    const read = readWords(words.slice(from), "p".repeat(n), last);
+    const read = readWords(words.slice(from), "p".repeat(n), last, ucs);
     return read as Point[] | null;
   };
   switch (cmd) {
     case "POLYGON": {
       const how = words[3]?.toUpperCase();
       if (how !== undefined && how !== "I" && how !== "C") return null;
-      const read = readWords(words.slice(0, 3), "npn", last);
+      const read = readWords(words.slice(0, 3), "npn", last, ucs);
       if (!read) return null;
       const [sides, centre, radius] = read as [number, Point, number];
       return draw({ kind: "polygon", centre, sides, radius, inscribed: how !== "C" });
     }
     case "DONUT": {
-      const read = readWords(words, "nnp", last);
+      const read = readWords(words, "nnp", last, ucs);
       if (!read) return null;
       const [inner, outer, centre] = read as [number, number, Point];
       return draw({ kind: "donut", centre, inner, outer });
@@ -352,7 +379,12 @@ function typedDraw(cmd: string, rest: string, last: Point | null): Action | null
   }
 }
 
-function command(line: string, aliases: Record<string, string>, last: Point | null): Action | ParseError {
+function command(
+  line: string,
+  aliases: Record<string, string>,
+  last: Point | null,
+  ucs?: Ucs,
+): Action | ParseError {
   const { name, rest } = expand(line, aliases);
   if (!(COMMANDS as readonly string[]).includes(name)) {
     return { type: "error", key: "cmd.unknown", args: { name: line.trim().split(/\s/, 1)[0] } };
@@ -365,7 +397,7 @@ function command(line: string, aliases: Record<string, string>, last: Point | nu
   const toggle = TOGGLES[cmd];
   if (toggle) return { type: "toggle", toggle };
   const needs = (key: string): ParseError => ({ type: "error", key, args: { name: cmd } });
-  if (TYPED_DRAWS.includes(cmd)) return typedDraw(cmd, rest, last) ?? needs("cmd.drawUsage");
+  if (TYPED_DRAWS.includes(cmd)) return typedDraw(cmd, rest, last, ucs) ?? needs("cmd.drawUsage");
   switch (cmd) {
     case "ESC":
       return { type: "cancel" };
@@ -396,6 +428,19 @@ function command(line: string, aliases: Record<string, string>, last: Point | nu
       return rest ? { type: "sheet", name: oneName(rest) } : needs("cmd.needSheet");
     case "AI":
       return rest ? { type: "ai", text: rest } : needs("cmd.needText");
+    case "VPORTS": {
+      const how = rest.trim();
+      if (how === "") return { type: "run", what: "vports" };
+      if (how === "1" || how === "2") return { type: "run", what: how === "1" ? "vports1" : "vports2" };
+      return { type: "error", key: "cmd.vportsOption" };
+    }
+    case "UCS": {
+      const how = rest.trim().toUpperCase();
+      if (how === "") return { type: "tool", tool: "ucs" };
+      if (how === "W" || how === "WORLD") return { type: "run", what: "ucsWorld" };
+      if (how === "OB" || how === "OBJECT") return { type: "tool", tool: "ucsObject" };
+      return { type: "error", key: "cmd.ucsOption" };
+    }
     default:
       return { type: "error", key: "cmd.unknown", args: { name: cmd } };
   }
@@ -429,7 +474,7 @@ export function parse(line: string, state: ParseState): Action | ParseError {
         ? { type: "distance", value }
         : { type: "error", key: "cmd.badDistance" };
     }
-    const p = readPoint(text, state.last);
+    const p = readPoint(text, state.last, state.ucs);
     if (p !== null) return Array.isArray(p) ? { type: "point", p } : p;
   }
   if ((state.expect === "count" || state.expect === "step") && numeric(text)) {
@@ -437,7 +482,7 @@ export function parse(line: string, state: ParseState): Action | ParseError {
     const bad = state.expect === "count" ? badCount(value) : badStep(value);
     return bad ?? { type: "number", value: value! };
   }
-  return command(text, state.aliases, state.last);
+  return command(text, state.aliases, state.last, state.ucs);
 }
 
 /** One autocomplete entry: a command, or an alias and the command it runs. */

@@ -21,3 +21,14 @@ test("grid snap rounds to the nearest dot", () => {
   expect(gridRound([1.26, -0.74], 0.5)).toEqual([1.5, -0.5]);
   expect(gridRound([1.26, -0.74], 0)).toEqual([1.26, -0.74]);
 });
+
+test("ortho and the grid follow the UCS", () => {
+  const ucs = { origin: [1, 1] as [number, number], x_axis: [Math.SQRT1_2, Math.SQRT1_2] as [number, number] };
+  // Along the UCS x axis (45 degrees in the world), from (1, 1).
+  const [x, y] = constrain([1, 1], [3, 3.2], { ...NO_TRACK, ortho: true, ucs });
+  expect(x - 1).toBeCloseTo(y - 1, 9);
+  // A grid dot of the UCS: 1 along its x axis from its origin.
+  const [gx, gy] = gridRound([1.75, 1.65], 1, ucs);
+  expect(gx).toBeCloseTo(1 + Math.SQRT1_2, 9);
+  expect(gy).toBeCloseTo(1 + Math.SQRT1_2, 9);
+});

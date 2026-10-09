@@ -36,3 +36,11 @@ test("the cursor shows in metres with an m suffix", () => {
   );
   expect(container.querySelector(".cursor")?.textContent).toBe("12.50, -3.00 m");
 });
+
+test("the cursor shows in the UCS, marked as such", () => {
+  const ucs = { origin: [10, 5] as [number, number], x_axis: [0, 1] as [number, number] };
+  const { container } = render(
+    <StatusBar {...props} cursor={[10, 6]} precision={2} problems={[]} ucs={ucs} />,
+  );
+  expect(container.querySelector(".cursor")?.textContent).toBe("UCS 1.00, 0.00 m");
+});

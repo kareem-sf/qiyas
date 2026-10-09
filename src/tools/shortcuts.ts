@@ -46,6 +46,10 @@ export function shortcutFor(e: Keys): Shortcut | null {
     // The file tabs, as in a browser.
     if (e.code === "Tab") return e.shiftKey ? "prevTab" : "nextTab";
     if (e.code === "KeyW" && !e.shiftKey) return "closeTab";
+    // The clipboard, as in AutoCAD: Ctrl+Shift+C copies with a base point, Ctrl+Shift+V pastes
+    // as a block.
+    if (e.code === "KeyC") return e.shiftKey ? "copybase" : "copyclip";
+    if (e.code === "KeyV") return e.shiftKey ? "pasteblock" : "pasteclip";
     return null;
   }
   if (e.code === "Escape") return "escape";

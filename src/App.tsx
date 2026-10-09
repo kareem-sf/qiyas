@@ -65,6 +65,21 @@ import {
   takeoff,
   totals,
   undo,
+  autosaveDrawings,
+  discardAutosave,
+  paperViews,
+  recoverableDrawings,
+  recoverAutosave,
+  recoverDrawing,
+  sheetBatch,
+  sheetBatchVersion,
+  sheetSetEntry,
+  sheetSetFromTabs,
+  sheetSetOpen,
+  sheetSetSave,
+  type PaperView,
+  type ReadReport,
+  type Recoverable,
   type AiUi,
   type BlockInfo,
   type Boq,
@@ -131,6 +146,8 @@ import { GroupNameDialog, LayerStatesDialog } from "./shell/LayerDialogs";
 import { LayersPanel } from "./shell/LayersPanel";
 import { LayerTranslator } from "./shell/LayerTranslator";
 import { PropertiesPanel } from "./shell/PropertiesPanel";
+import { RecoverReportDialog, RecoveryDialog } from "./shell/RecoveryDialog";
+import { SheetSetManager, type SheetSetApi } from "./shell/SheetSetManager";
 import { Ribbon, type Tool } from "./shell/Ribbon";
 import { SettingsDialog } from "./shell/SettingsDialog";
 import { DimStylePanel } from "./shell/DimStylePanel";
@@ -174,9 +191,12 @@ import {
 } from "./viewport/batch";
 import type { Bounds, Point } from "./viewport/camera";
 import type { Theme } from "./viewport/gl";
+import { SplitPane } from "./viewport/SplitPane";
 import { Viewport, type ViewportHandle } from "./viewport/Viewport";
 
 const THEME_KEY = "qiyas.theme";
+
+const MODEL = "*Model_Space";
 
 /** The drafting setting each switch turns on and off. */
 const TOGGLED: Record<DraftingToggle, "osnap" | "grid" | "ortho" | "polar"> = {
@@ -245,6 +265,16 @@ export default function App() {
    *  nothing on the sheet doesn't fetch the whole batch again. */
   const batchHeld = useRef<Batch | null>(null);
   const batchVersionRef = useRef<number | null>(null);
+  /** On a layout: model space drawn inside its viewports, and the core's version of it. */
+  const [inset, setInset] = useState<{ batch: Batch; views: PaperView[] } | null>(null);
+  const insetHeld = useRef<{ version: number; batch: Batch } | null>(null);
+  /** VPORTS: a second view beside the main one. */
+  const [split, setSplit] = useState(false);
+  /** Autosaves to offer back (on launch, or before opening `then`). */
+  const [recovery, setRecovery] = useState<{ items: Recoverable[]; then: string | null } | null>(null);
+  /** What RECOVER read and dropped from a damaged drawing. */
+  const [recoverReport, setRecoverReport] = useState<{ path: string; report: ReadReport } | null>(null);
+  const [sheetSetShown, setSheetSetShown] = useState(false);
   /** Bumped to run the fit effect when a redraw keeps the batch it has. */
   const [fitTick, setFitTick] = useState(0);
   /** Every glyph atlas page received for this drawing, and the atlas version they make up. */
@@ -497,7 +527,10 @@ export default function App() {
 
   /** Runs a take-off command; a new measurement becomes the selected row. An inquiry's answer
    *  shows in the info card. */
-  async function apply(cmd: Command) {
+  async function apply(given: Command) {
+    // Plain text pastes as a text as tall as new text is.
+    const cmd: Command =
+      given.type === "paste_from_clipboard" ? { ...given, height: currentTextHeight } : given;
     // BLOCK's base point is clicked: the name comes from its dialog.
     if (cmd.type === "create_block" && cmd.name === "") {
       await run(async () => setCreateBlockAsk({ cmd, names: (await readBlocks()).map((b) => b.name) }));
@@ -506,6 +539,29 @@ export default function App() {
     // GROUP's entities are picked: the name comes from its dialog.
     if (cmd.type === "create_group" && cmd.name === "") {
       setGroupAsk(cmd);
+      return;
+    }
+    // A copy goes onto the system clipboard and changes nothing; back to Select.
+    if (cmd.type === "copy_to_clipboard") {
+      await run(async () => {
+        const outcome = await runCommand(cmd);
+        if (outcome.type === "clipboard") setNotice(t("clip.copied", { n: outcome.count }));
+        chooseTool("select");
+      });
+      return;
+    }
+    // The UCS is view state: the info carries it to the cursor, typed points and the grid; the
+    // project file keeps it.
+    if (cmd.type === "ucs" || cmd.type === "ucs_object") {
+      let set = false;
+      await run(async () => {
+        await runCommand(cmd);
+        await syncInfo();
+        set = true;
+        const world = cmd.type === "ucs" && cmd.origin[0] === 0 && cmd.origin[1] === 0 && cmd.x_axis[0] > 0 && cmd.x_axis[1] === 0;
+        setNotice(t(world ? "ucs.worldSet" : "ucs.set"));
+      });
+      if (set) await autosave();
       return;
     }
     // Groups and matched properties change what the layers panel and the palette show.
@@ -547,9 +603,16 @@ export default function App() {
         "tolerance",
         "insert_block",
         "edit_block_in_place",
+        "paste_from_clipboard",
+        "mview",
       ];
       if (drawingChanged.includes(cmd.type)) {
         await redraw();
+      }
+      // A new viewport shows in the layers panel's VP freeze column.
+      if (cmd.type === "mview") await syncInfo();
+      if (cmd.type === "paste_from_clipboard" && outcome.type === "added") {
+        setNotice(t("clip.pasted", { n: outcome.handles.length }));
       }
       // An edit in place began: the bar to end it shows, and Select works on the block.
       if (cmd.type === "edit_block_in_place") {
@@ -598,6 +661,7 @@ export default function App() {
       groupOf,
     },
     drafting,
+    info?.ucs,
   );
 
   /** The height new text takes: the last one used, else 2.5 mm on paper in drawing units at the
@@ -1025,6 +1089,33 @@ export default function App() {
     batchHeld.current = next;
     fitNext.current = fit;
     setBatch(next);
+    await syncInset();
+  }
+
+  /** On a layout, fetches model space for its viewports (when the core's changed) and how each
+   *  shows it; elsewhere drops it. Its glyphs are drawn for the largest viewport's zoom. */
+  async function syncInset(pxPerUnit?: number) {
+    const gen = switchGen.current;
+    const views = await paperViews();
+    if (isStale(gen, switchGen.current)) return;
+    if (views.length === 0) {
+      insetHeld.current = null;
+      setInset(null);
+      return;
+    }
+    const version = await sheetBatchVersion(MODEL);
+    let model = pxPerUnit === undefined && insetHeld.current?.version === version ? insetHeld.current.batch : null;
+    if (!model) {
+      const scale = Math.max(...views.map((v) => v.scale));
+      const px = (pxPerUnit ?? viewport.current?.pxPerUnit() ?? 1) * scale;
+      const bytes = await sheetBatch(MODEL, undefined, px);
+      if (!bytes || isStale(gen, switchGen.current)) return;
+      model = parseBatch(bytes);
+      await syncAtlas(model);
+      if (isStale(gen, switchGen.current)) return;
+    }
+    insetHeld.current = { version, batch: model };
+    setInset({ batch: model, views });
   }
 
   /** Fetches the underlay pictures in `visible` that `next` needs for a zoom of `pxPerUnit` and
@@ -1079,6 +1170,7 @@ export default function App() {
       batchVersionRef.current = version;
       batchHeld.current = next;
       setBatch(next);
+      if (insetHeld.current) await syncInset(pxPerUnit);
     });
     glyphsBusy.current = false;
   }
@@ -1259,11 +1351,48 @@ export default function App() {
     };
   }, []);
 
+  // On launch: the recent drawings' autosaves newer than them are offered back.
+  useEffect(() => {
+    (async () => {
+      const paths = (await readRecents()).map((r) => r.path);
+      const found = await recoverableDrawings(paths);
+      if (found.length > 0) setRecovery((r) => r ?? { items: found, then: null });
+    })().catch(() => {});
+  }, []);
+
+  // Autosave: every few minutes (settings, 5 by default, 0 off) the drawings with unsaved changes
+  // are written to <name>.sv$ beside them, with their project.
+  useEffect(() => {
+    let timer = 0;
+    let gone = false;
+    getSettings()
+      .then((s) => {
+        const minutes = s.autosave_minutes ?? 5;
+        if (gone || !(minutes > 0)) return;
+        timer = window.setInterval(() => {
+          autosaveDrawings()
+            .then((done) => {
+              if (done.failed.length > 0) setError(t("autosave.failed", { error: done.failed.join("; ") }));
+            })
+            .catch((e) => setError(t("autosave.failed", { error: String(e) })));
+        }, minutes * 60_000);
+      })
+      .catch(() => {});
+    return () => {
+      gone = true;
+      clearInterval(timer);
+    };
+  }, [settingsOpen]);
+
   /** Forgets everything the window holds about the drawing on screen: the batch, the glyph atlas
    *  and the pictures (all per drawing), the selection, the tool's points, prompts and dialogs. */
   function resetDrawingView() {
     batchVersionRef.current = null;
     batchHeld.current = null;
+    insetHeld.current = null;
+    setInset(null);
+    // The second view showed another drawing's sheet.
+    setSplit(false);
     atlasVersionRef.current = null;
     atlasHeld.current = new Map();
     setAtlas([]);
@@ -1338,8 +1467,17 @@ export default function App() {
   }
 
   /** Opens the drawing at `path` in a new tab, or shows its tab when it is open already; nothing
-   *  happens when it is the drawing on screen. */
-  async function openPath(path: string) {
+   *  happens when it is the drawing on screen. An autosave newer than the drawing is offered first
+   *  (`recover` false skips that: the user chose to open the drawing itself). */
+  async function openPath(path: string, recover = true) {
+    if (recover) {
+      const found = await recoverableDrawings([path]).catch(() => []);
+      const open = fileTabs.some((f) => f.path === path);
+      if (found.length > 0 && !open) {
+        setRecovery({ items: found, then: path });
+        return;
+      }
+    }
     setOpening(true);
     await drawingChange(() =>
       run(async () => {
@@ -1356,6 +1494,74 @@ export default function App() {
     const path = await open({ filters: [{ name: "Drawings", extensions: ["dwg", "dxf"] }] });
     if (typeof path !== "string") return;
     await openPath(path);
+  }
+
+  /** Recover: the autosave of `drawing` opens in a new tab as a new drawing beside it, and Save As
+   *  asks where it goes. */
+  async function recoverFrom(drawing: string) {
+    let shown = false;
+    await drawingChange(async () => {
+      const next = await recoverAutosave(drawing);
+      await showDrawing(next, beginShow());
+      await refreshTabs();
+      shown = true;
+    });
+    dropRecovery(drawing);
+    if (shown) await saveFileAs();
+  }
+
+  /** Discard: the autosave of `drawing` is deleted; the drawing about to open opens. */
+  async function discardFrom(drawing: string) {
+    await discardAutosave(drawing);
+    const then = recovery?.then;
+    dropRecovery(drawing);
+    if (then === drawing) await openPath(drawing, false);
+  }
+
+  /** `drawing` is dealt with: the dialog goes when nothing is left in it. */
+  function dropRecovery(drawing: string) {
+    setRecovery((r) => {
+      const items = r?.items.filter((i) => i.drawing !== drawing) ?? [];
+      return r && items.length > 0 ? { ...r, items } : null;
+    });
+  }
+
+  /** RECOVER: a damaged drawing opens in a new tab through the failsafe reader, and the dialog
+   *  says what was dropped. */
+  async function recoverFile() {
+    const path = await open({ filters: [{ name: "Drawings", extensions: ["dwg", "dxf"] }] });
+    if (typeof path !== "string") return;
+    await drawingChange(() =>
+      run(async () => {
+        const { info: next, report } = await recoverDrawing(path);
+        await showDrawing(next, beginShow());
+        await refreshTabs();
+        setRecoverReport({ path, report });
+      }),
+    );
+  }
+
+  /** The sheet set manager's file dialogs and core commands. */
+  const sheetSetApi: SheetSetApi = {
+    open: sheetSetOpen,
+    save: sheetSetSave,
+    fromTabs: sheetSetFromTabs,
+    entry: sheetSetEntry,
+    pickNew: async () =>
+      (await save({ filters: [{ name: t("sheetSet.title"), extensions: ["qss"] }] })) ?? null,
+    pickOpen: async () => {
+      const path = await open({ filters: [{ name: t("sheetSet.title"), extensions: ["qss"] }] });
+      return typeof path === "string" ? path : null;
+    },
+    pickDrawing: async () => {
+      const path = await open({ filters: [{ name: "Drawings", extensions: ["dwg", "dxf"] }] });
+      return typeof path === "string" ? path : null;
+    },
+  };
+
+  /** Opens every drawing of a sheet set, a tab each, one after another. */
+  async function openAll(paths: string[]) {
+    for (const path of paths) await openPath(path);
   }
 
   /** Shows the drawing of tab `id` (call inside `drawingChange`); false when that failed (the
@@ -1685,7 +1891,7 @@ export default function App() {
 
   /** The palette's edit of the picked entity (a drawing's own, at the top of the sheet). */
   const setPickedProperty = useCallback(
-    (prop: EntityProp, value: boolean | string | number) => {
+    (prop: EntityProp, value: boolean | string | number | [number, number]) => {
       if (!pickedInfo) return;
       runLayerCommand({ type: "set_property", target: { handle: pickedInfo.handle, chain: [] }, prop, value });
     },
@@ -1954,6 +2160,15 @@ export default function App() {
       openFile();
       return;
     }
+    // Both open drawings: none needs to be open.
+    if (what === "recover") {
+      recoverFile();
+      return;
+    }
+    if (what === "sheetSet") {
+      setSheetSetShown(true);
+      return;
+    }
     if (!info) {
       setError(t("cmd.noDrawing"));
       return;
@@ -2003,6 +2218,14 @@ export default function App() {
         return setLayerStatesOpen(true);
       case "layerTranslate":
         return setTranslatorOpen(true);
+      case "vports":
+        return setSplit(!split);
+      case "vports1":
+        return setSplit(false);
+      case "vports2":
+        return setSplit(true);
+      case "ucsWorld":
+        return apply({ type: "ucs", origin: [0, 0], x_axis: [1, 0] });
       case "vpLayer": {
         const box = document.querySelector<HTMLElement>(".layers .vp-freeze");
         if (box) box.focus();
@@ -2062,6 +2285,9 @@ export default function App() {
         if (e.target instanceof HTMLButtonElement) return;
         measure.finish();
       } else if (action && !e.repeat) {
+        // Text selected in a panel: Ctrl+C copies it, as anywhere else.
+        const text = window.getSelection()?.toString() ?? "";
+        if ((action === "copyclip" || action === "copybase") && text !== "") return;
         chooseTool(action);
       }
     }
@@ -2315,6 +2541,11 @@ export default function App() {
   } else if (tool === "zoomWindow") {
     expect = "point";
     promptKey = measure.corner ? "cmd.prompt.otherCorner" : "cmd.prompt.firstCorner";
+  } else if (tool === "pasteclip" || tool === "pasteblock" || tool === "mview" || tool === "ucs") {
+    expect = "point";
+    promptKey = measure.hint;
+  } else if (tool === "ucsObject") {
+    promptKey = measure.hint;
   } else if (
     tool === "count" ||
     tool === "geometry" ||
@@ -2330,6 +2561,7 @@ export default function App() {
     aliases: commandAliases,
     options: measure.drawOptions,
     numberToo: measure.takesNumber,
+    ucs: info?.ucs,
   };
   const sheetShown = info?.sheets.find((s) => s.block.toLowerCase() === sheet.toLowerCase());
   const sheetName = sheetShown?.name ?? sheet;
@@ -2399,6 +2631,11 @@ export default function App() {
           onTranslateLayers={info ? () => setTranslatorOpen(true) : undefined}
           groupSelect={groupSelect}
           onGroupSelect={setGroupSelect}
+          split={split}
+          onSplit={info ? setSplit : undefined}
+          onUcsWorld={info ? () => apply({ type: "ucs", origin: [0, 0], x_axis: [1, 0] }) : undefined}
+          onSheetSet={() => setSheetSetShown(true)}
+          onRecover={recoverFile}
           arabicReversed={arabicReversed}
           onArabicReversed={info ? chooseArabicReversed : undefined}
           {...(onModel && {
@@ -2875,61 +3112,79 @@ export default function App() {
             onSelect={(id) => id !== activeTab && switchTab(id)}
             onClose={(id) => closeFileTab(id)}
           />
-          <div className="viewport" ref={viewportBox} tabIndex={0}>
-            <Viewport
-              ref={viewport}
-              batch={batch}
-              atlas={atlas}
-              onZoomHint={redrawGlyphs}
-              pictures={pictures}
-              onPictureHint={(px, visible) => run(() => syncPictures(batchHeld.current, px, visible))}
-              highlight={highlight}
-              overlay={overlay}
-              tool={tool}
-              theme={theme}
-              onClick={clickDrawing}
-              boxes={measure.boxes && !pending}
-              onBox={(bounds, crossing, shift) => {
-                if (switching.current === 0) measure.onBox(bounds, crossing, shift);
-              }}
-              grid={drafting?.grid ? drafting.grid_spacing : null}
-              onMove={measure.onMove}
-              onWindowZoomed={measure.cancel}
-            />
-            {measure.asking && info && (
-              <AlongPrompt
-                key={measure.asking}
-                kind={measure.asking}
-                units={info.units}
-                onAnswer={(value) => {
-                  measure.answer(value);
-                  focusDrawing();
+          <div className="views">
+            <div className="viewport" ref={viewportBox} tabIndex={0}>
+              <Viewport
+                ref={viewport}
+                batch={batch}
+                atlas={atlas}
+                onZoomHint={redrawGlyphs}
+                pictures={pictures}
+                onPictureHint={(px, visible) => run(() => syncPictures(batchHeld.current, px, visible))}
+                highlight={highlight}
+                overlay={overlay}
+                tool={tool}
+                theme={theme}
+                onClick={clickDrawing}
+                boxes={measure.boxes && !pending}
+                onBox={(bounds, crossing, shift) => {
+                  if (switching.current === 0) measure.onBox(bounds, crossing, shift);
                 }}
-                onCancel={() => {
-                  measure.cancel();
-                  focusDrawing();
-                }}
+                grid={drafting?.grid ? drafting.grid_spacing : null}
+                ucs={info?.ucs}
+                inset={inset}
+                onMove={measure.onMove}
+                onWindowZoomed={measure.cancel}
               />
-            )}
-            {textEditor && info && (
-              <InPlaceText
-                key={textEditor.key}
-                at={textEditor.at}
-                styles={info.text_styles}
-                style={currentTextStyle}
-                height={textEditor.request.height ?? currentTextHeight}
-                onSubmit={(d) => placeInPlace(textEditor.request, d)}
-                onCancel={() => {
-                  setTextEditor(null);
-                  focusDrawing();
-                }}
-              />
-            )}
-            {imageChosen && (
-              <ImageDisplayPanel
-                value={imageChosen.display}
-                onCommit={(display) => setChosenDisplay(imageChosen.handle, display)}
-                onClose={() => setImageChosen(null)}
+              {measure.asking && info && (
+                <AlongPrompt
+                  key={measure.asking}
+                  kind={measure.asking}
+                  units={info.units}
+                  onAnswer={(value) => {
+                    measure.answer(value);
+                    focusDrawing();
+                  }}
+                  onCancel={() => {
+                    measure.cancel();
+                    focusDrawing();
+                  }}
+                />
+              )}
+              {textEditor && info && (
+                <InPlaceText
+                  key={textEditor.key}
+                  at={textEditor.at}
+                  styles={info.text_styles}
+                  style={currentTextStyle}
+                  height={textEditor.request.height ?? currentTextHeight}
+                  onSubmit={(d) => placeInPlace(textEditor.request, d)}
+                  onCancel={() => {
+                    setTextEditor(null);
+                    focusDrawing();
+                  }}
+                />
+              )}
+              {imageChosen && (
+                <ImageDisplayPanel
+                  value={imageChosen.display}
+                  onCommit={(display) => setChosenDisplay(imageChosen.handle, display)}
+                  onClose={() => setImageChosen(null)}
+                />
+              )}
+            </div>
+            {split && info && (
+              <SplitPane
+                sheets={info.sheets}
+                mainSheet={sheet}
+                mainBatch={batch}
+                mainInset={inset}
+                atlas={atlas}
+                theme={theme}
+                ucs={info.ucs}
+                syncAtlas={syncAtlas}
+                onError={(e) => setError(String(e))}
+                onClose={() => setSplit(false)}
               />
             )}
           </div>
@@ -3081,7 +3336,30 @@ export default function App() {
         unitsWarning={info?.units === "unknown"}
         problems={problems}
         message={message}
+        ucs={info?.ucs}
       />
+      {recovery && (
+        <RecoveryDialog
+          items={recovery.items}
+          onRecover={recoverFrom}
+          onDiscard={discardFrom}
+          onClose={() => {
+            const then = recovery.then;
+            setRecovery(null);
+            if (then) openPath(then, false);
+          }}
+        />
+      )}
+      {recoverReport && (
+        <RecoverReportDialog
+          path={recoverReport.path}
+          report={recoverReport.report}
+          onClose={() => setRecoverReport(null)}
+        />
+      )}
+      {sheetSetShown && (
+        <SheetSetManager api={sheetSetApi} onOpenAll={openAll} onClose={() => setSheetSetShown(false)} />
+      )}
     </div>
   );
 }

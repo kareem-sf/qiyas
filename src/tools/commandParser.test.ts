@@ -398,3 +398,36 @@ test("layers, groups and properties from the command line", () => {
   expect(parse("MA", cmd)).toEqual({ type: "tool", tool: "matchprop" });
   expect(parse("matchprop", cmd)).toEqual({ type: "tool", tool: "matchprop" });
 });
+
+test("typed points are read in the UCS", () => {
+  const ucs = { origin: [10, 5] as [number, number], x_axis: [0, 1] as [number, number] };
+  const p = (line: string, last: [number, number] | null = null) =>
+    (parse(line, { ...at("point", last), ucs }) as { p: [number, number] }).p;
+  const near = (got: [number, number], want: [number, number]) => {
+    expect(got[0]).toBeCloseTo(want[0], 9);
+    expect(got[1]).toBeCloseTo(want[1], 9);
+  };
+  near(p("1,2"), [8, 6]);
+  near(p("@1,0", [0, 0]), [0, 1]);
+  // 0 degrees is along the UCS x axis.
+  near(p("@2<0", [0, 0]), [0, 2]);
+});
+
+test("the clipboard, viewport, UCS, sheet set and recover commands", () => {
+  expect(parse("COPYCLIP", cmd)).toEqual({ type: "tool", tool: "copyclip" });
+  expect(parse("copybase", cmd)).toEqual({ type: "tool", tool: "copybase" });
+  expect(parse("PASTECLIP", cmd)).toEqual({ type: "tool", tool: "pasteclip" });
+  expect(parse("PASTEBLOCK", cmd)).toEqual({ type: "tool", tool: "pasteblock" });
+  expect(parse("MV", cmd)).toEqual({ type: "tool", tool: "mview" });
+  expect(parse("MVIEW", cmd)).toEqual({ type: "tool", tool: "mview" });
+  expect(parse("VPORTS", cmd)).toEqual({ type: "run", what: "vports" });
+  expect(parse("VPORTS 2", cmd)).toEqual({ type: "run", what: "vports2" });
+  expect(parse("VPORTS 1", cmd)).toEqual({ type: "run", what: "vports1" });
+  expect(parse("UCS", cmd)).toEqual({ type: "tool", tool: "ucs" });
+  expect(parse("UCS W", cmd)).toEqual({ type: "run", what: "ucsWorld" });
+  expect(parse("ucs world", cmd)).toEqual({ type: "run", what: "ucsWorld" });
+  expect(parse("UCS OB", cmd)).toEqual({ type: "tool", tool: "ucsObject" });
+  expect(parse("UCS X", cmd)).toEqual({ type: "error", key: "cmd.ucsOption" });
+  expect(parse("SHEETSET", cmd)).toEqual({ type: "run", what: "sheetSet" });
+  expect(parse("RECOVER", cmd)).toEqual({ type: "run", what: "recover" });
+});
