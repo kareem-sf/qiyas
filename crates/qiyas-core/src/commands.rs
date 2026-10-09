@@ -1643,8 +1643,27 @@ impl Session {
 
     /// The handles of `targets` (each once, in order) when every one is an entity of the drawing
     /// itself at the top of the sheet on screen (an empty chain: not inside a block, not an
-    /// xref's); otherwise why not.
+    /// xref's) on a layer that is not locked; otherwise why not. For the commands that change
+    /// what they are given.
     pub(crate) fn sheet_targets(&self, targets: &[Target]) -> Result<Vec<Handle>, CoreError> {
+        let handles = self.sheet_targets_any(targets)?;
+        let doc = &self.drawing.doc;
+        for &h in &handles {
+            let layer = &doc.get_entity(h).expect("found above").common().layer;
+            if doc.layers.get(layer).is_some_and(|l| l.flags.locked) {
+                return Err(CoreError::InvalidCommand(format!(
+                    "Entity {:X} is on the locked layer {layer}: unlock it first",
+                    h.value()
+                )));
+            }
+        }
+        Ok(handles)
+    }
+
+    /// `sheet_targets`, locked layers allowed: for commands that only read what they are given
+    /// (a cutter, a boundary, what a dimension or a field measures) or don't change it (groups,
+    /// a viewport's layer freezes).
+    pub(crate) fn sheet_targets_any(&self, targets: &[Target]) -> Result<Vec<Handle>, CoreError> {
         if targets.is_empty() {
             return Err(invalid("Pick the entities first"));
         }

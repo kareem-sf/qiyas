@@ -428,7 +428,7 @@ impl Session {
         kind: &FieldKind,
     ) -> Result<u64, CoreError> {
         if let FieldKind::Area { target } | FieldKind::Length { target } = kind {
-            self.sheet_targets(std::slice::from_ref(target))?;
+            self.sheet_targets_any(std::slice::from_ref(target))?;
         }
         if let FieldKind::Count { block } = kind {
             if block.trim().is_empty() {

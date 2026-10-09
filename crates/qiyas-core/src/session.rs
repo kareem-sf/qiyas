@@ -25,7 +25,7 @@ use crate::drawing::short_layer_name;
 use crate::embed::{embed_measurements, read_embedded};
 use crate::project::{self, project_path, Project};
 use crate::underlay::{rebase_links, Underlays};
-use crate::undo::{DocChange, History, Parts, Step, TablesSnapshot};
+use crate::undo::{DocChange, History, Parts, Step, TablesSnapshot, ViewRefs};
 use crate::xref::{XrefInfo, XrefSet};
 use crate::{
     Boq, Command, Conflict, CoreError, Current, DimStyleInfo, Drafting, Drawing, LayerInfo,
@@ -240,7 +240,7 @@ pub struct EntityInfo {
     pub closed: Option<bool>,
     /// A lightweight polyline's constant width, in drawing units.
     pub global_width: Option<f64>,
-    /// A block reference's scale along its x axis.
+    /// A block reference's scale along its x axis, negative when it is mirrored.
     pub scale: Option<f64>,
 }
 
@@ -1004,8 +1004,9 @@ impl Session {
             EntityType::LwPolyline(p) => (Some(p.is_closed), Some(p.constant_width)),
             _ => (None, None),
         };
+        // Its x scale, negative when the reference is mirrored (x and y of opposite signs).
         let scale = match entity {
-            EntityType::Insert(i) => Some(i.x_scale()),
+            EntityType::Insert(i) => Some(i.x_scale().abs() * (i.x_scale() * i.y_scale()).signum()),
             _ => None,
         };
         let common = entity.common();
@@ -1107,6 +1108,11 @@ impl Session {
             conflicts: &mut self.conflicts,
             schedules: &mut self.schedules,
             doc: &mut self.drawing.doc,
+            view: ViewRefs {
+                current: &mut self.current,
+                hidden: &mut self.visibility.hidden_layers,
+                state_hidden: &mut self.state_hidden,
+            },
             doc_changed: &mut doc_changed,
         });
         if doc_changed {
@@ -1135,17 +1141,20 @@ impl Session {
         takeoff: bool,
         f: impl FnOnce(&mut Self) -> Result<T, CoreError>,
     ) -> Result<T, CoreError> {
+        let view = tables.then(|| self.view_refs().get());
         let tables = tables.then(|| TablesSnapshot::take(&self.drawing.doc));
         let takeoff = takeoff.then(|| self.takeoff.clone());
         let recorder = self.drawing.doc.begin_entity_change_recording();
         let done = f(self);
         self.drawing.doc.end_entity_change_recording();
-        let change = DocChange::from_before_images(
+        let mut change = DocChange::from_before_images(
             &self.drawing.doc,
             recorder.take_before_images(),
             tables,
             takeoff,
         );
+        // Kept only when the change moved it, so undoing an unrelated step never touches it.
+        change.view = view.filter(|before| *before != self.view_refs().get());
         match done {
             Ok(done) => {
                 if !change.is_empty(&self.drawing.doc) {
@@ -1155,10 +1164,25 @@ impl Session {
                 Ok(done)
             }
             Err(e) => {
-                change.swap(&mut self.drawing.doc, &mut self.takeoff);
+                let mut view = ViewRefs {
+                    current: &mut self.current,
+                    hidden: &mut self.visibility.hidden_layers,
+                    state_hidden: &mut self.state_hidden,
+                };
+                change.swap(&mut self.drawing.doc, &mut self.takeoff, &mut view);
                 *self.cache.get_mut() = None;
                 Err(e)
             }
+        }
+    }
+
+    /// The session's current state, hidden layers and layer states' hidden layers, to keep or
+    /// put back with a drawing change.
+    fn view_refs(&mut self) -> ViewRefs<'_> {
+        ViewRefs {
+            current: &mut self.current,
+            hidden: &mut self.visibility.hidden_layers,
+            state_hidden: &mut self.state_hidden,
         }
     }
 
@@ -1212,6 +1236,11 @@ impl Session {
             conflicts: &mut self.conflicts,
             schedules: &mut self.schedules,
             doc: &mut self.drawing.doc,
+            view: ViewRefs {
+                current: &mut self.current,
+                hidden: &mut self.visibility.hidden_layers,
+                state_hidden: &mut self.state_hidden,
+            },
             doc_changed: &mut doc_changed,
         });
         if doc_changed {

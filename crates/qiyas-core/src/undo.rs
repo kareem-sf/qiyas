@@ -5,6 +5,7 @@
 //! drawing's tables when the command changes them too. Each step remembers who made it, so the AI
 //! can undo only its own last change.
 
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use opencadcodec::classes::DxfClassCollection;
@@ -14,7 +15,7 @@ use opencadcodec::tables::{
 };
 use opencadcodec::{CadDocument, EntityType, Handle};
 
-use crate::{Boq, Conflict, Schedule, Source, Takeoff};
+use crate::{Boq, Conflict, Current, Schedule, Source, Takeoff};
 
 /// Most undo steps kept; the oldest is dropped first.
 const MAX_STEPS: usize = 200;
@@ -45,6 +46,45 @@ pub(crate) struct DocChange {
     pub tables: Option<Box<TablesSnapshot>>,
     /// The take-off before the change, for a command that changes it too.
     pub takeoff: Option<Takeoff>,
+    /// The session's view of the drawing's tables before the change, when the change moved it
+    /// (a renamed layer is the current or a hidden one; a layer state's hidden layers).
+    pub view: Option<ViewState>,
+}
+
+/// What the session keeps about the drawing's layers outside the drawing: the current drawing
+/// state, the hidden layers and the hidden layers kept with each layer state.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ViewState {
+    pub current: Current,
+    pub hidden: HashSet<String>,
+    pub state_hidden: BTreeMap<String, Vec<String>>,
+}
+
+/// The session's live `ViewState`, to put one back.
+pub(crate) struct ViewRefs<'a> {
+    pub current: &'a mut Current,
+    pub hidden: &'a mut HashSet<String>,
+    pub state_hidden: &'a mut BTreeMap<String, Vec<String>>,
+}
+
+impl ViewRefs<'_> {
+    /// As it is now.
+    pub(crate) fn get(&self) -> ViewState {
+        ViewState {
+            current: self.current.clone(),
+            hidden: self.hidden.clone(),
+            state_hidden: self.state_hidden.clone(),
+        }
+    }
+
+    /// Puts `state` in and returns the one it replaced.
+    fn swap(&mut self, state: ViewState) -> ViewState {
+        ViewState {
+            current: std::mem::replace(self.current, state.current),
+            hidden: std::mem::replace(self.hidden, state.hidden),
+            state_hidden: std::mem::replace(self.state_hidden, state.state_hidden),
+        }
+    }
 }
 
 /// The parts of a drawing outside its entities that commands change, with the header variables
@@ -204,13 +244,19 @@ impl DocChange {
             && self.removed.is_empty()
             && self.replaced.is_empty()
             && self.takeoff.is_none()
+            && self.view.is_none()
             && self.tables.as_ref().is_none_or(|t| t.same_as(doc))
     }
 
     /// Takes the change back in `doc` and `takeoff`, and returns the change that redoes it.
     /// Removed entities come back under their own handles, into the block they were in (a
     /// removal keeps the block's list of handles; see `CadDocument::remove_entity_arc`).
-    pub(crate) fn swap(self, doc: &mut CadDocument, takeoff: &mut Takeoff) -> DocChange {
+    pub(crate) fn swap(
+        self,
+        doc: &mut CadDocument,
+        takeoff: &mut Takeoff,
+        view: &mut ViewRefs,
+    ) -> DocChange {
         let mut redo = DocChange::default();
         for handle in self.added {
             if let Some(entity) = doc.remove_entity_arc(handle) {
@@ -229,6 +275,7 @@ impl DocChange {
         }
         redo.tables = self.tables.map(|t| t.swap(doc));
         redo.takeoff = self.takeoff.map(|t| std::mem::replace(takeoff, t));
+        redo.view = self.view.map(|v| view.swap(v));
         redo
     }
 }
@@ -240,13 +287,14 @@ pub(crate) struct Parts<'a> {
     pub conflicts: &'a mut Vec<Conflict>,
     pub schedules: &'a mut Vec<Schedule>,
     pub doc: &'a mut CadDocument,
+    pub view: ViewRefs<'a>,
     /// Set when the drawing was put back, so the session redraws it.
     pub doc_changed: &'a mut bool,
 }
 
 impl Step {
     /// Puts this step in place and returns what it replaced.
-    fn swap(self, parts: Parts) -> Step {
+    fn swap(self, mut parts: Parts) -> Step {
         match self {
             Step::Takeoff(t) => Step::Takeoff(std::mem::replace(parts.takeoff, t)),
             Step::Boq(b) => Step::Boq(std::mem::replace(parts.boq, b)),
@@ -256,7 +304,7 @@ impl Step {
             ),
             Step::Document(change) => {
                 *parts.doc_changed = true;
-                Step::Document(change.swap(parts.doc, parts.takeoff))
+                Step::Document(change.swap(parts.doc, parts.takeoff, &mut parts.view))
             }
         }
     }
@@ -372,6 +420,8 @@ mod tests {
         let (mut takeoff, mut boq, mut conflicts, mut schedules) =
             (Takeoff::default(), None, Vec::new(), Vec::new());
         let (mut doc, mut doc_changed) = (CadDocument::new(), false);
+        let (mut current, mut hidden, mut state_hidden) =
+            (Current::default(), HashSet::new(), BTreeMap::new());
         for i in 0..MAX_STEPS + 5 {
             let step = if i % 2 == 0 {
                 Step::Takeoff(Takeoff::default())
@@ -387,6 +437,11 @@ mod tests {
                 conflicts: &mut conflicts,
                 schedules: &mut schedules,
                 doc: &mut doc,
+                view: ViewRefs {
+                    current: &mut current,
+                    hidden: &mut hidden,
+                    state_hidden: &mut state_hidden,
+                },
                 doc_changed: &mut doc_changed,
             };
             history.undo(parts).then_some(())

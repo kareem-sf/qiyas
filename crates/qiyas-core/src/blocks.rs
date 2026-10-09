@@ -852,7 +852,15 @@ impl Session {
                     Some(tables),
                     None,
                 )
-                .swap(&mut self.drawing.doc, &mut self.takeoff);
+                .swap(
+                    &mut self.drawing.doc,
+                    &mut self.takeoff,
+                    &mut crate::undo::ViewRefs {
+                        current: &mut self.current,
+                        hidden: &mut self.visibility.hidden_layers,
+                        state_hidden: &mut self.state_hidden,
+                    },
+                );
                 self.block_edit = Some(edit);
                 return Err(e);
             }

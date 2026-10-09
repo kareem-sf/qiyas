@@ -166,7 +166,8 @@ impl Session {
     }
 
     /// `Command::RestoreLayerState`: the layers take what the state `name` saved, and the hidden
-    /// layers come back when the project kept them. Qiyas's current layer stays.
+    /// layers come back when the project kept them. Qiyas's current layer stays, and stays
+    /// thawed.
     pub(crate) fn restore_layer_state(&mut self, name: &str) -> Result<(), CoreError> {
         let doc = &mut self.drawing.doc;
         let Some(state) = doc.layer_state(name.trim()) else {
@@ -181,6 +182,10 @@ impl Session {
             doc.header.current_layer_name,
             doc.header.current_layer_handle,
         ) = header;
+        // The current layer is never frozen (AutoCAD refuses it too).
+        if let Some(current) = doc.layers.get_mut(&self.current.layer) {
+            current.flags.frozen = false;
+        }
         let hidden = self
             .state_hidden
             .iter()
@@ -508,7 +513,7 @@ impl Session {
         layer: &str,
         frozen: bool,
     ) -> Result<(), CoreError> {
-        let h = self.sheet_targets(std::slice::from_ref(viewport))?[0];
+        let h = self.sheet_targets_any(std::slice::from_ref(viewport))?[0];
         if !matches!(
             self.drawing.doc.get_entity(h),
             Some(EntityType::Viewport(_))

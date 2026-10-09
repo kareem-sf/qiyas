@@ -373,6 +373,121 @@ fn a_renamed_layer_takes_its_entities_the_takeoff_and_the_current_layer() {
     assert_eq!(on_layer(&s, "A-WALL"), walls);
     assert_eq!(s.takeoff.items[0].layer, "A-WALL");
     assert!(s.drawing.doc.layers.contains("A-WALL"));
+    // The session follows the undo: drawing goes on, on the layer as it was named.
+    assert_eq!(s.current.layer, "A-WALL");
+    assert_eq!(s.hidden_layers(), vec!["A-WALL".to_string()]);
+    // And the redo.
+    assert!(s.redo());
+    assert_eq!(s.current.layer, "S-WALL");
+    assert_eq!(s.hidden_layers(), vec!["S-WALL".to_string()]);
+    assert!(s.undo());
+    s.run(Command::Draw(qiyas_core::DrawSpec::Line {
+        a: [0.0, 50.0],
+        b: [1.0, 50.0],
+    }))
+    .unwrap();
+}
+
+#[test]
+fn undoing_a_deleted_layer_state_brings_back_its_hidden_layers() {
+    let (_dir, mut s) = open(&sample_doc(), "plan.dxf");
+    let hide = |s: &mut Session, hidden: bool| {
+        s.run(Command::SetLayerHidden {
+            name: "A-DOOR".into(),
+            hidden,
+        })
+        .unwrap();
+    };
+    hide(&mut s, true);
+    s.run(Command::SaveLayerState { name: "A".into() }).unwrap();
+    hide(&mut s, false);
+    s.run(Command::DeleteLayerState { name: "A".into() })
+        .unwrap();
+    assert!(s.undo());
+    s.run(Command::RestoreLayerState { name: "A".into() })
+        .unwrap();
+    assert_eq!(s.hidden_layers(), vec!["A-DOOR".to_string()]);
+}
+
+#[test]
+fn restoring_a_state_never_freezes_the_current_layer() {
+    let (_dir, mut s) = open(&sample_doc(), "plan.dxf");
+    set_layer(&mut s, "A-WALL", LayerProp::Frozen, json!(true));
+    set_layer(&mut s, "A-DOOR", LayerProp::Frozen, json!(true));
+    s.run(Command::SaveLayerState { name: "F".into() }).unwrap();
+    set_layer(&mut s, "A-WALL", LayerProp::Frozen, json!(false));
+    set_layer(&mut s, "A-DOOR", LayerProp::Frozen, json!(false));
+    s.run(Command::SetCurrent {
+        current: qiyas_core::Current {
+            layer: "A-WALL".into(),
+            ..Default::default()
+        },
+    })
+    .unwrap();
+    s.run(Command::RestoreLayerState { name: "F".into() })
+        .unwrap();
+    assert!(
+        !layer(&s, "A-WALL").flags.frozen,
+        "the current layer stays thawed"
+    );
+    assert!(layer(&s, "A-DOOR").flags.frozen);
+}
+
+#[test]
+fn entities_on_a_locked_layer_are_never_changed() {
+    let (_dir, mut s) = open(&sample_doc(), "plan.dxf");
+    let line = on_layer(&s, "A-WALL")[0];
+    let door = on_layer(&s, "A-DOOR")[0];
+    set_layer(&mut s, "A-WALL", LayerProp::Locked, json!(true));
+    let before = s.drawing.doc.get_entity(Handle::new(line)).cloned();
+    let moving = Command::Modify(qiyas_core::ModifySpec::Move {
+        targets: vec![t(door), t(line)],
+        delta: [1.0, 1.0],
+    });
+    let why = refused(&mut s, moving);
+    assert!(why.contains("locked") && why.contains("A-WALL"), "{why}");
+    assert_eq!(s.drawing.doc.get_entity(Handle::new(line)).cloned(), before);
+    refused(
+        &mut s,
+        Command::DeleteEntities {
+            targets: vec![t(line)],
+        },
+    );
+    refused(
+        &mut s,
+        Command::SetProperty {
+            target: t(line),
+            prop: qiyas_core::EntityProp::Color,
+            value: json!("ACI 2"),
+        },
+    );
+    refused(
+        &mut s,
+        Command::MatchProperties {
+            source: t(door),
+            targets: vec![t(line)],
+            props: vec![qiyas_core::MatchProp::Color],
+        },
+    );
+    // A locked entity may still be the source, and join a group.
+    s.run(Command::MatchProperties {
+        source: t(line),
+        targets: vec![t(door)],
+        props: vec![qiyas_core::MatchProp::Color],
+    })
+    .unwrap();
+    s.run(Command::CreateGroup {
+        name: "G".into(),
+        targets: vec![t(line)],
+    })
+    .unwrap();
+    // Unlocked, it moves.
+    set_layer(&mut s, "A-WALL", LayerProp::Locked, json!(false));
+    s.run(Command::Modify(qiyas_core::ModifySpec::Move {
+        targets: vec![t(line)],
+        delta: [1.0, 1.0],
+    }))
+    .unwrap();
 }
 
 #[test]
@@ -526,6 +641,11 @@ fn groups_are_made_edited_and_kept_in_the_dwg() {
     assert_eq!(groups.len(), 1);
     assert_eq!(groups[0].name, "Room 1");
     assert_eq!(groups[0].handles, walls[..2].to_vec());
+    // Each member's kind, so a click on the group can leave out what a tool can't take.
+    assert_eq!(
+        groups[0].kinds,
+        vec!["Line".to_string(), "LwPolyline".to_string()]
+    );
 
     assert!(refused(
         &mut s,

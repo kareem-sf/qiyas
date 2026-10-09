@@ -3,7 +3,7 @@
 
 use opencadcodec::entities::{Circle, Dimension};
 use opencadcodec::{CadDocument, Color, EntityType, Handle, LineType};
-use qiyas_core::fixtures::{sample_doc, write_drawing, write_xref_pair};
+use qiyas_core::fixtures::{sample_doc, schedule_doc, write_drawing, write_xref_pair};
 use qiyas_core::{
     Command, CoreError, DimSpec, DrawSpec, EntityProp, MatchProp, Outcome, Session, Target,
 };
@@ -251,9 +251,81 @@ fn texts_polylines_and_block_references() {
         Command::SetProperty {
             target: t(door),
             prop: EntityProp::InsertScale,
-            value: json!(-1),
+            value: json!("big"),
         },
     );
+}
+
+#[test]
+fn a_block_references_attributes_follow_its_scale_and_turn() {
+    let (_dir, mut s) = open(&schedule_doc());
+    let tag = first(&s, "Insert");
+    let attribute = |s: &Session| match entity(s, tag) {
+        EntityType::Insert(i) => {
+            let a = &i.attributes[0];
+            (
+                [a.insertion_point.x, a.insertion_point.y],
+                a.height,
+                i.x_scale(),
+            )
+        }
+        other => panic!("{other:?}"),
+    };
+    // MARK sits 0.5 right of the insertion point (30, 10), 0.2 tall.
+    set(&mut s, tag, EntityProp::InsertRotation, json!(90));
+    let (at, height, _) = attribute(&s);
+    assert!(
+        (at[0] - 30.0).abs() < 1e-9 && (at[1] - 10.5).abs() < 1e-9,
+        "{at:?}"
+    );
+    set(&mut s, tag, EntityProp::InsertScale, json!(2));
+    let (at, height2, scale) = attribute(&s);
+    assert!(
+        (at[0] - 30.0).abs() < 1e-9 && (at[1] - 11.0).abs() < 1e-9,
+        "{at:?}"
+    );
+    assert!((height2 - 2.0 * height).abs() < 1e-9);
+    assert_eq!(scale, 2.0);
+    // A mirrored reference stays mirrored: the palette shows the signed scale.
+    s.run(Command::Modify(qiyas_core::ModifySpec::Mirror {
+        targets: vec![t(tag)],
+        p1: [30.0, 0.0],
+        p2: [30.0, 1.0],
+        keep: false,
+    }))
+    .unwrap();
+    let mirrored = s.entity_info(tag, &[]).unwrap().scale.unwrap();
+    assert!(mirrored < 0.0, "{mirrored}");
+    set(&mut s, tag, EntityProp::InsertScale, json!(3));
+    assert!((s.entity_info(tag, &[]).unwrap().scale.unwrap() + 3.0).abs() < 1e-9);
+    refused(
+        &mut s,
+        Command::SetProperty {
+            target: t(tag),
+            prop: EntityProp::InsertScale,
+            value: json!(0),
+        },
+    );
+}
+
+#[test]
+fn an_xrefs_layer_is_never_given_to_an_entity() {
+    let mut doc = sample_doc();
+    let mut theirs = opencadcodec::Layer::new("PLAN|A-WALL");
+    theirs.handle = doc.allocate_handle();
+    theirs.flags.xref_dependent = true;
+    doc.layers.add(theirs).unwrap();
+    let (_dir, mut s) = open(&doc);
+    let line = first(&s, "Line");
+    let why = refused(
+        &mut s,
+        Command::SetProperty {
+            target: t(line),
+            prop: EntityProp::Layer,
+            value: json!("PLAN|A-WALL"),
+        },
+    );
+    assert!(why.contains("xref"), "{why}");
 }
 
 #[test]
@@ -412,4 +484,26 @@ fn an_xrefs_entity_is_never_edited_from_the_palette() {
         },
     );
     assert!(why.contains("read-only"), "{why}");
+    // Matching from it: its colour, never its layer (an xref's).
+    s.run(Command::MatchProperties {
+        source: Target {
+            handle: inside,
+            chain: vec![xref],
+        },
+        targets: vec![t(own)],
+        props: vec![MatchProp::Color],
+    })
+    .unwrap();
+    let why = refused(
+        &mut s,
+        Command::MatchProperties {
+            source: Target {
+                handle: inside,
+                chain: vec![xref],
+            },
+            targets: vec![t(own)],
+            props: vec![MatchProp::Layer],
+        },
+    );
+    assert!(why.contains("xref"), "{why}");
 }

@@ -650,8 +650,9 @@ impl Session {
     /// `Command::Edit`: see `EditSpec`. `Edited` with the new and removed handles for the
     /// changes in place; `Added` for offset and blend, which only add.
     pub(crate) fn edit_entities(&mut self, spec: EditSpec) -> Result<Outcome, CoreError> {
-        // Every entity named must be the sheet's own, cutters and boundaries too.
-        self.sheet_targets(&spec.targets())?;
+        // Every entity named must be the sheet's own, cutters and boundaries too (they may be
+        // locked: only what changes may not).
+        self.sheet_targets_any(&spec.targets())?;
         let one = |s: &Session, t: &Target| -> Result<Handle, CoreError> {
             Ok(s.sheet_targets(std::slice::from_ref(t))?[0])
         };
@@ -771,7 +772,7 @@ impl Session {
     /// drawn on the sheet on screen (for a trim, only what is drawn across `h`'s box).
     fn edges(&self, named: &[Target], h: Handle, near: bool) -> Result<Vec<Handle>, CoreError> {
         if !named.is_empty() {
-            let mut handles = self.sheet_targets(named)?;
+            let mut handles = self.sheet_targets_any(named)?;
             handles.retain(|&c| c != h);
             return Ok(handles);
         }

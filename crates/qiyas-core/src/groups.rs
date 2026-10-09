@@ -8,14 +8,16 @@ use opencadcodec::Handle;
 use serde::Serialize;
 
 use crate::blocks::BAD_NAME_CHARS;
+use crate::session::variant_name;
 use crate::{CoreError, Session, Target};
 
-/// A group of the drawing: its name, its entities (those still in the drawing) and whether
-/// picking one picks the group.
+/// A group of the drawing: its name, its entities (those still in the drawing) with each one's
+/// kind ("Line", "Dimension"…), and whether picking one picks the group.
 #[derive(Debug, Clone, Serialize)]
 pub struct GroupInfo {
     pub name: String,
     pub handles: Vec<u64>,
+    pub kinds: Vec<String>,
     pub selectable: bool,
 }
 
@@ -76,16 +78,19 @@ impl Session {
             .entries
             .iter()
             .filter_map(|(name, h)| match doc.objects.get(h) {
-                Some(ObjectType::Group(g)) => Some(GroupInfo {
-                    name: name.clone(),
-                    handles: g
+                Some(ObjectType::Group(g)) => {
+                    let members: Vec<_> = g
                         .entities
                         .iter()
-                        .filter(|e| doc.get_entity(**e).is_some())
-                        .map(|e| e.value())
-                        .collect(),
-                    selectable: g.selectable,
-                }),
+                        .filter_map(|e| doc.get_entity(*e))
+                        .collect();
+                    Some(GroupInfo {
+                        name: name.clone(),
+                        handles: members.iter().map(|e| e.common().handle.value()).collect(),
+                        kinds: members.iter().map(|e| variant_name(e)).collect(),
+                        selectable: g.selectable,
+                    })
+                }
                 _ => None,
             })
             .collect()
@@ -146,7 +151,7 @@ impl Session {
         if let Ok((old, _)) = self.find_group(name) {
             return Err(invalid(format!("There is a group named {old} already")));
         }
-        let members = self.sheet_targets(targets)?;
+        let members = self.sheet_targets_any(targets)?;
         let dictionary = self.ensure_group_dictionary();
         let doc = &mut self.drawing.doc;
         let mut group = Group::new(name);
@@ -165,7 +170,7 @@ impl Session {
     /// `Command::AddToGroup`.
     pub(crate) fn add_to_group(&mut self, name: &str, targets: &[Target]) -> Result<(), CoreError> {
         let (_, h) = self.find_group(name)?;
-        let members = self.sheet_targets(targets)?;
+        let members = self.sheet_targets_any(targets)?;
         self.group_mut(h).add_entities(members.iter().copied());
         self.set_reactors(&members, h, true);
         Ok(())
@@ -200,7 +205,7 @@ impl Session {
 
     /// `Command::Ungroup`: every group holding one of `targets` goes, its entities stay.
     pub(crate) fn ungroup(&mut self, targets: &[Target]) -> Result<(), CoreError> {
-        let picked = self.sheet_targets(targets)?;
+        let picked = self.sheet_targets_any(targets)?;
         let doc = &self.drawing.doc;
         let going: Vec<(String, Handle)> =
             match self.group_dictionary().map(|d| doc.objects.get(&d)) {

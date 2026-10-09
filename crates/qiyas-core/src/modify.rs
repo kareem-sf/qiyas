@@ -160,7 +160,7 @@ fn translation(d: [f64; 2]) -> Transform {
 }
 
 /// Turns `radians` about `base`.
-fn rotation(base: [f64; 2], radians: f64) -> Transform {
+pub(crate) fn rotation(base: [f64; 2], radians: f64) -> Transform {
     translation([-base[0], -base[1]])
         .then(&Transform::from_rotation(Vector3::UNIT_Z, radians))
         .then(&translation(base))

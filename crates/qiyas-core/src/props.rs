@@ -7,13 +7,14 @@
 //! changes; a row measuring an entity whose layer changes takes the new layer.
 
 use opencadcodec::entities::{CellStyle, Dimension, EntityCommon};
-use opencadcodec::{EntityType, Handle, LineWeight};
-use qiyas_geom::{dimscale, set_dimtxt, DimLook};
+use opencadcodec::types::Transform;
+use opencadcodec::{EntityType, Handle, LineWeight, Vector3};
+use qiyas_geom::{dimscale, object_to_world, set_dimtxt, DimLook};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::draw::{parse_color, LINEWEIGHTS};
-use crate::modify::measures;
+use crate::modify::{measures, place, rotation, Placing};
 use crate::session::{locate, variant_name};
 use crate::{CoreError, Session, Target};
 
@@ -23,8 +24,9 @@ use crate::{CoreError, Session, Target};
 /// `text` a text's or an MText's text; `text_height` (drawing units, above 0) of a text, an
 /// MText, a dimension or a table; `text_rotation` (degrees) of a text or an MText; `text_style`
 /// a text style of the drawing; `radius` (above 0) of a circle or an arc; `closed` (true or
-/// false) and `global_width` (0 or more) of a polyline; `insert_scale` (above 0, all three
-/// axes) and `insert_rotation` (degrees) of a block reference; `dim_style` a dimension style of
+/// false) and `global_width` (0 or more) of a polyline; `insert_scale` (the size of its x scale:
+/// all three axes scale together about the insertion point, a mirrored reference stays mirrored)
+/// and `insert_rotation` (degrees) of a block reference, its attributes following; `dim_style` a dimension style of
 /// the drawing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -81,6 +83,23 @@ fn text(value: &Value) -> Result<&str, CoreError> {
     value
         .as_str()
         .ok_or_else(|| invalid(format!("{value} is not text")))
+}
+
+/// An xref's layer (`XREF|LAYER`), which no entity of the drawing may take.
+fn is_xref_layer(name: &str, xref_dependent: bool) -> bool {
+    xref_dependent || name.contains('|')
+}
+
+fn xref_layer(name: &str) -> CoreError {
+    invalid(format!(
+        "Layer {name} belongs to an xref: pick a layer of this drawing"
+    ))
+}
+
+/// Where a block reference's insertion point is on the plan.
+fn insert_at(i: &opencadcodec::entities::Insert) -> [f64; 2] {
+    let p = i.insert_point;
+    object_to_world(&i.normal, p.z).apply([p.x, p.y])
 }
 
 /// What the entity's kind is called in a refusal.
@@ -177,6 +196,9 @@ impl Session {
                     .layers
                     .get(name)
                     .ok_or_else(|| invalid(format!("The drawing has no layer {name}")))?;
+                if is_xref_layer(&layer.name, layer.flags.xref_dependent) {
+                    return Err(xref_layer(&layer.name));
+                }
                 e.common_mut().layer.clone_from(&layer.name);
             }
             EntityProp::Color => {
@@ -293,23 +315,52 @@ impl Session {
                 }
                 after.reshaped = true;
             }
+            // Scaled and turned about its insertion point as a whole, so its attributes follow.
             EntityProp::InsertScale => {
-                let s = positive(value)?;
-                match e {
-                    EntityType::Insert(i) => {
-                        i.set_x_scale(s);
-                        i.set_y_scale(s);
-                        i.set_z_scale(s);
-                    }
-                    other => return Err(no_such(other, "scale")),
+                let s = number(value)?.abs();
+                let EntityType::Insert(i) = &*e else {
+                    return Err(no_such(e, "scale"));
+                };
+                let now = i.x_scale().abs();
+                if s.is_nan() || now.is_nan() || s <= 0.0 || now <= 0.0 {
+                    return Err(invalid("The scale must be more than 0"));
+                }
+                let k = s / now;
+                let (x, y, z) = (i.x_scale(), i.y_scale(), i.z_scale());
+                let t = Transform::from_scaling_with_origin(
+                    Vector3::new(k, k, k),
+                    Vector3::new(insert_at(i)[0], insert_at(i)[1], 0.0),
+                );
+                place(e, &Placing::plain(t));
+                // Exactly as typed, its mirror kept.
+                if let EntityType::Insert(i) = e {
+                    i.set_x_scale(x.signum() * s);
+                    i.set_y_scale(y * k);
+                    i.set_z_scale(z * k);
                 }
                 after.reshaped = true;
             }
             EntityProp::InsertRotation => {
                 let a = number(value)?.to_radians();
-                match e {
-                    EntityType::Insert(i) => i.rotation = a,
-                    other => return Err(no_such(other, "rotation")),
+                let EntityType::Insert(i) = &*e else {
+                    return Err(no_such(e, "rotation"));
+                };
+                let turn = a - i.rotation;
+                let (x, y, z) = (i.x_scale(), i.y_scale(), i.z_scale());
+                place(e, &Placing::plain(rotation(insert_at(i), turn)));
+                // A turn keeps the scales; exactly as typed when the turn landed there.
+                if let EntityType::Insert(i) = e {
+                    if (i.x_scale() - x).abs() < 1e-9 * x.abs().max(1.0)
+                        && (i.y_scale() - y).abs() < 1e-9 * y.abs().max(1.0)
+                    {
+                        i.set_x_scale(x);
+                        i.set_y_scale(y);
+                        i.set_z_scale(z);
+                    }
+                    let off = (i.rotation - a).rem_euclid(std::f64::consts::TAU);
+                    if off < 1e-9 || std::f64::consts::TAU - off < 1e-9 {
+                        i.rotation = a;
+                    }
                 }
                 after.reshaped = true;
             }
@@ -343,12 +394,14 @@ impl Session {
         let located = locate(&self.drawing.doc, &xrefs, source.handle, &source.chain)?;
         let from = located.entity.clone();
         // Layer "0" inside a block is drawn on its reference's: that is the layer it shows.
-        let layer = self
-            .drawing
-            .doc
-            .layers
-            .get(&located.layer)
-            .map(|l| l.name.clone());
+        let own = self.drawing.doc.layers.get(&located.layer);
+        if props.contains(&MatchProp::Layer)
+            && (located.xref.is_some()
+                || own.is_some_and(|l| is_xref_layer(&l.name, l.flags.xref_dependent)))
+        {
+            return Err(xref_layer(&located.layer));
+        }
+        let layer = own.map(|l| l.name.clone());
         let source_doc_is_host = located.xref.is_none();
         drop(xrefs);
         let doc = &self.drawing.doc;

@@ -402,7 +402,7 @@ impl Session {
     /// The circle or arc `target` (at the top of the sheet) in the world: centre, radius, and
     /// for an arc its start and end angles.
     fn round(&self, target: &Target) -> Result<Round, CoreError> {
-        let h = self.sheet_targets(std::slice::from_ref(target))?[0];
+        let h = self.sheet_targets_any(std::slice::from_ref(target))?[0];
         let entity = self.entity(h);
         if !matches!(entity, EntityType::Circle(_) | EntityType::Arc(_)) {
             return Err(invalid("Pick a circle or an arc"));
@@ -608,7 +608,7 @@ impl Session {
     /// QDIM's dimension of one entity: a line's horizontal or vertical length, its line through
     /// `line_point`; an arc's radius; a circle's diameter.
     fn quick(&self, target: &Target, line_point: [f64; 2]) -> Result<Dimension, CoreError> {
-        let h = self.sheet_targets(std::slice::from_ref(target))?[0];
+        let h = self.sheet_targets_any(std::slice::from_ref(target))?[0];
         match self.entity(h) {
             EntityType::Line(l) => {
                 let (a, b) = (xy(&l.start), xy(&l.end));
@@ -831,7 +831,7 @@ impl Session {
     /// `cutter` crosses them.
     pub(crate) fn dim_break(&mut self, target: &Target, cutter: &Target) -> Result<(), CoreError> {
         let (h, d) = self.dimension_target(target)?;
-        let c = self.sheet_targets(std::slice::from_ref(cutter))?[0];
+        let c = self.sheet_targets_any(std::slice::from_ref(cutter))?[0];
         if c == h {
             return Err(invalid("Pick another entity to break the dimension at"));
         }
