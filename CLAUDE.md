@@ -133,6 +133,29 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
   sides x,y radius [I|C], DONUT (DO) inner outer x,y, RAY / XLINE (XL) x,y x,y, SOLID (SO) 3 or
   4 points, TRACE width points, MLINE (ML) points, SKETCH points.
 
+## Modify
+
+- `Command::Modify(ModifySpec)` (`qiyas-core/src/modify.rs`): move, copy (A: several in a row),
+  rotate and scale (C: a copy), mirror (keep; texts and attributes still read forwards, as
+  MIRRTEXT 0), stretch (line and polyline vertices in the window move; other entities move whole
+  when wholly inside or when their centre or insertion point is), align (one or two pairs, no
+  scaling), rectangular and polar arrays (polar `angle` is between items), explode (block
+  references one level, layer 0 and ByBlock taking the reference's; polylines and multilines;
+  anything else is left as it is). One undo step. Wire form `{"type":"modify","kind":"move",
+  "targets":[...],...}`, angles in degrees. Erase is `DeleteEntities`. Not an AI tool yet.
+- Targets as for delete: the drawing's own entities at the top of the sheet, all or nothing.
+  Changes in place keep handles; copies get new ones (attributes too) and drop reactors,
+  extension dictionaries and hatch associativity. Dimensions and tables are refused until their
+  blocks are drawn again; images and PDF underlays move but are not copied.
+- `Session::pick_window(bounds, crossing)` (IPC `pick_window`): a window takes entities drawn
+  wholly inside, a crossing those with a segment touching it (clipped exactly); always the entity
+  at the top of the sheet (a block or xref reference whole). The select tool keeps a selection
+  set: Shift+click adds, a left drag draws a box (left to right a window, solid; right to left a
+  crossing, dashed), Shift+drag adds, Esc clears. A modify tool starts on it (or on the select
+  tool's pick, whole), else asks for one (clicks or a box, then Enter); stretch always asks for
+  its crossing window. Home tab, Modify group; command line M, CO/CP, RO, SC, MI, S, AL, AR (R or
+  P), X, E. Grips come later.
+
 ## PDF
 
 - PDFs are read through pdfium (BSD-3), a shared library loaded at run time through
