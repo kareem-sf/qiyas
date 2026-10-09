@@ -711,7 +711,9 @@ impl Session {
         Importer::new(src, &mut doc).fill(&record.name, model, Vector3::new(-b.x, -b.y, -b.z))?;
         let bytes =
             DwgWriter::write_to_vec(&doc).map_err(|e| CoreError::Unwritable(e.to_string()))?;
-        std::fs::write(path, bytes).map_err(|e| CoreError::Unwritable(e.to_string()))
+        // Written over only through the Save dialog, which asked: keep the old file as .bak.
+        crate::project::write_with_backup(path, &bytes)
+            .map_err(|e| CoreError::Unwritable(e.to_string()))
     }
 
     /// `path` as a real path inside the drawing's folder or one of its subfolders (relative

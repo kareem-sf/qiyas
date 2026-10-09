@@ -809,6 +809,19 @@ fn a_written_block_reopens_with_its_entities_at_the_origin() {
 }
 
 #[test]
+fn a_block_written_over_a_file_keeps_its_backup() {
+    let (dir, session) = sample_session();
+    // As the Save dialog does once the user said to replace it: a file already there.
+    let path = dir.path().join("door.dwg");
+    std::fs::write(&path, b"the old file").unwrap();
+    session.write_block("DOOR", &path).unwrap();
+    let bak = dir.path().join("door.dwg.bak");
+    assert_eq!(std::fs::read(&bak).unwrap(), b"the old file");
+    assert!(Session::open(&path).is_ok(), "the block was written whole");
+    assert!(!dir.path().join("door.dwg.tmp").exists());
+}
+
+#[test]
 fn a_block_written_outside_the_drawings_folder_is_refused() {
     let (_dir, mut session) = sample_session();
     let elsewhere = tempfile::tempdir().unwrap();
