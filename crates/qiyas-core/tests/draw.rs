@@ -552,7 +552,7 @@ fn a_revision_cloud_is_a_closed_polyline_of_outward_arcs() {
 /// The ring found, with no islands.
 fn ring_of(found: Boundary) -> Vec<[f64; 2]> {
     match found {
-        Boundary::Ring { ring, holes } if holes.is_empty() => ring,
+        Boundary::Ring { ring, holes, .. } if holes.is_empty() => ring,
         other => panic!("a ring without islands, got {other:?}"),
     }
 }
@@ -611,6 +611,7 @@ fn hatches_from_points_or_closed_entities_with_solid_or_pattern_fills() {
             boundary_handles: Vec::new(),
             points: ring.clone(),
             holes: Vec::new(),
+            bulges: Vec::new(),
             pattern: HatchPattern::Solid,
         },
     ) else {
@@ -633,6 +634,7 @@ fn hatches_from_points_or_closed_entities_with_solid_or_pattern_fills() {
             boundary_handles: Vec::new(),
             points: ring.clone(),
             holes: Vec::new(),
+            bulges: Vec::new(),
             pattern: HatchPattern::Ansi31,
         },
     ) else {
@@ -653,6 +655,7 @@ fn hatches_from_points_or_closed_entities_with_solid_or_pattern_fills() {
             boundary_handles: Vec::new(),
             points: ring.clone(),
             holes: Vec::new(),
+            bulges: Vec::new(),
             pattern: HatchPattern::Ansi37,
         },
     ) else {
@@ -667,6 +670,7 @@ fn hatches_from_points_or_closed_entities_with_solid_or_pattern_fills() {
             boundary_handles: Vec::new(),
             points: ring.clone(),
             holes: Vec::new(),
+            bulges: Vec::new(),
             pattern: HatchPattern::Custom {
                 name: "line".into(),
                 angle: 90.0,
@@ -687,6 +691,7 @@ fn hatches_from_points_or_closed_entities_with_solid_or_pattern_fills() {
             boundary_handles: Vec::new(),
             points: ring.clone(),
             holes: Vec::new(),
+            bulges: Vec::new(),
             pattern: HatchPattern::Custom {
                 name: "NO-SUCH".into(),
                 angle: 0.0,
@@ -711,6 +716,7 @@ fn hatches_from_points_or_closed_entities_with_solid_or_pattern_fills() {
             boundary_handles: vec![rectangle],
             points: Vec::new(),
             holes: Vec::new(),
+            bulges: Vec::new(),
             pattern: HatchPattern::Solid,
         },
     ) else {
@@ -744,6 +750,7 @@ fn hatches_from_points_or_closed_entities_with_solid_or_pattern_fills() {
                 boundary_handles: handles,
                 points,
                 holes: Vec::new(),
+                bulges: Vec::new(),
                 pattern: HatchPattern::Solid,
             },
         );
@@ -768,6 +775,7 @@ fn the_hatch_boundary_inside_the_sample_rectangle_is_its_ring() {
             boundary_handles: Vec::new(),
             points: ring,
             holes: Vec::new(),
+            bulges: Vec::new(),
             pattern: HatchPattern::Solid,
         },
     ) else {
@@ -936,12 +944,14 @@ fn every_draw() -> Vec<DrawSpec> {
             boundary_handles: Vec::new(),
             points: ring.clone(),
             holes: Vec::new(),
+            bulges: Vec::new(),
             pattern: HatchPattern::Solid,
         },
         DrawSpec::Hatch {
             boundary_handles: Vec::new(),
             points: ring.clone(),
             holes: Vec::new(),
+            bulges: Vec::new(),
             pattern: HatchPattern::Ansi37,
         },
         DrawSpec::Solid2D {
@@ -1099,6 +1109,7 @@ fn drawn_hatches_solids_and_wipeouts_fill_in_the_batch() {
             boundary_handles: Vec::new(),
             points: ring.clone(),
             holes: Vec::new(),
+            bulges: Vec::new(),
             pattern: HatchPattern::Solid,
         },
     )[0];
@@ -1109,6 +1120,7 @@ fn drawn_hatches_solids_and_wipeouts_fill_in_the_batch() {
             boundary_handles: Vec::new(),
             points: vec![[40.0, 0.0], [50.0, 0.0], [50.0, 10.0], [40.0, 10.0]],
             holes: Vec::new(),
+            bulges: Vec::new(),
             pattern: HatchPattern::Ansi31,
         },
     )[0];
@@ -1146,7 +1158,7 @@ fn the_boundary_search_grows_until_the_region_fits_and_finds_its_islands() {
     square(&mut s, [1083.0, 1083.0], [1086.0, 1086.0]);
     // Looked for 1 unit around first: the room is found all the same, with the outer column as
     // its one island (the inner one is the column's own).
-    let Boundary::Ring { ring, holes } = s.boundary_at([1010.0, 1010.0], 1.0) else {
+    let Boundary::Ring { ring, holes, .. } = s.boundary_at([1010.0, 1010.0], 1.0) else {
         panic!("a ring");
     };
     assert!(close(signed_area(&ring).abs(), 10_000.0), "{ring:?}");
@@ -1159,6 +1171,7 @@ fn the_boundary_search_grows_until_the_region_fits_and_finds_its_islands() {
             boundary_handles: Vec::new(),
             points: ring,
             holes,
+            bulges: Vec::new(),
             pattern: HatchPattern::Solid,
         },
     ) else {
@@ -1169,7 +1182,7 @@ fn the_boundary_search_grows_until_the_region_fits_and_finds_its_islands() {
     assert!(!h.paths[1].flags.is_external());
     // Inside the column, the column with its own island; outside everything, nothing even once
     // the box holds the whole sheet.
-    let Boundary::Ring { ring, holes } = s.boundary_at([1081.0, 1081.0], 0.5) else {
+    let Boundary::Ring { ring, holes, .. } = s.boundary_at([1081.0, 1081.0], 0.5) else {
         panic!("the column");
     };
     assert!(close(signed_area(&ring).abs(), 100.0));
@@ -1269,6 +1282,7 @@ fn pattern_lines_near_the_click_do_not_count_toward_too_dense() {
                 boundary_handles: Vec::new(),
                 points: vec![[x, 0.0], [x + 5.0, 0.0], [x + 5.0, 5.0], [x, 5.0]],
                 holes: Vec::new(),
+                bulges: Vec::new(),
                 pattern: HatchPattern::Custom {
                     name: "ANSI31".into(),
                     angle: 0.0,
@@ -1289,4 +1303,53 @@ fn pattern_lines_near_the_click_do_not_count_toward_too_dense() {
     // A cap below the pattern lines' count, above the outlines' count.
     let ring = ring_of(s.boundary_at_most([117.5, 2.5], 20.0, 40));
     assert!(close(signed_area(&ring).abs(), 15.0), "{ring:?}");
+}
+
+#[test]
+fn hatch_by_click_inside_a_circle_follows_the_circle_not_its_chords() {
+    let (_dir, mut s) = sample_session();
+    // A 1.5 m circle (the sample is in metres), far from the sample's own entities.
+    draw(
+        &mut s,
+        DrawSpec::Circle {
+            centre: [500.0, 500.0],
+            radius: 0.75,
+        },
+    );
+    let Boundary::Ring {
+        ring,
+        holes,
+        bulges,
+    } = s.boundary_at([500.2, 500.1], 0.5)
+    else {
+        panic!("a ring");
+    };
+    assert!(holes.is_empty());
+    assert_eq!(bulges.len(), 1);
+    assert_eq!(bulges[0].len(), ring.len());
+    assert!(bulges[0].iter().all(|b| *b > 0.0), "every edge is an arc");
+    let EntityType::Hatch(h) = one(
+        &mut s,
+        DrawSpec::Hatch {
+            boundary_handles: Vec::new(),
+            points: ring,
+            holes,
+            bulges,
+            pattern: HatchPattern::Solid,
+        },
+    ) else {
+        panic!("a hatch");
+    };
+    let Outcome::Measured { measurement } = s
+        .run(Command::MeasureEntity {
+            handle: h.common.handle.value(),
+            chain: Vec::new(),
+        })
+        .unwrap()
+    else {
+        panic!("measured");
+    };
+    let want = PI * 0.75 * 0.75;
+    let rel = (measurement.value - want).abs() / want;
+    assert!(rel < 1e-3, "{} vs {want}", measurement.value);
 }

@@ -13,7 +13,7 @@ pub use dimension::{
     dimension_entities, dimension_text, dimscale, dimtxt, format_measure, leader_entities,
     set_dimscale, set_dimtxt, style_named, tolerance_entities, DimGeometry, DimLook,
 };
-pub use exact::{exact_area, exact_length};
+pub use exact::{exact_area, exact_hatch_areas, exact_length};
 pub use flatten::{
     arc_points, drawn_style, find_layer, flatten, flatten_with, flatten_within, insert_instances,
     is_logical_text, is_overlay_block, is_xref_block, object_to_world, xref_symbol, FlatPath,

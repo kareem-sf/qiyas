@@ -14,11 +14,12 @@ use opencadcodec::{
     Arc, Circle, Color, Ellipse, EntityType, Handle, LineWeight, LwPolyline, Point, Spline,
     Vector2, Vector3,
 };
-use opencadkernel::geom2d::{bounded_faces, Line as KernelLine, NurbsCurve, Tolerance};
-use qiyas_geom::{flatten, Xform};
+use opencadkernel::geom2d::{bounded_faces, Curve, Line as KernelLine, NurbsCurve, Tolerance};
+use qiyas_geom::{flatten, flatten_with, snap_shapes, Paint, Xform};
+use qiyas_render::layer_shown_with;
 use serde::{Deserialize, Serialize};
 
-use crate::session::MEASURE_TOL;
+use crate::session::{locate, MEASURE_TOL};
 use crate::{CoreError, Session};
 
 /// The drawing state new entities take: their layer, colour, linetype and lineweight. Saved in
@@ -190,6 +191,10 @@ pub enum DrawSpec {
         /// With `points`: islands inside the ring, left empty (as `Boundary::Ring` gives them).
         #[serde(default)]
         holes: Vec<Vec<[f64; 2]>>,
+        /// With `points`: per ring (the ring first, then each island) the bulge of the edge from
+        /// each point to the next, as `Boundary::Ring` gives them; missing ones are straight.
+        #[serde(default)]
+        bulges: Vec<Vec<f64>>,
         pattern: HatchPattern,
     },
     /// A filled triangle or quadrilateral (AutoCAD's SOLID), its corners in AutoCAD's order: the
@@ -675,11 +680,13 @@ impl Session {
                 boundary_handles,
                 points,
                 holes,
+                bulges,
                 pattern,
             } => one(EntityType::Hatch(self.hatch(
                 &boundary_handles,
                 &points,
                 &holes,
+                &bulges,
                 pattern,
             )?)),
             DrawSpec::Solid2D { points } => {
@@ -761,11 +768,16 @@ impl Session {
         handles: &[u64],
         points: &[[f64; 2]],
         holes: &[Vec<[f64; 2]>],
+        bulges: &[Vec<f64>],
         pattern: HatchPattern,
     ) -> Result<Hatch, CoreError> {
         if !holes.is_empty() && points.is_empty() {
             return Err(invalid("Islands go with a ring of points"));
         }
+        if bulges.iter().flatten().any(|b| !b.is_finite()) {
+            return Err(invalid("Bulges must be finite numbers"));
+        }
+        let bulges_of = |i: usize| bulges.get(i).map_or(&[][..], Vec::as_slice);
         let pattern = match pattern {
             HatchPattern::Solid => None,
             HatchPattern::Ansi31 => Some(("ANSI31".to_string(), 0.0, 1.0)),
@@ -790,10 +802,10 @@ impl Session {
         match (handles.is_empty(), points.is_empty()) {
             (true, false) => {
                 check_ring(points, "hatch boundary")?;
-                hatch.add_path(ring_path(points, &[]));
-                for hole in holes {
+                hatch.add_path(ring_path(points, bulges_of(0)));
+                for (i, hole) in holes.iter().enumerate() {
                     check_ring(hole, "hatch island")?;
-                    let mut path = ring_path(hole, &[]);
+                    let mut path = ring_path(hole, bulges_of(i + 1));
                     path.flags = BoundaryPathFlags::DEFAULT;
                     hatch.add_path(path);
                 }
@@ -918,8 +930,13 @@ impl Session {
             };
             let lo = [p[0] - radius, p[1] - radius];
             let hi = [p[0] + radius, p[1] + radius];
-            if let Some(found) = region_around(&near.segments, p, radius, lo, hi) {
-                return found;
+            // The entities drawn there, flattened again as finely as they are measured.
+            let (segments, rounds) = self.exact_near(&near.sources, lo, hi);
+            if segments.len() > max {
+                return Boundary::TooDense;
+            }
+            if let Some(found) = region_around(&segments, p, radius, lo, hi) {
+                return with_bulges(found, &rounds);
             }
             // The box held every segment there is: nothing further can close a region.
             if near.whole_sheet {
@@ -930,14 +947,150 @@ impl Session {
     }
 }
 
+impl Session {
+    /// The outlines of `sources` (handle and chain, as drawn) flattened at `MEASURE_TOL` in
+    /// drawing coordinates: the segments reaching into the box `lo hi`, texts and hidden layers
+    /// left out, and the circles and arcs among the entities' true shapes.
+    fn exact_near(
+        &self,
+        sources: &[(u64, Vec<u64>)],
+        lo: [f64; 2],
+        hi: [f64; 2],
+    ) -> (Vec<[f64; 4]>, Vec<Round>) {
+        let xrefs = self.xref_docs();
+        let doc = &self.drawing.doc;
+        let mut segments = Vec::new();
+        let mut rounds = Vec::new();
+        for (handle, chain) in sources {
+            let Ok(located) = locate(doc, &xrefs, *handle, chain) else {
+                continue;
+            };
+            let flat = flatten_with(
+                located.doc,
+                &xrefs,
+                located.entity,
+                &located.xf,
+                MEASURE_TOL,
+            );
+            for f in flat.paths {
+                if f.paint != Paint::Outline || f.text.is_some() {
+                    continue;
+                }
+                let layer = match &located.xref {
+                    Some(x) if !f.layer.contains('|') => format!("{x}|{}", f.layer),
+                    _ => f.layer.clone(),
+                };
+                if !layer_shown_with(doc, &xrefs, &self.visibility, &layer) {
+                    continue;
+                }
+                let pts = &f.path.points;
+                let n = pts.len();
+                let count = if f.path.closed && n > 2 {
+                    n
+                } else {
+                    n.saturating_sub(1)
+                };
+                for i in 0..count {
+                    let (a, b) = (pts[i], pts[(i + 1) % n]);
+                    let reaches = a[0].min(b[0]) <= hi[0]
+                        && a[0].max(b[0]) >= lo[0]
+                        && a[1].min(b[1]) <= hi[1]
+                        && a[1].max(b[1]) >= lo[1];
+                    if reaches {
+                        segments.push([a[0], a[1], b[0], b[1]]);
+                    }
+                }
+            }
+            let shapes = snap_shapes(located.doc, located.entity, &located.xf, MEASURE_TOL);
+            for piece in shapes.iter().filter(|s| s.exact).flat_map(|s| &s.pieces) {
+                match piece {
+                    Curve::Circle(c) => rounds.push(Round {
+                        centre: c.centre,
+                        radius: c.radius,
+                        start: 0.0,
+                        sweep: TAU,
+                    }),
+                    Curve::Arc(a) => rounds.push(Round {
+                        centre: a.centre,
+                        radius: a.radius,
+                        start: a.start_angle,
+                        sweep: a.sweep(),
+                    }),
+                    _ => {}
+                }
+            }
+        }
+        (segments, rounds)
+    }
+}
+
+/// A circle, or an arc of one (counter-clockwise from `start`), drawn near a hatch's point.
+struct Round {
+    centre: [f64; 2],
+    radius: f64,
+    start: f64,
+    sweep: f64,
+}
+
+/// `found` with each edge that is a chord of a drawn circle or arc turned back into that arc:
+/// its bulge (zero for a straight edge), per ring, the ring first.
+fn with_bulges(found: Boundary, rounds: &[Round]) -> Boundary {
+    let Boundary::Ring { ring, holes, .. } = found else {
+        return found;
+    };
+    // Chords are within `MEASURE_TOL` of their arc; points where a line crosses one sit on the
+    // chord, as far off the circle at most.
+    let near = 1.5 * MEASURE_TOL;
+    let bulge = |a: [f64; 2], b: [f64; 2]| -> f64 {
+        for r in rounds {
+            let on =
+                |q: [f64; 2]| ((q[0] - r.centre[0]).hypot(q[1] - r.centre[1]) - r.radius).abs();
+            if on(a) > near || on(b) > near {
+                continue;
+            }
+            let (u, v) = (
+                [a[0] - r.centre[0], a[1] - r.centre[1]],
+                [b[0] - r.centre[0], b[1] - r.centre[1]],
+            );
+            let turn = (u[0] * v[1] - u[1] * v[0]).atan2(u[0] * v[0] + u[1] * v[1]);
+            // Only a chord as fine as the flattening: never a straight line across the circle.
+            if turn.abs() < 1e-12 || r.radius * (1.0 - (turn / 2.0).cos()) > near {
+                continue;
+            }
+            let mid = u[1].atan2(u[0]) + turn / 2.0;
+            if (mid - r.start).rem_euclid(TAU) > r.sweep + 1e-9 {
+                continue;
+            }
+            return (turn / 4.0).tan();
+        }
+        0.0
+    };
+    let bulges_of = |pts: &[[f64; 2]]| -> Vec<f64> {
+        let n = pts.len();
+        (0..n).map(|i| bulge(pts[i], pts[(i + 1) % n])).collect()
+    };
+    let bulges = std::iter::once(&ring)
+        .chain(&holes)
+        .map(|r| bulges_of(r))
+        .collect();
+    Boundary::Ring {
+        ring,
+        holes,
+        bulges,
+    }
+}
+
 /// What `Session::boundary_at` finds around a point.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "found", rename_all = "snake_case")]
 pub enum Boundary {
-    /// The region's ring (counter-clockwise) and its islands.
+    /// The region's ring (counter-clockwise) and its islands, and per ring (the ring first,
+    /// then each island) the bulge of the edge from each point to the next: an arc where the
+    /// edge runs along a drawn circle or arc, else 0.
     Ring {
         ring: Vec<[f64; 2]>,
         holes: Vec<Vec<[f64; 2]>>,
+        bulges: Vec<Vec<f64>>,
     },
     /// The point is inside no closed region.
     None,
@@ -964,7 +1117,7 @@ fn region_around(
             end: [x1, y1],
         })
         .collect();
-    // Points of the batch are f32 relative to its origin: weld at a few of their units.
+    // Weld points a millionth of the box apart.
     let tol = (radius * 1e-6).max(1e-6);
     let faces = bounded_faces(&lines, Tolerance::new(tol));
     let (at, ring) = faces
@@ -995,6 +1148,7 @@ fn region_around(
     Some(Boundary::Ring {
         ring: ring.clone(),
         holes,
+        bulges: Vec::new(),
     })
 }
 

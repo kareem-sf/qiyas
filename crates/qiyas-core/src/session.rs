@@ -10,8 +10,8 @@ use opencadcodec::tables::normalize_name;
 use opencadcodec::{CadDocument, Color, DwgWriter, DxfWriter, EntityType, Handle};
 use opencadkernel::geom2d::{ring_nesting_depths, Curve};
 use qiyas_geom::{
-    dimension_text, drawn_style, exact_area, exact_length, flatten_with, insert_instances,
-    is_xref_block, snap_shapes, DimLook, Xform, XrefDocs, MAX_XREF_DEPTH,
+    dimension_text, drawn_style, exact_area, exact_hatch_areas, exact_length, flatten_with,
+    insert_instances, is_xref_block, snap_shapes, DimLook, Xform, XrefDocs, MAX_XREF_DEPTH,
 };
 use qiyas_render::{
     add_images, add_pick_outlines, build_batch_with_xrefs, decode_codes, layer_shown, place_text,
@@ -36,7 +36,9 @@ use crate::{
 pub const BATCH_TOL: f64 = 0.05;
 /// What `Session::segments_near` finds.
 pub(crate) struct Near {
-    pub segments: Vec<[f64; 4]>,
+    /// The entities the drawn segments there draw (handle and block chain, as `locate` takes them), once
+    /// each.
+    pub sources: Vec<(u64, Vec<u64>)>,
     /// The square held the whole sheet: there is nothing further out.
     pub whole_sheet: bool,
 }
@@ -951,13 +953,12 @@ impl Session {
         })
     }
 
-    /// The drawn segments (absolute `x0 y0 x1 y1`) of the sheet on screen that reach into the
-    /// square `radius` around `p`, text boxes and hatch pattern lines left out; `None` when more
-    /// than `max` of them do.
+    /// The entities of the sheet on screen whose drawn segments reach into the square `radius`
+    /// around `p`, text boxes and hatch pattern lines left out; `None` when more than `max`
+    /// segments do.
     pub(crate) fn segments_near(&self, p: [f64; 2], radius: f64, max: usize) -> Option<Near> {
         self.with_cache(None, |cached| {
             let batch = &cached.batch;
-            let [ox, oy] = batch.origin;
             let lo = [p[0] - radius, p[1] - radius];
             let hi = [p[0] + radius, p[1] + radius];
             // Counted after text boxes and pattern lines go: a densely hatched room nearby
@@ -972,20 +973,15 @@ impl Session {
             }
             let [b0, b1] = batch.bounds;
             let whole_sheet = lo[0] <= b0[0] && lo[1] <= b0[1] && hi[0] >= b1[0] && hi[1] >= b1[1];
-            let segments = found
-                .into_iter()
-                .map(|i| {
-                    let s = &batch.segments[4 * i..4 * i + 4];
-                    [
-                        f64::from(s[0]) + ox,
-                        f64::from(s[1]) + oy,
-                        f64::from(s[2]) + ox,
-                        f64::from(s[3]) + oy,
-                    ]
-                })
-                .collect();
+            let mut sources: Vec<(u64, Vec<u64>)> = Vec::new();
+            let mut seen = HashSet::new();
+            for r in found.iter().filter_map(|&i| batch.range_of(i)) {
+                if seen.insert((r.entity, r.chain)) {
+                    sources.push((r.entity, batch.chain_of(r).to_vec()));
+                }
+            }
             Some(Near {
-                segments,
+                sources,
                 whole_sheet,
             })
         })
@@ -1366,15 +1362,19 @@ impl Session {
         let exact = exact_area(entity, xf).filter(|_| !self_intersecting);
         let area = (!closed.is_empty()).then(|| {
             exact.unwrap_or_else(|| match entity {
-                // A hatch's boundary paths fill even-odd: an island is taken away.
-                EntityType::Hatch(_) if closed.len() > 1 => {
+                // A hatch's boundary paths fill even-odd: an island is taken away. Each path
+                // exactly when it is a bulged polyline (one outline per path, in order).
+                EntityType::Hatch(_) => {
+                    let areas = exact_hatch_areas(entity, xf)
+                        .filter(|a| a.len() == closed.len() && !self_intersecting)
+                        .unwrap_or_else(|| closed.iter().map(|p| p.area()).collect());
                     let rings: Vec<Vec<[f64; 2]>> =
                         closed.iter().map(|p| p.points.clone()).collect();
                     let depths = ring_nesting_depths(&rings);
-                    closed
+                    areas
                         .iter()
                         .zip(depths)
-                        .map(|(p, d)| if d % 2 == 0 { p.area() } else { -p.area() })
+                        .map(|(a, d)| if d % 2 == 0 { *a } else { -a })
                         .sum()
                 }
                 _ => closed.iter().map(|p| p.area()).sum(),

@@ -185,7 +185,11 @@ fn try_hatch(s: &mut Session, label: &str, at: [f64; 2], start: f64) -> Option<u
     let found = s.boundary_at(at, start);
     let took = ms(t);
     match found {
-        Boundary::Ring { ring, holes } => {
+        Boundary::Ring {
+            ring,
+            holes,
+            bulges,
+        } => {
             let area = |r: &[[f64; 2]]| {
                 let n = r.len();
                 (0..n)
@@ -220,7 +224,7 @@ fn try_hatch(s: &mut Session, label: &str, at: [f64; 2], start: f64) -> Option<u
                 s,
                 "  hatch it (ANSI31)",
                 json!({ "type": "draw", "kind": "hatch", "points": ring, "holes": holes,
-                        "pattern": "ansi31" }),
+                        "bulges": bulges, "pattern": "ansi31" }),
             ))
             .first()?;
             measure(s, "  measure the hatch", h);

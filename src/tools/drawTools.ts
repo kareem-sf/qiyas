@@ -394,6 +394,7 @@ export function drawReducer(state: DrawState, input: DrawInput): DrawState {
         boundary_handles: [],
         points: found.ring,
         holes: found.holes,
+        bulges: found.bulges,
         pattern: patternOf(s, input.scale),
       });
     }

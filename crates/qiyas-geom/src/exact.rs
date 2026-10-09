@@ -3,6 +3,7 @@
 
 use std::f64::consts::{PI, TAU};
 
+use opencadcodec::entities::BoundaryEdge;
 use opencadcodec::{EntityType, Vector3};
 
 use crate::flatten::sweep;
@@ -63,6 +64,28 @@ pub fn exact_length(entity: &EntityType, xf: &Xform) -> Option<f64> {
         _ => return None,
     };
     Some(local * s)
+}
+
+/// The plan area of each boundary path of a hatch after `xf`, in path order, worked out exactly
+/// when every path is one polyline edge (bulged segments as arcs, as Qiyas draws them). `None`
+/// for any other hatch or entity, a stretching `xf` or a tilted normal: measure the flattened
+/// paths then. Each area is positive; the caller takes islands away.
+pub fn exact_hatch_areas(entity: &EntityType, xf: &Xform) -> Option<Vec<f64>> {
+    let EntityType::Hatch(h) = entity else {
+        return None;
+    };
+    flat(&h.normal)?;
+    let s = uniform_scale(xf)?;
+    h.paths
+        .iter()
+        .map(|path| match path.edges.as_slice() {
+            [BoundaryEdge::Polyline(e)] if e.vertices.len() >= 2 => {
+                let vertices: Vec<_> = e.vertices.iter().map(|v| ([v.x, v.y], v.z)).collect();
+                Some(bulge_area(&vertices) * s * s)
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// The plan area of a closed `entity` after `xf`, worked out exactly: a closed LwPolyline or

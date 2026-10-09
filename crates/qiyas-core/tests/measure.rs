@@ -660,6 +660,7 @@ fn a_hatch_with_an_island_measures_without_it_and_after_a_move() {
             boundary_handles: Vec::new(),
             points: square,
             holes: vec![island],
+            bulges: Vec::new(),
             pattern: qiyas_core::HatchPattern::Solid,
         }))
         .unwrap()

@@ -559,9 +559,10 @@ export type Drafting = {
 };
 
 /** What `boundaryAt` finds (`qiyas_core::Boundary`): the ring around the point (counter-clockwise)
- *  and its islands, no closed area, or too much line work there to look through (zoom in). */
+ *  and its islands, with each ring's bulges (the ring first; an edge along a drawn circle or arc
+ *  is that arc), no closed area, or too much line work there to look through (zoom in). */
 export type Boundary =
-  | { found: "ring"; ring: [number, number][]; holes: [number, number][][] }
+  | { found: "ring"; ring: [number, number][]; holes: [number, number][][]; bulges: number[][] }
   | { found: "none" }
   | { found: "too_dense" };
 
@@ -726,12 +727,13 @@ export type DrawSpec =
   | { kind: "revcloud"; points: P[]; arc_len: number }
   | { kind: "wipeout"; points: P[] }
   /** Inside the closed entities `boundary_handles` or the ring `points` (less the islands
-   *  `holes`): one of the two. */
+   *  `holes`, with each ring's `bulges` as `Boundary` gives them): one of the two. */
   | {
       kind: "hatch";
       boundary_handles: number[];
       points: P[];
       holes?: P[][];
+      bulges?: number[][];
       pattern: HatchPattern;
     }
   | { kind: "solid2d"; points: P[] }

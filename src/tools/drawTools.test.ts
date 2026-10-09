@@ -229,7 +229,8 @@ test("hatch asks for the area around the click, then fills it with the chosen pa
       [2, 2],
     ],
   ];
-  const found = (scale = 25): DrawInput => ({ type: "ring", found: { found: "ring", ring, holes }, scale });
+  const bulges = [[0, 0.4, 0], [0, 0, 0]];
+  const found = (scale = 25): DrawInput => ({ type: "ring", found: { found: "ring", ring, holes, bulges }, scale });
   const all = steps("hatch", [opt("ANSI31"), pt([1, 1]), found()]);
   // The prompt names the pattern.
   expect(all[0].hint).toBe("draw.prompt.hatch");
@@ -243,6 +244,7 @@ test("hatch asks for the area around the click, then fills it with the chosen pa
     boundary_handles: [],
     points: ring,
     holes,
+    bulges,
     pattern: { custom: { name: "ANSI31", angle: 0, scale: 25 } },
   });
   expect(all[2].hintArgs).toEqual({ pattern: "ANSI31" });
