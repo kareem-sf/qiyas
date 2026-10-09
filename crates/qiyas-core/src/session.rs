@@ -9,7 +9,8 @@ use opencadcodec::tables::normalize_name;
 use opencadcodec::{CadDocument, DwgWriter, DxfWriter, EntityType, Handle};
 use qiyas_geom::{exact_area, exact_length, flatten, insert_instances, Xform};
 use qiyas_render::{
-    build_batch_with_text, place_text, Batch, PickIndex, TextEngine, TextOptions, Visibility,
+    build_batch_with_text, layer_shown, place_text, Batch, PickIndex, TextEngine, TextOptions,
+    Visibility, TEXT_BOX,
 };
 use serde::{Deserialize, Serialize};
 
@@ -18,8 +19,8 @@ use crate::embed::{embed_measurements, read_embedded};
 use crate::project::{self, project_path, Project};
 use crate::undo::{History, Parts, Snapshot};
 use crate::{
-    Boq, Command, Conflict, CoreError, Drawing, LayerInfo, Outcome, Schedule, Sheet, Source,
-    Takeoff, Units,
+    Boq, Command, Conflict, CoreError, Drafting, Drawing, LayerInfo, Outcome, Schedule, Sheet,
+    Source, Takeoff, Units,
 };
 
 /// Flatten tolerance for drawing on screen, in drawing units.
@@ -48,6 +49,8 @@ pub struct Session {
     /// The drawing holds its Arabic text backwards (typed in visual order for old CAD fonts):
     /// draw every Arabic run reversed. Saved in the project file.
     pub arabic_reversed: bool,
+    /// Snaps, ortho, polar, grid and display precision. Saved in the project file.
+    pub drafting: Drafting,
     history: History,
     /// Which session this is; see `NEXT_EPOCH`.
     epoch: u64,
@@ -66,6 +69,9 @@ struct Cached {
     arabic_reversed: bool,
     batch: Batch,
     index: PickIndex,
+    /// The point entities on the sheet (top level, on shown layers), for node snaps: where, and
+    /// their handle. They are not drawn, so the pick index can't find them.
+    points: Vec<PointAt>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -79,6 +85,11 @@ pub struct DrawingInfo {
     /// See `Session::arabic_reversed`.
     pub arabic_reversed: bool,
 }
+
+/// An entity by its handle and the block references it sits inside (outermost first).
+pub(crate) type EntityAt = (u64, Vec<u64>);
+/// A point entity: where it is, and its handle.
+pub(crate) type PointAt = ([f64; 2], u64);
 
 /// Shown when some block content was too deep or too large to draw.
 const TRUNCATED: &str = "Drawing too complex, some block content not drawn";
@@ -227,6 +238,7 @@ impl Session {
         let mut conflicts = Vec::new();
         let mut schedules = Vec::new();
         let mut arabic_reversed = false;
+        let mut drafting = Drafting::default();
         let project_file = project_path(path);
         if project_file.exists() {
             match project::load(&project_file) {
@@ -244,6 +256,7 @@ impl Session {
                     conflicts = project.conflicts;
                     schedules = project.schedules;
                     arabic_reversed = project.arabic_reversed;
+                    drafting = project.drafting;
                 }
                 // Keep a copy, since the next save replaces the unreadable file.
                 Err(e) => drawing
@@ -267,6 +280,7 @@ impl Session {
             conflicts,
             schedules,
             arabic_reversed,
+            drafting,
             history: History::default(),
             epoch: NEXT_EPOCH.fetch_add(1, Ordering::Relaxed),
             document_revision: 0,
@@ -287,6 +301,7 @@ impl Session {
             conflicts: self.conflicts.clone(),
             schedules: self.schedules.clone(),
             arabic_reversed: self.arabic_reversed,
+            drafting: self.drafting.clone(),
         };
         project::save(&path, &project)?;
         Ok(path)
@@ -453,6 +468,47 @@ impl Session {
         })
     }
 
+    /// Up to `max_entities` drawn entities with a segment within `tol` of `p`, nearest first (by
+    /// handle and block-reference chain; text boxes left out), looking at no more than
+    /// `max_segments` segments; and the sheet's point entities within `tol`.
+    pub(crate) fn near_entities(
+        &self,
+        p: [f64; 2],
+        tol: f64,
+        max_entities: usize,
+        max_segments: usize,
+    ) -> (Vec<EntityAt>, Vec<PointAt>) {
+        self.with_cache(None, |cached| {
+            let mut entities: Vec<EntityAt> = Vec::new();
+            for i in cached.index.near(p, tol, max_segments) {
+                let Some(range) = cached.batch.range_of(i) else {
+                    continue;
+                };
+                if range.flags & TEXT_BOX != 0 {
+                    continue;
+                }
+                let chain = cached.batch.chain_of(range);
+                if entities
+                    .iter()
+                    .any(|(h, c)| *h == range.entity && c == chain)
+                {
+                    continue;
+                }
+                entities.push((range.entity, chain.to_vec()));
+                if entities.len() == max_entities {
+                    break;
+                }
+            }
+            let points = cached
+                .points
+                .iter()
+                .filter(|(q, _)| (q[0] - p[0]).hypot(q[1] - p[1]) <= tol)
+                .copied()
+                .collect();
+            (entities, points)
+        })
+    }
+
     /// The entity `handle` inside the block references `chain` (outermost first; empty for an
     /// entity on a sheet), measured where those references place it.
     pub fn entity_info(&self, handle: u64, chain: &[u64]) -> Result<EntityInfo, CoreError> {
@@ -591,12 +647,26 @@ impl Session {
                 &mut text,
                 options,
             );
+            let doc = &self.drawing.doc;
+            let points = doc
+                .entities_in_block(&self.sheet)
+                .filter_map(|e| match e {
+                    EntityType::Point(pt)
+                        if !pt.common.invisible
+                            && layer_shown(doc, &self.visibility, &pt.common.layer) =>
+                    {
+                        Some(([pt.location.x, pt.location.y], pt.common.handle.value()))
+                    }
+                    _ => None,
+                })
+                .collect();
             *cache = Some(Cached {
                 sheet: self.sheet.clone(),
                 hidden_layers: self.visibility.hidden_layers.clone(),
                 arabic_reversed: self.arabic_reversed,
                 index: PickIndex::new(&batch),
                 batch,
+                points,
             });
         }
         let cached = cache.as_mut().expect("cache was just filled");

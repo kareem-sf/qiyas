@@ -31,9 +31,12 @@ type Props = {
   theme: Theme;
   /** Violet segments `x0 y0 x1 y1` in absolute drawing coordinates, drawn over the drawing. */
   overlay?: Float64Array | null;
+  /** Drawing units between the grid's dots; null or left out for no grid. */
+  grid?: number | null;
   /** A left click; `worldPerPixel` is the zoom at that moment, for pick tolerances. */
   onClick(world: Point, screen: Point, worldPerPixel: number): void;
-  onMove(world: Point): void;
+  /** The cursor moved; `worldPerPixel` is the zoom at that moment, for snap tolerances. */
+  onMove(world: Point, worldPerPixel: number): void;
   /** The zoom has more than doubled or halved since the batch's glyphs were drawn: draw them
    *  again for `pxPerUnit` screen pixels per drawing unit. Called once the zoom settles. */
   onZoomHint?(pxPerUnit: number): void;
@@ -60,6 +63,7 @@ export function Viewport({
   tool,
   theme,
   overlay = null,
+  grid = null,
   onClick,
   onMove,
   onZoomHint,
@@ -217,6 +221,11 @@ export function Viewport({
     requestDraw();
   }, [overlay]);
 
+  useEffect(() => {
+    renderer.current!.setGrid(grid);
+    requestDraw();
+  }, [grid]);
+
   const local = (e: PointerEvent): Point => {
     const r = e.currentTarget.getBoundingClientRect();
     return [e.clientX - r.left, e.clientY - r.top];
@@ -258,7 +267,7 @@ export function Viewport({
       setZoomBox([d.start, p]);
     }
     if (d) d.last = p;
-    onMove(screenToWorld(camera.current, p));
+    onMove(screenToWorld(camera.current, p), camera.current.scale);
   }
 
   function onPointerUp() {

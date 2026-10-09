@@ -146,6 +146,50 @@ export const atlasPages = (sinceVersion?: number) =>
 export const pick = (x: number, y: number, tol: number) =>
   invoke<Picked | null>("pick", { x, y, tol });
 
+/** What kind of point an object snap found (`qiyas_core::SnapKind`), best first. */
+export type SnapKind =
+  | "end"
+  | "intersection"
+  | "mid"
+  | "centre"
+  | "node"
+  | "perpendicular"
+  | "nearest";
+
+/** A point found by an object snap, on the entity `handle` inside the block references `chain`. */
+export type Snap = { point: [number, number]; kind: SnapKind; handle: number; chain: number[] };
+
+export type SnapModes = Record<SnapKind, boolean>;
+
+/** How the window draws and measures (`qiyas_core::Drafting`), saved in the project file. */
+export type Drafting = {
+  /** Object snaps on at all (F3). */
+  osnap: boolean;
+  snap_modes: SnapModes;
+  /** Each next point straight across or up from the one before (F8). */
+  ortho: boolean;
+  /** Each next point's direction snapped to a multiple of `polar_step_deg` when close (F10). */
+  polar: boolean;
+  polar_step_deg: number;
+  /** The dot grid shown (F7), `grid_spacing` drawing units apart, every tenth dot a major one. */
+  grid: boolean;
+  grid_spacing: number;
+  /** Points go to the nearest grid dot when no object snap is found. */
+  grid_snap: boolean;
+  /** Decimals shown in the take-off and the status bar: 2, 3 or 4. */
+  precision: number;
+};
+
+/** The object snap within `tol` drawing units of (x, y) with the drawing's snap modes; `from` is the
+ *  previous point, for perpendicular snaps. Null when there is none or snaps are off. */
+export const snap = (x: number, y: number, tol: number, from: [number, number] | null = null) =>
+  invoke<Snap | null>("snap", { x, y, tol, fromX: from?.[0] ?? null, fromY: from?.[1] ?? null });
+
+export const getDrafting = () => invoke<Drafting>("get_drafting");
+
+/** Replaces the drafting settings (not an undo step). Rejects a value out of range. */
+export const setDrafting = (drafting: Drafting) => invoke<void>("set_drafting", { drafting });
+
 /** One entity; give `chain` for an entity inside blocks. */
 export const entityInfo = (handle: number, chain: number[] = []) =>
   invoke<EntityInfo>("entity_info", { handle, chain });
@@ -267,6 +311,8 @@ export type Command =
   | { type: "set_sheet"; block: string }
   /** The drawing holds its Arabic text backwards; not an undo step. */
   | { type: "set_arabic_reversed"; on: boolean }
+  /** The drafting settings; not an undo step. */
+  | { type: "set_drafting"; drafting: Drafting }
   /** Length, area and count values come from the geometry (points or handles, not both). */
   | {
       type: "add_measurement";

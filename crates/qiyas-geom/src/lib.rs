@@ -3,6 +3,7 @@
 mod exact;
 mod flatten;
 mod path;
+mod shapes;
 mod transform;
 
 pub use exact::{exact_area, exact_length};
@@ -11,4 +12,5 @@ pub use flatten::{
     HAlign, TextLayout, VAlign,
 };
 pub use path::Path;
+pub use shapes::{snap_shapes, SnapShape};
 pub use transform::Xform;

@@ -8,6 +8,9 @@ import {
   conflicts as readConflicts,
   drawingInfo,
   entityInfo,
+  getDrafting,
+  setDrafting,
+  snap,
   exportConflicts,
   exportTakeoff,
   importBoq,
@@ -32,6 +35,7 @@ import {
   type Boq,
   type Command,
   type Conflict,
+  type Drafting,
   type DrawingInfo,
   type Measurement,
   type Total,
@@ -44,6 +48,7 @@ import { ConflictsPanel, type ResolveCommand } from "./boq/ConflictsPanel";
 import { openCount } from "./boq/conflictsMath";
 import { useLanguage, useT } from "./i18n";
 import { About } from "./shell/About";
+import { DraftingSettings } from "./shell/DraftingSettings";
 import { LayersPanel } from "./shell/LayersPanel";
 import { Ribbon, type Tool } from "./shell/Ribbon";
 import { SettingsDialog } from "./shell/SettingsDialog";
@@ -56,7 +61,7 @@ import {
   measurementTargets,
   overlaySegments,
 } from "./tools/overlay";
-import { shortcutFor } from "./tools/shortcuts";
+import { shortcutFor, type DraftingToggle } from "./tools/shortcuts";
 import { useTool } from "./tools/useTool";
 import {
   parseAtlas,
@@ -70,6 +75,14 @@ import type { Theme } from "./viewport/gl";
 import { Viewport, type ViewportHandle } from "./viewport/Viewport";
 
 const THEME_KEY = "qiyas.theme";
+
+/** The drafting setting each switch turns on and off. */
+const TOGGLED: Record<DraftingToggle, "osnap" | "grid" | "ortho" | "polar"> = {
+  osnap: "osnap",
+  grid: "grid",
+  ortho: "ortho",
+  polar: "polar",
+};
 
 /** Focus is in a text field: keys are typing, not shortcuts. */
 const typing = (e: KeyboardEvent) =>
@@ -126,7 +139,9 @@ export default function App() {
   const [sheet, setSheetBlock] = useState("");
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [tool, setTool] = useState<Tool>("select");
-  const [cursor, setCursor] = useState<[number, number] | null>(null);
+  /** The drawing's snaps, ortho, polar, grid and display precision; null with no drawing. */
+  const [drafting, setDraftingState] = useState<Drafting | null>(null);
+  const [draftingOpen, setDraftingOpen] = useState(false);
   const [opening, setOpening] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -238,12 +253,36 @@ export default function App() {
     if (changed) await autosave();
   }
 
-  const measure = useTool(tool, {
-    pick,
-    entityInfo,
-    run: apply,
-    onError: (e) => setError(String(e)),
-  });
+  const measure = useTool(
+    tool,
+    {
+      pick,
+      snap,
+      entityInfo,
+      run: apply,
+      onError: (e) => setError(String(e)),
+    },
+    drafting,
+  );
+
+  /** Makes `next` the drawing's drafting settings and saves them with the project. Throws when the
+   *  core refuses them. */
+  async function saveDrafting(next: Drafting) {
+    await setDrafting(next);
+    setDraftingState(next);
+    await autosave();
+  }
+
+  /** Turns one drafting switch on or off (status bar or F3, F7, F8, F10). Ortho and polar exclude
+   *  each other, as in AutoCAD. */
+  function toggleDrafting(toggle: DraftingToggle) {
+    if (!drafting) return;
+    const key = TOGGLED[toggle];
+    const next: Drafting = { ...drafting, [key]: !drafting[key] };
+    if (toggle === "ortho" && next.ortho) next.polar = false;
+    if (toggle === "polar" && next.polar) next.ortho = false;
+    run(() => saveDrafting(next));
+  }
 
   async function history(step: () => Promise<boolean>) {
     let changed = false;
@@ -430,6 +469,7 @@ export default function App() {
       atlasHeld.current = new Map();
       setAtlas([]);
       setArabicReversed(next.arabic_reversed);
+      setDraftingState(await getDrafting());
       autosaveOff.current = false;
       setInfo(next);
       // The core opens a drawing on its first sheet.
@@ -643,7 +683,11 @@ export default function App() {
     function onKeyDown(e: KeyboardEvent) {
       if (typing(e)) return;
       const action = shortcutFor(e);
-      if (action === "undo" || action === "redo" || action === "save") {
+      if (action === "osnap" || action === "grid" || action === "ortho" || action === "polar") {
+        // F7 and F10 also mean something to the web view; not here.
+        e.preventDefault();
+        if (!e.repeat) toggleDrafting(action);
+      } else if (action === "undo" || action === "redo" || action === "save") {
         if (action === "undo") history(undo);
         else if (action === "redo") history(redo);
         else saveFile();
@@ -778,11 +822,21 @@ export default function App() {
     return all;
   }, [selected, boqLinked, conflictLinked]);
   const rubberBand = useMemo(
-    () => (measure.points.length > 0 ? overlaySegments(measure.points, cursor, tool) : null),
-    [measure.points, cursor, tool],
+    () =>
+      measure.points.length > 0 ? overlaySegments(measure.points, measure.cursor, tool) : null,
+    [measure.points, measure.cursor, tool],
   );
-  // A measure in progress hides the selected row's outline.
-  const overlay = rubberBand ?? selectedOverlay;
+  // A measure in progress hides the selected row's outline; the snap marker goes over either.
+  const overlay = useMemo(() => {
+    const lines = rubberBand ?? selectedOverlay;
+    const marker = measure.marker;
+    if (!marker) return lines;
+    if (!lines) return marker;
+    const all = new Float64Array(lines.length + marker.length);
+    all.set(lines);
+    all.set(marker, lines.length);
+    return all;
+  }, [rubberBand, selectedOverlay, measure.marker]);
 
   const openConflicts = openCount(conflicts);
   const fileName = info?.path.split(/[\\/]/).pop() ?? "";
@@ -855,6 +909,13 @@ export default function App() {
         </div>
       </header>
       {aboutOpen && <About theme={theme} onClose={() => setAboutOpen(false)} />}
+      {draftingOpen && drafting && (
+        <DraftingSettings
+          drafting={drafting}
+          onSave={saveDrafting}
+          onClose={() => setDraftingOpen(false)}
+        />
+      )}
       {settingsOpen && (
         <SettingsDialog
           onClose={() => {
@@ -883,7 +944,8 @@ export default function App() {
               tool={tool}
               theme={theme}
               onClick={measure.onClick}
-              onMove={(p) => setCursor(p)}
+              grid={drafting?.grid ? drafting.grid_spacing : null}
+              onMove={measure.onMove}
             />
           </div>
           {error && (
@@ -960,6 +1022,7 @@ export default function App() {
               onRename={renameRow}
               boq={bill}
               onLink={linkRow}
+              precision={drafting?.precision ?? 3}
             />
           </div>
           <div
@@ -1013,7 +1076,12 @@ export default function App() {
         </div>
       </div>
       <StatusBar
-        cursor={cursor}
+        cursor={measure.cursor}
+        precision={drafting?.precision ?? 3}
+        snapLabel={measure.snap ? t(`snap.${measure.snap.kind}`) : null}
+        drafting={info ? drafting : null}
+        onToggle={toggleDrafting}
+        onDraftingSettings={() => setDraftingOpen(true)}
         units={units}
         unitsWarning={info?.units === "unknown"}
         problems={info?.problems.length ?? 0}

@@ -10,6 +10,7 @@
  */
 import { matchingRanges, TEXT_BOX, type AtlasPage, type Batch, type Target } from "./batch";
 import type { Camera } from "./camera";
+import { GRID_MAJOR, gridLevels, offsetInPeriod } from "./grid";
 
 export type Theme = "light" | "dark";
 
@@ -24,6 +25,8 @@ export type Renderer = {
   setHighlight(targets: Target[]): void;
   /** Violet segments `x0 y0 x1 y1` in absolute drawing coordinates, drawn on top; `null` for none. */
   setOverlay(segments: Float64Array | null): void;
+  /** Draws a dot grid `spacing` drawing units apart under the drawing; `null` for none. */
+  setGrid(spacing: number | null): void;
   draw(camera: Camera, theme: Theme): void;
   dispose(): void;
 };
@@ -103,6 +106,43 @@ void main() {
   outColor = vec4(c, coverage);
 }`;
 
+/** One triangle over the whole canvas; the grid's dots are worked out per pixel. */
+const GRID_VERTEX = `#version 300 es
+void main() {
+  vec2 corner = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+  gl_Position = vec4(corner * 2.0 - 1.0, 0.0, 1.0);
+}`;
+
+const GRID_FRAGMENT = `#version 300 es
+precision highp float;
+uniform vec2 u_half;          // half the canvas, device pixels
+uniform float u_worldPerPx;   // drawing units per device pixel
+uniform vec2 u_offset;        // camera centre less the nearest major grid point
+uniform float u_spacing;
+uniform float u_major;        // u_spacing * 10
+uniform bool u_minor;         // minor dots far enough apart to draw
+uniform float u_dot;          // half a minor dot, device pixels
+uniform vec4 u_color;
+out vec4 outColor;
+void main() {
+  vec2 w = u_offset + (gl_FragCoord.xy - u_half) * u_worldPerPx;
+  vec2 toMajor = abs(w - u_major * floor(w / u_major + 0.5)) / u_worldPerPx;
+  if (max(toMajor.x, toMajor.y) <= 1.5 * u_dot) {
+    outColor = u_color;
+    return;
+  }
+  vec2 toMinor = abs(w - u_spacing * floor(w / u_spacing + 0.5)) / u_worldPerPx;
+  if (u_minor && max(toMinor.x, toMinor.y) <= u_dot) {
+    outColor = vec4(u_color.rgb, u_color.a * 0.6);
+    return;
+  }
+  discard;
+}`;
+
+/** Grid dots: Slate on Paper, Stone on Ink, half seen. */
+const GRID_LIGHT: [number, number, number, number] = [...rgb(0x6e6a64), 0.55];
+const GRID_DARK: [number, number, number, number] = [...rgb(0xf2eee7), 0.35];
+
 function compile(gl: WebGL2RenderingContext, type: number, source: string): WebGLShader {
   const shader = gl.createShader(type)!;
   gl.shaderSource(shader, source);
@@ -171,6 +211,19 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
   const uLight = u("u_light");
   const uInk = u("u_ink");
   const uPaper = u("u_paper");
+
+  const gridProgram = link(gl, GRID_VERTEX, GRID_FRAGMENT);
+  const gu = (name: string) => gl.getUniformLocation(gridProgram, name);
+  const gHalf = gu("u_half");
+  const gWorldPerPx = gu("u_worldPerPx");
+  const gOffset = gu("u_offset");
+  const gSpacing = gu("u_spacing");
+  const gMajor = gu("u_major");
+  const gMinor = gu("u_minor");
+  const gDot = gu("u_dot");
+  const gColor = gu("u_color");
+  const gridVao = gl.createVertexArray();
+  let grid: number | null = null;
 
   const vao = gl.createVertexArray();
   const positions = gl.createBuffer();
@@ -386,11 +439,37 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       overlay = segments;
     },
 
+    setGrid(spacing) {
+      grid = spacing !== null && spacing > 0 ? spacing : null;
+    },
+
     draw(camera, theme) {
       const light = theme === "light";
       gl.viewport(0, 0, canvas.width, canvas.height);
       gl.clearColor(...(light ? PAPER : INK), 1);
       gl.clear(gl.COLOR_BUFFER_BIT);
+
+      // The grid under the drawing, its dots hidden when they would crowd together.
+      const levels = grid === null ? null : gridLevels(grid, camera.scale);
+      if (grid !== null && levels?.major) {
+        const dprGrid = canvas.width / camera.width;
+        const major = grid * GRID_MAJOR;
+        gl.useProgram(gridProgram);
+        gl.bindVertexArray(gridVao);
+        gl.uniform2f(gHalf, canvas.width / 2, canvas.height / 2);
+        gl.uniform1f(gWorldPerPx, camera.scale / dprGrid);
+        gl.uniform2f(gOffset, offsetInPeriod(camera.cx, major), offsetInPeriod(camera.cy, major));
+        gl.uniform1f(gSpacing, grid);
+        gl.uniform1f(gMajor, major);
+        gl.uniform1i(gMinor, levels.minor ? 1 : 0);
+        gl.uniform1f(gDot, Math.max(0.75, 0.75 * dprGrid));
+        gl.uniform4f(gColor, ...(light ? GRID_LIGHT : GRID_DARK));
+        gl.enable(gl.BLEND);
+        gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        gl.disable(gl.BLEND);
+        gl.bindVertexArray(null);
+      }
       if (!batch) return;
 
       gl.useProgram(program);
@@ -480,6 +559,8 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       gl.deleteBuffer(textHighlightIndices);
       gl.deleteVertexArray(textVao);
       gl.deleteProgram(textProgram);
+      gl.deleteVertexArray(gridVao);
+      gl.deleteProgram(gridProgram);
       for (const { texture } of textures.values()) gl.deleteTexture(texture);
       textures.clear();
     },

@@ -14,11 +14,14 @@ type Props = {
   boq: Boq | null;
   /** Links the row to the BOQ item `code`, or unlinks it (null). */
   onLink(id: string, code: string | null): void;
+  /** Decimals of lengths, areas and volumes (2, 3 or 4). */
+  precision?: number;
 };
 
-/** Quantities keep Latin digits in both languages: counts as whole numbers, the rest with three
- *  decimals. */
-const qty = (n: number, kind: Kind) => (kind === "count" ? n.toFixed(0) : n.toFixed(3));
+/** Quantities keep Latin digits in both languages: counts as whole numbers, the rest with
+ *  `precision` decimals. */
+const qty = (n: number, kind: Kind, precision: number) =>
+  kind === "count" ? n.toFixed(0) : n.toFixed(precision);
 
 /** The take-off: one row per measurement (click to show it on the drawing, double click or the pen
  *  to rename, the chain to link it to a BOQ item, the cross to remove) and the totals per kind
@@ -32,6 +35,7 @@ export const TakeoffPanel = memo(function TakeoffPanel({
   onRename,
   boq,
   onLink,
+  precision = 3,
 }: Props) {
   const t = useT();
   const [editing, setEditing] = useState<string | null>(null);
@@ -131,7 +135,7 @@ export const TakeoffPanel = memo(function TakeoffPanel({
                         )}
                       </div>
                     </td>
-                    <td className="num">{qty(m.shown, m.kind)}</td>
+                    <td className="num">{qty(m.shown, m.kind, precision)}</td>
                     <td>{t(`qty.${m.unit}`)}</td>
                     <td title={m.boq_code ?? undefined} className={m.boq_code ? undefined : "muted"}>
                       {m.boq_code ?? "—"}
@@ -212,7 +216,7 @@ export const TakeoffPanel = memo(function TakeoffPanel({
             <span className="kind">{t(total.kind)}</span>
             <span className="num">{total.count} ×</span>
             <span className="num">
-              {qty(total.sum, total.kind)} {t(`qty.${total.unit}`)}
+              {qty(total.sum, total.kind, precision)} {t(`qty.${total.unit}`)}
             </span>
           </li>
         ))}

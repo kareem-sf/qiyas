@@ -10,7 +10,8 @@ use serde::{Deserialize, Serialize};
 use crate::session::{effective_block_name, locate, variant_name};
 use crate::takeoff::in_metres;
 use crate::{
-    Boq, Conflict, ConflictStatus, CoreError, Kind, Measurement, Schedule, Session, Source,
+    Boq, Conflict, ConflictStatus, CoreError, Drafting, Kind, Measurement, Schedule, Session,
+    Source,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,6 +57,10 @@ pub enum Command {
     /// Not an undo step.
     SetArabicReversed {
         on: bool,
+    },
+    /// Replaces the drafting settings (`Session::drafting`). Not an undo step.
+    SetDrafting {
+        drafting: Drafting,
     },
     /// A measurement of any kind, described by the caller (usually the AI). Geometry is `points`
     /// (drawing coordinates) or `handles` (measured from the entities' flattened paths, summed),
@@ -130,7 +135,8 @@ impl Command {
         match self {
             Command::SetLayerHidden { .. }
             | Command::SetSheet { .. }
-            | Command::SetArabicReversed { .. } => None,
+            | Command::SetArabicReversed { .. }
+            | Command::SetDrafting { .. } => None,
             Command::SetBoq { .. } | Command::SetBoqTolerance { .. } => Some(Part::Boq),
             Command::SetConflicts { .. } | Command::ResolveConflict { .. } => Some(Part::Conflicts),
             _ => Some(Part::Takeoff),
@@ -220,6 +226,11 @@ impl Session {
             }
             Command::SetArabicReversed { on } => {
                 self.arabic_reversed = on;
+                return Ok(Outcome::Changed);
+            }
+            Command::SetDrafting { drafting } => {
+                drafting.check()?;
+                self.drafting = drafting;
                 return Ok(Outcome::Changed);
             }
             Command::AddMeasurement {

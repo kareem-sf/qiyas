@@ -427,7 +427,7 @@ pub fn insert_instances<'a>(
 /// The object-to-world transform of an entity stored in object coordinates, projected on plan;
 /// `None` when it needs none (world-coordinate entities, and normals along +Z). Inserts apply
 /// theirs in `insert_instances`.
-fn ocs_of(entity: &EntityType) -> Option<Xform> {
+pub(crate) fn ocs_of(entity: &EntityType) -> Option<Xform> {
     match entity {
         EntityType::Arc(e) => ocs(&e.normal, e.center.z),
         EntityType::Circle(e) => ocs(&e.normal, e.center.z),
@@ -463,7 +463,7 @@ pub(crate) fn ocs(normal: &Vector3, z: f64) -> Option<Xform> {
 }
 
 /// An ellipse's minor semi-axis on plan: the normal crossed with the major axis, times the ratio.
-fn minor_axis(normal: &Vector3, major: &Vector3, ratio: f64) -> [f64; 2] {
+pub(crate) fn minor_axis(normal: &Vector3, major: &Vector3, ratio: f64) -> [f64; 2] {
     let n = if normal.length() < 1e-12 {
         Vector3::new(0.0, 0.0, 1.0)
     } else {

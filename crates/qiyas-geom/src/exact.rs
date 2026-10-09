@@ -112,7 +112,7 @@ pub fn exact_area(entity: &EntityType, xf: &Xform) -> Option<f64> {
 }
 
 /// The scale factor of `xf` when it scales both axes alike (a mirror is fine), else `None`.
-fn uniform_scale(xf: &Xform) -> Option<f64> {
+pub(crate) fn uniform_scale(xf: &Xform) -> Option<f64> {
     let [[a, b, _], [c, d, _], _] = xf.m;
     let (sx, sy) = (a.hypot(c), b.hypot(d));
     let uniform = sx > 0.0

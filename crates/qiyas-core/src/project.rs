@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Boq, Conflict, CoreError, Schedule, Takeoff};
+use crate::{Boq, Conflict, CoreError, Drafting, Schedule, Takeoff};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Project {
@@ -29,6 +29,9 @@ pub struct Project {
     /// The drawing holds its Arabic text backwards (`Session::arabic_reversed`).
     #[serde(default)]
     pub arabic_reversed: bool,
+    /// Snaps, ortho, polar, grid and display precision (`Session::drafting`).
+    #[serde(default)]
+    pub drafting: Drafting,
 }
 
 /// The project file of `drawing`: same folder, same stem, extension `qiyas`.
@@ -128,6 +131,7 @@ mod tests {
             conflicts: Vec::new(),
             schedules: Vec::new(),
             arabic_reversed: false,
+            drafting: Drafting::default(),
         };
         assert!(save(&path, &project).is_err());
         assert!(!dir.path().join("villa.qiyas.tmp").exists());

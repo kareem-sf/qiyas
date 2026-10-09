@@ -39,4 +39,16 @@ impl PickIndex {
         let nearest = self.tree.nearest_neighbor(&p)?;
         (nearest.distance_2(&p) <= tol * tol).then_some(nearest.data)
     }
+
+    /// Indices of the segments within `tol` of `p` (drawing coordinates), nearest first, at most
+    /// `max` of them.
+    pub fn near(&self, p: [f64; 2], tol: f64, max: usize) -> Vec<usize> {
+        let p = [p[0] - self.origin[0], p[1] - self.origin[1]];
+        self.tree
+            .nearest_neighbor_iter_with_distance_2(&p)
+            .take_while(|(_, d2)| *d2 <= tol * tol)
+            .take(max)
+            .map(|(s, _)| s.data)
+            .collect()
+    }
 }

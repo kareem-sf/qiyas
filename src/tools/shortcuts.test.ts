@@ -41,3 +41,12 @@ test("Alt and Meta leave the key alone", () => {
   expect(shortcutFor(keys("KeyD", { altKey: true }))).toBeNull();
   expect(shortcutFor(keys("KeyZ", { ctrlKey: true, metaKey: true }))).toBeNull();
 });
+
+test("F3, F7, F8 and F10 switch snaps, grid, ortho and polar", () => {
+  expect(shortcutFor(keys("F3"))).toBe("osnap");
+  expect(shortcutFor(keys("F7"))).toBe("grid");
+  expect(shortcutFor(keys("F8"))).toBe("ortho");
+  expect(shortcutFor(keys("F10"))).toBe("polar");
+  expect(shortcutFor(keys("F8", { ctrlKey: true }))).toBeNull();
+  expect(shortcutFor(keys("F9"))).toBeNull();
+});

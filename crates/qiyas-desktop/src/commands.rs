@@ -8,8 +8,8 @@ use std::sync::{MutexGuard, PoisonError};
 use qiyas_ai::prompt::Lang;
 use qiyas_ai::{Agent, AgentEvent};
 use qiyas_core::{
-    Boq, Command, Conflict, CoreError, DrawingInfo, EntityInfo, Measurement, Outcome, Picked,
-    Session, Source, Total,
+    Boq, Command, Conflict, CoreError, Drafting, DrawingInfo, EntityInfo, Measurement, Outcome,
+    Picked, Session, Snap, Source, Total,
 };
 use serde::Serialize;
 use tauri::ipc::Response;
@@ -120,6 +120,40 @@ pub async fn pick(
     state: State<'_, AppState>,
 ) -> Result<Option<Picked>, String> {
     with_session(&state, |s| Ok(s.pick([x, y], tol)))
+}
+
+/// The object snap within `tol` (drawing units) of `(x, y)`, with the session's snap modes;
+/// `from_x`, `from_y` is the previous point, for perpendicular snaps. None while snaps are off.
+#[tauri::command]
+pub async fn snap(
+    x: f64,
+    y: f64,
+    tol: f64,
+    from_x: Option<f64>,
+    from_y: Option<f64>,
+    state: State<'_, AppState>,
+) -> Result<Option<Snap>, String> {
+    let from = from_x.zip(from_y).map(|(fx, fy)| [fx, fy]);
+    with_session(&state, |s| {
+        Ok(s.drafting
+            .osnap
+            .then(|| s.snap([x, y], tol, &s.drafting.snap_modes, from))
+            .flatten())
+    })
+}
+
+/// The drawing's drafting settings: snaps, ortho, polar, grid and display precision.
+#[tauri::command]
+pub async fn get_drafting(state: State<'_, AppState>) -> Result<Drafting, String> {
+    with_session(&state, |s| Ok(s.drafting.clone()))
+}
+
+/// Replaces the drafting settings (not an undo step); the window saves the project after.
+#[tauri::command]
+pub async fn set_drafting(drafting: Drafting, state: State<'_, AppState>) -> Result<(), String> {
+    with_session(&state, |s| {
+        s.run(Command::SetDrafting { drafting }).map(|_| ())
+    })
 }
 
 /// One entity; `chain` (outermost block reference first) for an entity inside blocks.
@@ -616,7 +650,10 @@ mod tests {
                     ai_status,
                     get_settings,
                     set_settings,
-                    mcp_status
+                    mcp_status,
+                    snap,
+                    get_drafting,
+                    set_drafting
                 ])
                 .build(mock_context(noop_assets()))
                 .unwrap();
@@ -788,6 +825,28 @@ mod tests {
         assert_eq!(ipc.call("undo", json!({})), Ok(json!(true)));
         assert_eq!(ipc.call("ai_undo", json!({})), Ok(json!(true)));
         assert_eq!(ipc.call("takeoff", json!({})), Ok(json!([])));
+    }
+
+    #[test]
+    fn snap_follows_the_drafting_settings() {
+        let ipc = Ipc::open();
+        let at = json!({ "x": 4.03, "y": 2.97, "tol": 0.05 });
+        let found = ipc.call("snap", at.clone()).unwrap();
+        assert_eq!(found["kind"], "end");
+        assert_eq!(found["point"], json!([4.0, 3.0]));
+
+        let mut drafting = ipc.call("get_drafting", json!({})).unwrap();
+        assert_eq!(drafting["osnap"], true);
+        drafting["osnap"] = json!(false);
+        ipc.call("set_drafting", json!({ "drafting": drafting }))
+            .unwrap();
+        assert_eq!(ipc.call("snap", at).unwrap(), Value::Null);
+        assert_eq!(ipc.call("get_drafting", json!({})).unwrap()["osnap"], false);
+
+        drafting["grid_spacing"] = json!(-1.0);
+        assert!(ipc
+            .call("set_drafting", json!({ "drafting": drafting }))
+            .is_err());
     }
 
     #[test]

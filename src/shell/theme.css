@@ -321,6 +321,30 @@ button.link {
   text-align: end;
   font-variant-numeric: tabular-nums;
 }
+.status .snap-kind {
+  color: var(--accent);
+  white-space: nowrap;
+}
+/* OSNAP, ORTHO, POLAR, GRID and the drafting settings gear. */
+.status .drafting {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+}
+.status .drafting button {
+  padding: 0 6px;
+  font-size: 11px;
+  line-height: 16px;
+  letter-spacing: 0.03em;
+}
+.status .drafting .gear {
+  line-height: 0;
+  padding: 1px 4px;
+}
+.status .drafting .gear svg {
+  width: 13px;
+  height: 13px;
+}
 
 /* Take-off panel: beside the drawing, on the side opposite the layers. */
 .takeoff {
@@ -984,6 +1008,11 @@ button.link {
 .settings .status {
   margin: 0;
   color: var(--muted);
+}
+.drafting-settings .modes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 12px;
 }
 .settings .snippet button {
   align-self: flex-end;

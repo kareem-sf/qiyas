@@ -2965,6 +2965,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "opencadkernel"
+version = "0.1.0"
+source = "git+https://github.com/HakanSeven12/opencadkernel.git?rev=99b6b48#99b6b4890704d300596ba502b5a1c8ec1eefa954"
+dependencies = [
+ "rustc-hash",
+]
+
+[[package]]
 name = "openssl-probe"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3343,6 +3351,7 @@ name = "qiyas-core"
 version = "0.1.0"
 dependencies = [
  "opencadcodec",
+ "opencadkernel",
  "qiyas-core",
  "qiyas-geom",
  "qiyas-render",
@@ -3380,6 +3389,7 @@ name = "qiyas-geom"
 version = "0.1.0"
 dependencies = [
  "opencadcodec",
+ "opencadkernel",
 ]
 
 [[package]]

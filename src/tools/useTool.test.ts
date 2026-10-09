@@ -192,3 +192,63 @@ test("a double click measures what the status bar showed before it", () => {
   expect(toolReducer(inner, { type: "finish" }).pendingCommand).toEqual(entity);
   expect(toolReducer(back, { type: "finish" }).pendingCommand).toEqual(entity);
 });
+
+const ORTHO = { ortho: true, polar: false, polarStepDeg: 45 };
+const POLAR = { ortho: false, polar: true, polarStepDeg: 45 };
+
+/** A click placing a point with tracking, `snapped` when it is an object snap's point. */
+const tracked = (world: Point, time: number, track: typeof ORTHO, snapped = false): ToolEvent => ({
+  type: "click",
+  world,
+  screen: [world[0] * 10, world[1] * 10],
+  time,
+  picked: null,
+  info: null,
+  track,
+  snapped,
+});
+
+test("ortho keeps the second point level with the first", () => {
+  const s = run("distance", [
+    tracked([1, 1], 0, ORTHO),
+    tracked([6, 1.8], 1000, ORTHO),
+  ]);
+  expect(s.points).toEqual([
+    [1, 1],
+    [6, 1],
+  ]);
+});
+
+test("ortho goes up when the cursor is more up than across", () => {
+  const s = run("area", [
+    tracked([0, 0], 0, ORTHO),
+    tracked([0.5, 4], 1000, ORTHO),
+  ]);
+  expect(s.points[1]).toEqual([0, 4]);
+});
+
+test("polar snaps the direction to 45 degrees when within 5 degrees", () => {
+  const s = run("distance", [
+    tracked([0, 0], 0, POLAR),
+    // About 47 degrees.
+    tracked([3, 3.2], 1000, POLAR),
+  ]);
+  const [x, y] = s.points[1];
+  expect(x).toBeCloseTo(y, 9);
+  expect(Math.hypot(x, y)).toBeCloseTo((3 + 3.2) / Math.SQRT2, 9);
+
+  // 30 degrees is 15 away from both 0 and 45: left alone.
+  const free = run("distance", [
+    tracked([0, 0], 0, POLAR),
+    tracked([Math.cos(Math.PI / 6), Math.sin(Math.PI / 6)], 1000, POLAR),
+  ]);
+  expect(free.points[1][0]).toBeCloseTo(Math.cos(Math.PI / 6), 12);
+});
+
+test("a snapped point is placed as it is, ortho or not", () => {
+  const s = run("distance", [
+    tracked([0, 0], 0, ORTHO),
+    tracked([4, 3], 1000, ORTHO, true),
+  ]);
+  expect(s.points[1]).toEqual([4, 3]);
+});

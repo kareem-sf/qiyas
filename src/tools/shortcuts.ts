@@ -1,9 +1,19 @@
 import type { Tool } from "../shell/Ribbon";
 
-/** What a key press asks for: a tool, or one of the actions below. */
-export type Shortcut = Tool | "undo" | "redo" | "save" | "escape" | "finish";
+/** A drafting switch the function keys turn on and off, as in AutoCAD. */
+export type DraftingToggle = "osnap" | "grid" | "ortho" | "polar";
+
+/** What a key press asks for: a tool, a drafting switch, or one of the actions below. */
+export type Shortcut = Tool | DraftingToggle | "undo" | "redo" | "save" | "escape" | "finish";
 
 export type Keys = Pick<KeyboardEvent, "code" | "key" | "ctrlKey" | "metaKey" | "shiftKey" | "altKey">;
+
+const TOGGLE_CODES: Record<string, DraftingToggle> = {
+  F3: "osnap",
+  F7: "grid",
+  F8: "ortho",
+  F10: "polar",
+};
 
 const TOOL_CODES: Record<string, Tool> = {
   KeyD: "distance",
@@ -23,6 +33,7 @@ export function shortcutFor(e: Keys): Shortcut | null {
     return null;
   }
   if (e.code === "Escape") return "escape";
+  if (!e.shiftKey && e.code in TOGGLE_CODES) return TOGGLE_CODES[e.code];
   if (e.code === "Enter" || e.code === "NumpadEnter") return "finish";
   if (e.shiftKey) return null;
   return TOOL_CODES[e.code] ?? null;
