@@ -268,11 +268,59 @@ button[aria-pressed="true"] {
   overflow-y: auto;
 }
 .layers li {
+  padding: 1px 6px;
+  border-radius: 6px;
+}
+.layers .layer-row {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 1px 6px;
-  border-radius: 6px;
+}
+/* A layer's properties, open under its row. */
+.layer-props {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 8px;
+  align-items: center;
+  padding: 4px 0 8px;
+  padding-inline-start: 16px;
+}
+.layer-props label {
+  display: contents;
+}
+.layer-props label.check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  grid-column: span 2;
+}
+.layer-props input,
+.layer-props select {
+  min-width: 0;
+}
+.layer-props button.link {
+  grid-column: span 2;
+  justify-self: start;
+}
+.layers-vp,
+.layers-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+}
+.layers-foot {
+  border-top: 1px solid var(--rule);
+}
+.layer-new {
+  display: flex;
+  gap: 4px;
+  flex: 1 1 100%;
+}
+.layer-new input {
+  flex: 1;
+  min-width: 0;
 }
 .layers li:hover {
   background: var(--hover);
@@ -1865,6 +1913,48 @@ button.close {
   display: inline-block;
   margin-inline-end: 6px;
   vertical-align: -1px;
+}
+/* The palette's editable fields fill their cell. */
+.properties dd input:not([type="checkbox"]),
+.properties dd select {
+  width: 100%;
+  min-width: 0;
+}
+.properties dd .swatch + input {
+  width: calc(100% - 16px);
+}
+/* LAYSTATE's states and LAYTRANS's mapping table. */
+.layer-states {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+.layer-states li {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.layer-states input {
+  flex: 1;
+  min-width: 0;
+}
+.laytrans {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 8px;
+}
+.laytrans th,
+.laytrans td {
+  padding: 2px 6px;
+  text-align: start;
+}
+.laytrans-source {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
 }
 .properties .attributes dd dl {
   margin: 0;

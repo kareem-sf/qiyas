@@ -48,7 +48,12 @@ export type Run =
   | "insertBlock"
   | "writeBlock"
   | "refClose"
-  | "attributeManager";
+  | "attributeManager"
+  | "layers"
+  | "layerStates"
+  | "layerTranslate"
+  | "vpLayer"
+  | "properties";
 
 export type Action =
   /** An empty line where a command is expected: run the last command again. */
@@ -101,6 +106,11 @@ const RUNS: Partial<Record<CommandName, Run>> = {
   WBLOCK: "writeBlock",
   REFCLOSE: "refClose",
   BATTMAN: "attributeManager",
+  LAYER: "layers",
+  LAYSTATE: "layerStates",
+  LAYTRANS: "layerTranslate",
+  VPLAYER: "vpLayer",
+  PROPERTIES: "properties",
 };
 
 const TOOLS: Partial<Record<CommandName, Tool>> = {
@@ -129,6 +139,9 @@ const TOOLS: Partial<Record<CommandName, Tool>> = {
   ARRAY: "array",
   EXPLODE: "explode",
   ERASE: "erase",
+  GROUP: "group",
+  UNGROUP: "ungroup",
+  MATCHPROP: "matchprop",
   TRIM: "trim",
   EXTEND: "extend",
   BREAK: "break",

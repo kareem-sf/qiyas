@@ -283,3 +283,55 @@ describe("block", () => {
     expect(s.hint).toBe("block.prompt.base");
   });
 });
+
+describe("groups and match properties", () => {
+  it("GROUP: picks, then Enter asks the app for the name", () => {
+    const { commands } = feed(initialModifyState("group", []), [picked(1, 2), finish]);
+    expect(commands).toEqual([{ type: "create_group", name: "", targets: t([1, 2]) }]);
+    // A selection made before groups at once; dimensions and tables join too.
+    const s = initialModifyState("group", [3], { 3: "Dimension" });
+    expect(s.command).toEqual({ type: "create_group", name: "", targets: t([3]) });
+  });
+
+  it("UNGROUP: what is picked loses its groups", () => {
+    const { commands } = feed(initialModifyState("ungroup", []), [picked(4), finish]);
+    expect(commands).toEqual([{ type: "ungroup", targets: t([4]) }]);
+  });
+
+  it("MA: the first pick is the source, then the targets until Enter", () => {
+    let s = initialModifyState("matchprop", []);
+    expect(s.hint).toBe("props.prompt.source");
+    const { s: after, commands } = feed(s, [picked(5, 6), picked(7), picked(5, 8)]);
+    expect(after.source).toBe(5);
+    expect(after.hint).toBe("props.prompt.targets");
+    expect(after.handles).toEqual([7, 8]);
+    expect(commands).toEqual([]);
+    s = modifyReducer(after, finish);
+    expect(s.command).toEqual({
+      type: "match_properties",
+      source: { handle: 5, chain: [] },
+      targets: t([7, 8]),
+      props: [
+        "layer",
+        "color",
+        "linetype",
+        "lineweight",
+        "text_style",
+        "text_height",
+        "dim_style",
+        "hatch_pattern",
+      ],
+    });
+    // Back to a new source.
+    expect(s.source).toBeNull();
+  });
+
+  it("MA with one entity picked before starts from it as the source", () => {
+    const s = initialModifyState("matchprop", [9]);
+    expect(s.source).toBe(9);
+    expect(s.phase).toBe("select");
+    expect(s.hint).toBe("props.prompt.targets");
+    // Enter with no target asks again.
+    expect(modifyReducer(s, finish).command).toBeNull();
+  });
+});

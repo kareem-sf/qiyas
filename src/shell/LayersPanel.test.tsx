@@ -116,3 +116,120 @@ test("make current marks the current layer; an xref's layer can't be current", (
   expect(onMakeCurrent).toHaveBeenCalledWith("0");
   expect(button("Make current: PLAN|A-DOOR").disabled).toBe(true);
 });
+
+test("a layer's properties open under it and each edit goes to the core", () => {
+  const onSetLayer = vi.fn();
+  const onRenameLayer = vi.fn();
+  const onDeleteLayer = vi.fn();
+  const wall: LayerInfo = {
+    ...layer("A-WALL"),
+    color_name: "ACI 1",
+    linetype: "Continuous",
+    lineweight: -3,
+    plot: true,
+  };
+  render(
+    <LayersPanel
+      layers={[wall, layer("PLAN|A-DOOR")]}
+      hidden={new Set()}
+      linetypes={["Continuous", "DASHED"]}
+      onToggle={() => {}}
+      onIsolate={() => {}}
+      onShowAll={() => {}}
+      onSetLayer={onSetLayer}
+      onRenameLayer={onRenameLayer}
+      onDeleteLayer={onDeleteLayer}
+    />,
+  );
+  // An xref's layer is the xref's: nothing to edit.
+  expect(screen.queryByRole("button", { name: "Layer properties: PLAN|A-DOOR" })).toBeNull();
+  const open = screen.getByRole("button", { name: "Layer properties: A-WALL" });
+  expect(screen.queryByRole("checkbox", { name: "Frozen" })).toBeNull();
+  fireEvent.click(open);
+  expect(open.getAttribute("aria-expanded")).toBe("true");
+
+  fireEvent.click(screen.getByRole("checkbox", { name: "Frozen" }));
+  expect(onSetLayer).toHaveBeenLastCalledWith("A-WALL", "frozen", true);
+  fireEvent.click(screen.getByRole("checkbox", { name: "On" }));
+  expect(onSetLayer).toHaveBeenLastCalledWith("A-WALL", "on", false);
+  fireEvent.click(screen.getByRole("checkbox", { name: "Locked" }));
+  expect(onSetLayer).toHaveBeenLastCalledWith("A-WALL", "locked", true);
+  fireEvent.click(screen.getByRole("checkbox", { name: "Plot" }));
+  expect(onSetLayer).toHaveBeenLastCalledWith("A-WALL", "plot", false);
+
+  const colour = screen.getByRole("textbox", { name: "Colour" }) as HTMLInputElement;
+  expect(colour.value).toBe("ACI 1");
+  fireEvent.change(colour, { target: { value: "ACI 5" } });
+  fireEvent.keyDown(colour, { key: "Enter" });
+  expect(onSetLayer).toHaveBeenLastCalledWith("A-WALL", "color", "ACI 5");
+
+  fireEvent.change(screen.getByRole("combobox", { name: "Linetype" }), { target: { value: "DASHED" } });
+  expect(onSetLayer).toHaveBeenLastCalledWith("A-WALL", "linetype", "DASHED");
+  fireEvent.change(screen.getByRole("combobox", { name: "Lineweight" }), { target: { value: "35" } });
+  expect(onSetLayer).toHaveBeenLastCalledWith("A-WALL", "lineweight", 35);
+
+  const name = screen.getByRole("textbox", { name: "Rename" });
+  fireEvent.change(name, { target: { value: "S-WALL" } });
+  fireEvent.keyDown(name, { key: "Enter" });
+  expect(onRenameLayer).toHaveBeenCalledWith("A-WALL", "S-WALL");
+  fireEvent.click(screen.getByRole("button", { name: "Delete layer A-WALL" }));
+  expect(onDeleteLayer).toHaveBeenCalledWith("A-WALL");
+});
+
+test("new layer, layer states and the translator from the panel's foot", () => {
+  const onNewLayer = vi.fn();
+  const onLayerStates = vi.fn();
+  const onTranslate = vi.fn();
+  render(
+    <LayersPanel
+      layers={[layer("0")]}
+      hidden={new Set()}
+      onToggle={() => {}}
+      onIsolate={() => {}}
+      onShowAll={() => {}}
+      onNewLayer={onNewLayer}
+      onLayerStates={onLayerStates}
+      onTranslate={onTranslate}
+    />,
+  );
+  const name = screen.getByRole("textbox", { name: "New layer" });
+  fireEvent.change(name, { target: { value: " S-COLS " } });
+  fireEvent.click(screen.getByRole("button", { name: "Add" }));
+  expect(onNewLayer).toHaveBeenCalledWith("S-COLS");
+  fireEvent.click(screen.getByRole("button", { name: "Layer states…" }));
+  expect(onLayerStates).toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Translate layers…" }));
+  expect(onTranslate).toHaveBeenCalled();
+});
+
+test("on a paper sheet with viewports a VP freeze column freezes a layer in the chosen viewport", () => {
+  const onViewportFrozen = vi.fn();
+  const props = {
+    layers: [layer("A-WALL"), layer("A-DOOR")],
+    hidden: new Set<string>(),
+    onToggle() {},
+    onIsolate() {},
+    onShowAll() {},
+    onViewportFrozen,
+  };
+  const { rerender } = render(<LayersPanel {...props} viewports={[]} />);
+  expect(screen.queryByRole("checkbox", { name: "VP freeze: A-WALL" })).toBeNull();
+  rerender(
+    <LayersPanel
+      {...props}
+      viewports={[
+        { handle: 9, frozen: ["A-WALL"] },
+        { handle: 12, frozen: [] },
+      ]}
+    />,
+  );
+  const wall = screen.getByRole("checkbox", { name: "VP freeze: A-WALL" }) as HTMLInputElement;
+  expect(wall.checked).toBe(true);
+  fireEvent.click(wall);
+  expect(onViewportFrozen).toHaveBeenLastCalledWith(9, "A-WALL", false);
+  fireEvent.change(screen.getByRole("combobox", { name: "Viewport" }), { target: { value: "12" } });
+  const door = screen.getByRole("checkbox", { name: "VP freeze: A-DOOR" }) as HTMLInputElement;
+  expect(door.checked).toBe(false);
+  fireEvent.click(door);
+  expect(onViewportFrozen).toHaveBeenLastCalledWith(12, "A-DOOR", true);
+});

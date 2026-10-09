@@ -5,7 +5,7 @@
  *  A selection made before the tool starts is used at once (stretch excepted: it needs its own
  *  crossing window). After a command the tool asks for a new selection; copy keeps placing copies
  *  until Enter. */
-import type { Command, ModifySpec } from "../api";
+import { MATCH_ALL, type Command, type ModifySpec } from "../api";
 import type { Bounds, Point } from "../viewport/camera";
 
 export const MODIFY_TOOLS = [
@@ -22,6 +22,13 @@ export const MODIFY_TOOLS = [
   /** BLOCK: the entities picked become a block, made at the base point clicked (the app asks
    *  for its name). On the ribbon's Insert tab, not the Modify group. */
   "block",
+  /** GROUP: the entities picked become a group (the app asks for its name). On the Home tab's
+   *  Layers group, as are the two below. */
+  "group",
+  /** UNGROUP: the groups of the entities picked go; the entities stay. */
+  "ungroup",
+  /** MA (MATCHPROP): the first entity picked is the source, the rest take its properties. */
+  "matchprop",
 ] as const;
 
 export type ModifyKind = (typeof MODIFY_TOOLS)[number];
@@ -55,6 +62,8 @@ export type ModifyState = {
   window: Bounds | null;
   /** Stretch: the window to look through, waiting for what it touches (a `picked` input). */
   seek: Bounds | null;
+  /** MA: the entity whose properties the others take, once picked. */
+  source: number | null;
   /** Set by the input that finished a change; the hook runs it. */
   command: Command | null;
   /** Dimensions and tables the last input left out (this tool can't change them yet), to say so
@@ -79,7 +88,16 @@ export type ModifyInput =
 /** Kinds drawn from a block of their own, which isn't made again yet: only move and copy change
  *  them (erase and explode take them as they are). */
 const BLOCK_DRAWN = new Set(["Dimension", "Table"]);
-const TAKES_BLOCK_DRAWN = new Set<ModifyKind>(["move", "copy", "erase", "explode", "block"]);
+const TAKES_BLOCK_DRAWN = new Set<ModifyKind>([
+  "move",
+  "copy",
+  "erase",
+  "explode",
+  "block",
+  "group",
+  "ungroup",
+  "matchprop",
+]);
 
 /** `handles` less the dimensions and tables `kind` can't change, and how many those were. */
 function admit(
@@ -94,11 +112,10 @@ function admit(
 
 const NO_ARRAY = { kind: "R" as const, rows: 1, cols: 1, dy: 0, items: 0 };
 
-const selectHint = (s: ModifyState): ModifyState => ({
-  ...s,
-  hint: "modify.prompt.select",
-  hintArgs: { n: String(s.handles.length) },
-});
+const selectHint = (s: ModifyState): ModifyState =>
+  s.kind === "matchprop"
+    ? { ...s, hint: s.source === null ? "props.prompt.source" : "props.prompt.targets", hintArgs: null }
+    : { ...s, hint: "modify.prompt.select", hintArgs: { n: String(s.handles.length) } };
 
 /** A fresh tool: with `selection` (entities picked before, their kinds in `kinds`), straight to
  *  the points. */
@@ -118,11 +135,14 @@ export function initialModifyState(
     array: NO_ARRAY,
     window: null,
     seek: null,
+    source: null,
     command: null,
     skipped: 0,
     hint: kind === "stretch" ? "modify.prompt.stretchWindow" : "modify.prompt.select",
     hintArgs: kind === "stretch" ? null : { n: "0" },
   };
+  // MA's source is one entity: one picked before is it.
+  if (kind === "matchprop") return selectHint({ ...s, source: selection.length === 1 ? selection[0] : null });
   if (kind === "stretch" || selection.length === 0) return s;
   const { handles, skipped } = admit(kind, [...new Set(selection)], (h) => kinds[h]);
   if (handles.length === 0) return { ...s, skipped };
@@ -155,6 +175,18 @@ function startPoints(s: ModifyState): ModifyState {
       return { ...p, asking: "arrayKind", hint: "modify.prompt.arrayKind" };
     case "block":
       return { ...p, hint: "block.prompt.base" };
+    case "group":
+      // The name comes from the app's dialog.
+      return done(s, { type: "create_group", name: "", targets: targets(s) });
+    case "ungroup":
+      return done(s, { type: "ungroup", targets: targets(s) });
+    case "matchprop":
+      return done(s, {
+        type: "match_properties",
+        source: { handle: s.source!, chain: [] },
+        targets: targets(s),
+        props: MATCH_ALL,
+      });
     default:
       return { ...p, hint: "modify.prompt.base" };
   }
@@ -380,7 +412,11 @@ export function modifyReducer(state: ModifyState, input: ModifyInput): ModifySta
         return { ...s, seek: null, handles: admitted, phase: "points", points: [], skipped, hint: "modify.prompt.base" };
       }
       if (s.phase !== "select") return s;
-      const handles = [...new Set([...s.handles, ...admitted])];
+      if (s.kind === "matchprop" && s.source === null) {
+        return admitted.length > 0 ? selectHint({ ...s, source: admitted[0] }) : s;
+      }
+      const fresh = admitted.filter((h) => h !== s.source);
+      const handles = [...new Set([...s.handles, ...fresh])];
       return selectHint({ ...s, handles, skipped });
     }
   }

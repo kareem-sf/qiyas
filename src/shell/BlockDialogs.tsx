@@ -7,7 +7,7 @@ const BAD_NAME = /[<>/\\":;?*|,=`]/;
 
 /** A modal dialog that shows itself, gives focus back on close, keeps its keys from the drawing
  *  and runs `submit` (its error stays in the dialog). */
-function useModal() {
+export function useModal() {
   const dialog = useRef<HTMLDialogElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -42,7 +42,7 @@ type ShellProps = {
 };
 
 /** The dialog and form around a block dialog's fields; Enter submits. */
-function Shell({ modal, id, title, onClose, onSubmit, children }: ShellProps) {
+export function Shell({ modal, id, title, onClose, onSubmit, children }: ShellProps) {
   return (
     <dialog
       ref={modal.dialog}

@@ -140,6 +140,9 @@ export type ToolEvent =
       track?: Track;
       /** Shift was held: the select tool adds the entity to the selection set. */
       shift?: boolean;
+      /** The group the entity picked belongs to (its top-level handles): the select tool
+       *  selects all of them. Absent with Ctrl held or group selection off. */
+      group?: number[] | null;
     }
   /** What a selection box picked (top-level handles, and each one's kind when known); `add`
    *  (Shift) keeps what was selected. */
@@ -468,15 +471,17 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
         }
         case "select": {
           const picked = event.picked;
+          // A grouped entity brings its whole group (AutoCAD's PICKSTYLE).
+          const whole = picked ? (event.group && event.group.length > 0 ? event.group : [picked.top]) : [];
           // Shift adds the whole top-level entity to the selection set, and measures nothing.
           if (event.shift) {
             if (!picked) return clicked;
             const kinds = withKinds(s.kinds, [picked.top], [picked.kind]);
-            return { ...clicked, selection: union(s.selection, [picked.top]), kinds };
+            return { ...clicked, selection: union(s.selection, whole), kinds };
           }
           // Otherwise the click replaces the selection set (AutoCAD's PICKADD), and measures as before.
           if (picked === null) return { ...clicked, selected: null, hint: "", hintArgs: null, selection: [], kinds: {} };
-          clicked.selection = [picked.top];
+          clicked.selection = whole;
           clicked.kinds = withKinds({}, [picked.top], [picked.kind]);
           const current = s.selected;
           if (current && samePick(current.picked, picked)) {
@@ -590,6 +595,9 @@ export type ToolApi = {
   editText?(handle: number, at: Point | null): void;
   /** An annotate tool needs typed text: a leader's, a tolerance's frame, a dimension's. */
   dimText?(request: DimRequest): void;
+  /** The group the top-level entity `handle` is in, its handles; null when none (or when group
+   *  selection is off). */
+  groupOf?(handle: number): number[] | null;
   onError(e: unknown): void;
 };
 
@@ -735,7 +743,7 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
     if (snapping) snapper.current.request({ p: world, tol: SNAP_PX * worldPerPixel, from: prev, wpp: worldPerPixel });
   }
 
-  async function onClick(world: Point, screen: Point, worldPerPixel: number, shift = false) {
+  async function onClick(world: Point, screen: Point, worldPerPixel: number, shift = false, ctrl = false) {
     const time = performance.now();
     if (snapsNow) {
       let found: Snap | null = null;
@@ -774,7 +782,9 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
       api.onError(e);
       return;
     }
-    dispatch({ type: "click", world, screen, time, picked, info, shift });
+    // Ctrl picks one entity out of its group.
+    const group = tool === "select" && picked && !ctrl ? (api.groupOf?.(picked.top) ?? null) : null;
+    dispatch({ type: "click", world, screen, time, picked, info, shift, group });
   }
 
   /** A selection box dragged in the viewport: picks for the select tool or a modify tool, or is

@@ -10,6 +10,7 @@ import {
   blockThumbnail,
   clearRecents,
   drawingBlocks,
+  drawingLayers,
   getSettings,
   setToolPalette,
   writeBlock,
@@ -69,13 +70,16 @@ import {
   type Boq,
   type Command,
   type Conflict,
+  type Current,
   type Drafting,
   type DrawingInfo,
   type EntityFilter,
   type EntityInfo,
+  type EntityProp,
   type FieldKind,
   type Field,
   type ImageDisplay,
+  type LayerProp,
   type TableInfo,
   type Measurement,
   type NamedView,
@@ -122,7 +126,9 @@ import { FindReplaceDialog, type FindQuery } from "./shell/FindReplaceDialog";
 import { cycleTab, FileTabs } from "./shell/FileTabs";
 import { isStale, serial } from "./shell/switcher";
 import { AlongPrompt, InfoCard, type Info } from "./shell/InfoCard";
+import { GroupNameDialog, LayerStatesDialog } from "./shell/LayerDialogs";
 import { LayersPanel } from "./shell/LayersPanel";
+import { LayerTranslator } from "./shell/LayerTranslator";
 import { PropertiesPanel } from "./shell/PropertiesPanel";
 import { Ribbon, type Tool } from "./shell/Ribbon";
 import { SettingsDialog } from "./shell/SettingsDialog";
@@ -314,6 +320,13 @@ export default function App() {
   const [palette, setPalette] = useState<PaletteItem[] | null>(null);
   /** BATTMAN is open on these blocks. */
   const [managerBlocks, setManagerBlocks] = useState<BlockInfo[] | null>(null);
+  /** LAYSTATE's and LAYTRANS's dialogs are open. */
+  const [layerStatesOpen, setLayerStatesOpen] = useState(false);
+  const [translatorOpen, setTranslatorOpen] = useState(false);
+  /** GROUP's entities are picked: the command waiting for the group's name. */
+  const [groupAsk, setGroupAsk] = useState<Extract<Command, { type: "create_group" }> | null>(null);
+  /** Clicking a grouped entity selects its group (AutoCAD's PICKSTYLE); Ctrl picks one alone. */
+  const [groupSelect, setGroupSelect] = useState(true);
   /** The block palette's thumbnails, revoked when it closes. */
   const thumbUrls = useRef<string[]>([]);
   /** The text height and style new text takes: the last ones used; null until then (2.5 mm in
@@ -486,6 +499,18 @@ export default function App() {
       await run(async () => setCreateBlockAsk({ cmd, names: (await readBlocks()).map((b) => b.name) }));
       return;
     }
+    // GROUP's entities are picked: the name comes from its dialog.
+    if (cmd.type === "create_group" && cmd.name === "") {
+      setGroupAsk(cmd);
+      return;
+    }
+    // Groups and matched properties change what the layers panel and the palette show.
+    if (cmd.type === "ungroup" || cmd.type === "match_properties") {
+      await run(async () => {
+        await runDrawingCommand(cmd);
+      });
+      return;
+    }
     let changed = false;
     await run(async () => {
       const outcome = await runCommand(cmd);
@@ -566,6 +591,7 @@ export default function App() {
       placeText,
       editText: (handle, at) => run(() => openTextEdit(handle, at)),
       dimText: setDimText,
+      groupOf,
     },
     drafting,
   );
@@ -704,6 +730,41 @@ export default function App() {
   /** Runs a block command from a dialog or the edit bar, then draws it and reads the take-off
    *  (rows may lose their links) and the drawing's state (an edit in place may end) again; an
    *  error goes back to the caller. */
+  /** Runs a layer, group or property command (its error goes to the caller), then reads the
+   *  drawing again: the batch, the take-off, the layers, groups and hidden layers. */
+  async function runDrawingCommand(cmd: Command) {
+    const gen = switchGen.current;
+    const outcome = await runCommand(cmd);
+    await redraw();
+    await refreshTakeoffAndBoq();
+    const next = await drawingInfo();
+    if (!isStale(gen, switchGen.current)) {
+      setInfo(next);
+      setHidden(new Set(next.hidden_layers));
+    }
+    await autosave();
+    return outcome;
+  }
+
+  /** `runDrawingCommand` with its error in the status bar. */
+  const runLayerCommand = (cmd: Command) =>
+    run(async () => {
+      await runDrawingCommand(cmd);
+    });
+
+  /** The group the top-level entity `handle` is in, while group selection is on. */
+  function groupOf(handle: number) {
+    if (!groupSelect) return null;
+    return info?.groups?.find((g) => g.selectable && g.handles.includes(handle))?.handles ?? null;
+  }
+
+  /** Asks for a drawing and reads its layers, for the layer translator's standard. */
+  async function loadLayerStandard() {
+    const path = await open({ filters: [{ name: "Drawings", extensions: ["dwg", "dxf"] }] });
+    if (typeof path !== "string") return null;
+    return { path, layers: await drawingLayers(path) };
+  }
+
   async function runBlock(cmd: Command) {
     const gen = switchGen.current;
     const outcome = await runCommand(cmd);
@@ -1524,6 +1585,8 @@ export default function App() {
     run(async () => {
       await setSheet(block);
       setSheetBlock(block);
+      // The layers panel's VP freeze column lists this sheet's viewports.
+      setInfo(await drawingInfo());
       measure.cancel();
       fitIds.current = fit ?? null;
       await redraw(true);
@@ -1578,6 +1641,47 @@ export default function App() {
   );
 
   const showAll = useCallback(() => applyHidden(new Set()), [hidden, info]);
+
+  /** One property of the drawing's layer `name` (one undo step). */
+  const setLayerProp = useCallback(
+    (name: string, prop: LayerProp, value: boolean | string | number) =>
+      runLayerCommand({ type: "set_layer", name, prop, value }),
+    [info],
+  );
+
+  /** The viewport `viewport` freezes `layer` inside it, or thaws it. */
+  const setViewportFrozen = useCallback(
+    (viewport: number, layer: string, frozen: boolean) =>
+      runLayerCommand({ type: "set_viewport_frozen", viewport: { handle: viewport, chain: [] }, layer, frozen }),
+    [info],
+  );
+
+  /** The palette's edit of the picked entity (a drawing's own, at the top of the sheet). */
+  const setPickedProperty = useCallback(
+    (prop: EntityProp, value: boolean | string | number) => {
+      if (!pickedInfo) return;
+      runLayerCommand({ type: "set_property", target: { handle: pickedInfo.handle, chain: [] }, prop, value });
+    },
+    [pickedInfo, info],
+  );
+
+  /** What new entities are drawn with, from the palette (not an undo step). */
+  const setCurrentState = useCallback(
+    (current: Current) => {
+      const gen = switchGen.current;
+      run(async () => {
+        await runCommand({ type: "set_current", current });
+        const next = await drawingInfo();
+        if (isStale(gen, switchGen.current)) return;
+        setInfo(next);
+        await autosave();
+      });
+    },
+    [info],
+  );
+
+  /** The drawing's own layers (not its xrefs'), for the palette. */
+  const ownLayers = useMemo(() => info?.layers.map((l) => l.name).filter((n) => !n.includes("|")) ?? [], [info]);
 
   /** Draws new entities on layer `name` from now on (saved with the project, not an undo step). */
   const makeCurrent = useCallback(
@@ -1865,6 +1969,22 @@ export default function App() {
         return closeBlockEdit(true);
       case "attributeManager":
         return openAttributeManager();
+      case "layers":
+        document.querySelector<HTMLElement>(".layers button, .layers input")?.focus();
+        return;
+      case "layerStates":
+        return setLayerStatesOpen(true);
+      case "layerTranslate":
+        return setTranslatorOpen(true);
+      case "vpLayer": {
+        const box = document.querySelector<HTMLElement>(".layers .vp-freeze");
+        if (box) box.focus();
+        else setError(t("layer.vpNone"));
+        return;
+      }
+      case "properties":
+        document.querySelector<HTMLElement>(".properties h2 button")?.focus();
+        return;
       case "calibrate":
         if (!batch || batch.imageTable.length === 0) {
           setError(t("cmd.notNow", { name: "CALIBRATE" }));
@@ -2248,6 +2368,10 @@ export default function App() {
           onAttributeManager={info ? openAttributeManager : undefined}
           onDesignCenter={info ? openDesignCenter : undefined}
           onToolPalettes={info ? openToolPalettes : undefined}
+          onLayerStates={info ? () => setLayerStatesOpen(true) : undefined}
+          onTranslateLayers={info ? () => setTranslatorOpen(true) : undefined}
+          groupSelect={groupSelect}
+          onGroupSelect={setGroupSelect}
           arabicReversed={arabicReversed}
           onArabicReversed={info ? chooseArabicReversed : undefined}
           {...(onModel && {
@@ -2417,6 +2541,52 @@ export default function App() {
           }}
           onClose={() => {
             setTextDialog(null);
+            focusDrawing();
+          }}
+        />
+      )}
+      {groupAsk && (
+        <GroupNameDialog
+          names={info?.groups?.map((g) => g.name) ?? []}
+          onSubmit={async (name) => {
+            await runDrawingCommand({ ...groupAsk, name });
+          }}
+          onClose={() => {
+            setGroupAsk(null);
+            focusDrawing();
+          }}
+        />
+      )}
+      {layerStatesOpen && info && (
+        <LayerStatesDialog
+          states={info.layer_states ?? []}
+          onSave={async (name) => {
+            await runDrawingCommand({ type: "save_layer_state", name });
+          }}
+          onRestore={async (name) => {
+            await runDrawingCommand({ type: "restore_layer_state", name });
+          }}
+          onRename={async (from, to) => {
+            await runDrawingCommand({ type: "rename_layer_state", from, to });
+          }}
+          onDelete={async (name) => {
+            await runDrawingCommand({ type: "delete_layer_state", name });
+          }}
+          onClose={() => {
+            setLayerStatesOpen(false);
+            focusDrawing();
+          }}
+        />
+      )}
+      {translatorOpen && info && (
+        <LayerTranslator
+          layers={info.layers}
+          loadStandard={loadLayerStandard}
+          onTranslate={async (from_path, mappings) => {
+            await runDrawingCommand({ type: "translate_layers", from_path, mappings });
+          }}
+          onClose={() => {
+            setTranslatorOpen(false);
             focusDrawing();
           }}
         />
@@ -2642,12 +2812,26 @@ export default function App() {
             onShowAll={showAll}
             current={info?.current.layer}
             onMakeCurrent={info ? makeCurrent : undefined}
+            linetypes={info?.linetypes}
+            onSetLayer={info ? setLayerProp : undefined}
+            onRenameLayer={info ? (from, to) => runLayerCommand({ type: "rename_layer", from, to }) : undefined}
+            onDeleteLayer={info ? (name) => runLayerCommand({ type: "delete_layer", name }) : undefined}
+            onNewLayer={info ? (name) => runLayerCommand({ type: "new_layer", name }) : undefined}
+            onLayerStates={info ? () => setLayerStatesOpen(true) : undefined}
+            onTranslate={info ? () => setTranslatorOpen(true) : undefined}
+            viewports={sheetShown?.is_model ? [] : info?.viewports}
+            onViewportFrozen={info ? setViewportFrozen : undefined}
           />
           <PropertiesPanel
             entity={pickedInfo}
             units={info?.units ?? "metres"}
             precision={drafting?.precision ?? 3}
             sheet={sheetName}
+            layers={ownLayers}
+            linetypes={info?.linetypes}
+            onSet={info && pickedInfo ? setPickedProperty : undefined}
+            current={info?.current}
+            onSetCurrent={info ? setCurrentState : undefined}
           />
         </div>
         <main className="work">

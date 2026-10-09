@@ -81,8 +81,8 @@ type Props = {
   /** Drawing units between the grid's dots; null or left out for no grid. */
   grid?: number | null;
   /** A left click; `worldPerPixel` is the zoom at that moment, for pick tolerances; `shift` when
-   *  Shift was held. */
-  onClick(world: Point, screen: Point, worldPerPixel: number, shift: boolean): void;
+   *  Shift was held, `ctrl` when Ctrl (or Cmd) was. */
+  onClick(world: Point, screen: Point, worldPerPixel: number, shift: boolean, ctrl?: boolean): void;
   /** A left drag draws a selection box (the select tool, a modify tool picking). */
   boxes?: boolean;
   /** A selection box was dragged: `crossing` when drawn right to left (it takes what it touches;
@@ -406,7 +406,9 @@ export function Viewport({
     if (down && e.button === 0) {
       press.current = null;
       const p = local(e);
-      if (isClick(down, p)) onClick(screenToWorld(camera.current, p), p, camera.current.scale, e.shiftKey);
+      if (isClick(down, p)) {
+        onClick(screenToWorld(camera.current, p), p, camera.current.scale, e.shiftKey, e.ctrlKey || e.metaKey);
+      }
     }
     const d = drag.current;
     if (!d) return;

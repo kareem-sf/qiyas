@@ -143,7 +143,17 @@ test("file, view and drafting commands", () => {
 });
 
 test("suggestions list commands, then aliases, the exact match first", () => {
-  expect(suggest("la", aliases).map((s) => s.name)).toEqual(["LAYALL", "LAYISO", "LAYOFF", "LAYON"]);
+  expect(suggest("la", aliases).map((s) => s.name)).toEqual([
+    "LA",
+    "LAYALL",
+    "LAYER",
+    "LAYISO",
+    "LAYOFF",
+    "LAYON",
+    "LAYSTATE",
+    "LAYTRANS",
+    "LAS",
+  ]);
   expect(suggest("dis", aliases)).toEqual([{ name: "DIST" }, { name: "DISTANCE", target: "DIST" }]);
   expect(suggest("do", aliases)).toEqual([
     { name: "DO", target: "DONUT" },
@@ -367,4 +377,24 @@ test("the other draws are typed whole", () => {
     const name = line.split(" ")[0];
     expect(parse(line, cmd)).toEqual({ type: "error", key: "cmd.drawUsage", args: { name } });
   }
+});
+
+test("layers, groups and properties from the command line", () => {
+  const runs: Record<string, string> = {
+    LA: "layers",
+    layer: "layers",
+    LAS: "layerStates",
+    laystate: "layerStates",
+    LAYTRANS: "layerTranslate",
+    VPLAYER: "vpLayer",
+    PR: "properties",
+    properties: "properties",
+    CH: "properties",
+  };
+  for (const [line, what] of Object.entries(runs)) expect(parse(line, cmd)).toEqual({ type: "run", what });
+  expect(parse("G", cmd)).toEqual({ type: "tool", tool: "group" });
+  expect(parse("group", cmd)).toEqual({ type: "tool", tool: "group" });
+  expect(parse("UNGROUP", cmd)).toEqual({ type: "tool", tool: "ungroup" });
+  expect(parse("MA", cmd)).toEqual({ type: "tool", tool: "matchprop" });
+  expect(parse("matchprop", cmd)).toEqual({ type: "tool", tool: "matchprop" });
 });

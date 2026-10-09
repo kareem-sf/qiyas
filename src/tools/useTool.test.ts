@@ -465,6 +465,19 @@ test("the select tool's selection set: Shift adds a click, a box replaces or add
   expect(toolReducer(run("distance", []), { type: "selected", handles: [1], add: false }).selection).toEqual([]);
 });
 
+test("clicking a grouped entity selects its group; Shift adds the group", () => {
+  const grouped = (handle: number, time: number, shift = false): ToolEvent =>
+    ({ ...click([handle, 0], time, handle), group: [4, 5, 6], shift } as ToolEvent);
+  let s = run("select", [grouped(5, 0)]);
+  expect(s.selection).toEqual([4, 5, 6]);
+  // The palette still shows the entity clicked.
+  expect(s.selected?.picked.top).toBe(5);
+  s = run("select", [click([9, 0], 0, 9), grouped(4, 1000, true)]);
+  expect(s.selection).toEqual([9, 4, 5, 6]);
+  // Without a group (Ctrl held, or group selection off) a click takes the entity alone.
+  expect(run("select", [click([5, 0], 0, 5)]).selection).toEqual([5]);
+});
+
 test("a modify tool starts on the selection set, or on what the select tool picked (whole)", () => {
   const set = toolReducer(run("select", []), { type: "selected", handles: [3], add: false });
   const move = toolReducer(set, { type: "tool", tool: "move" });

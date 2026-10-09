@@ -6,10 +6,69 @@ export type Sheet = { name: string; block: string; is_model: boolean };
 export type LayerInfo = {
   name: string;
   color: [number, number, number];
+  /** Its colour as "ACI n" or "#rrggbb" (optional in tests that don't edit layers). */
+  color_name?: string;
   off: boolean;
   frozen: boolean;
   locked: boolean;
+  linetype?: string;
+  /** Hundredths of a millimetre; -3 Default. */
+  lineweight?: number;
+  /** Plotted. */
+  plot?: boolean;
 };
+
+/** A group of the drawing: its name and entities (`qiyas_core::GroupInfo`). */
+export type GroupInfo = { name: string; handles: number[]; selectable: boolean };
+
+/** A paper-space viewport of the sheet on screen and the layers it freezes on its own. */
+export type ViewportInfo = { handle: number; frozen: string[] };
+
+/** A layer property `set_layer` changes: on, frozen, locked and plot take booleans; color
+ *  "ACI n" or "#rrggbb"; linetype a name; lineweight a number. */
+export type LayerProp = "on" | "frozen" | "locked" | "color" | "linetype" | "lineweight" | "plot";
+
+/** A property the palette edits (`qiyas_core::EntityProp`). */
+export type EntityProp =
+  | "layer"
+  | "color"
+  | "linetype"
+  | "lineweight"
+  | "text"
+  | "text_height"
+  | "text_rotation"
+  | "text_style"
+  | "radius"
+  | "closed"
+  | "global_width"
+  | "insert_scale"
+  | "insert_rotation"
+  | "dim_style";
+
+/** What match properties copies (`qiyas_core::MatchProp`). */
+export type MatchProp =
+  | "layer"
+  | "color"
+  | "linetype"
+  | "lineweight"
+  | "text_style"
+  | "text_height"
+  | "dim_style"
+  | "hatch_pattern";
+
+export const MATCH_ALL: MatchProp[] = [
+  "layer",
+  "color",
+  "linetype",
+  "lineweight",
+  "text_style",
+  "text_height",
+  "dim_style",
+  "hatch_pattern",
+];
+
+/** One line of the layer translator. */
+export type LayerMapping = { from: string; to: string; color?: string | null };
 
 export type Units = "inches" | "feet" | "millimetres" | "centimetres" | "metres" | "unknown";
 
@@ -65,6 +124,14 @@ export type DrawingInfo = {
   annotation_factor: number;
   /** The block being edited in place, if one is. */
   block_edit: string | null;
+  /** The drawing's linetypes, sorted (optional in older tests). */
+  linetypes?: string[];
+  /** The drawing's layer states. */
+  layer_states?: string[];
+  /** The drawing's groups. */
+  groups?: GroupInfo[];
+  /** The paper-space viewports of the sheet on screen. */
+  viewports?: ViewportInfo[];
 };
 
 /** A dimension style's common fields, in drawing units before its `scale` (DIMASZ, DIMTXT,
@@ -142,6 +209,13 @@ export type EntityInfo = {
   style: string | null;
   /** A table's cells. */
   table?: TableInfo | null;
+  /** A text's or a block reference's own rotation, in degrees. */
+  rotation?: number | null;
+  /** A polyline is closed; its constant width. */
+  closed?: boolean | null;
+  global_width?: number | null;
+  /** A block reference's scale. */
+  scale?: number | null;
 };
 
 /** A table's cells for the table editor (`qiyas_core::TableInfo`). */
@@ -868,7 +942,26 @@ export type Command =
   | { type: "edit_att_def"; block: string; tag: string; prompt: string; default: string }
   /** Every reference gets the block's attributes as defined now, keeping each tag's value. */
   | { type: "sync_attributes"; block: string }
-  | { type: "redefine_block"; name: string; from_path: string };
+  | { type: "redefine_block"; name: string; from_path: string }
+  /** Layer states, kept in the drawing as AutoCAD keeps them (the hidden layers beside them). */
+  | { type: "save_layer_state"; name: string }
+  | { type: "restore_layer_state"; name: string }
+  | { type: "delete_layer_state"; name: string }
+  | { type: "rename_layer_state"; from: string; to: string }
+  | { type: "set_layer"; name: string; prop: LayerProp; value: boolean | string | number }
+  | { type: "new_layer"; name: string }
+  | { type: "delete_layer"; name: string }
+  | { type: "rename_layer"; from: string; to: string }
+  | { type: "translate_layers"; from_path: string | null; mappings: LayerMapping[] }
+  | { type: "set_viewport_frozen"; viewport: EntityTarget; layer: string; frozen: boolean }
+  /** An empty name: the app asks for one (GROUP). */
+  | { type: "create_group"; name: string; targets: EntityTarget[] }
+  | { type: "add_to_group"; name: string; targets: EntityTarget[] }
+  | { type: "remove_from_group"; name: string; targets: EntityTarget[] }
+  | { type: "delete_group"; name: string }
+  | { type: "ungroup"; targets: EntityTarget[] }
+  | { type: "match_properties"; source: EntityTarget; targets: EntityTarget[]; props: MatchProp[] }
+  | { type: "set_property"; target: EntityTarget; prop: EntityProp; value: boolean | string | number };
 
 /** Where find and replace looks: the sheet on screen, or every sheet. */
 export type TextScope = "sheet" | "drawing";
@@ -1009,6 +1102,8 @@ export const blockThumbnail = (name: string, px: number) =>
 /** The named blocks of another drawing, opened read-only, with their attribute definitions
  *  (the Design Center). */
 export const drawingBlocks = (path: string) => invoke<BlockInfo[]>("drawing_blocks", { path });
+/** Another drawing's layers, read-only (the layer translator's standard). */
+export const drawingLayers = (path: string) => invoke<LayerInfo[]>("drawing_layers", { path });
 
 /** WBLOCK to a .dwg the user chose in the Save dialog. */
 export const writeBlock = (name: string, path: string) => invoke<void>("write_block", { name, path });

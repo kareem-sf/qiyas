@@ -237,3 +237,39 @@ test("the Insert tab has the Block group", () => {
     expect(handler).toHaveBeenCalled();
   }
 });
+
+test("Home has a Layers group: layer states, the translator, groups, match properties", () => {
+  const onTool = vi.fn();
+  const onLayerStates = vi.fn();
+  const onTranslateLayers = vi.fn();
+  const onGroupSelect = vi.fn();
+  render(
+    <Ribbon
+      {...props}
+      onTool={onTool}
+      onLayerStates={onLayerStates}
+      onTranslateLayers={onTranslateLayers}
+      groupSelect
+      onGroupSelect={onGroupSelect}
+    />,
+  );
+  const layers = within(screen.getByRole("group", { name: "Layers" }));
+  fireEvent.click(layers.getByRole("button", { name: "Layer states" }));
+  expect(onLayerStates).toHaveBeenCalled();
+  fireEvent.click(layers.getByRole("button", { name: "Translate layers" }));
+  expect(onTranslateLayers).toHaveBeenCalled();
+  for (const [name, tool] of [
+    ["Group", "group"],
+    ["Ungroup", "ungroup"],
+    ["Match properties", "matchprop"],
+  ]) {
+    fireEvent.click(layers.getByRole("button", { name }));
+    expect(onTool).toHaveBeenLastCalledWith(tool);
+  }
+  // They are not the Modify group's.
+  expect(within(screen.getByRole("group", { name: "Modify" })).queryByRole("button", { name: "Ungroup" })).toBeNull();
+  const box = layers.getByRole("checkbox", { name: "Group selection" }) as HTMLInputElement;
+  expect(box.checked).toBe(true);
+  fireEvent.click(box);
+  expect(onGroupSelect).toHaveBeenCalledWith(false);
+});

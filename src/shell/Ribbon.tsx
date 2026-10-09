@@ -62,7 +62,17 @@ type Props = {
   onGoToView?(view: NamedView): void;
   onSaveView?(name: string): Promise<void>;
   onDeleteView?(name: string): Promise<void>;
+  /** The Home tab's Layers group: layer states (LAYSTATE) and the layer translator (LAYTRANS). */
+  onLayerStates?(): void;
+  onTranslateLayers?(): void;
+  /** Clicking a grouped entity selects its group (PICKSTYLE); the checkbox is disabled without a
+   *  handler. */
+  groupSelect?: boolean;
+  onGroupSelect?(on: boolean): void;
 };
+
+/** The modify tools on the Home tab's Layers group, not its Modify group. */
+const LAYER_TOOLS = ["group", "ungroup", "matchprop"] as const;
 
 type Tab = "home" | "measure" | "annotate" | "insert" | "view";
 const TABS: Tab[] = ["home", "measure", "annotate", "insert", "view"];
@@ -153,7 +163,9 @@ export function Ribbon(props: Props) {
           </span>,
           <span key="sep-modify" className="sep" />,
           <span key="modify" className="ribbon-group" role="group" aria-label={t("modify.group")}>
-            {MODIFY_TOOLS.filter((name) => name !== "block").map((name) => tool(name, `modify.${name}`))}
+            {MODIFY_TOOLS.filter((name) => name !== "block" && !(LAYER_TOOLS as readonly string[]).includes(name)).map(
+              (name) => tool(name, `modify.${name}`),
+            )}
             {/* The second row of Modify: trim, extend, fillet… */}
             <span className="ribbon-break" />
             {EDIT_TOOLS.map((name) => tool(name, `edit.${name}`))}
@@ -162,6 +174,23 @@ export function Ribbon(props: Props) {
           <span key="text" className="ribbon-group" role="group" aria-label={t("text.group")}>
             {[...TEXT_TOOLS, "textEdit" as const].map((name) => tool(name, `text.${name}`))}
             {action("text.find", props.onFind)}
+          </span>,
+          <span key="sep-layers" className="sep" />,
+          <span key="layers" className="ribbon-group" role="group" aria-label={t("layers")}>
+            {action("layer.statesButton", props.onLayerStates)}
+            {action("layer.translateButton", props.onTranslateLayers)}
+            {LAYER_TOOLS.map((name) => tool(name, `layerTool.${name}`))}
+            <label className="ribbon-check">
+              <input
+                type="checkbox"
+                checked={props.groupSelect ?? true}
+                disabled={!props.onGroupSelect}
+                onChange={(e) => props.onGroupSelect?.(e.currentTarget.checked)}
+                onKeyDown={ignoreSpace}
+                onKeyUp={ignoreSpace}
+              />
+              {t("group.select")}
+            </label>
           </span>,
         ]}
         {tab === "measure" && [
