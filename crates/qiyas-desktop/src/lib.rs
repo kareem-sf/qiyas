@@ -27,6 +27,8 @@ pub fn run() {
             commands::drawing_info,
             commands::set_sheet,
             commands::set_layer_hidden,
+            commands::reload_xrefs,
+            commands::set_xref_path,
             commands::batch_version,
             commands::render_batch,
             commands::atlas_pages,

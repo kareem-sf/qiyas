@@ -16,6 +16,7 @@ mod tables;
 mod takeoff;
 mod undo;
 mod units;
+mod xref;
 
 pub use boq::{Boq, BoqItem};
 pub use commands::{Command, Outcome};
@@ -30,3 +31,4 @@ pub use snap::{Drafting, Snap, SnapKind, SnapModes};
 pub use tables::Schedule;
 pub use takeoff::{Kind, Measurement, Source, Takeoff, Total};
 pub use units::Units;
+pub use xref::{candidates as xref_candidates, Xref, XrefInfo, XrefSet};

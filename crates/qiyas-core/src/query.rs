@@ -1,14 +1,15 @@
 //! Read-only questions about the open drawing: what is there, what it says, what it measures.
 //! These are the AI's eyes; nothing here changes the session.
 
+use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap};
 
 use opencadcodec::entities::mtext_format::parse_mtext;
-use opencadcodec::entities::Dimension;
+use opencadcodec::entities::{Dimension, Insert};
 use opencadcodec::tables::normalize_name;
 use opencadcodec::{CadDocument, EntityType};
-use qiyas_geom::{flatten, insert_instances, Xform};
-use qiyas_render::{layer_on_in_file, layer_shown};
+use qiyas_geom::{flatten_with, insert_instances, is_xref_block, Xform, XrefDocs, MAX_XREF_DEPTH};
+use qiyas_render::{layer_on_in_file_with, layer_shown_with};
 use serde::{Deserialize, Serialize};
 
 use crate::session::{effective_block_name, variant_name, Extent};
@@ -57,11 +58,14 @@ impl Default for EntityFilter {
     }
 }
 
-/// One entity found. Length and area are in drawing units; bounds in world coordinates.
+/// One entity found. Length and area are in drawing units; bounds in world coordinates. An
+/// entity at the top of an xref has `xref` set and `chain` holding the xref's reference (give both
+/// handle and chain to measure it); its handle is the xref drawing's.
 #[derive(Debug, Clone, Serialize)]
 pub struct EntityRow {
     pub handle: u64,
     pub kind: String,
+    /// For an xref's entity, `XREF|LAYER` (layer "0" takes the xref reference's).
     pub layer: String,
     pub block_name: Option<String>,
     /// A Text's value, an MText's plain text, or an insert's attribute values joined by " | ".
@@ -70,6 +74,10 @@ pub struct EntityRow {
     pub area: Option<f64>,
     /// `[[min_x, min_y], [max_x, max_y]]`.
     pub bounds: [[f64; 2]; 2],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub xref: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub chain: Vec<u64>,
 }
 
 /// One page of results. `total` counts every match; `next_offset` is set when more remain.
@@ -90,6 +98,10 @@ pub struct TextRow {
     pub height: f64,
     /// The block the text sits in, when it was reached through an insert.
     pub inside_block: Option<String>,
+    /// The xref the text is in (the outermost, for a nested xref); `handle` is then that
+    /// drawing's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub xref: Option<String>,
 }
 
 /// One dimension. `measurement` is computed from its definition points: drawing units, or
@@ -116,46 +128,125 @@ pub struct BlockCount {
     pub attributes: Vec<String>,
 }
 
+/// A reference on a sheet to a loaded xref, placed by its first cell.
+pub(crate) struct XrefAt<'a> {
+    /// The reference, in the host drawing.
+    pub insert: &'a Insert,
+    /// The xref drawing.
+    pub doc: &'a CadDocument,
+    /// Xref model space to world.
+    pub xf: Xform,
+}
+
+impl XrefAt<'_> {
+    /// The layer an entity at the top of the xref is drawn on: `XREF|LAYER`, or the reference's
+    /// own layer for one on layer "0".
+    pub fn layer_of(&self, e: &EntityType) -> String {
+        match e.common().layer.as_str() {
+            "0" => self.insert.common.layer.clone(),
+            own => format!("{}|{own}", self.insert.block_name),
+        }
+    }
+}
+
+/// An entity `find_entities` looks at: one on the sheet, or one at the top of a sheet's xref.
+struct Candidate<'a> {
+    entity: &'a EntityType,
+    /// The drawing it is in.
+    doc: &'a CadDocument,
+    layer: Cow<'a, str>,
+    /// Its drawing's model space to world (identity on the sheet).
+    xf: Xform,
+    chain: Vec<u64>,
+    xref: Option<&'a str>,
+}
+
 impl Session {
-    /// The entities of a sheet that pass `f`, in drawing order, one page at a time.
+    /// The references on `sheet` (top level, not invisible) to loaded xrefs.
+    pub(crate) fn sheet_xrefs(&self, sheet: &str) -> Vec<XrefAt<'_>> {
+        let host = &self.drawing.doc;
+        let docs = self.xref_docs();
+        self.drawing
+            .entities_in(sheet)
+            .filter_map(|e| match e {
+                EntityType::Insert(insert)
+                    if !insert.common.invisible && is_xref_block(host, &insert.block_name) =>
+                {
+                    let doc = *docs.get(&normalize_name(&insert.block_name))?;
+                    let xf = insert_instances(host, insert, &Xform::identity()).next()?;
+                    Some(XrefAt { insert, doc, xf })
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The entities of a sheet that pass `f`, in drawing order, one page at a time; then those at
+    /// the top of each xref on the sheet (a block reference inside an xref is one row).
     pub fn find_entities(&self, f: &EntityFilter) -> Page<EntityRow> {
         let layer = f.layer.as_deref().map(normalize_name);
         let block = f.block_name.as_deref().map(normalize_name);
         let needle = f.text_contains.as_deref().map(str::to_lowercase);
         let within = f.within.map(normalized_box);
         let sheet = self.sheet_block(f.sheet.as_deref());
-        let doc = &self.drawing.doc;
-        let matches: Vec<&EntityType> = self
+        let xrefs = self.xref_docs();
+        let host = &self.drawing.doc;
+        let mut candidates: Vec<Candidate> = self
             .drawing
             .entities_in(&sheet)
-            .filter(|e| {
+            .map(|entity| Candidate {
+                entity,
+                doc: host,
+                layer: Cow::Borrowed(&entity.common().layer),
+                xf: Xform::identity(),
+                chain: Vec::new(),
+                xref: None,
+            })
+            .collect();
+        for x in self.sheet_xrefs(&sheet) {
+            for entity in x.doc.entities_in_block("*Model_Space") {
+                candidates.push(Candidate {
+                    entity,
+                    doc: x.doc,
+                    layer: Cow::Owned(x.layer_of(entity)),
+                    xf: x.xf,
+                    chain: vec![x.insert.common.handle.value()],
+                    xref: Some(&x.insert.block_name),
+                });
+            }
+        }
+        let matches: Vec<Candidate> = candidates
+            .into_iter()
+            .filter(|c| {
                 layer
                     .as_ref()
-                    .is_none_or(|l| *l == normalize_name(&e.common().layer))
+                    .is_none_or(|l| *l == normalize_name(&c.layer))
             })
-            .filter(|e| {
+            .filter(|c| {
                 f.kind
                     .as_ref()
-                    .is_none_or(|k| variant_name(e).eq_ignore_ascii_case(k))
+                    .is_none_or(|k| variant_name(c.entity).eq_ignore_ascii_case(k))
             })
-            .filter(|e| {
-                block.as_ref().is_none_or(|b| match e {
+            .filter(|c| {
+                block.as_ref().is_none_or(|b| match c.entity {
                     // Either name of a dynamic block's anonymous copy matches.
                     EntityType::Insert(insert) => {
                         *b == normalize_name(&insert.block_name)
-                            || *b == normalize_name(&effective_block_name(doc, insert))
+                            || *b == normalize_name(&effective_block_name(c.doc, insert))
                     }
                     _ => false,
                 })
             })
-            .filter(|e| {
+            .filter(|c| {
                 needle.as_ref().is_none_or(|n| {
-                    texts_of(e)
+                    texts_of(c.entity)
                         .iter()
                         .any(|t| t.to_lowercase().contains(n.as_str()))
                 })
             })
-            .filter(|e| within.is_none_or(|b| self.points_of(e).iter().any(|p| inside(*p, b))))
+            .filter(|c| {
+                within.is_none_or(|b| self.points_of(&xrefs, c).iter().any(|p| inside(*p, b)))
+            })
             .collect();
         let total = matches.len();
         let limit = f.limit.min(MAX_LIMIT);
@@ -163,7 +254,7 @@ impl Session {
             .into_iter()
             .skip(f.offset)
             .take(limit)
-            .map(|e| self.entity_row(e))
+            .map(|c| self.entity_row(&xrefs, c))
             .collect();
         let end = f.offset.saturating_add(rows.len());
         Page {
@@ -174,20 +265,25 @@ impl Session {
     }
 
     /// Every Text, MText (formatting stripped) and insert attribute on a sheet, including those
-    /// inside blocks, in world coordinates. `within` keeps only text placed inside that box.
+    /// inside blocks and xrefs, in world coordinates. `within` keeps only text placed inside that
+    /// box.
     pub fn read_text(&self, sheet: Option<&str>, within: Option<[[f64; 2]; 2]>) -> Vec<TextRow> {
         let sheet = self.sheet_block(sheet);
-        let mut out = Vec::new();
-        let mut budget = MAX_INSTANCES;
-        collect_text(
+        let xrefs = self.xref_docs();
+        let mut walk = TextWalk {
+            xrefs: &xrefs,
+            budget: MAX_INSTANCES,
+            out: Vec::new(),
+        };
+        walk.collect(
             &self.drawing.doc,
             self.drawing.entities_in(&sheet),
             &Xform::identity(),
             None,
             0,
-            &mut budget,
-            &mut out,
+            &mut Vec::new(),
         );
+        let mut out = walk.out;
         if let Some(b) = within.map(normalized_box) {
             out.retain(|t| inside(t.at, b));
         }
@@ -208,7 +304,8 @@ impl Session {
 
     /// Block references on a sheet per block and layer, on visible layers only, most first.
     /// Counts top-level references, like the count command, by the insert's own layer; a dynamic
-    /// block's anonymous copies count as the dynamic block.
+    /// block's anonymous copies count as the dynamic block. References at the top of the sheet's
+    /// xrefs count on their `XREF|LAYER`.
     pub fn block_summary(&self, sheet: Option<&str>) -> Vec<BlockCount> {
         self.block_counts(sheet, true)
     }
@@ -224,44 +321,62 @@ impl Session {
     /// `block_summary` when `as_shown`, else `block_summary_in_file`.
     fn block_counts(&self, sheet: Option<&str>, as_shown: bool) -> Vec<BlockCount> {
         let sheet = self.sheet_block(sheet);
-        // (block, layer, attribute values when split by them) -> (count, attribute values).
-        type Key<'a> = (String, &'a str, Vec<String>);
-        let mut counts: HashMap<Key, (usize, BTreeSet<String>)> = HashMap::new();
+        let host = &self.drawing.doc;
+        let xrefs = self.xref_docs();
+        let counted = |layer: &str| {
+            if as_shown {
+                layer_shown_with(host, &xrefs, &self.visibility, layer)
+            } else {
+                layer_on_in_file_with(host, &xrefs, layer)
+            }
+        };
+        // Each top-level insert with its drawing and the layer it is drawn on.
+        let mut inserts: Vec<(&Insert, &CadDocument, Cow<str>)> = Vec::new();
         for e in self.drawing.entities_in(&sheet) {
             if let EntityType::Insert(insert) = e {
-                let common = e.common();
-                let counted = if as_shown {
-                    layer_shown(&self.drawing.doc, &self.visibility, &common.layer)
-                } else {
-                    layer_on_in_file(&self.drawing.doc, &common.layer)
-                };
-                if common.invisible || !counted {
-                    continue;
-                }
-                let values: BTreeSet<String> = insert
-                    .attributes
-                    .iter()
-                    .map(|a| a.value.trim().to_string())
-                    .filter(|v| !v.is_empty())
-                    .collect();
-                let split = if as_shown {
-                    Vec::new()
-                } else {
-                    values.iter().cloned().collect()
-                };
-                let block = effective_block_name(&self.drawing.doc, insert);
-                let entry = counts
-                    .entry((block, common.layer.as_str(), split))
-                    .or_default();
-                entry.0 += 1;
-                entry.1.extend(values);
+                inserts.push((insert, host, Cow::Borrowed(&insert.common.layer)));
             }
+        }
+        for x in self.sheet_xrefs(&sheet) {
+            if !counted(&x.insert.common.layer) {
+                continue;
+            }
+            for e in x.doc.entities_in_block("*Model_Space") {
+                if let EntityType::Insert(insert) = e {
+                    inserts.push((insert, x.doc, Cow::Owned(x.layer_of(e))));
+                }
+            }
+        }
+        // (block, layer, attribute values when split by them) -> (count, attribute values).
+        type Key = (String, String, Vec<String>);
+        let mut counts: HashMap<Key, (usize, BTreeSet<String>)> = HashMap::new();
+        for (insert, doc, layer) in inserts {
+            if insert.common.invisible || !counted(&layer) {
+                continue;
+            }
+            let values: BTreeSet<String> = insert
+                .attributes
+                .iter()
+                .map(|a| a.value.trim().to_string())
+                .filter(|v| !v.is_empty())
+                .collect();
+            let split = if as_shown {
+                Vec::new()
+            } else {
+                values.iter().cloned().collect()
+            };
+            let block = effective_block_name(doc, insert);
+            let entry = counts
+                .entry((block, layer.into_owned(), split))
+                .or_default();
+            entry.0 += 1;
+            entry.1.extend(values);
         }
         let mut summary: Vec<BlockCount> = counts
             .into_iter()
             .map(|((block_name, layer, _), (count, values))| BlockCount {
                 block_name,
-                layer: layer.to_string(),
+                layer,
                 count,
                 attributes: values.into_iter().collect(),
             })
@@ -289,34 +404,44 @@ impl Session {
             .map_or_else(|| name.to_string(), |s| s.block)
     }
 
-    fn entity_row(&self, e: &EntityType) -> EntityRow {
-        let Extent { length, area, .. } = self.extent(e, &Xform::identity());
+    fn entity_row(&self, xrefs: &XrefDocs, c: Candidate) -> EntityRow {
+        let e = c.entity;
+        let Extent { length, area, .. } = self.extent(c.doc, e, &c.xf);
         let texts = texts_of(e);
         EntityRow {
             handle: e.common().handle.value(),
             kind: variant_name(e),
-            layer: e.common().layer.clone(),
             block_name: match e {
-                EntityType::Insert(insert) => Some(effective_block_name(&self.drawing.doc, insert)),
+                EntityType::Insert(insert) => Some(effective_block_name(c.doc, insert)),
                 _ => None,
             },
             text: (!texts.is_empty()).then(|| texts.join(" | ")),
             length,
             area,
-            bounds: bounds(&self.points_of(e)),
+            bounds: bounds(&self.points_of(xrefs, &c)),
+            layer: c.layer.into_owned(),
+            xref: c.xref.map(str::to_string),
+            chain: c.chain,
         }
     }
 
     /// The entity's flattened points in world coordinates; for an entity that does not
     /// flatten (a dimension or table), the corners of its own bounding box.
-    fn points_of(&self, e: &EntityType) -> Vec<[f64; 2]> {
-        let paths = flatten(&self.drawing.doc, e, &Xform::identity(), BATCH_TOL).into_paths();
+    fn points_of(&self, xrefs: &XrefDocs, c: &Candidate) -> Vec<[f64; 2]> {
+        let paths = flatten_with(c.doc, xrefs, c.entity, &c.xf, BATCH_TOL).into_paths();
         let points: Vec<[f64; 2]> = paths.into_iter().flat_map(|p| p.points).collect();
         if !points.is_empty() {
             return points;
         }
-        let b = e.as_entity().bounding_box();
-        vec![[b.min.x, b.min.y], [b.max.x, b.max.y]]
+        let b = c.entity.as_entity().bounding_box();
+        [
+            [b.min.x, b.min.y],
+            [b.max.x, b.min.y],
+            [b.max.x, b.max.y],
+            [b.min.x, b.max.y],
+        ]
+        .map(|p| c.xf.apply(p))
+        .to_vec()
     }
 }
 
@@ -335,55 +460,86 @@ pub(crate) fn plain_text(value: &str) -> String {
     parse_mtext(value, true).to_plain_text()
 }
 
-/// Appends the text of `entities`, placed by `xf`, walking into blocks.
-fn collect_text<'a>(
-    doc: &'a CadDocument,
-    entities: impl Iterator<Item = &'a EntityType>,
-    xf: &Xform,
-    inside_block: Option<&str>,
-    depth: usize,
-    budget: &mut usize,
-    out: &mut Vec<TextRow>,
-) {
-    for e in entities {
-        let handle = e.common().handle.value();
-        let mut push = |text: String, at: &opencadcodec::Vector3, height: f64| {
-            out.push(TextRow {
-                handle,
-                text,
-                at: xf.apply([at.x, at.y]),
-                height: scaled_height(xf, height),
-                inside_block: inside_block.map(str::to_string),
-            })
-        };
-        match e {
-            EntityType::Text(t) => push(t.value.clone(), &t.insertion_point, t.height),
-            EntityType::MText(t) => push(plain_text(&t.value), &t.insertion_point, t.height),
-            EntityType::Insert(insert) => {
-                // Attributes are stored where the insert sits, not in the block's coordinates.
-                for a in &insert.attributes {
-                    push(a.value.clone(), &a.insertion_point, a.height);
-                }
-                if depth >= MAX_DEPTH {
-                    continue;
-                }
-                for instance in insert_instances(doc, insert, xf) {
-                    if *budget == 0 {
+/// Text collected by `read_text`.
+struct TextWalk<'x, 'a> {
+    xrefs: &'x XrefDocs<'a>,
+    /// Block instances still allowed.
+    budget: usize,
+    out: Vec<TextRow>,
+}
+
+impl TextWalk<'_, '_> {
+    /// Appends the text of `entities` of `doc`, placed by `xf`, walking into blocks and loaded
+    /// xrefs. `xref_stack` holds the xrefs entered, outermost first.
+    fn collect<'d>(
+        &mut self,
+        doc: &'d CadDocument,
+        entities: impl Iterator<Item = &'d EntityType>,
+        xf: &Xform,
+        inside_block: Option<&str>,
+        depth: usize,
+        xref_stack: &mut Vec<String>,
+    ) {
+        for e in entities {
+            let handle = e.common().handle.value();
+            let xref = xref_stack.first().cloned();
+            let out = &mut self.out;
+            let mut push = |text: String, at: &opencadcodec::Vector3, height: f64| {
+                out.push(TextRow {
+                    handle,
+                    text,
+                    at: xf.apply([at.x, at.y]),
+                    height: scaled_height(xf, height),
+                    inside_block: inside_block.map(str::to_string),
+                    xref: xref.clone(),
+                })
+            };
+            match e {
+                EntityType::Text(t) => push(t.value.clone(), &t.insertion_point, t.height),
+                EntityType::MText(t) => push(plain_text(&t.value), &t.insertion_point, t.height),
+                EntityType::Insert(insert) => {
+                    // Attributes are stored where the insert sits, not in the block's coordinates.
+                    for a in &insert.attributes {
+                        push(a.value.clone(), &a.insertion_point, a.height);
+                    }
+                    if depth >= MAX_DEPTH {
+                        continue;
+                    }
+                    let (inner, block, inside): (&CadDocument, &str, Option<&str>) =
+                        if is_xref_block(doc, &insert.block_name) {
+                            let key = normalize_name(&insert.block_name);
+                            let Some(&xdoc) = self.xrefs.get(&key) else {
+                                continue;
+                            };
+                            let cycle = xref_stack.iter().any(|n| normalize_name(n) == key);
+                            if cycle || xref_stack.len() >= MAX_XREF_DEPTH {
+                                continue;
+                            }
+                            (xdoc, "*Model_Space", None)
+                        } else {
+                            (doc, &insert.block_name, Some(&insert.block_name))
+                        };
+                    let entering = inside.is_none();
+                    if entering {
+                        xref_stack.push(insert.block_name.clone());
+                    }
+                    for instance in insert_instances(doc, insert, xf) {
+                        if self.budget == 0 {
+                            break;
+                        }
+                        self.budget -= 1;
+                        let entities = inner.entities_in_block(block);
+                        self.collect(inner, entities, &instance, inside, depth + 1, xref_stack);
+                    }
+                    if entering {
+                        xref_stack.pop();
+                    }
+                    if self.budget == 0 {
                         return;
                     }
-                    *budget -= 1;
-                    collect_text(
-                        doc,
-                        doc.entities_in_block(&insert.block_name),
-                        &instance,
-                        Some(&insert.block_name),
-                        depth + 1,
-                        budget,
-                        out,
-                    );
                 }
+                _ => {}
             }
-            _ => {}
         }
     }
 }

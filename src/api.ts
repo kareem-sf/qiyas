@@ -13,14 +13,33 @@ export type LayerInfo = {
 
 export type Units = "inches" | "feet" | "millimetres" | "centimetres" | "metres" | "unknown";
 
+/** One xref (another drawing shown in this one, `qiyas_core::XrefInfo`). */
+export type XrefInfo = {
+  name: string;
+  /** The file was found. */
+  found: boolean;
+  /** The file opened, or the path the drawing stores when none was found. */
+  path: string;
+  overlay: boolean;
+  /** Unloaded in the drawing: listed, not opened. */
+  unloaded: boolean;
+  /** Layers it adds to the list, named `NAME|LAYER`. */
+  layer_count: number;
+  /** What went wrong finding or reading it (also in the drawing's `problems`). */
+  problems: string[];
+};
+
 export type DrawingInfo = {
   path: string;
   sheets: Sheet[];
+  /** The drawing's layers, then its xrefs' as `NAME|LAYER`, sorted by name. */
   layers: LayerInfo[];
   units: Units;
   problems: string[];
   /** The drawing holds its Arabic text backwards (typed in visual order for old CAD fonts). */
   arabic_reversed: boolean;
+  /** Its xrefs and those inside them, in load order. */
+  xrefs: XrefInfo[];
 };
 
 export type EntityInfo = {
@@ -40,10 +59,13 @@ export type EntityInfo = {
   chain: number[];
   /** The block names along `chain`, outermost first. */
   block_path: string[];
+  /** The xref the entity is in; `handle` is then that drawing's. */
+  xref?: string | null;
 };
 
 /** What is under the cursor (`qiyas_core::Picked`): the entity, the block references it sits inside
- *  (outermost first, empty on the sheet) and the top-level entity on the sheet. */
+ *  (outermost first, empty on the sheet) and the top-level entity on the sheet. Inside an xref,
+ *  `chain` ends with the xref's reference and `xref` names it. */
 export type Picked = { top: number; entity: number; chain: number[]; xref: string | null };
 
 /** Filter for the session's `find_entities` query (no IPC command yet). Names match case-insensitively. */
@@ -71,6 +93,9 @@ export type EntityRow = {
   length: number | null;
   area: number | null;
   bounds: [[number, number], [number, number]];
+  /** Set for an entity of an xref; measure it with `chain`. */
+  xref?: string;
+  chain?: number[];
 };
 
 /** One page of results; `total` counts every match. */
@@ -82,6 +107,7 @@ export type TextRow = {
   at: [number, number];
   height: number;
   inside_block: string | null;
+  xref?: string;
 };
 
 /** A dimension; `measurement` in drawing units (degrees for angular), null when not computed. */
@@ -113,6 +139,14 @@ export const setSheet = (block: string) => invoke<void>("set_sheet", { block });
 
 export const setLayerHidden = (name: string, hidden: boolean) =>
   invoke<void>("set_layer_hidden", { name, hidden });
+
+/** Looks for every xref again and reopens it; the drawing's info with the new list. */
+export const reloadXrefs = () => invoke<DrawingInfo>("reload_xrefs");
+
+/** Uses the file `path` for the xref `name` (null: look for it again), then reloads the xrefs.
+ *  Saving the project remembers the choice. */
+export const setXrefPath = (name: string, path: string | null) =>
+  invoke<DrawingInfo>("set_xref_path", { name, path });
 
 /** Names the current sheet's batch: the same number means the same batch. */
 export const batchVersion = () => invoke<number>("batch_version");
@@ -228,6 +262,8 @@ export type Measurement = {
   chain: number[];
   /** The block names along `chain`, outermost first. */
   block_path: string[];
+  /** The xref the measured entities are in (`chain` ends with its reference). */
+  xref?: string | null;
 };
 
 export type Total = { kind: Kind; unit: Measurement["unit"]; count: number; sum: number };

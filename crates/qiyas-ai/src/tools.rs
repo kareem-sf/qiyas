@@ -67,8 +67,10 @@ pub fn catalogue() -> Vec<ToolSpec> {
              must match, names match in any case. Each row gives the entity's handle (an integer \
              id for get_entity, measure_length, measure_area, add_measurement and zoom_to), type, \
              layer, block name, text, length and area in drawing units, and bounds \
-             [[min_x, min_y], [max_x, max_y]]. Includes entities on hidden layers. Paged: total \
-             counts every match; pass next_offset as offset for the next page.",
+             [[min_x, min_y], [max_x, max_y]]. Includes entities on hidden layers, and those of \
+             xrefs (other drawings shown in this one; layers named XREF|LAYER): such a row has \
+             xref and chain, and its handle needs that chain. Paged: total counts every match; \
+             pass next_offset as offset for the next page.",
             json!({
                 "sheet": sheet("Sheet name or block name; the sheet shown when left out."),
                 "layer": { "type": "string", "description": "Only entities on this layer." },
@@ -406,8 +408,9 @@ fn chain() -> Value {
     json!({
         "type": "array",
         "items": { "type": "integer" },
-        "description": "For an entity inside blocks: the handles of the block references it \
-                        sits inside, outermost first. Leave out for an entity on the sheet."
+        "description": "For an entity inside blocks or an xref: the handles of the block \
+                        references it sits inside, outermost first (an xref row's chain from \
+                        find_entities). Leave out for an entity on the sheet."
     })
 }
 

@@ -1,11 +1,11 @@
 use std::collections::{HashMap, HashSet};
 
 use opencadcodec::{CadDocument, Color, Handle};
-use qiyas_geom::{flatten, Path, Xform};
+use qiyas_geom::{flatten_with, Path, Xform, XrefDocs};
 
 use crate::color::resolve_color;
 use crate::text::{LaidText, Quad, TextEngine};
-use crate::visibility::layer_shown;
+use crate::visibility::layer_shown_with;
 
 /// First four bytes of a batch: "BYIQ" read as bytes, `0x51495942` as a little-endian `u32`.
 pub const MAGIC: u32 = 0x5149_5942;
@@ -107,7 +107,7 @@ pub struct Visibility {
 ///
 /// Texts are kept as their boxes only (flagged `TEXT_BOX`); `build_batch_with_text` draws them.
 pub fn build_batch(doc: &CadDocument, sheet_block: &str, vis: &Visibility, tol: f64) -> Batch {
-    build(doc, sheet_block, vis, tol, None)
+    build(doc, &XrefDocs::new(), sheet_block, vis, tol, None)
 }
 
 /// `build_batch`, with every text shaped and laid out by `engine` and drawn as glyph quads, its
@@ -120,8 +120,31 @@ pub fn build_batch_with_text(
     engine: &mut TextEngine,
     options: TextOptions,
 ) -> Batch {
+    build_batch_with_xrefs(
+        doc,
+        &XrefDocs::new(),
+        sheet_block,
+        vis,
+        tol,
+        engine,
+        options,
+    )
+}
+
+/// `build_batch_with_text`, with the references to the loaded `xrefs` drawn (see
+/// `qiyas_geom::flatten_with`): their paths sit under the xref reference's chain, on layers named
+/// `XREF|LAYER`, and their texts are shaped with the xref's text styles into the same atlas.
+pub fn build_batch_with_xrefs(
+    doc: &CadDocument,
+    xrefs: &XrefDocs,
+    sheet_block: &str,
+    vis: &Visibility,
+    tol: f64,
+    engine: &mut TextEngine,
+    options: TextOptions,
+) -> Batch {
     engine.start_build();
-    let mut batch = build(doc, sheet_block, vis, tol, Some((engine, options)));
+    let mut batch = build(doc, xrefs, sheet_block, vis, tol, Some((engine, options)));
     if !batch.texts.is_empty() {
         let [[x0, y0], [x1, y1]] = batch.bounds;
         let fit = DEFAULT_FIT_PX / (x1 - x0).max(y1 - y0);
@@ -147,6 +170,7 @@ pub fn place_text(batch: &mut Batch, engine: &mut TextEngine, px_per_unit: f64) 
 
 fn build(
     doc: &CadDocument,
+    xrefs: &XrefDocs,
     sheet_block: &str,
     vis: &Visibility,
     tol: f64,
@@ -157,7 +181,7 @@ fn build(
     let mut shown = |layer: &str| match shown_layers.get(layer) {
         Some(&shown) => shown,
         None => {
-            let shown = layer_shown(doc, vis, layer);
+            let shown = layer_shown_with(doc, xrefs, vis, layer);
             shown_layers.insert(layer.to_string(), shown);
             shown
         }
@@ -173,7 +197,7 @@ fn build(
             continue;
         }
         let top = common.handle.value();
-        let outcome = flatten(doc, entity, &Xform::identity(), tol);
+        let outcome = flatten_with(doc, xrefs, entity, &Xform::identity(), tol);
         batch.truncated |= outcome.truncated;
         for flat in &outcome.paths {
             if !shown(&flat.layer) {
@@ -196,7 +220,7 @@ fn build(
             // A laid-out text's box is the box of what it draws.
             let laid = match (&flat.text, text.as_mut()) {
                 (Some(t), Some((engine, options))) => {
-                    engine.lay_out(doc, t, options.arabic_reversed)
+                    engine.lay_out_with(doc, xrefs, t, options.arabic_reversed)
                 }
                 _ => None,
             };

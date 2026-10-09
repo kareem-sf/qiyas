@@ -16,6 +16,8 @@ type Props = {
   onCompare?(): void;
   onExportConflicts?(): void;
   onZoomExtents(): void;
+  /** Opens the external references (xrefs) dialog. */
+  onXrefs?(): void;
   onUndo?(): void;
   onRedo?(): void;
   /** The drawing holds its Arabic text backwards; the checkbox is disabled without a handler. */
@@ -97,6 +99,7 @@ export function Ribbon(props: Props) {
         {tab === "view" && [
           action("zoomExtents", props.onZoomExtents),
           tool("zoomWindow"),
+          action("xrefs", props.onXrefs),
           <span key="sep" className="sep" />,
           <label key="arabicReversed" className="ribbon-check">
             <input

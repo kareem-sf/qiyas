@@ -1,7 +1,8 @@
 //! Schedules found on a sheet: real table entities, and grids of loose text laid out as a table.
 
 use opencadcodec::entities::Table;
-use opencadcodec::EntityType;
+use opencadcodec::{EntityType, Vector3};
+use qiyas_geom::Xform;
 use serde::{Deserialize, Serialize};
 
 use crate::query::plain_text;
@@ -30,27 +31,43 @@ const MIN_ROWS: usize = 3;
 const MIN_COLUMNS: usize = 2;
 
 impl Session {
-    /// The table entities on a sheet, then the grids of loose Text and MText on it. Text
-    /// inside blocks is not used for grids.
+    /// The table entities on a sheet, then the grids of loose Text and MText on it; the tables
+    /// and loose text at the top of the sheet's xrefs count as on the sheet. Text inside blocks is
+    /// not used for grids.
     pub fn read_tables(&self, sheet: Option<&str>) -> Vec<Schedule> {
         let sheet = self.sheet_block(sheet);
         let mut schedules = Vec::new();
         let mut texts = Vec::new();
-        for e in self.drawing.entities_in(&sheet) {
+        let xrefs = self.sheet_xrefs(&sheet);
+        let placed = self
+            .drawing
+            .entities_in(&sheet)
+            .map(|e| (e, Xform::identity()))
+            .chain(
+                xrefs
+                    .iter()
+                    .flat_map(|x| x.doc.entities_in_block("*Model_Space").map(|e| (e, x.xf))),
+            );
+        for (e, xf) in placed {
+            let cell = |at: &Vector3, height: f64, text: String| {
+                let [x, y] = xf.apply([at.x, at.y]);
+                let [x0, y0] = xf.apply([0.0, 0.0]);
+                let [x1, y1] = xf.apply([0.0, height]);
+                Cell {
+                    x,
+                    y,
+                    height: (x1 - x0).hypot(y1 - y0),
+                    text,
+                }
+            };
             match e {
                 EntityType::Table(t) => schedules.push(table_schedule(t, &sheet)),
-                EntityType::Text(t) => texts.push(Cell {
-                    x: t.insertion_point.x,
-                    y: t.insertion_point.y,
-                    height: t.height,
-                    text: t.value.clone(),
-                }),
-                EntityType::MText(t) => texts.push(Cell {
-                    x: t.insertion_point.x,
-                    y: t.insertion_point.y,
-                    height: t.height,
-                    text: plain_text(&t.value),
-                }),
+                EntityType::Text(t) => {
+                    texts.push(cell(&t.insertion_point, t.height, t.value.clone()))
+                }
+                EntityType::MText(t) => {
+                    texts.push(cell(&t.insertion_point, t.height, plain_text(&t.value)))
+                }
                 _ => {}
             }
         }

@@ -17,6 +17,7 @@ import {
   openDrawing,
   pick,
   redo,
+  reloadXrefs,
   atlasPages,
   batchVersion,
   renderBatch,
@@ -27,6 +28,7 @@ import {
   SESSION_CHANGED,
   setLayerHidden,
   setSheet,
+  setXrefPath,
   TAKEOFF_CHANGED,
   takeoff,
   totals,
@@ -55,6 +57,7 @@ import { SettingsDialog } from "./shell/SettingsDialog";
 import { SheetTabs } from "./shell/SheetTabs";
 import { StatusBar } from "./shell/StatusBar";
 import { TakeoffPanel } from "./shell/TakeoffPanel";
+import { XrefManager } from "./shell/XrefManager";
 import {
   handlesBounds,
   measurementBounds,
@@ -145,6 +148,7 @@ export default function App() {
   const [opening, setOpening] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [xrefsOpen, setXrefsOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** A one-off status bar message, e.g. after an export; the next action clears it. */
   const [notice, setNotice] = useState<string | null>(null);
@@ -512,12 +516,28 @@ export default function App() {
   async function saveFile() {
     if (!info) return;
     if (
-      info.problems.length > 0 &&
+      // An xref's problems are not the drawing's own: saving never touches the xref.
+      info.problems.length > info.xrefs.reduce((n, x) => n + x.problems.length, 0) &&
       !(await ask(t("save.confirmRecovered"), { title: t("appName"), kind: "warning" }))
     ) {
       return;
     }
     await saveWith(saveDrawing);
+  }
+
+  /** Shows the xrefs as the core now has them (their layers, problems and drawing) and saves the
+   *  project, which remembers a file chosen for one. Errors go to the xrefs dialog. */
+  async function xrefsChanged(next: DrawingInfo) {
+    setInfo(next);
+    await redraw();
+    await autosave();
+  }
+
+  /** Asks for the file of the missing xref `name` and loads it from there. */
+  async function locateXref(name: string) {
+    const path = await open({ filters: [{ name: "Drawings", extensions: ["dwg", "dxf"] }] });
+    if (typeof path !== "string") return;
+    await xrefsChanged(await setXrefPath(name, path));
   }
 
   /** Asks where to save the drawing, as DWG or DXF, and saves it there. */
@@ -867,6 +887,7 @@ export default function App() {
             viewport.current?.fitExtents();
             focusDrawing();
           }}
+          onXrefs={info ? () => setXrefsOpen(true) : undefined}
           arabicReversed={arabicReversed}
           onArabicReversed={info ? chooseArabicReversed : undefined}
         />
@@ -909,6 +930,14 @@ export default function App() {
         </div>
       </header>
       {aboutOpen && <About theme={theme} onClose={() => setAboutOpen(false)} />}
+      {xrefsOpen && info && (
+        <XrefManager
+          xrefs={info.xrefs}
+          onReload={async () => xrefsChanged(await reloadXrefs())}
+          onLocate={locateXref}
+          onClose={() => setXrefsOpen(false)}
+        />
+      )}
       {draftingOpen && drafting && (
         <DraftingSettings
           drafting={drafting}

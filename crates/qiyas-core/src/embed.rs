@@ -12,6 +12,10 @@
 //! reference, each with the whole count's record. A volume is drawn like an area, on
 //! `QIYAS-AREA`; an item with geometry is drawn like a length, on `QIYAS-ITEM` (a markup, an item
 //! with unit "markup", on `QIYAS-MARKUP`), and an item without geometry is not written.
+//!
+//! Xrefs are read-only: a measurement of an xref's entities (`Measurement::xref`) is written from
+//! its points only (a count's xref references are kept as points), never from the xref's handles,
+//! and QIYAS entities inside an xref drawing are never read back.
 
 use std::collections::HashMap;
 
@@ -19,7 +23,7 @@ use opencadcodec::xdata::{ExtendedDataRecord, XDataValue};
 use opencadcodec::{
     AppId, CadDocument, Color, EntityType, Handle, Layer, LwPolyline, Point, Vector2, Vector3,
 };
-use qiyas_geom::{flatten, object_to_world, Path};
+use qiyas_geom::{flatten, object_to_world, Path, XrefDocs};
 
 use crate::session::{effective_block_name, locate, MEASURE_TOL};
 use crate::{Kind, Measurement, Units};
@@ -58,8 +62,8 @@ fn kind_name(kind: Kind) -> &'static str {
 
 /// Replaces the measurement entities in `doc` with `items`: removes every entity carrying `QIYAS`
 /// xdata, then adds one polyline per path of a length, area, volume or item and one point per counted reference
-/// (or per stored point, for a count rebuilt from the drawing), on the measurement's sheet. A count
-/// reference that is not a block reference is skipped.
+/// and per stored point, on the measurement's sheet. A count reference that is not a block
+/// reference is skipped, and so are the handles of a measurement of an xref's entities.
 pub fn embed_measurements(doc: &mut CadDocument, items: &[Measurement]) {
     // `remove_entity` leaves the handle in its block's list; readers and writers skip such handles.
     let old: Vec<Handle> = doc
@@ -101,27 +105,26 @@ pub fn embed_measurements(doc: &mut CadDocument, items: &[Measurement]) {
                 }
             }
             Kind::Count => {
-                let locations: Vec<Vector3> = if m.handles.is_empty() {
-                    m.points
-                        .iter()
-                        .map(|p| Vector3::new(p[0], p[1], 0.0))
-                        .collect()
+                let handles = if m.xref.is_some() {
+                    &[][..]
                 } else {
-                    m.handles
-                        .iter()
-                        .filter_map(|h| {
-                            let located = locate(doc, *h, &m.chain).ok()?;
-                            let EntityType::Insert(insert) = located.entity else {
-                                return None;
-                            };
-                            // The insert point is in the insert's own object coordinates.
-                            let p = insert.insert_point;
-                            let on_plan = object_to_world(&insert.normal, p.z).apply([p.x, p.y]);
-                            let [x, y] = located.xf.apply(on_plan);
-                            Some(Vector3::new(x, y, p.z))
-                        })
-                        .collect()
+                    &m.handles[..]
                 };
+                let locations: Vec<Vector3> = handles
+                    .iter()
+                    .filter_map(|h| {
+                        let located = locate(doc, &XrefDocs::new(), *h, &m.chain).ok()?;
+                        let EntityType::Insert(insert) = located.entity else {
+                            return None;
+                        };
+                        // The insert point is in the insert's own object coordinates.
+                        let p = insert.insert_point;
+                        let on_plan = object_to_world(&insert.normal, p.z).apply([p.x, p.y]);
+                        let [x, y] = located.xf.apply(on_plan);
+                        Some(Vector3::new(x, y, p.z))
+                    })
+                    .chain(m.points.iter().map(|p| Vector3::new(p[0], p[1], 0.0)))
+                    .collect();
                 for location in locations {
                     let mut point = Point::new();
                     point.location = location;
@@ -150,15 +153,18 @@ fn closed(kind: Kind) -> bool {
 
 /// The picked points as one path, or for a measured entity the vertices of each of its paths
 /// (each closed path, for an area or volume), placed by its chain of block references. Empty
-/// when there is nothing to draw.
+/// when there is nothing to draw, and for an xref's entity without points.
 fn shape_paths(doc: &CadDocument, m: &Measurement) -> Vec<Vec<[f64; 2]>> {
     if !m.points.is_empty() {
         return vec![m.points.clone()];
     }
+    if m.xref.is_some() {
+        return Vec::new();
+    }
     let Some(located) = m
         .handles
         .first()
-        .and_then(|h| locate(doc, *h, &m.chain).ok())
+        .and_then(|h| locate(doc, &XrefDocs::new(), *h, &m.chain).ok())
     else {
         return Vec::new();
     };

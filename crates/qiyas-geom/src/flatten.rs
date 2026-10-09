@@ -5,8 +5,9 @@ use opencadcodec::entities::{
     AttributeEntity, BoundaryEdge, EntityCommon, EntityType, HorizontalAlignment, Insert, MText,
     Text, TextHorizontalAlignment, TextVerticalAlignment, VerticalAlignment,
 };
+use opencadcodec::tables::normalize_name;
 use opencadcodec::types::Matrix3;
-use opencadcodec::{CadDocument, Color, Vector3};
+use opencadcodec::{CadDocument, Color, Layer, Vector3};
 
 use crate::path::same_point;
 use crate::{Path, Xform};
@@ -20,6 +21,41 @@ const MAX_SEGMENTS: usize = 1 << 16;
 const MAX_WORK: usize = 1_000_000;
 /// Bulges smaller than this are straight segments.
 const MIN_BULGE: f64 = 1e-12;
+/// Deepest xref nesting drawn: an xref inside an xref inside ... four levels down.
+pub const MAX_XREF_DEPTH: usize = 4;
+
+/// The loaded xref drawings, by xref block name as `normalize_name` gives it (upper case).
+pub type XrefDocs<'a> = HashMap<String, &'a CadDocument>;
+
+/// The xref drawing and the name inside it of an xref-dependent symbol `XREF|NAME`, when `XREF`
+/// is a loaded xref. `None` for any other name.
+pub fn xref_symbol<'a, 'n>(
+    xrefs: &XrefDocs<'a>,
+    name: &'n str,
+) -> Option<(&'a CadDocument, &'n str)> {
+    let (xref, inner) = name.split_once('|')?;
+    xrefs.get(&normalize_name(xref)).map(|doc| (*doc, inner))
+}
+
+/// The layer `name` as drawn: the host drawing's own (an `XREF|LAYER` the host keeps wins, as
+/// AutoCAD keeps xref layer changes), else for `XREF|LAYER` the layer `LAYER` of that xref.
+pub fn find_layer<'a>(
+    host: &'a CadDocument,
+    xrefs: &XrefDocs<'a>,
+    name: &str,
+) -> Option<&'a Layer> {
+    host.layers.get(name).or_else(|| {
+        let (doc, inner) = xref_symbol(xrefs, name)?;
+        doc.layers.get(inner)
+    })
+}
+
+/// True when `block_name` is an xref (attached or overlaid) in `doc`.
+pub fn is_xref_block(doc: &CadDocument, block_name: &str) -> bool {
+    doc.block_records
+        .get(block_name)
+        .is_some_and(|b| b.flags.is_xref || b.flags.is_xref_overlay)
+}
 
 /// One flattened path with what it is drawn with. `layer` and `color` are resolved the AutoCAD
 /// way inside blocks: an entity on layer "0" takes its insert's layer, ByLayer takes that
@@ -34,7 +70,9 @@ pub struct FlatPath {
     /// Handle of the entity the path comes from: the innermost one, or the insert itself for an
     /// attribute's text box.
     pub entity: u64,
-    /// Name of the xref the path comes from; always `None` for now.
+    /// Name of the xref the path comes from (the outermost one, for a nested xref). Its `chain`
+    /// then ends with that xref's reference, and `entity` is the entity at the top of the xref's
+    /// model space (a block reference inside the xref is picked whole).
     pub xref: Option<String>,
     /// For a text's box (picked, not drawn): what the text draws.
     pub text: Option<Box<FlatText>>,
@@ -120,8 +158,25 @@ impl FlattenOutcome {
 /// within `tol` after `xf` is applied. Entities in object coordinates (arcs, circles, polylines,
 /// hatches, text, inserts) are mapped through their extrusion normal first, so a mirrored block
 /// (normal 0,0,-1) lands where it is drawn. Invisible entities inside blocks are left out.
+/// Xref references draw nothing here; `flatten_with` draws them.
 pub fn flatten(doc: &CadDocument, entity: &EntityType, xf: &Xform, tol: f64) -> FlattenOutcome {
+    flatten_with(doc, &XrefDocs::new(), entity, xf, tol)
+}
+
+/// `flatten`, with a reference to a loaded xref drawn as that drawing's model space under the
+/// reference's transform (xrefs inside it too, `MAX_XREF_DEPTH` deep; a cycle stops). Inside an
+/// xref, layers are named `XREF|LAYER` (layer "0" takes the reference's, as in a block) and text
+/// styles `XREF|STYLE`, both named after the innermost xref.
+pub fn flatten_with(
+    doc: &CadDocument,
+    xrefs: &XrefDocs,
+    entity: &EntityType,
+    xf: &Xform,
+    tol: f64,
+) -> FlattenOutcome {
     let mut walk = Walk {
+        host: doc,
+        xrefs,
         doc,
         tol,
         out: Vec::new(),
@@ -129,6 +184,8 @@ pub fn flatten(doc: &CadDocument, entity: &EntityType, xf: &Xform, tol: f64) -> 
         truncated: false,
         chain: Vec::new(),
         layer_colors: HashMap::new(),
+        xref_stack: Vec::new(),
+        xref_entity: None,
     };
     let style = walk.style(entity.common(), None);
     walk.entity(entity, xf, &style, 0);
@@ -145,6 +202,10 @@ struct Style {
 }
 
 struct Walk<'a> {
+    /// The drawing `flatten` was called on: layers are looked up here (and in `xrefs`).
+    host: &'a CadDocument,
+    xrefs: &'a XrefDocs<'a>,
+    /// The drawing whose blocks are being walked: the host, or an xref inside it.
     doc: &'a CadDocument,
     tol: f64,
     out: Vec<FlatPath>,
@@ -153,26 +214,29 @@ struct Walk<'a> {
     truncated: bool,
     /// Inserts entered so far, outermost first.
     chain: Vec<u64>,
-    /// Each layer's colour by its name as written, so a block drawn many times looks it up once.
+    /// Each layer's colour by its name as drawn, so a block drawn many times looks it up once.
     layer_colors: HashMap<String, Color>,
+    /// The xrefs entered, outermost first, by block name as written.
+    xref_stack: Vec<String>,
+    /// Inside an xref: the entity at the top of the outermost xref's model space, which every
+    /// path inside it is reported as.
+    xref_entity: Option<u64>,
 }
 
 impl Walk<'_> {
     /// The style of an entity with `common`, inside a block reference drawn with `parent`
     /// (`None` at the top level).
     fn style(&mut self, common: &EntityCommon, parent: Option<&Style>) -> Style {
-        let layer = match parent {
-            Some(p) if common.layer == "0" => &p.layer,
-            _ => &common.layer,
+        let layer = match (parent, self.xref_stack.last()) {
+            (Some(p), _) if common.layer == "0" => p.layer.clone(),
+            (_, Some(xref)) => format!("{xref}|{}", common.layer),
+            _ => common.layer.clone(),
         };
         let color = match common.color {
             Color::ByLayer => match self.layer_colors.get(layer.as_str()) {
                 Some(c) => *c,
                 None => {
-                    let c = self
-                        .doc
-                        .layers
-                        .get(layer)
+                    let c = find_layer(self.host, self.xrefs, &layer)
                         .map_or(Color::ByLayer, |l| l.color);
                     self.layer_colors.insert(layer.clone(), c);
                     c
@@ -181,10 +245,7 @@ impl Walk<'_> {
             Color::ByBlock => parent.map_or(Color::ByBlock, |p| p.color),
             other => other,
         };
-        Style {
-            layer: layer.clone(),
-            color,
-        }
+        Style { layer, color }
     }
 
     fn entity(&mut self, entity: &EntityType, xf: &Xform, style: &Style, depth: usize) {
@@ -292,8 +353,13 @@ impl Walk<'_> {
         self.push(points, closed, xf, style, handle);
     }
 
-    /// The insert's attribute text boxes (picked as the insert), then its block's content.
+    /// The insert's attribute text boxes (picked as the insert), then its block's content; for
+    /// an xref, the xref drawing's model space.
     fn insert(&mut self, e: &Insert, xf: &Xform, style: &Style, depth: usize) {
+        if is_xref_block(self.doc, &e.block_name) {
+            self.xref(e, xf, style, depth);
+            return;
+        }
         let handle = e.common.handle.value();
         // Attributes sit where the insert sits, not in the block's coordinates.
         for a in &e.attributes {
@@ -310,7 +376,11 @@ impl Walk<'_> {
             self.truncated = true;
             return;
         }
-        self.chain.push(handle);
+        // Inside an xref the chain stays at the xref's reference.
+        let tracked = self.xref_stack.is_empty();
+        if tracked {
+            self.chain.push(handle);
+        }
         let doc = self.doc;
         // Styles depend only on the block's entities, not on where each instance is.
         let children: Vec<(&EntityType, Style)> = doc
@@ -328,7 +398,54 @@ impl Walk<'_> {
                 self.entity(child, &instance, child_style, depth + 1);
             }
         }
-        self.chain.pop();
+        if tracked {
+            self.chain.pop();
+        }
+    }
+
+    /// An xref reference: the loaded xref's model space under the reference's transform. A
+    /// missing or unloaded xref, one nested too deep, or one already being drawn (a cycle)
+    /// draws nothing.
+    fn xref(&mut self, e: &Insert, xf: &Xform, style: &Style, depth: usize) {
+        let key = normalize_name(&e.block_name);
+        let Some(&xdoc) = self.xrefs.get(&key) else {
+            return;
+        };
+        let cycle = self.xref_stack.iter().any(|n| normalize_name(n) == key);
+        if cycle || self.xref_stack.len() >= MAX_XREF_DEPTH {
+            return;
+        }
+        let outermost = self.xref_stack.is_empty();
+        if outermost {
+            self.chain.push(e.common.handle.value());
+        }
+        let host_side = self.doc;
+        self.xref_stack.push(e.block_name.clone());
+        self.doc = xdoc;
+        let children: Vec<(&EntityType, Style)> = xdoc
+            .entities_in_block("*Model_Space")
+            .filter(|child| !child.common().invisible)
+            .map(|child| (child, self.style(child.common(), Some(style))))
+            .collect();
+        for instance in insert_instances(host_side, e, xf) {
+            if self.budget == 0 {
+                self.truncated = true;
+                break;
+            }
+            self.budget -= 1;
+            for (child, child_style) in &children {
+                if outermost {
+                    self.xref_entity = Some(child.common().handle.value());
+                }
+                self.entity(child, &instance, child_style, depth + 1);
+            }
+        }
+        self.doc = host_side;
+        self.xref_stack.pop();
+        if outermost {
+            self.xref_entity = None;
+            self.chain.pop();
+        }
     }
 
     /// Appends a text's closed box, carrying what the text draws.
@@ -338,8 +455,11 @@ impl Walk<'_> {
         xf: &Xform,
         style: &Style,
         entity: u64,
-        text: FlatText,
+        mut text: FlatText,
     ) {
+        if let Some(xref) = self.xref_stack.last() {
+            text.style = format!("{xref}|{}", text.style);
+        }
         self.push_with(points, true, xf, style, entity, Some(Box::new(text)));
     }
 
@@ -384,8 +504,8 @@ impl Walk<'_> {
             layer: style.layer.clone(),
             color: style.color,
             chain: self.chain.clone(),
-            entity,
-            xref: None,
+            entity: self.xref_entity.unwrap_or(entity),
+            xref: self.xref_stack.first().cloned(),
             text,
         });
     }

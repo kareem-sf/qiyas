@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -7,9 +7,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use opencadcodec::entities::Insert;
 use opencadcodec::tables::normalize_name;
 use opencadcodec::{CadDocument, DwgWriter, DxfWriter, EntityType, Handle};
-use qiyas_geom::{exact_area, exact_length, flatten, insert_instances, Xform};
+use qiyas_geom::{
+    exact_area, exact_length, flatten_with, insert_instances, is_xref_block, Xform, XrefDocs,
+    MAX_XREF_DEPTH,
+};
 use qiyas_render::{
-    build_batch_with_text, layer_shown, place_text, Batch, PickIndex, TextEngine, TextOptions,
+    build_batch_with_xrefs, layer_shown, place_text, Batch, PickIndex, TextEngine, TextOptions,
     Visibility, TEXT_BOX,
 };
 use serde::{Deserialize, Serialize};
@@ -18,6 +21,7 @@ use crate::commands::Part;
 use crate::embed::{embed_measurements, read_embedded};
 use crate::project::{self, project_path, Project};
 use crate::undo::{History, Parts, Snapshot};
+use crate::xref::{XrefInfo, XrefSet};
 use crate::{
     Boq, Command, Conflict, CoreError, Drafting, Drawing, LayerInfo, Outcome, Schedule, Sheet,
     Source, Takeoff, Units,
@@ -51,6 +55,11 @@ pub struct Session {
     pub arabic_reversed: bool,
     /// Snaps, ortho, polar, grid and display precision. Saved in the project file.
     pub drafting: Drafting,
+    /// The drawing's xrefs, opened read-only.
+    pub xrefs: XrefSet,
+    /// The file the user chose for an xref, by xref name; looked at first. Saved in the project
+    /// file.
+    pub xref_overrides: HashMap<String, String>,
     history: History,
     /// Which session this is; see `NEXT_EPOCH`.
     epoch: u64,
@@ -84,6 +93,8 @@ pub struct DrawingInfo {
     pub problems: Vec<String>,
     /// See `Session::arabic_reversed`.
     pub arabic_reversed: bool,
+    /// The drawing's xrefs (and those inside them), in load order.
+    pub xrefs: Vec<XrefInfo>,
 }
 
 /// An entity by its handle and the block references it sits inside (outermost first).
@@ -97,12 +108,17 @@ const TRUNCATED: &str = "Drawing too complex, some block content not drawn";
 /// What is under the cursor: the entity itself (`entity`), the block references it sits inside
 /// (`chain`, outermost first, empty at the top level) and the top-level entity on the sheet
 /// (`top`: the first of `chain`, or `entity` itself).
+///
+/// Inside an xref, `chain` ends with the xref's reference (it lists the host's references only),
+/// `entity` is the entity at the top of the xref's model space (a handle of the xref drawing; a
+/// block reference or a nested xref there is picked whole) and `xref` names the xref.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Picked {
     pub top: u64,
     pub entity: u64,
     pub chain: Vec<u64>,
-    /// Name of the xref the entity belongs to; always `None` for now.
+    /// Name of the xref the entity belongs to (the outermost, for a nested xref).
+    #[serde(default)]
     pub xref: Option<String>,
 }
 
@@ -127,11 +143,17 @@ pub struct EntityInfo {
     pub chain: Vec<u64>,
     /// The block names along `chain`, outermost first.
     pub block_path: Vec<String>,
+    /// The xref the entity belongs to; its `handle` is then one of that drawing's.
+    pub xref: Option<String>,
 }
 
 /// An entity found by handle and chain, with what places it in the world.
 pub(crate) struct Located<'a> {
     pub entity: &'a EntityType,
+    /// The drawing the entity is in: the host, or the xref the chain ends in.
+    pub doc: &'a CadDocument,
+    /// The xref the entity belongs to, when the chain ends in an xref reference.
+    pub xref: Option<String>,
     /// Block-to-world transform of the chain (identity at the top level).
     pub xf: Xform,
     /// The layer the entity is drawn on (layer "0" inside a block takes its insert's).
@@ -142,9 +164,12 @@ pub(crate) struct Located<'a> {
 
 /// Finds `handle` inside the block references `chain` (outermost first; empty for an entity
 /// on a sheet). Each reference must sit in the block of the one before it, and the entity in
-/// the last one's block. An array (MINSERT) is placed by its first cell.
+/// the last one's block. An array (MINSERT) is placed by its first cell. A chain may end with a
+/// reference to an xref in `xrefs`: the entity is then one at the top of that xref's model space,
+/// on layer `XREF|LAYER` (layer "0" takes the reference's).
 pub(crate) fn locate<'a>(
     doc: &'a CadDocument,
+    xrefs: &XrefDocs<'a>,
     handle: u64,
     chain: &[u64],
 ) -> Result<Located<'a>, CoreError> {
@@ -156,7 +181,13 @@ pub(crate) fn locate<'a>(
     let mut layer: Option<&str> = None;
     let mut block: Option<&str> = None;
     let mut block_path = Vec::new();
+    let mut xref: Option<(&'a str, &'a CadDocument)> = None;
     for &h in chain {
+        if xref.is_some() {
+            return Err(CoreError::InvalidCommand(format!(
+                "Entity {h} is inside an xref: an xref reference ends the chain"
+            )));
+        }
         let e = get(h)?;
         let EntityType::Insert(insert) = e else {
             return Err(CoreError::InvalidCommand(format!(
@@ -171,15 +202,55 @@ pub(crate) fn locate<'a>(
         layer = Some(drawn_layer(&insert.common.layer, layer));
         block = Some(&insert.block_name);
         block_path.push(effective_block_name(doc, insert));
+        if is_xref_block(doc, &insert.block_name) {
+            let xdoc = xrefs
+                .get(&normalize_name(&insert.block_name))
+                .ok_or_else(|| {
+                    CoreError::InvalidCommand(format!("Xref {} is not loaded", insert.block_name))
+                })?;
+            xref = Some((&insert.block_name, xdoc));
+        }
     }
-    let entity = get(handle)?;
-    check_inside(doc, handle, block)?;
+    let Some((name, xdoc)) = xref else {
+        let entity = get(handle)?;
+        check_inside(doc, handle, block)?;
+        return Ok(Located {
+            entity,
+            doc,
+            xref: None,
+            xf,
+            layer: drawn_layer(&entity.common().layer, layer).to_string(),
+            block_path,
+        });
+    };
+    let entity = xdoc
+        .get_entity(Handle::new(handle))
+        .ok_or(CoreError::NoSuchEntity(handle))?;
+    check_inside(xdoc, handle, Some("*Model_Space"))?;
+    let own = &entity.common().layer;
+    let layer = match layer {
+        Some(outer) if own == "0" => outer.to_string(),
+        _ => format!("{name}|{own}"),
+    };
     Ok(Located {
         entity,
+        doc: xdoc,
+        xref: Some(name.to_string()),
         xf,
-        layer: drawn_layer(&entity.common().layer, layer).to_string(),
+        layer,
         block_path,
     })
+}
+
+/// The xref an entity picked with `chain` belongs to: the block of the chain's last reference,
+/// when that is an xref.
+pub(crate) fn xref_of_chain(doc: &CadDocument, chain: &[u64]) -> Option<String> {
+    match doc.get_entity(Handle::new(*chain.last()?))? {
+        EntityType::Insert(insert) if is_xref_block(doc, &insert.block_name) => {
+            Some(insert.block_name.clone())
+        }
+        _ => None,
+    }
 }
 
 /// An entity's layer as drawn: layer "0" inside a block takes the insert's.
@@ -229,7 +300,9 @@ impl Session {
     /// Opens a drawing on its model sheet with nothing hidden, with the take-off and BOQ from its
     /// project file when there is one, else from the measurements embedded in the drawing. A project file
     /// that can't be read is a problem, not a failure. When the project file exists it wins: the
-    /// embedded measurements are ignored and rewritten on the next save.
+    /// embedded measurements are ignored and rewritten on the next save. Then opens its xrefs
+    /// (with the files the project chose for them); a missing xref is a problem, not a failure.
+    /// Measurements embedded inside xrefs are never read.
     pub fn open(path: &Path) -> Result<Session, CoreError> {
         let mut drawing = Drawing::open(path)?;
         let sheet = drawing.sheets()[0].block.clone();
@@ -239,6 +312,7 @@ impl Session {
         let mut schedules = Vec::new();
         let mut arabic_reversed = false;
         let mut drafting = Drafting::default();
+        let mut xref_overrides = HashMap::new();
         let project_file = project_path(path);
         if project_file.exists() {
             match project::load(&project_file) {
@@ -257,6 +331,7 @@ impl Session {
                     schedules = project.schedules;
                     arabic_reversed = project.arabic_reversed;
                     drafting = project.drafting.clamped();
+                    xref_overrides = project.xref_overrides;
                 }
                 // Keep a copy, since the next save replaces the unreadable file.
                 Err(e) => drawing
@@ -271,6 +346,7 @@ impl Session {
         } else {
             takeoff.items = read_embedded(&drawing.doc);
         }
+        let xrefs = XrefSet::load(&drawing, &xref_overrides, MAX_XREF_DEPTH);
         Ok(Session {
             drawing,
             sheet,
@@ -281,6 +357,8 @@ impl Session {
             schedules,
             arabic_reversed,
             drafting,
+            xrefs,
+            xref_overrides,
             history: History::default(),
             epoch: NEXT_EPOCH.fetch_add(1, Ordering::Relaxed),
             document_revision: 0,
@@ -302,6 +380,7 @@ impl Session {
             schedules: self.schedules.clone(),
             arabic_reversed: self.arabic_reversed,
             drafting: self.drafting.clone(),
+            xref_overrides: self.xref_overrides.clone(),
         };
         project::save(&path, &project)?;
         Ok(path)
@@ -315,6 +394,8 @@ impl Session {
 
     /// Writes the drawing to `path` (DWG or DXF by extension, in the drawing's own version) with
     /// the take-off embedded on the `QIYAS-*` layers, then saves the project file next to it.
+    /// Only the host drawing is written: xref files are never touched, and a measurement of an
+    /// xref's entity is embedded from its points only.
     /// A file already at `path` is first copied to `<path>.bak`. From then on the session's
     /// drawing is the one at `path`; after a failed write it is unchanged.
     pub fn save_as(&mut self, path: &Path) -> Result<(), CoreError> {
@@ -359,17 +440,61 @@ impl Session {
     /// current sheet (builds the sheet's batch when it is not cached yet).
     pub fn info(&self) -> DrawingInfo {
         let mut problems = self.drawing.problems.clone();
+        problems.extend(self.xrefs.problems().cloned());
         if self.with_cache(None, |c| c.batch.truncated) {
             problems.push(TRUNCATED.to_string());
         }
         DrawingInfo {
             path: self.drawing.path.display().to_string(),
             sheets: self.drawing.sheets(),
-            layers: self.drawing.layers(),
+            layers: self.layers(),
             units: units_name(self.drawing.units).to_string(),
             problems,
             arabic_reversed: self.arabic_reversed,
+            xrefs: self.xrefs.info(),
         }
+    }
+
+    /// The drawing's layers and those its xrefs add (`XREF|LAYER`), sorted by name. An xref
+    /// layer the drawing keeps a copy of itself is listed once, as the drawing has it.
+    pub fn layers(&self) -> Vec<LayerInfo> {
+        let mut layers = self.drawing.layers();
+        let own: HashSet<String> = layers.iter().map(|l| normalize_name(&l.name)).collect();
+        layers.extend(
+            self.xrefs
+                .layers()
+                .into_iter()
+                .filter(|l| !own.contains(&normalize_name(&l.name))),
+        );
+        layers.sort_by(|a, b| a.name.cmp(&b.name));
+        layers
+    }
+
+    /// The opened xref drawings by upper-case name, for drawing, measuring and searching.
+    pub(crate) fn xref_docs(&self) -> XrefDocs<'_> {
+        self.xrefs.docs()
+    }
+
+    /// Looks for every xref again and reopens it (a changed or newly found file shows).
+    pub fn reload_xrefs(&mut self) {
+        self.xrefs = XrefSet::load(&self.drawing, &self.xref_overrides, MAX_XREF_DEPTH);
+        *self.cache.get_mut() = None;
+    }
+
+    /// Uses `path` for the xref `name` from now on (`None` goes back to looking for it), then
+    /// reloads the xrefs. Saved in the project file. Fails when the drawing has no such xref.
+    pub fn set_xref_path(&mut self, name: &str, path: Option<&Path>) -> Result<(), CoreError> {
+        let Some(xref) = self.xrefs.get(name) else {
+            return Err(CoreError::InvalidCommand(format!("No xref named {name}")));
+        };
+        let key = normalize_name(&xref.name);
+        let name = xref.name.clone();
+        self.xref_overrides.retain(|n, _| normalize_name(n) != key);
+        if let Some(path) = path {
+            self.xref_overrides.insert(name, path.display().to_string());
+        }
+        self.reload_xrefs();
+        Ok(())
     }
 
     /// Shows the sheet whose block is `block` (case-insensitive).
@@ -407,11 +532,11 @@ impl Session {
     }
 
     /// Names what `batch` would give: it changes when the sheet, the hidden layers, the Arabic
-    /// setting or the drawing itself change, and not for take-off, BOQ or conflict changes, undo
-    /// or redo. Not for the zoom the glyphs are drawn for either: the window asks for that.
-    /// A 64-bit FNV-1a hash of the session, sheet, hidden layers (sorted, case-folded), Arabic
-    /// setting and document revision, cut to 53 bits so it survives a trip through a JavaScript
-    /// number.
+    /// setting, the drawing itself or its xrefs change, and not for take-off, BOQ or conflict
+    /// changes, undo or redo. Not for the zoom the glyphs are drawn for either: the window asks
+    /// for that. A 64-bit FNV-1a hash of the session, sheet, hidden layers (sorted, case-folded),
+    /// Arabic setting, document revision and xrefs (name, file found and when it was last
+    /// changed, each), cut to 53 bits so it survives a trip through a JavaScript number.
     pub fn batch_version(&self) -> u64 {
         let mut hash = Fnv::new();
         hash.write(&self.epoch.to_le_bytes());
@@ -430,6 +555,19 @@ impl Session {
         }
         hash.write(&[u8::from(self.arabic_reversed)]);
         hash.write(&self.document_revision.to_le_bytes());
+        for x in &self.xrefs.entries {
+            hash.write(x.name.as_bytes());
+            hash.write(&[0xFF]);
+            if let Some(found) = &x.found {
+                hash.write(found.as_os_str().as_encoded_bytes());
+            }
+            hash.write(&[0xFF, u8::from(x.drawing.is_some())]);
+            let modified = x
+                .modified
+                .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_nanos());
+            hash.write(&modified.to_le_bytes());
+        }
         hash.0 & ((1 << 53) - 1)
     }
 
@@ -459,11 +597,12 @@ impl Session {
     pub fn pick(&self, p: [f64; 2], tol: f64) -> Option<Picked> {
         self.with_cache(None, |cached| {
             let range = cached.batch.range_of(cached.index.pick(p, tol)?)?;
+            let chain = cached.batch.chain_of(range).to_vec();
             Some(Picked {
                 top: range.top,
                 entity: range.entity,
-                chain: cached.batch.chain_of(range).to_vec(),
-                xref: None,
+                xref: xref_of_chain(&self.drawing.doc, &chain),
+                chain,
             })
         })
     }
@@ -510,15 +649,15 @@ impl Session {
     }
 
     /// The entity `handle` inside the block references `chain` (outermost first; empty for an
-    /// entity on a sheet), measured where those references place it.
+    /// entity on a sheet), measured where those references place it. A chain ending in an xref
+    /// reference names an entity of that xref.
     pub fn entity_info(&self, handle: u64, chain: &[u64]) -> Result<EntityInfo, CoreError> {
-        let located = locate(&self.drawing.doc, handle, chain)?;
+        let xrefs = self.xref_docs();
+        let located = locate(&self.drawing.doc, &xrefs, handle, chain)?;
         let entity = located.entity;
-        let Extent { length, area, .. } = self.extent(entity, &located.xf);
+        let Extent { length, area, .. } = self.extent(located.doc, entity, &located.xf);
         let (block_name, text) = match entity {
-            EntityType::Insert(insert) => {
-                (Some(effective_block_name(&self.drawing.doc, insert)), None)
-            }
+            EntityType::Insert(insert) => (Some(effective_block_name(located.doc, insert)), None),
             EntityType::Text(t) => (None, Some(t.value.clone())),
             EntityType::MText(t) => (None, Some(t.value.clone())),
             _ => (None, None),
@@ -534,6 +673,7 @@ impl Session {
             inside_block: located.block_path.last().cloned(),
             chain: chain.to_vec(),
             block_path: located.block_path,
+            xref: located.xref,
         })
     }
 
@@ -552,8 +692,9 @@ impl Session {
             Part::Conflicts => Snapshot::Conflicts(self.conflicts.clone(), self.schedules.clone()),
         });
         // No command changes the drawing's geometry yet, so none bumps `document_revision`. The
-        // first one that does (drawing and editing commands), and anything that changes xrefs or
-        // underlays, must bump it here, or the window keeps showing the old batch.
+        // first one that does (drawing and editing commands), and anything that changes
+        // underlays, must bump it here, or the window keeps showing the old batch. Xrefs change
+        // outside commands (`reload_xrefs`) and are part of `batch_version` themselves.
         let outcome = self.execute(cmd, source)?;
         if let Some(before) = before {
             if !matches!(outcome, Outcome::Nothing) {
@@ -603,11 +744,12 @@ impl Session {
         self.history.can_redo()
     }
 
-    /// Length and area of `entity` placed by `xf`: exact for lines, arcs, circles, full
-    /// ellipses and (bulged) polylines under a uniform scale; otherwise the length of all its
-    /// flattened paths and the area of the closed ones.
-    pub(crate) fn extent(&self, entity: &EntityType, xf: &Xform) -> Extent {
-        let paths = flatten(&self.drawing.doc, entity, xf, MEASURE_TOL).into_paths();
+    /// Length and area of `entity` of `doc` (the drawing or one of its xrefs) placed by `xf`:
+    /// exact for lines, arcs, circles, full ellipses and (bulged) polylines under a uniform scale;
+    /// otherwise the length of all its flattened paths and the area of the closed ones.
+    pub(crate) fn extent(&self, doc: &CadDocument, entity: &EntityType, xf: &Xform) -> Extent {
+        let xrefs = self.xref_docs();
+        let paths = flatten_with(doc, &xrefs, entity, xf, MEASURE_TOL).into_paths();
         let closed: Vec<_> = paths.iter().filter(|p| p.closed).collect();
         let self_intersecting = closed.iter().any(|p| p.self_intersects());
         let length = (!paths.is_empty()).then(|| {
@@ -639,8 +781,9 @@ impl Session {
                 arabic_reversed: self.arabic_reversed,
                 px_per_unit,
             };
-            let batch = build_batch_with_text(
+            let batch = build_batch_with_xrefs(
                 &self.drawing.doc,
+                &self.xref_docs(),
                 &self.sheet,
                 &self.visibility,
                 BATCH_TOL,

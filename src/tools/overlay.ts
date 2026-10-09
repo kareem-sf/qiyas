@@ -18,10 +18,10 @@ export function overlaySegments(points: Point[], cursor: Point | null, tool: Too
   return out;
 }
 
-/** Where a take-off line sits: around its points, else around its entities as drawn in `batch`.
- *  `null` when neither is on the current batch. */
+/** Where a take-off line sits: around its points and its entities as drawn in `batch` (a count
+ *  of an xref's blocks has both). `null` when neither is on the current batch. */
 export function measurementBounds(m: Measurement, batch: Batch | null): Bounds | null {
-  return around(m.points, m.points.length === 0 ? measurementTargets(m) : [], batch);
+  return around(m.points, measurementTargets(m), batch);
 }
 
 /** Around the entities `handles` (on the sheet) as drawn in `batch`; `null` when none is on it. */

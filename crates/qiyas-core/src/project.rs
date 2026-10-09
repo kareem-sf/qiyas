@@ -1,6 +1,7 @@
 //! The `.qiyas` project file: the take-off, the BOQ, the conflicts and the schedules, saved as
 //! JSON next to the drawing.
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -32,6 +33,9 @@ pub struct Project {
     /// Snaps, ortho, polar, grid and display precision (`Session::drafting`).
     #[serde(default)]
     pub drafting: Drafting,
+    /// The file the user chose for an xref, by xref name (`Session::xref_overrides`).
+    #[serde(default)]
+    pub xref_overrides: HashMap<String, String>,
 }
 
 /// The project file of `drawing`: same folder, same stem, extension `qiyas`.
@@ -132,6 +136,7 @@ mod tests {
             schedules: Vec::new(),
             arabic_reversed: false,
             drafting: Drafting::default(),
+            xref_overrides: HashMap::new(),
         };
         assert!(save(&path, &project).is_err());
         assert!(!dir.path().join("villa.qiyas.tmp").exists());

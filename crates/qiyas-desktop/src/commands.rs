@@ -71,6 +71,29 @@ pub async fn set_layer_hidden(
     })
 }
 
+/// Looks for every xref again and reopens it; returns the drawing's info with the new list.
+#[tauri::command]
+pub async fn reload_xrefs(state: State<'_, AppState>) -> Result<DrawingInfo, String> {
+    with_session(&state, |s| {
+        s.reload_xrefs();
+        Ok(s.info())
+    })
+}
+
+/// Uses the file `path` for the xref `name` (`None` goes back to looking for it), reloads the
+/// xrefs and returns the drawing's info. The window saves the project after, which remembers it.
+#[tauri::command]
+pub async fn set_xref_path(
+    name: String,
+    path: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<DrawingInfo, String> {
+    with_session(&state, |s| {
+        s.set_xref_path(&name, path.as_deref().map(Path::new))?;
+        Ok(s.info())
+    })
+}
+
 /// Names the current sheet's line batch; it changes only when the batch would.
 #[tauri::command]
 pub async fn batch_version(state: State<'_, AppState>) -> Result<u64, String> {

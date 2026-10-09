@@ -81,6 +81,10 @@ pub struct Measurement {
     /// The block names along `chain`, outermost first, for showing where the entity is.
     #[serde(default)]
     pub block_path: Vec<String>,
+    /// The xref the measured entities belong to (`chain` then ends with its reference and
+    /// `handles` are the xref drawing's); `None` for the drawing's own entities and drawn shapes.
+    #[serde(default)]
+    pub xref: Option<String>,
 }
 
 impl Measurement {
@@ -118,6 +122,7 @@ impl Measurement {
             boq_code: None,
             auto_description: false,
             chain: Vec::new(),
+            xref: None,
             block_path: Vec::new(),
         }
     }

@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use ab_glyph::{Font as _, GlyphId, Point};
 use opencadcodec::entities::mtext_format::parse_mtext;
 use opencadcodec::CadDocument;
-use qiyas_geom::{FlatText, HAlign, TextLayout, VAlign, Xform};
+use qiyas_geom::{xref_symbol, FlatText, HAlign, TextLayout, VAlign, Xform, XrefDocs};
 use rustybuzz::{Direction, ShapePlan, UnicodeBuffer};
 
 use crate::atlas::{Atlas, PageView, PAD, PAGE_SIZE};
@@ -296,11 +296,15 @@ impl TextEngine {
         pen
     }
 
-    fn style(&mut self, doc: &CadDocument, name: &str) -> StyleFont {
+    fn style(&mut self, doc: &CadDocument, xrefs: &XrefDocs, name: &str) -> StyleFont {
         if let Some(style) = self.styles.get(name) {
             return style.clone();
         }
-        let found = doc.text_styles.get(name);
+        // An xref's style `XREF|STYLE`: the host's copy when it keeps one, else the xref's own.
+        let found = doc.text_styles.get(name).or_else(|| {
+            let (xdoc, inner) = xref_symbol(xrefs, name)?;
+            xdoc.text_styles.get(inner)
+        });
         let style = StyleFont {
             chain: self.fonts.chain(found.map_or("", |s| s.font_file.as_str())),
             height: found.map_or(0.0, |s| s.height),
@@ -318,7 +322,18 @@ impl TextEngine {
         text: &FlatText,
         arabic_reversed: bool,
     ) -> Option<(Xform, Vec<ShapedGlyph>, [[f64; 2]; 4])> {
-        let style = self.style(doc, &text.style);
+        self.lay_out_with(doc, &XrefDocs::new(), text, arabic_reversed)
+    }
+
+    /// `lay_out`, with a style named `XREF|STYLE` looked up in that loaded xref.
+    pub fn lay_out_with(
+        &mut self,
+        doc: &CadDocument,
+        xrefs: &XrefDocs,
+        text: &FlatText,
+        arabic_reversed: bool,
+    ) -> Option<(Xform, Vec<ShapedGlyph>, [[f64; 2]; 4])> {
+        let style = self.style(doc, xrefs, &text.style);
         let height = [text.height, style.height]
             .into_iter()
             .find(|h| *h > 0.0 && h.is_finite())?;

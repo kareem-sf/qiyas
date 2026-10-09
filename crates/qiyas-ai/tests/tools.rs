@@ -671,3 +671,47 @@ fn entity_tools_reach_inside_blocks_with_a_chain() {
         Err(ToolError::BadInput(_))
     ));
 }
+
+#[test]
+fn tools_see_xref_layers_blocks_and_entities() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = qiyas_core::fixtures::write_xref_pair(dir.path());
+    let mut session = Session::open(&path).unwrap();
+
+    let layers = run(&mut session, "list_layers", json!({})).unwrap();
+    assert!(layers.to_string().contains("plan-arch|A-WALL"), "{layers}");
+
+    // DOOR is only in the xref: still a block to count, on the xref's layer.
+    let out = run(
+        &mut session,
+        "count_blocks",
+        json!({ "block_name": "DOOR", "layer": "plan-arch|A-DOOR" }),
+    )
+    .unwrap();
+    assert_eq!(out["measurement"]["value"], 3.0);
+
+    let found = run(
+        &mut session,
+        "find_entities",
+        json!({ "layer": "plan-arch|A-WALL", "kind": "Line" }),
+    )
+    .unwrap();
+    let row = &found["rows"][0];
+    assert_eq!(row["xref"], "plan-arch");
+    let out = run(
+        &mut session,
+        "measure_length",
+        json!({ "handle": row["handle"], "chain": row["chain"] }),
+    )
+    .unwrap();
+    assert!((out["measurement"]["value"].as_f64().unwrap() - 10.0).abs() < 1e-9);
+    assert_eq!(out["measurement"]["xref"], "plan-arch");
+
+    let out = run(
+        &mut session,
+        "show_layers",
+        json!({ "names": ["plan-arch|A-WALL"], "visible": false }),
+    )
+    .unwrap();
+    assert_eq!(out["hidden"], json!(["plan-arch|A-WALL"]));
+}

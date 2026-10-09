@@ -232,14 +232,16 @@ impl Session {
         }
 
         let doc = &self.drawing.doc;
+        let xrefs = self.xref_docs();
         // Pieces of the entities that pass within the tolerance, with their entity's index.
         let mut near: Vec<(usize, Curve)> = Vec::new();
         for (i, (handle, chain)) in entities.iter().enumerate() {
             let at = (*handle, chain.as_slice());
-            let Ok(located) = locate(doc, *handle, chain) else {
+            let Ok(located) = locate(doc, &xrefs, *handle, chain) else {
                 continue;
             };
-            for shape in snap_shapes(doc, located.entity, &located.xf, world_tol / 4.0) {
+            let shapes = snap_shapes(located.doc, located.entity, &located.xf, world_tol / 4.0);
+            for shape in shapes {
                 for &v in &shape.vertices {
                     best.offer(SnapKind::Node, v, None, &at);
                 }

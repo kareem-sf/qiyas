@@ -405,6 +405,15 @@ fn set_sheet(session: &mut Session, input: SheetName, source: Source) -> Result<
     Ok(json!({ "sheet": block, "ui": { "action": "show_sheet", "sheet": block } }))
 }
 
+/// True when the drawing has the layer, or one of its xrefs adds it (`XREF|LAYER`); any case.
+fn has_layer(session: &Session, name: &str) -> bool {
+    session.drawing.doc.layers.get(name).is_some()
+        || session
+            .layers()
+            .iter()
+            .any(|l| l.name.eq_ignore_ascii_case(name))
+}
+
 fn list_layers(session: &Session, offset: usize) -> Value {
     let hidden: HashSet<String> = session
         .hidden_layers()
@@ -412,7 +421,6 @@ fn list_layers(session: &Session, offset: usize) -> Value {
         .map(|n| n.to_uppercase())
         .collect();
     let rows: Vec<Value> = session
-        .drawing
         .layers()
         .into_iter()
         .map(|l| {
@@ -438,7 +446,7 @@ fn show_layers(
     let unknown: Vec<&str> = input
         .names
         .iter()
-        .filter(|n| session.drawing.doc.layers.get(n).is_none())
+        .filter(|n| !has_layer(session, n))
         .map(String::as_str)
         .collect();
     if !unknown.is_empty() {
@@ -536,15 +544,24 @@ fn count_blocks(
     input: CountInput,
     source: Source,
 ) -> Result<Value, ToolError> {
-    let doc = &session.drawing.doc;
-    if doc.block_records.get(&input.block_name).is_none() {
+    // The block may be the drawing's or one of its xrefs'.
+    let known_block = std::iter::once(&session.drawing.doc)
+        .chain(
+            session
+                .xrefs
+                .entries
+                .iter()
+                .filter_map(|x| Some(&x.drawing.as_ref()?.doc)),
+        )
+        .any(|doc| doc.block_records.get(&input.block_name).is_some());
+    if !known_block {
         return Err(bad(&format!(
             "No block named {}; block_summary lists the blocks",
             input.block_name
         )));
     }
     if let Some(layer) = &input.layer {
-        if doc.layers.get(layer).is_none() {
+        if !has_layer(session, layer) {
             return Err(bad(&format!("No layer named {layer}")));
         }
     }

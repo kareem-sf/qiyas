@@ -3,8 +3,8 @@
 
 use opencadcodec::tables::normalize_name;
 use opencadcodec::EntityType;
-use qiyas_geom::Path;
-use qiyas_render::layer_shown;
+use qiyas_geom::{object_to_world, Path};
+use qiyas_render::layer_shown_with;
 use serde::{Deserialize, Serialize};
 
 use crate::session::{effective_block_name, locate, variant_name};
@@ -27,14 +27,15 @@ pub enum Command {
     },
     /// Area of a closed entity, length of an open one, or 1 piece for a block reference.
     /// `chain` lists the block references the entity sits inside, outermost first (empty, the
-    /// default, for an entity on the sheet); it is measured where they place it.
+    /// default, for an entity on the sheet); it is measured where they place it. A chain ending in
+    /// an xref reference names an entity at the top of that xref (see `Picked`).
     MeasureEntity {
         handle: u64,
         #[serde(default)]
         chain: Vec<u64>,
     },
     /// Block references of `block_name` on the current sheet, on visible layers only
-    /// (and only on `layer` when given).
+    /// (and only on `layer` when given), and those at the top of the sheet's xrefs.
     CountBlock {
         block_name: String,
         layer: Option<String>,
@@ -378,9 +379,10 @@ impl Session {
         if !chain.is_empty() && handles.is_empty() {
             return Err(invalid("A chain goes with handles"));
         }
+        let xrefs = self.xref_docs();
         let entities = handles
             .iter()
-            .map(|&h| locate(&self.drawing.doc, h, &chain))
+            .map(|&h| locate(&self.drawing.doc, &xrefs, h, &chain))
             .collect::<Result<Vec<_>, _>>()?;
 
         let mut self_intersecting = false;
@@ -398,7 +400,7 @@ impl Session {
             Kind::Length => entities
                 .iter()
                 .map(|e| {
-                    self.extent(e.entity, &e.xf)
+                    self.extent(e.doc, e.entity, &e.xf)
                         .length
                         .ok_or_else(|| invalid("This entity has no length"))
                 })
@@ -417,7 +419,7 @@ impl Session {
             Kind::Area | Kind::Volume => entities
                 .iter()
                 .map(|e| {
-                    let extent = self.extent(e.entity, &e.xf);
+                    let extent = self.extent(e.doc, e.entity, &e.xf);
                     self_intersecting |= extent.self_intersecting;
                     extent
                         .area
@@ -443,6 +445,7 @@ impl Session {
         m.handles = handles;
         if let Some(first) = entities.first() {
             m.block_path = first.block_path.clone();
+            m.xref = first.xref.clone();
         }
         m.chain = chain;
         Ok(m)
@@ -461,16 +464,17 @@ impl Session {
     }
 
     fn measure_entity(&self, handle: u64, chain: Vec<u64>) -> Result<Measurement, CoreError> {
-        let located = locate(&self.drawing.doc, handle, &chain)?;
+        let xrefs = self.xref_docs();
+        let located = locate(&self.drawing.doc, &xrefs, handle, &chain)?;
         let entity = located.entity;
         let layer = &located.layer;
         let description = format!("{} on {layer}", variant_name(entity));
         let mut m = if let EntityType::Insert(insert) = entity {
             let mut m = self.measurement(Kind::Count, 1.0, &description, layer);
-            m.block_name = Some(effective_block_name(&self.drawing.doc, insert));
+            m.block_name = Some(effective_block_name(located.doc, insert));
             m
         } else {
-            let extent = self.extent(entity, &located.xf);
+            let extent = self.extent(located.doc, entity, &located.xf);
             match (extent.area, extent.length) {
                 (Some(area), _) => {
                     let mut m = self.measurement(Kind::Area, area, &description, layer);
@@ -483,16 +487,22 @@ impl Session {
         };
         m.handles = vec![handle];
         m.block_path = located.block_path;
+        m.xref = located.xref;
         m.chain = chain;
         Ok(m)
     }
 
     /// Counts top-level references only: a block nested inside another block is not counted yet.
-    /// A dynamic block's anonymous copies count as the dynamic block.
+    /// A dynamic block's anonymous copies count as the dynamic block. References at the top of
+    /// the sheet's xrefs count too (on their `XREF|LAYER`): they are kept as their points, since
+    /// their handles are the xref drawing's.
     fn count_block(&self, block_name: String, layer: Option<String>) -> Measurement {
         let block = normalize_name(&block_name);
         let only_on = layer.as_deref().map(normalize_name);
         let doc = &self.drawing.doc;
+        let xrefs = self.xref_docs();
+        let shown = |layer: &str| layer_shown_with(doc, &xrefs, &self.visibility, layer);
+        let wanted = |layer: &str| only_on.as_ref().is_none_or(|l| *l == normalize_name(layer));
         let handles: Vec<u64> = self
             .drawing
             .entities_in(&self.sheet)
@@ -504,23 +514,39 @@ impl Session {
                 }
                 _ => None,
             })
-            .filter(|c| {
-                !c.invisible
-                    && layer_shown(&self.drawing.doc, &self.visibility, &c.layer)
-                    && only_on
-                        .as_ref()
-                        .is_none_or(|l| *l == normalize_name(&c.layer))
-            })
+            .filter(|c| !c.invisible && shown(&c.layer) && wanted(&c.layer))
             .map(|c| c.handle.value())
             .collect();
+        let mut points = Vec::new();
+        for x in self.sheet_xrefs(&self.sheet) {
+            if !shown(&x.insert.common.layer) {
+                continue;
+            }
+            for e in x.doc.entities_in_block("*Model_Space") {
+                let EntityType::Insert(insert) = e else {
+                    continue;
+                };
+                let on = x.layer_of(e);
+                let counted = !e.common().invisible
+                    && normalize_name(&effective_block_name(x.doc, insert)) == block
+                    && shown(&on)
+                    && wanted(&on);
+                if counted {
+                    let p = insert.insert_point;
+                    let on_plan = object_to_world(&insert.normal, p.z).apply([p.x, p.y]);
+                    points.push(x.xf.apply(on_plan));
+                }
+            }
+        }
         let description = format!("{block_name} count");
         let mut m = self.measurement(
             Kind::Count,
-            handles.len() as f64,
+            (handles.len() + points.len()) as f64,
             &description,
             layer.as_deref().unwrap_or(""),
         );
         m.handles = handles;
+        m.points = points;
         m.block_name = Some(block_name);
         m
     }

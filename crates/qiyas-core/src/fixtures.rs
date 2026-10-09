@@ -181,6 +181,49 @@ fn add_block(doc: &mut CadDocument, name: &str, entity: EntityType) {
     doc.add_entity(entity).unwrap();
 }
 
+/// Adds to `doc` an xref named `name` stored as `path` (a block record flagged as an xref, with
+/// no content) and a reference to it in model space at `at`, turned `rotation` radians, on layer
+/// `X-REF`. Returns the reference's handle.
+pub fn add_xref(doc: &mut CadDocument, name: &str, path: &str, at: [f64; 2], rotation: f64) -> u64 {
+    let mut block = BlockRecord::new(name);
+    block.handle = doc.allocate_handle();
+    block.block_entity_handle = doc.allocate_handle();
+    block.block_end_handle = doc.allocate_handle();
+    block.flags.is_xref = true;
+    block.xref_path = path.to_string();
+    doc.block_records.add(block).unwrap();
+    let mut insert = Insert::new(name, Vector3::new(at[0], at[1], 0.0)).with_rotation(rotation);
+    insert.common.layer = "X-REF".to_string();
+    doc.add_entity(EntityType::Insert(insert)).unwrap().value()
+}
+
+/// A host drawing in `dir`: `host.dxf`, with the sample's layers, a line of its own on A-WALL
+/// from (0, -10) to (5, -10), and the xref `plan-arch` stored as `plan-arch.dxf`, referenced at
+/// (100, 0) turned a quarter turn; and the xref itself, `plan-arch.dxf`, the sample drawing.
+/// Returns the host's path. Units are metres.
+pub fn write_xref_pair(dir: &Path) -> PathBuf {
+    let mut host = CadDocument::new();
+    host.header.insertion_units = 6;
+    add_layers(&mut host);
+    let mut own = EntityType::Line(Line::from_coords(0.0, -10.0, 0.0, 5.0, -10.0, 0.0));
+    own.common_mut().layer = "A-WALL".to_string();
+    host.add_entity(own).unwrap();
+    add_xref(
+        &mut host,
+        "plan-arch",
+        "plan-arch.dxf",
+        [100.0, 0.0],
+        PI / 2.0,
+    );
+    write_doc(&sample_doc(), &dir.join("plan-arch.dxf"));
+    write_doc(&host, &dir.join("host.dxf"))
+}
+
+/// Writes `doc` to `path`, DXF or DWG by extension.
+pub fn write_drawing(doc: &CadDocument, path: &Path) -> PathBuf {
+    write_doc(doc, path)
+}
+
 /// Writes the schedule drawing as `schedule.<ext>` in `dir`.
 pub fn write_schedule(dir: &Path, ext: &str) -> PathBuf {
     write_doc(&schedule_doc(), &dir.join(format!("schedule.{ext}")))

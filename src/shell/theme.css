@@ -1009,6 +1009,38 @@ button.link {
   margin: 0;
   color: var(--muted);
 }
+.xref-manager {
+  width: 620px;
+}
+.xref-manager table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+.xref-manager th {
+  text-align: start;
+  font-weight: 400;
+  color: var(--muted);
+}
+.xref-manager th,
+.xref-manager td {
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--rule);
+}
+.xref-manager th:nth-child(2) {
+  width: 90px;
+}
+.xref-manager th:nth-child(4) {
+  width: 120px;
+}
+.xref-manager td.path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.xref-manager tr.dim td:not(:last-child) {
+  color: var(--muted);
+}
 .drafting-settings .modes {
   display: grid;
   grid-template-columns: 1fr 1fr;
