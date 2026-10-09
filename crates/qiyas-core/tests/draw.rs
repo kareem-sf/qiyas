@@ -1352,4 +1352,46 @@ fn hatch_by_click_inside_a_circle_follows_the_circle_not_its_chords() {
     let want = PI * 0.75 * 0.75;
     let rel = (measurement.value - want).abs() / want;
     assert!(rel < 1e-3, "{} vs {want}", measurement.value);
+
+    // Around it, a 3 x 3 square: the circle is an island, taken away as a circle.
+    draw(
+        &mut s,
+        DrawSpec::Rectangle {
+            a: [498.5, 498.5],
+            b: [501.5, 501.5],
+        },
+    );
+    let Boundary::Ring {
+        ring,
+        holes,
+        bulges,
+    } = s.boundary_at([498.7, 498.7], 0.5)
+    else {
+        panic!("a ring");
+    };
+    assert_eq!(holes.len(), 1);
+    let EntityType::Hatch(h) = one(
+        &mut s,
+        DrawSpec::Hatch {
+            boundary_handles: Vec::new(),
+            points: ring,
+            holes,
+            bulges,
+            pattern: HatchPattern::Solid,
+        },
+    ) else {
+        panic!("a hatch");
+    };
+    let Outcome::Measured { measurement } = s
+        .run(Command::MeasureEntity {
+            handle: h.common.handle.value(),
+            chain: Vec::new(),
+        })
+        .unwrap()
+    else {
+        panic!("measured");
+    };
+    let want = 9.0 - PI * 0.75 * 0.75;
+    let rel = (measurement.value - want).abs() / want;
+    assert!(rel < 1e-4, "{} vs {want}", measurement.value);
 }

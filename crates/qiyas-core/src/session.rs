@@ -1358,7 +1358,8 @@ impl Session {
         let xrefs = self.xref_docs();
         let paths = flatten_with(doc, &xrefs, entity, xf, MEASURE_TOL).into_paths();
         let closed: Vec<_> = paths.iter().filter(|p| p.closed).collect();
-        let self_intersecting = closed.iter().any(|p| p.self_intersects());
+        let crossing: Vec<bool> = closed.iter().map(|p| p.self_intersects()).collect();
+        let self_intersecting = crossing.contains(&true);
         let length = (!paths.is_empty()).then(|| {
             exact_length(entity, xf).unwrap_or_else(|| paths.iter().map(|p| p.length()).sum())
         });
@@ -1367,11 +1368,18 @@ impl Session {
         let area = (!closed.is_empty()).then(|| {
             exact.unwrap_or_else(|| match entity {
                 // A hatch's boundary paths fill even-odd: an island is taken away. Each path
-                // exactly when it is a bulged polyline (one outline per path, in order).
+                // exactly when it is a bulged polyline that does not cross itself (one outline
+                // per path, in order).
                 EntityType::Hatch(_) => {
-                    let areas = exact_hatch_areas(entity, xf)
-                        .filter(|a| a.len() == closed.len() && !self_intersecting)
-                        .unwrap_or_else(|| closed.iter().map(|p| p.area()).collect());
+                    let exact = exact_hatch_areas(entity, xf).filter(|a| a.len() == closed.len());
+                    let areas: Vec<f64> = closed
+                        .iter()
+                        .enumerate()
+                        .map(|(i, p)| match &exact {
+                            Some(a) if !crossing[i] => a[i],
+                            _ => p.area(),
+                        })
+                        .collect();
                     let rings: Vec<Vec<[f64; 2]>> =
                         closed.iter().map(|p| p.points.clone()).collect();
                     let depths = ring_nesting_depths(&rings);
