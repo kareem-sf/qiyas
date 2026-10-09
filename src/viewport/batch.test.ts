@@ -19,6 +19,8 @@ import {
   picturesToRelease,
   rangeMatcher,
   type HeldPicture,
+  FILL_BACKGROUND,
+  PATTERN,
   TEXT_BOX,
   unpackImageFlags,
 } from "./batch";
@@ -414,4 +416,47 @@ test("the box of a picture just attached is the one the batch before did not hav
   ]);
   expect(newPictureBounds(b, b)).toBeNull();
   expect(newPictureBounds(b, null)).toBeNull();
+});
+
+/** The bytes `Batch::to_bytes` writes for `fill_sections_match_the_frontend_fixture`
+ *  (crates/qiyas-render/tests/fills.rs): one line (handle 5), one green fill triangle (handle 6)
+ *  and one triangle on the background (handle 7). */
+const FILLS_FROM_RUST = [
+  "42594951020000000000000000000000000000000000000000000000000000400000000000000040",
+  "000000000000f03f000000000000f03f0900000003000000a80000002000000004000000c8000000",
+  "0000000005000000c80000001000000006000000d80000000400000007000000e000000000000000",
+  "08000000e00000001800000009000000f8000000000000000c000000f8000000380000000d000000",
+  "300100004000000005000000000000000500000000000000ffffffff000000000100000000000000",
+  "000080bf000080bf0000803f0000803f0000ff000000000000000000000000000000000000000000",
+  "0000000000000000000080bf000080bf0000803f000080bf0000803f0000803f00ff0000000080bf",
+  "000080bf0000803f0000803f000080bf0000803f0000000106000000000000000600000000000000",
+  "ffffffff00000000010000000000000007000000000000000700000000000000ffffffff01000000",
+  "0100000000000000",
+].join("");
+
+test("parseBatch reads the fill triangles and their ranges the Rust side writes", () => {
+  const b = parseBatch(fromHex(FILLS_FROM_RUST));
+  expect(b.segments.length).toBe(4);
+  expect(b.fills.length).toBe(2);
+  expect(b.fills.at(0)).toEqual({ corners: [-1, -1, 1, -1, 1, 1], color: 0x00ff00 });
+  expect(b.fills.at(1)).toEqual({ corners: [-1, -1, 1, 1, -1, 1], color: FILL_BACKGROUND });
+  expect(b.fillRanges.length).toBe(2);
+  expect([b.fillRanges.at(0), b.fillRanges.at(1)]).toEqual([
+    { top: 6n, entity: 6n, chain: NO_CHAIN, first: 0, count: 1, flags: 0 },
+    { top: 7n, entity: 7n, chain: NO_CHAIN, first: 1, count: 1, flags: 0 },
+  ]);
+  // A batch without them has none.
+  const plain = parseBatch(fromHex(FROM_RUST));
+  expect([plain.fills.length, plain.fillRanges.length]).toEqual([0, 0]);
+  expect(PATTERN).toBe(2);
+});
+
+test("parseBatch rejects fill ranges that do not cover the triangles", () => {
+  const buf = fromHex(FILLS_FROM_RUST);
+  const v = new DataView(buf);
+  // Section table entry 8 is the fill ranges (kind 13); the second range's count sits at +32+24.
+  const entry = 60 + 12 * 8;
+  expect(v.getUint32(entry, true)).toBe(13);
+  v.setUint32(v.getUint32(entry + 4, true) + 32 + 24, 2, true);
+  expect(() => parseBatch(buf)).toThrow("section 13 too short");
 });

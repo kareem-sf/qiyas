@@ -1,7 +1,8 @@
 /**
  * WebGL2 renderer for a `Batch`: its underlay pictures (one RGBA texture per picture id), then its
- * line segments, then its text as glyph quads textured from the glyph atlas (one R8 texture per
- * page; the texel is the glyph's coverage, drawn as alpha).
+ * fill triangles (wipeouts in the background colour last), then its line segments, then its text as
+ * glyph quads textured from the glyph atlas (one R8 texture per page; the texel is the glyph's
+ * coverage, drawn as alpha).
  *
  * Precision: drawings can sit far from (0, 0) (survey grids in metres or millimetres), where f32
  * keeps only a few useful digits. So no absolute coordinate ever reaches the GPU. The segments arrive
@@ -10,6 +11,7 @@
  * small offset is passed to the shader as f32.
  */
 import {
+  FILL_BACKGROUND,
   imageUniforms,
   matchingRanges,
   TEXT_BOX,
@@ -289,6 +291,29 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
   gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, highlightIndices);
   gl.bindVertexArray(null);
 
+  // Fill triangles with their colours, and the background ones (positions only, u_color gives the
+  // background), with the line program.
+  const fillVao = gl.createVertexArray();
+  const fillPositions = gl.createBuffer();
+  const fillColors = gl.createBuffer();
+  gl.bindVertexArray(fillVao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, fillPositions);
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, fillColors);
+  gl.enableVertexAttribArray(aColor);
+  gl.vertexAttribPointer(aColor, 4, gl.UNSIGNED_BYTE, true, 0, 0);
+  gl.bindVertexArray(null);
+  const backgroundVao = gl.createVertexArray();
+  const backgroundPositions = gl.createBuffer();
+  gl.bindVertexArray(backgroundVao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, backgroundPositions);
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+  gl.bindVertexArray(null);
+  let fillCount = 0;
+  let backgroundCount = 0;
+
   // The overlay has positions only; u_color gives its colour.
   const overlayVao = gl.createVertexArray();
   const overlayPositions = gl.createBuffer();
@@ -418,6 +443,44 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
     gl.bufferData(gl.ARRAY_BUFFER, rgba, gl.STATIC_DRAW);
   }
 
+  /** The fill triangles: coloured ones and background ones apart, three vertices each. */
+  function uploadFills(b: Batch | null) {
+    const n = b?.fills.length ?? 0;
+    let background = 0;
+    for (let i = 0; i < n; i++) if (b!.fills.color(i) & FILL_BACKGROUND) background++;
+    const colored = new Float32Array(6 * (n - background));
+    const rgba = new Uint8Array(12 * (n - background));
+    const behind = new Float32Array(6 * background);
+    let [c, w] = [0, 0];
+    for (let i = 0; i < n; i++) {
+      const f = b!.fills;
+      const color = f.color(i);
+      const target = color & FILL_BACKGROUND ? behind : colored;
+      const at = 6 * (color & FILL_BACKGROUND ? w++ : c);
+      for (let k = 0; k < 3; k++) {
+        target[at + 2 * k] = f.x(i, k);
+        target[at + 2 * k + 1] = f.y(i, k);
+      }
+      if (color & FILL_BACKGROUND) continue;
+      for (let k = 0; k < 3; k++) {
+        const o = 12 * c + 4 * k;
+        rgba[o] = (color >> 16) & 255;
+        rgba[o + 1] = (color >> 8) & 255;
+        rgba[o + 2] = color & 255;
+        rgba[o + 3] = 255;
+      }
+      c++;
+    }
+    fillCount = 3 * c;
+    backgroundCount = 3 * w;
+    gl.bindBuffer(gl.ARRAY_BUFFER, fillPositions);
+    gl.bufferData(gl.ARRAY_BUFFER, colored, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, fillColors);
+    gl.bufferData(gl.ARRAY_BUFFER, rgba, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, backgroundPositions);
+    gl.bufferData(gl.ARRAY_BUFFER, behind, gl.STATIC_DRAW);
+  }
+
   function uploadText(b: Batch | null) {
     const n = b?.quads.length ?? 0;
     const vertices = new Float32Array(16 * n);
@@ -497,7 +560,10 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
     setBatch(b) {
       const sameLines = !!b && !!batch && b.segments === batch.segments;
       batch = b;
-      if (!sameLines) uploadLines(b);
+      if (!sameLines) {
+        uploadLines(b);
+        uploadFills(b);
+      }
       uploadText(b);
       uploadImages(b);
       uploadHighlight();
@@ -645,7 +711,19 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       gl.uniform3f(uInk, ...INK);
       gl.uniform3f(uPaper, ...PAPER);
       gl.uniform2f(uOffset, 0, 0);
+      // Fills under the lines; wipeouts over the other fills, in the background colour.
       gl.uniform4f(uColor, 0, 0, 0, 0);
+      if (fillCount > 0) {
+        gl.bindVertexArray(fillVao);
+        gl.drawArrays(gl.TRIANGLES, 0, fillCount);
+      }
+      if (backgroundCount > 0) {
+        gl.bindVertexArray(backgroundVao);
+        gl.uniform4f(uColor, ...(light ? PAPER : INK), 1);
+        gl.drawArrays(gl.TRIANGLES, 0, backgroundCount);
+        gl.uniform4f(uColor, 0, 0, 0, 0);
+      }
+      gl.bindVertexArray(vao);
       gl.drawArrays(gl.LINES, 0, vertexCount);
 
       // The text over the lines, its coverage blended onto them.
@@ -717,6 +795,11 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       gl.deleteVertexArray(vao);
       gl.deleteBuffer(overlayPositions);
       gl.deleteVertexArray(overlayVao);
+      gl.deleteBuffer(fillPositions);
+      gl.deleteBuffer(fillColors);
+      gl.deleteVertexArray(fillVao);
+      gl.deleteBuffer(backgroundPositions);
+      gl.deleteVertexArray(backgroundVao);
       gl.deleteProgram(program);
       gl.deleteBuffer(textVertices);
       gl.deleteBuffer(textColors);

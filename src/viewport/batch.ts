@@ -17,6 +17,8 @@ export type Range = {
 
 /** `Range.flags`: the segments are a text's box (its glyph quads draw it). */
 export const TEXT_BOX = 1;
+/** `Range.flags`: the segments are a hatch's pattern lines. */
+export const PATTERN = 2;
 
 /** The ranges section read in place: a big drawing has hundreds of thousands of ranges, too many
  *  to turn into objects. Range `i` is the 32-byte record `i`. */
@@ -155,6 +157,36 @@ export class ImageQuads {
   }
 }
 
+/** `Fills.color` bit: fill with the background colour (a wipeout), not the RGB below it. */
+export const FILL_BACKGROUND = 0x01000000;
+
+/** The fill triangles section read in place; triangle `i` is the 28-byte record `i`: corners
+ *  `x0 y0 x1 y1 x2 y2` relative to the batch origin, then `0xRRGGBB` or `FILL_BACKGROUND`. */
+export class Fills {
+  /** The same bytes as f32 and u32 (7 per record). */
+  constructor(
+    readonly f32: Float32Array,
+    readonly u32: Uint32Array,
+  ) {}
+
+  get length() {
+    return this.f32.length / 7;
+  }
+  /** Corner `k` (0 to 2) of triangle `i`. */
+  x(i: number, k: number) {
+    return this.f32[7 * i + 2 * k];
+  }
+  y(i: number, k: number) {
+    return this.f32[7 * i + 2 * k + 1];
+  }
+  color(i: number) {
+    return this.u32[7 * i + 6];
+  }
+  at(i: number) {
+    return { corners: Array.from(this.f32.subarray(7 * i, 7 * i + 6)), color: this.color(i) };
+  }
+}
+
 /** The pixels image quads need: picture `id` as of `version`. */
 export type ImageEntry = { id: number; version: number };
 
@@ -184,6 +216,10 @@ export type Batch = {
   images: ImageQuads;
   /** One per picture id the image quads use. */
   imageTable: ImageEntry[];
+  /** Filled triangles (solid hatches, 2D solids, wipeouts), drawn under the lines. */
+  fills: Fills;
+  /** One per filled entity, over `fills`, in triangle order. */
+  fillRanges: Ranges;
 };
 
 /** Something drawn, to highlight or frame: an entity on the sheet by its handle (`chain` empty), or
@@ -204,12 +240,15 @@ const SECTION = {
   textRanges: 9,
   images: 10,
   imageTable: 11,
+  fills: 12,
+  fillRanges: 13,
 };
 
 /**
  * Decodes layout version 2 documented on `Batch::to_bytes` (crates/qiyas-render/src/batch.rs): a
  * header, then a table of sections found by kind; unknown kinds are skipped, and the text sections
- * (7, 8, 9) and the image sections (10, 11) may be left out (no texts, no underlays). The typed views share `buf` (every section is 8-byte
+ * (7, 8, 9), the image sections (10, 11) and the fill sections (12, 13) may be left out (no texts,
+ * no underlays, no fills). The typed views share `buf` (every section is 8-byte
  * aligned) and read in platform byte order, which is little-endian on every desktop platform Qiyas
  * targets.
  */
@@ -271,7 +310,8 @@ export function parseBatch(buf: ArrayBuffer): Batch {
     for (let i = 0; i < ranges.length; i++) {
       const chain = ranges.chain(i);
       if (ranges.first(i) !== covered || (chain !== NO_CHAIN && chain >= chains.length)) {
-        const what = kind === SECTION.ranges ? "segments" : "quads";
+        const what =
+          kind === SECTION.ranges ? "segments" : kind === SECTION.fillRanges ? "triangles" : "quads";
         throw new Error(`Render batch section ${kind} does not match the ${what}`);
       }
       covered += ranges.count(i);
@@ -316,6 +356,15 @@ export function parseBatch(buf: ArrayBuffer): Batch {
     }
   }
 
+  // The fill sections: absent means no fills.
+  const fl = sections.has(SECTION.fills) ? section(SECTION.fills, 28) : empty;
+  const fills = new Fills(
+    new Float32Array(buf, fl.at, fl.length / 4),
+    new Uint32Array(buf, fl.at, fl.length / 4),
+  );
+  const fr = sections.has(SECTION.fillRanges) ? section(SECTION.fillRanges, 32) : empty;
+  const fillRanges = readRanges(SECTION.fillRanges, fr, fills.length);
+
   return {
     bounds: [
       [f(0), f(1)],
@@ -333,6 +382,8 @@ export function parseBatch(buf: ArrayBuffer): Batch {
     pxPerUnit,
     images,
     imageTable,
+    fills,
+    fillRanges,
   };
 }
 
