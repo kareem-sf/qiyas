@@ -383,7 +383,7 @@ test("a drag zoom after one typed corner drops that corner", () => {
 test("draw tools run each finished draw and end a polyline on a double click", () => {
   const line = run("line", [click([0, 0], 0), click([3, 4], 1000)]);
   expect(line.pendingCommand).toEqual({ type: "draw", kind: "line", a: [0, 0], b: [3, 4] });
-  expect(line.hint).toBe("draw.prompt.nextPoint");
+  expect(line.hint).toBe("draw.prompt.lineNext");
 
   // The second click of a double click ends the polyline without a doubled point.
   const pline = run("polyline", [click([0, 0], 0), click([2, 0], 1000), click([2, 2], 2000), click([2, 2], 2100)]);
@@ -417,7 +417,23 @@ test("draw tools run each finished draw and end a polyline on a double click", (
   ]);
   expect(ortho.pendingCommand).toEqual({ type: "draw", kind: "line", a: [0, 0], b: [5, 0] });
 
-  // Esc drops what was placed.
+  // Esc keeps the polyline drawn so far, as AutoCAD does; a lone point is dropped.
+  const kept = toolReducer(run("polyline", [click([0, 0], 0), click([3, 0], 1000)]), {
+    type: "escape",
+  });
+  expect(kept.pendingCommand).toMatchObject({ type: "draw", kind: "polyline", closed: false });
+  expect(kept.draw?.points).toEqual([]);
   const dropped = toolReducer(run("polyline", [click([0, 0], 0)]), { type: "escape" });
   expect(dropped.draw?.points).toEqual([]);
+  expect(dropped.pendingCommand).toBeNull();
+
+  // The second click of a double click places no second point or hatch.
+  const points = run("point", [click([1, 1], 0), click([1, 1], 100)]);
+  expect(points.pendingCommand).toBeNull();
+  expect(run("point", [click([1, 1], 0), click([1, 1], 1000)]).pendingCommand).toMatchObject({
+    kind: "point",
+  });
+  const hatch = run("hatch", [click([1, 1], 0)]);
+  expect(hatch.draw?.seek).toEqual([1, 1]);
+  expect(toolReducer(hatch, click([1, 1], 100)).draw?.seek).toEqual([1, 1]);
 });

@@ -1,7 +1,7 @@
 /** The draw tools: which points, typed numbers and options become which draw. Pure state machines
  *  with their prompts (i18n keys); `useTool` feeds them clicks and typed input and runs each
  *  finished draw (`spec`) as a `draw` command. */
-import type { DrawSpec, HatchPattern } from "../api";
+import type { Boundary, DrawSpec, HatchPattern } from "../api";
 import type { Point } from "../viewport/camera";
 
 /** The tools with a ribbon button; the other draws (polygon, donut, ray…) are typed whole on the
@@ -34,16 +34,24 @@ export type DrawState = {
   /** `circle`: "centre", "2P" or "3P"; `arc`: "3P" or "C"; `polyline`: "L" or "A" (the next
    *  segment straight or an arc). */
   mode: string;
-  /** `hatch`: the fill of the next hatch. */
-  pattern: HatchPattern;
+  /** `hatch`: the next hatch's pattern (upper case, SOLID for a fill), its angle in degrees and
+   *  its scale (null: the drawing's default, from its units). */
+  patternName: string;
+  patternAngle: number;
+  patternScale: number | null;
+  /** `hatch`: the option typed whose number comes next ("S" scale, "A" angle). */
+  asking: "S" | "A" | null;
   /** `revcloud`: the arc length typed; null works it out from the outline. */
   arcLen: number | null;
   /** Set by the input that finished a draw; the hook runs it. */
   spec: DrawSpec | null;
   /** `hatch`: the point clicked, waiting for the ring around it (a `ring` input). */
   seek: Point | null;
-  /** An i18n key for the status bar and the command line. */
+  /** An i18n key for the status bar and the command line, and what it is filled in with. */
   hint: string;
+  hintArgs: Record<string, string> | null;
+  /** `line`: set by U; the hook undoes the line drawn last. */
+  undo: boolean;
 };
 
 export type DrawInput =
@@ -54,8 +62,8 @@ export type DrawInput =
   | { type: "option"; option: string }
   /** Enter, or a double click. */
   | { type: "finish" }
-  /** The ring found around `seek`, or null when there is none. */
-  | { type: "ring"; ring: Point[] | null };
+  /** What was found around `seek`, and the pattern scale the drawing's units give. */
+  | { type: "ring"; found: Boundary; scale: number };
 
 /** The hatch patterns the command line offers besides SOLID, ANSI31 and ANSI37 (the core's table). */
 const TABLE = ["LINE", "NET", "DASH", "BRICK"];
@@ -75,22 +83,46 @@ const FIRST: Record<DrawKind, string> = {
 };
 
 export function initialDrawState(kind: DrawKind): DrawState {
-  return {
+  const s: DrawState = {
     kind,
     points: [],
     bulges: [],
     mode: kind === "circle" ? "centre" : kind === "arc" ? "3P" : "L",
-    pattern: "solid",
+    patternName: "SOLID",
+    patternAngle: 0,
+    patternScale: null,
+    asking: null,
     arcLen: null,
     spec: null,
     seek: null,
     hint: FIRST[kind],
+    hintArgs: null,
+    undo: false,
   };
+  return kind === "hatch" ? hatchPrompt(s) : s;
+}
+
+/** The hatch tool's prompt, naming the pattern it hatches with. */
+function hatchPrompt(s: DrawState, hint = FIRST.hatch): DrawState {
+  const parts = [s.patternName];
+  if (s.patternName !== "SOLID") {
+    if (s.patternScale !== null) parts.push(`S ${s.patternScale}`);
+    if (s.patternAngle !== 0) parts.push(`A ${s.patternAngle}°`);
+  }
+  return { ...s, hint, hintArgs: { pattern: parts.join(", ") } };
+}
+
+/** The pattern the hatch tool's state names, `scale` when it has none of its own. */
+function patternOf(s: DrawState, scale: number): HatchPattern {
+  if (s.patternName === "SOLID") return "solid";
+  return { custom: { name: s.patternName, angle: s.patternAngle, scale: s.patternScale ?? scale } };
 }
 
 /** The option words the command line takes now. */
 export function drawOptions(s: DrawState): string[] {
   switch (s.kind) {
+    case "line":
+      return s.points.length >= 3 ? ["C", "U"] : s.points.length === 2 ? ["U"] : [];
     case "polyline":
       return s.points.length >= 2 ? ["A", "L", "C", "U"] : s.points.length === 1 ? ["A", "L", "U"] : [];
     case "circle":
@@ -98,20 +130,22 @@ export function drawOptions(s: DrawState): string[] {
     case "arc":
       return s.points.length === 0 ? ["C"] : [];
     case "hatch":
-      return ["SOLID", "ANSI31", "ANSI37", ...TABLE];
+      return ["SOLID", "ANSI31", "ANSI37", ...TABLE, "S", "A"];
     default:
       return [];
   }
 }
 
-/** The tool takes a typed distance now (a circle's radius, an ellipse's other axis, a cloud's arc
- *  length before its first point). */
-export function takesNumber(s: DrawState): boolean {
-  return (
+/** The tool takes a typed number now: "distance" (a circle's radius, an ellipse's other axis, a
+ *  cloud's arc length before its first point, a hatch's scale), "angle" (a hatch's, in degrees,
+ *  any sign) or false. */
+export function takesNumber(s: DrawState): "distance" | "angle" | false {
+  if (s.kind === "hatch" && s.asking) return s.asking === "A" ? "angle" : "distance";
+  const distance =
     (s.kind === "circle" && s.mode === "centre" && s.points.length === 1) ||
     (s.kind === "ellipse" && s.points.length === 2) ||
-    (s.kind === "revcloud" && s.points.length === 0)
-  );
+    (s.kind === "revcloud" && s.points.length === 0);
+  return distance ? "distance" : false;
 }
 
 const same = (a: Point, b: Point) => a[0] === b[0] && a[1] === b[1];
@@ -149,12 +183,17 @@ function tangentBulge(dir: Point, a: Point, b: Point): number {
   return Math.tan(angle / 2);
 }
 
-const done = (s: DrawState, spec: DrawSpec): DrawState => ({
-  ...initialDrawState(s.kind),
-  pattern: s.pattern,
-  arcLen: s.arcLen,
-  spec,
-});
+const done = (s: DrawState, spec: DrawSpec): DrawState => {
+  const next: DrawState = {
+    ...initialDrawState(s.kind),
+    patternName: s.patternName,
+    patternAngle: s.patternAngle,
+    patternScale: s.patternScale,
+    arcLen: s.arcLen,
+    spec,
+  };
+  return s.kind === "hatch" ? hatchPrompt(next) : next;
+};
 
 /** The outline of a closed tool's points, its length. */
 const perimeter = (points: Point[]) =>
@@ -187,9 +226,10 @@ function addPoint(s: DrawState, q: Point): DrawState {
   const last = s.points[s.points.length - 1];
   switch (s.kind) {
     case "line":
+      // The whole chain is kept, for C (close) and U (undo).
       if (!last) return { ...s, points: p, hint: "draw.prompt.nextPoint" };
       if (same(last, q)) return s;
-      return { ...s, points: [q], spec: { kind: "line", a: last, b: q } };
+      return { ...s, points: p, hint: "draw.prompt.lineNext", spec: { kind: "line", a: last, b: q } };
     case "polyline": {
       if (last && same(last, q)) return s;
       const bulges = [...s.bulges];
@@ -251,7 +291,7 @@ function addPoint(s: DrawState, q: Point): DrawState {
     case "point":
       return { ...s, spec: { kind: "point", p: q } };
     case "hatch":
-      return { ...s, seek: q, hint: "draw.prompt.hatchSeeking" };
+      return { ...s, seek: q, asking: null, hint: "draw.prompt.hatchSeeking", hintArgs: null };
     case "spline":
     case "revcloud":
     case "wipeout":
@@ -279,6 +319,16 @@ function ellipseAxis(s: DrawState, other: number): DrawState {
 function option(s: DrawState, word: string): DrawState {
   if (!drawOptions(s).includes(word)) return s;
   switch (s.kind) {
+    case "line": {
+      const p = s.points;
+      if (word === "C") {
+        // The closing segment, then a new chain.
+        return { ...initialDrawState(s.kind), spec: { kind: "line", a: p[p.length - 1], b: p[0] } };
+      }
+      // U: the last segment goes (the hook undoes it) and its start is the point to go on from.
+      const points = p.slice(0, -1);
+      return { ...s, points, undo: true, hint: points.length > 1 ? "draw.prompt.lineNext" : "draw.prompt.nextPoint" };
+    }
     case "polyline": {
       if (word === "A" || word === "L") return { ...s, mode: word };
       if (word === "U") {
@@ -297,46 +347,55 @@ function option(s: DrawState, word: string): DrawState {
       return { ...s, mode: word, hint: "draw.prompt.firstPoint" };
     case "arc":
       return { ...s, mode: word, hint: "draw.prompt.arcCentre" };
-    case "hatch": {
-      const pattern: HatchPattern =
-        word === "SOLID"
-          ? "solid"
-          : word === "ANSI31"
-            ? "ansi31"
-            : word === "ANSI37"
-              ? "ansi37"
-              : { custom: { name: word, angle: 0, scale: 1 } };
-      return { ...s, pattern };
-    }
+    case "hatch":
+      if (word === "S" || word === "A") {
+        return { ...s, asking: word, hint: word === "S" ? "draw.prompt.hatchScale" : "draw.prompt.hatchAngle", hintArgs: null };
+      }
+      return hatchPrompt({ ...s, patternName: word, asking: null });
     default:
       return s;
   }
 }
 
 export function drawReducer(state: DrawState, input: DrawInput): DrawState {
-  // A finished draw is pending for one state only: the hook sees it once.
-  const s = { ...state, spec: null };
+  // A finished draw (or an undo) is pending for one state only: the hook sees it once.
+  const s = { ...state, spec: null, undo: false };
   switch (input.type) {
     case "point":
       // A hatch waits for its ring before the next click.
       if (s.seek) return s;
       return addPoint(s, input.p);
-    case "number":
-      if (!(input.value > 0) || !Number.isFinite(input.value) || !takesNumber(s)) return s;
+    case "number": {
+      const takes = takesNumber(s);
+      if (!Number.isFinite(input.value) || !takes || (takes === "distance" && !(input.value > 0))) {
+        return s;
+      }
+      if (s.kind === "hatch") {
+        const typed = s.asking === "A" ? { patternAngle: input.value } : { patternScale: input.value };
+        return hatchPrompt({ ...s, ...typed, asking: null });
+      }
       if (s.kind === "circle") return circleRadius(s, input.value);
       if (s.kind === "ellipse") return ellipseAxis(s, input.value);
       return { ...s, arcLen: input.value };
+    }
     case "option":
       return option(s, input.option);
     case "finish":
       return finishMany(s);
     case "ring": {
       if (!s.seek) return s;
-      if (!input.ring || input.ring.length < 3) return { ...s, seek: null, hint: "draw.prompt.noBoundary" };
-      return {
-        ...done(s, { kind: "hatch", boundary_handles: [], points: input.ring, pattern: s.pattern }),
-        hint: FIRST.hatch,
-      };
+      const found = input.found;
+      if (found.found !== "ring" || found.ring.length < 3) {
+        const hint = found.found === "too_dense" ? "draw.prompt.zoomIn" : "draw.prompt.noBoundary";
+        return { ...s, seek: null, hint, hintArgs: null };
+      }
+      return done(s, {
+        kind: "hatch",
+        boundary_handles: [],
+        points: found.ring,
+        holes: found.holes,
+        pattern: patternOf(s, input.scale),
+      });
     }
   }
 }

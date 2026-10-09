@@ -353,13 +353,20 @@ export type Drafting = {
   precision: number;
 };
 
+/** What `boundaryAt` finds (`qiyas_core::Boundary`): the ring around the point (counter-clockwise)
+ *  and its islands, no closed area, or too much line work there to look through (zoom in). */
+export type Boundary =
+  | { found: "ring"; ring: [number, number][]; holes: [number, number][][] }
+  | { found: "none" }
+  | { found: "too_dense" };
+
+/** The closed area around (x, y) the drawn lines make, for a hatch: looked for `start` drawing
+ *  units around it first, then 4 times as far each time until one fits. */
+export const boundaryAt = (x: number, y: number, start: number) =>
+  invoke<Boundary>("boundary_at", { x, y, start });
+
 /** The object snap within `tol` drawing units of (x, y) with the drawing's snap modes; `from` is the
  *  previous point, for perpendicular snaps. Null when there is none or snaps are off. */
-/** The ring around (x, y) that the drawn lines within `radius` close (counter-clockwise), for a
- *  hatch; null when (x, y) is inside no closed area. */
-export const boundaryAt = (x: number, y: number, radius: number) =>
-  invoke<[number, number][] | null>("boundary_at", { x, y, radius });
-
 export const snap = (x: number, y: number, tol: number, from: [number, number] | null = null) =>
   invoke<Snap | null>("snap", { x, y, tol, fromX: from?.[0] ?? null, fromY: from?.[1] ?? null });
 
@@ -509,8 +516,15 @@ export type DrawSpec =
   | { kind: "xline"; origin: P; dir: P }
   | { kind: "revcloud"; points: P[]; arc_len: number }
   | { kind: "wipeout"; points: P[] }
-  /** Inside the closed entities `boundary_handles` or the ring `points`: one of the two. */
-  | { kind: "hatch"; boundary_handles: number[]; points: P[]; pattern: HatchPattern }
+  /** Inside the closed entities `boundary_handles` or the ring `points` (less the islands
+   *  `holes`): one of the two. */
+  | {
+      kind: "hatch";
+      boundary_handles: number[];
+      points: P[];
+      holes?: P[][];
+      pattern: HatchPattern;
+    }
   | { kind: "solid2d"; points: P[] }
   | { kind: "trace"; points: P[]; width: number }
   | { kind: "mline"; points: P[]; style: string | null; scale: number | null }

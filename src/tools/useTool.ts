@@ -2,7 +2,7 @@
  *  (the draw tools' in `drawTools`); the hook does the async picking around it and hands each
  *  finished command to the app. */
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
-import type { Command, Drafting, EntityInfo, Picked, Snap, SnapKind } from "../api";
+import type { Boundary, Command, Drafting, EntityInfo, Picked, Snap, SnapKind } from "../api";
 import type { Target } from "../viewport/batch";
 import type { Bounds, Point } from "../viewport/camera";
 import { markerSegments } from "../viewport/snapMarker";
@@ -126,7 +126,7 @@ function drawStep(s: ToolState, input: DrawInput): ToolState {
   if (!s.draw) return s;
   const draw = drawReducer(s.draw, input);
   const pendingCommand: Command | null = draw.spec ? { type: "draw", ...draw.spec } : null;
-  return { ...s, draw, hint: draw.hint, hintArgs: null, pendingCommand };
+  return { ...s, draw, hint: draw.hint, hintArgs: draw.hintArgs, pendingCommand };
 }
 
 /** The last point a draw tool placed. */
@@ -180,6 +180,10 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
     case "draw":
       return drawStep(s, event.input);
     case "escape":
+      // Esc keeps a polyline drawn so far, as AutoCAD does.
+      if (s.draw?.kind === "polyline" && s.draw.points.length >= 2) {
+        return { ...finish(s), hint: promptOf(s.tool), hintArgs: null };
+      }
       return initialToolState(s.tool);
     case "finish":
       return finish(s);
@@ -203,6 +207,8 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
       const clicked = { ...s, lastClick: { screen: event.screen, time: event.time } };
       if (s.draw) {
         if (double && MANY_POINTS.has(s.draw.kind)) return finish(s);
+        // The second click of a double click places no second point or hatch.
+        if (double && (s.draw.kind === "point" || s.draw.kind === "hatch")) return clicked;
         const prev = lastDrawPoint(s);
         const point = event.snapped ? event.world : constrain(prev, event.world, event.track ?? NO_TRACK);
         return drawStep(clicked, { type: "point", p: point });
@@ -294,8 +300,12 @@ export type ToolApi = {
   run(cmd: Command): void;
   /** Shows the window `zoomWindow` was given by two typed corners. */
   zoomTo(bounds: Bounds): void;
-  /** The ring around `p` the drawn lines close, for a hatch (null when none). */
-  boundary(p: Point): Promise<Point[] | null>;
+  /** The closed area around `p` the drawn lines make, for a hatch. */
+  boundary(p: Point): Promise<Boundary>;
+  /** A hatch pattern's scale when none is typed: 0.025 metres per drawing unit's worth. */
+  hatchScale(): number;
+  /** Takes back the last change (the line tool's U). */
+  undo(): void;
   onError(e: unknown): void;
 };
 
@@ -354,17 +364,23 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
     if (state.pendingZoom) api.zoomTo(state.pendingZoom);
   }, [state.pendingZoom]);
 
+  useEffect(() => {
+    if (state.draw?.undo) api.undo();
+  }, [state.draw]);
+
   // A hatch's click: find the ring around it, then hand it back.
   const seek = state.draw?.seek ?? null;
   useEffect(() => {
     if (!seek) return;
     let gone = false;
+    const ring = (found: Boundary) =>
+      dispatch({ type: "draw", input: { type: "ring", found, scale: api.hatchScale() } });
     api.boundary(seek).then(
-      (ring) => !gone && dispatch({ type: "draw", input: { type: "ring", ring } }),
+      (found) => !gone && ring(found),
       (e) => {
         if (gone) return;
         api.onError(e);
-        dispatch({ type: "draw", input: { type: "ring", ring: null } });
+        ring({ found: "none" });
       },
     );
     return () => {

@@ -48,12 +48,32 @@ test("line repeats from the last point until Esc or Enter", () => {
     { kind: "line", a: [1, 0], b: [1, 1] },
   ]);
   expect(all[0].hint).toBe("draw.prompt.nextPoint");
+  expect(all[1].hint).toBe("draw.prompt.lineNext");
   // Enter ends the chain: the next click starts a new one.
   expect(all[3].points).toEqual([]);
   expect(all[3].hint).toBe("draw.prompt.firstPoint");
   expect(all[4].points).toEqual([[5, 5]]);
   // The same point twice draws nothing.
   expect(specs("line", [pt([0, 0]), pt([0, 0])])).toEqual([]);
+});
+
+test("line closes back to its first point with C, and U takes back the last segment", () => {
+  const closed = steps("line", [pt([0, 0]), pt([4, 0]), pt([4, 3]), opt("C")]);
+  expect(closed[3].spec).toEqual({ kind: "line", a: [4, 3], b: [0, 0] });
+  expect(closed[3].points).toEqual([]);
+  // C is no circle here, and wants two segments first.
+  expect(drawOptions(closed[1])).toEqual(["U"]);
+  expect(drawOptions(closed[2])).toEqual(["C", "U"]);
+  // U asks for the last line to be undone and goes on from its start.
+  const undone = steps("line", [pt([0, 0]), pt([4, 0]), pt([4, 3]), opt("U"), pt([9, 9])]);
+  expect(undone[3].undo).toBe(true);
+  expect(undone[3].spec).toBeNull();
+  expect(undone[3].points).toEqual([
+    [0, 0],
+    [4, 0],
+  ]);
+  expect(undone[4].undo).toBe(false);
+  expect(undone[4].spec).toEqual({ kind: "line", a: [4, 0], b: [9, 9] });
 });
 
 test("polyline takes arcs, closes, and takes back its last point", () => {
@@ -115,7 +135,7 @@ test("circle by centre and radius, two points or three points", () => {
   expect(specs("circle", [pt([1, 1]), pt([4, 5])])).toEqual([{ kind: "circle", centre: [1, 1], radius: 5 }]);
   // A typed radius.
   const typed = steps("circle", [pt([1, 1])]);
-  expect(takesNumber(typed[0])).toBe(true);
+  expect(takesNumber(typed[0])).toBe("distance");
   expect(specs("circle", [pt([1, 1]), num(2.5)])).toEqual([{ kind: "circle", centre: [1, 1], radius: 2.5 }]);
   expect(specs("circle", [opt("2P"), pt([0, 0]), pt([4, 0])])).toEqual([
     { kind: "circle", centre: [2, 0], radius: 2 },
@@ -196,27 +216,64 @@ test("point places one per click", () => {
   ]);
 });
 
-test("hatch asks for the ring around the click, then fills it with the chosen pattern", () => {
+test("hatch asks for the area around the click, then fills it with the chosen pattern", () => {
   const ring: Point[] = [
     [0, 0],
     [4, 0],
     [4, 3],
   ];
-  const all = steps("hatch", [opt("ANSI31"), pt([1, 1]), { type: "ring", ring }]);
+  const holes: Point[][] = [
+    [
+      [1, 1],
+      [2, 1],
+      [2, 2],
+    ],
+  ];
+  const found = (scale = 25): DrawInput => ({ type: "ring", found: { found: "ring", ring, holes }, scale });
+  const all = steps("hatch", [opt("ANSI31"), pt([1, 1]), found()]);
+  // The prompt names the pattern.
+  expect(all[0].hint).toBe("draw.prompt.hatch");
+  expect(all[0].hintArgs).toEqual({ pattern: "ANSI31" });
   expect(all[1].seek).toEqual([1, 1]);
   expect(all[1].spec).toBeNull();
   expect(all[2].seek).toBeNull();
-  expect(all[2].spec).toEqual({ kind: "hatch", boundary_handles: [], points: ring, pattern: "ansi31" });
-  // Solid by default; a pattern of the table by name.
-  expect(specs("hatch", [pt([1, 1]), { type: "ring", ring }])[0]).toMatchObject({ pattern: "solid" });
-  expect(specs("hatch", [opt("NET"), pt([1, 1]), { type: "ring", ring }])[0]).toMatchObject({
-    pattern: { custom: { name: "NET", angle: 0, scale: 1 } },
+  // The drawing's scale (25 in millimetres) unless one is typed; the islands stay empty.
+  expect(all[2].spec).toEqual({
+    kind: "hatch",
+    boundary_handles: [],
+    points: ring,
+    holes,
+    pattern: { custom: { name: "ANSI31", angle: 0, scale: 25 } },
   });
-  // No ring: it says so and waits for another click.
-  const none = steps("hatch", [pt([1, 1]), { type: "ring", ring: null }]);
+  expect(all[2].hintArgs).toEqual({ pattern: "ANSI31" });
+  // Solid by default.
+  expect(initialDrawState("hatch").hintArgs).toEqual({ pattern: "SOLID" });
+  expect(specs("hatch", [pt([1, 1]), found()])[0]).toMatchObject({ pattern: "solid" });
+  // S and A take the number typed next: a scale above 0, an angle of any sign.
+  const typed = steps("hatch", [
+    opt("NET"),
+    opt("S"),
+    num(0.5),
+    opt("A"),
+    num(-30),
+    pt([1, 1]),
+    found(0.025),
+  ]);
+  expect(takesNumber(typed[1])).toBe("distance");
+  expect(takesNumber(typed[3])).toBe("angle");
+  expect(typed[4].hintArgs).toEqual({ pattern: "NET, S 0.5, A -30°" });
+  expect(typed[6].spec).toMatchObject({ pattern: { custom: { name: "NET", angle: -30, scale: 0.5 } } });
+  // Kept for the next hatch.
+  expect(typed[6].patternScale).toBe(0.5);
+  // No area, or too much line work: it says so and waits for another click.
+  const none = steps("hatch", [pt([1, 1]), { type: "ring", found: { found: "none" }, scale: 1 }]);
   expect(none[1].spec).toBeNull();
   expect(none[1].hint).toBe("draw.prompt.noBoundary");
-  expect(drawOptions(initialDrawState("hatch"))).toContain("ANSI37");
+  const dense = steps("hatch", [pt([1, 1]), { type: "ring", found: { found: "too_dense" }, scale: 1 }]);
+  expect(dense[1].hint).toBe("draw.prompt.zoomIn");
+  expect(drawOptions(initialDrawState("hatch"))).toEqual(
+    expect.arrayContaining(["ANSI37", "S", "A"]),
+  );
 });
 
 test("previews follow the cursor", () => {

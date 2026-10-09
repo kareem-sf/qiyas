@@ -188,6 +188,12 @@ test("a draw tool's options and typed distances", () => {
   expect(parse("٢٫٥", { ...at("point"), numberToo: true })).toEqual({ type: "distance", value: 2.5 });
   expect(parse("2.5", at("point"))).toEqual({ type: "error", key: "cmd.badPoint" });
   expect(parse("-1", { ...at("point"), numberToo: true })).toEqual({ type: "error", key: "cmd.badDistance" });
+  // An angle may be 0 or below.
+  expect(parse("-30", { ...at("point"), numberToo: "angle" })).toEqual({ type: "distance", value: -30 });
+  expect(parse("0", { ...at("point"), numberToo: "angle" })).toEqual({ type: "distance", value: 0 });
+  // The line tool's C closes and U undoes: options win over the CIRCLE and UNDO aliases.
+  expect(parse("c", { ...at("point"), options: ["C", "U"] })).toEqual({ type: "option", option: "C" });
+  expect(parse("u", { ...at("point"), options: ["C", "U"] })).toEqual({ type: "option", option: "U" });
 });
 
 test("the other draws are typed whole", () => {

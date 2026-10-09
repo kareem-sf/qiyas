@@ -22,8 +22,9 @@ export type ParseState = {
   aliases: Record<string, string>;
   /** Where a point is expected, the option words a draw tool takes now (upper case). */
   options?: string[];
-  /** Where a point is expected, a lone number is a distance (a radius, an axis, an arc length). */
-  numberToo?: boolean;
+  /** Where a point is expected, a lone number is a distance (a radius, an axis, an arc length,
+   *  above 0) or, with "angle", an angle in degrees (any sign). */
+  numberToo?: boolean | "distance" | "angle";
 };
 
 /** One of the app's own actions, run from the command line. */
@@ -346,7 +347,9 @@ export function parse(line: string, state: ParseState): Action | ParseError {
     if (state.options?.includes(word)) return { type: "option", option: word };
     const value = state.numberToo ? readNumber(text) : null;
     if (value !== null) {
-      return value > 0 ? { type: "distance", value } : { type: "error", key: "cmd.badDistance" };
+      return value > 0 || state.numberToo === "angle"
+        ? { type: "distance", value }
+        : { type: "error", key: "cmd.badDistance" };
     }
     const p = readPoint(text, state.last);
     if (p !== null) return Array.isArray(p) ? { type: "point", p } : p;

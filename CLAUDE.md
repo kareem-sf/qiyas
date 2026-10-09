@@ -96,12 +96,16 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
 - Properties palette under Layers: what the Select tool picked (colour as drawn, linetype,
   weight, attributes, values in metres).
 - The batch also carries fill triangles (section 12, `u32` colour each, bit 24 =
-  `FILL_BACKGROUND`) and their ranges (13), only when there are fills; GL draws them under the
-  lines, wipeouts last in the background colour. Solid hatches, 2D solids and traces fill;
-  pattern hatches draw pattern lines clipped to the boundary (range flag `PATTERN`, never part
-  of a hatch boundary, left out when denser than 20,000 lines); rays and xlines run across the
-  sheet without growing its bounds; multilines draw their element lines. Measuring sees outlines
-  only (`FlattenOutcome::into_paths`). Points are still not drawn.
+  `FILL_BACKGROUND`) and their ranges (13), only when there are fills; GL draws fills under the
+  lines, then wipeouts in the background colour over all lines (they hide line work under them,
+  even lines drawn later: no draw order yet), then the wipeout frames. Solid hatches, 2D solids
+  and traces fill; gradient hatches fill with their first colour; pattern hatches draw pattern
+  lines clipped to the boundary (range flag `PATTERN`, never part of a hatch boundary, left out
+  when denser than 20,000 lines); rays and xlines run across the sheet without growing its
+  bounds; multilines draw their element lines but measure along their centre line (the drawn
+  points); points draw as a cross (PDSIZE, or 1% of the sheet). Splines flatten from control
+  points and knots (the curve through the fit points when there are none). Measuring sees
+  outlines only (`FlattenOutcome::into_paths`).
 
 ## Drawing
 
@@ -112,16 +116,22 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
   multiline, sketch. One undo step on the sheet on screen; `Outcome::Added` lists the handles.
   Wire form `{"type":"draw","kind":"line",...}`, angles in degrees. Not an AI tool yet.
 - `Session::current` (layer, colour, linetype, lineweight; layer "0" and ByLayer by default)
-  styles new entities. `Command::SetCurrent` is not an undo step; saved in the project file; a
+  styles new entities. `Command::SetCurrent` is not an undo step; saved in the project file;
+  layer and linetype as the drawing spells them, lineweights from AutoCAD's standard set; a
   layer gone from the drawing falls back to "0". Layers panel: the pen button makes a layer
   current (not an xref's).
-- Home tab, Draw: Line, Polyline (A arc, L line, C close, U undo), Rectangle, Circle (2P, 3P,
-  typed radius), Arc (three points, or C centre first), Ellipse, Spline, Point, Hatch (click
-  inside; `Session::boundary_at` finds the ring with `arrangement::bounded_faces` over the drawn
-  segments in view; type SOLID, ANSI31, ANSI37, LINE, NET, DASH or BRICK first), Revision cloud,
-  Wipeout. Command line: L, PL, REC, C, A, EL, SPL, PO, H, REVCLOUD, WIPEOUT; typed whole:
-  POLYGON (POL) sides x,y radius [I|C], DONUT (DO) inner outer x,y, RAY / XLINE (XL) x,y x,y,
-  SOLID (SO) 3 or 4 points, TRACE width points, MLINE (ML) points, SKETCH points.
+- Home tab, Draw: Line (C close, U undo the last line), Polyline (A arc, L line, C close, U
+  undo; Esc keeps what is drawn), Rectangle, Circle (2P, 3P, typed radius), Arc (three points,
+  or C centre first), Ellipse, Spline, Point, Hatch, Revision cloud, Wipeout.
+- Hatch: click inside. `Session::boundary_at` runs `arrangement::bounded_faces` over the drawn
+  segments in a box about 50 screen pixels across, growing it 4 times until the region found
+  fits inside the box; regions inside it become islands. More than 50,000 segments in the box
+  is `TooDense` (the prompt says zoom in), never a ring from part of them. Type a pattern
+  (SOLID, ANSI31, ANSI37, LINE, NET, DASH, BRICK), S scale, A angle; the default scale is
+  0.025 / metres per unit (25 in millimetres).
+- Command line: L, PL, REC, C, A, EL, SPL, PO, H, REVCLOUD, WIPEOUT; typed whole: POLYGON (POL)
+  sides x,y radius [I|C], DONUT (DO) inner outer x,y, RAY / XLINE (XL) x,y x,y, SOLID (SO) 3 or
+  4 points, TRACE width points, MLINE (ML) points, SKETCH points.
 
 ## PDF
 

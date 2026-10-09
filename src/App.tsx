@@ -406,11 +406,12 @@ export default function App() {
       run: apply,
       zoomTo: (bounds) => viewport.current?.fitTo(bounds),
       boundary: (p) => {
-        // The lines in view (and as far again around the point) can close the area.
-        const view = viewport.current?.visible();
-        const radius = view ? Math.max(view[1][0] - view[0][0], view[1][1] - view[0][1]) : 1000;
-        return boundaryAt(p[0], p[1], radius);
+        // About 50 screen pixels across first; the core looks further until the area fits.
+        const pxPerUnit = viewport.current?.pxPerUnit() ?? 1;
+        return boundaryAt(p[0], p[1], 25 / pxPerUnit);
       },
+      hatchScale: () => 0.025 / metresPerUnit(info?.units ?? "unknown"),
+      undo: () => history(undo),
       onError: (e) => setError(String(e)),
     },
     drafting,
