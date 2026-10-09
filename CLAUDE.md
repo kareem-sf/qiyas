@@ -314,12 +314,18 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
   with entities, inside blocks too), `RenameLayer` (codec `rename_layer`: entities, layer states;
   take-off rows' `layer`, the current and hidden layers follow; a name another layer has is
   refused). Off and frozen layers are left out of the batch, counts and measures as before
-  (`layer_shown`). Layer states are AutoCAD's own (`ACAD_LAYERSTATES` XRecords, codec
+  (`layer_shown`). Locked layers: `sheet_targets` refuses their entities for every command that
+  changes what it is given (modify, edit, erase, set and match properties, text, dimension and
+  table edits, blocks); `sheet_targets_any` lets them through where they are only read or not
+  changed (cutters and boundaries, what a dimension or field measures, groups, a viewport's
+  freezes, a match's source). A document step that moves `Session::current`, the hidden layers
+  or the layer states' hidden layers keeps them as they were (`undo::ViewState`) and undo and
+  redo put them back. Layer states are AutoCAD's own (`ACAD_LAYERSTATES` XRecords, codec
   `capture_layer_state`): `SaveLayerState` (Qiyas's current layer as the state's; the layer
   table's extension dictionary is made outside the step so an undo never leaves a dangling
   pointer), `RestoreLayerState` (the header's current layer is put back), `RenameLayerState`,
   `DeleteLayerState`; the hidden layers at save time live in the project file (`qiyas_hidden`)
-  and come back on restore (not an undo step, like hiding). `TranslateLayers { from_path,
+  and come back on restore; the current layer stays thawed. `TranslateLayers { from_path,
   mappings: [{ from, to, color }] }`: renames, or merges into an existing `to` (entities move,
   viewports' freezes follow, the old layer goes), then the standard's layer properties (another
   drawing, read-only; IPC `drawing_layers`) and the mapping's colour. `SetViewportFrozen {
@@ -330,12 +336,15 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
 - `qiyas-core/src/groups.rs`: `CreateGroup { name, targets }`, `AddToGroup`, `RemoveFromGroup`,
   `DeleteGroup` (AutoCAD's explode of a group: the entities stay), `Ungroup { targets }` (every
   group holding one): `GROUP` objects in `ACAD_GROUP`, members carry the group as a reactor; sheet
-  entities only. Select: a click on a grouped entity selects the group (Home, Layers, "Group
+  entities only. `GroupInfo` lists each member's kind. Select: a click on a grouped entity selects the group (Home, Layers, "Group
   selection" is PICKSTYLE; Ctrl picks one alone); boxes pick entities.
 - `qiyas-core/src/props.rs`: `SetProperty { target, prop, value }` (layer, color, linetype,
   lineweight, text, text_height, text_rotation and insert_rotation in degrees, text_style, radius,
   closed, global_width, insert_scale, dim_style; sheet entities only) and `MatchProperties {
-  source, targets, props }` (the source may be inside a block or an xref). A dimension's text
+  source, targets, props }` (the source may be inside a block or an xref; an xref's layer is
+  never given to an entity). Insert scale and rotation scale and turn the reference about its
+  insertion point (`modify::place`), so its attributes follow; the scale is the size of its x
+  scale, a mirrored reference stays mirrored and `EntityInfo::scale` is negative for one. A dimension's text
   height is a `DSTYLE` DIMTXT override (`qiyas_geom::set_dimtxt`, before DIMSCALE) and its block
   is drawn again; a table's sets every cell; a change of shape runs `follow_edit`; rows on an
   entity take its new layer. `EntityInfo` has `rotation`, `closed`, `global_width`, `scale`, and
