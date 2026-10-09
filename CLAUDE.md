@@ -185,21 +185,25 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
   `mtext`; plain text, `\n` becomes `\P`, `\`, `{`, `}` escaped; box top left and width) go on the
   current layer and state with a text style (`None`: the drawing's TEXTSTYLE, else "Standard");
   `EditText { target, value, tag }` changes a text, an MText (as plain text: its formatting goes)
-  or one attribute (`tag`) of a block reference; chains refused. One undo step each.
+  or one attribute (`tag`, may be cleared) of a block reference; chains refused. One undo step
+  each.
 - New and edited text is stored in reading order and marked with xdata app `QIYAS_TEXT`
   (`qiyas_geom::LOGICAL_TEXT_APP`, never `QIYAS`: `embed_measurements` deletes those);
   `FlatText::logical` makes the renderer ignore "Arabic text is reversed" for it.
 - `FindReplace { find, replace, scope: sheet | drawing, match_case, whole_word }`: texts, MText
-  plain runs (codes such as `\C1;` and braces are never matched), attribute values and dimension
-  overrides (`<>` kept) on the sheet or every sheet, not inside block definitions; one undo step,
-  `Outcome::Replaced { count, handles }` (none when nothing matches). `FindText` lists the
+  plain runs (codes such as `\C1;` and braces are never matched), attribute values (a multiline
+  one's embedded MText, every line) and dimension overrides (`<>` kept) on the sheet or every
+  sheet, not inside block definitions; one undo step, `Outcome::Replaced { count, handles,
+  skipped }` (none when nothing changes). A TEXT the result would leave blank or break into two
+  lines, or a single-line attribute it would break, is left as it is and counted in `skipped`. `FindText` lists the
   matches (`Outcome::Found`), no step. `DrawingInfo` has `text_styles` and `text_style`;
   `EntityInfo::plain_text` is an MText's text without codes.
 - Home tab, Text group; command line TEXT (DT): click, type in place, Enter (a click elsewhere
   places it too; Esc drops it), H height, R rotation; MTEXT (MT, T): two corners, then the MText
   dialog; TEXTEDIT (ED, DDEDIT) or a double click on a text with Select: the edit dialog (an
   unchanged value sends nothing); FIND: the find and replace dialog (Find next zooms to each
-  entity, switching sheet; Replace all highlights what changed). New text height starts at
+  entity, switching sheet: the sheet's first fit goes to the match, `fitMatch`; Replace all
+  highlights what changed and says how many were skipped). New text height starts at
   2.5 mm in drawing units, then the last one used.
 
 ## PDF

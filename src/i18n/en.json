@@ -598,5 +598,6 @@
   "find.close": "Close",
   "find.none": "No matches",
   "find.at": "{i} of {n} texts · {count} matches",
-  "find.replaced": "Replaced {n}"
+  "find.replaced": "Replaced {n}",
+  "find.skipped": "{n} left as they were: a text can't be blank or break onto two lines"
 }

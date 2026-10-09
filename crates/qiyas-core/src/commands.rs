@@ -265,7 +265,7 @@ pub enum Command {
     },
     /// Changes the text of `target` (a text or an MText at the top of the sheet on screen) to
     /// `value`, plain text (an MText's formatting goes); for a block reference the value of its
-    /// attribute `tag`. One undo step.
+    /// attribute `tag` (which may be cleared). One undo step.
     EditText {
         target: Target,
         value: String,
@@ -275,7 +275,9 @@ pub enum Command {
     /// Replaces `find` with `replace` in the texts, MText (plain runs: formatting codes stay),
     /// attribute values and dimension text overrides of `scope`, in any case unless
     /// `match_case`, inside words too unless `whole_word`: one undo step (none when nothing
-    /// matches). `Outcome::Replaced`.
+    /// changes). A TEXT the replacement would leave blank or break into two lines, or a
+    /// single-line attribute it would break, is left as it is and counted as skipped.
+    /// `Outcome::Replaced`.
     FindReplace {
         find: String,
         replace: String,
@@ -409,11 +411,13 @@ pub enum Outcome {
         unlinked: usize,
         joined_rows: usize,
     },
-    /// A find and replace: how many replacements, and the entities changed (a block
-    /// reference's, for an attribute).
+    /// A find and replace: how many replacements, the entities changed (a block reference's,
+    /// for an attribute), and how many entities with matches were left as they were because
+    /// the result would not fit (a blank text, a line break in a single line).
     Replaced {
         count: usize,
         handles: Vec<u64>,
+        skipped: usize,
     },
     /// A find: how many matches, and each entity holding one with its sheet.
     Found {
@@ -734,8 +738,12 @@ impl Session {
                 whole_word,
             } => {
                 let finder = Finder::new(&find, match_case, whole_word)?;
-                let (count, handles) = self.find_replace(&finder, &replace, scope);
-                return Ok(Outcome::Replaced { count, handles });
+                let (count, handles, skipped) = self.find_replace(&finder, &replace, scope);
+                return Ok(Outcome::Replaced {
+                    count,
+                    handles,
+                    skipped,
+                });
             }
             Command::FindText {
                 find,

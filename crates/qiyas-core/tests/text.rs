@@ -422,7 +422,7 @@ fn replace(
         })
         .unwrap()
     {
-        Outcome::Replaced { count, handles } => (count, handles),
+        Outcome::Replaced { count, handles, .. } => (count, handles),
         other => panic!("{other:?}"),
     }
 }
@@ -573,4 +573,60 @@ fn the_wire_forms() {
             ..
         }
     ));
+}
+
+#[test]
+fn an_attribute_may_be_cleared_but_a_text_may_not() {
+    let (_dir, mut s) = open(&schedule_doc(), "edit.dxf");
+    let tag = insert_handle(&s);
+    s.run(Command::EditText {
+        target: t(tag),
+        value: String::new(),
+        tag: Some("MARK".to_string()),
+    })
+    .unwrap();
+    assert_eq!(attribute(&s, tag, "MARK"), "");
+    let d1 = find_text(&s, "D1");
+    refused(
+        &mut s,
+        Command::EditText {
+            target: t(d1),
+            value: " ".to_string(),
+            tag: None,
+        },
+    );
+}
+
+#[test]
+fn a_replacement_that_would_empty_a_text_or_break_its_line_is_skipped() {
+    let (_dir, mut s) = open(&find_doc(), "find.dxf");
+    let title = find_text(&s, "DOOR SCHEDULE");
+    let note = find_text(&s, "{\\C1;FIRE} RATED\\PDOORS");
+    let run = |s: &mut Session, find: &str, with: &str| match s
+        .run(Command::FindReplace {
+            find: find.to_string(),
+            replace: with.to_string(),
+            scope: TextScope::Sheet,
+            match_case: true,
+            whole_word: false,
+        })
+        .unwrap()
+    {
+        Outcome::Replaced {
+            count,
+            handles,
+            skipped,
+        } => (count, handles, skipped),
+        other => panic!("{other:?}"),
+    };
+    // The whole title would go: left as it is, and nothing else matched, so no step.
+    assert_eq!(run(&mut s, "DOOR SCHEDULE", ""), (0, vec![], 1));
+    assert_eq!(value_of(&s, title), "DOOR SCHEDULE");
+    assert!(!s.can_undo());
+    // A line break: the TEXT is skipped, the MText takes it as a new line, the dimension too.
+    let (count, handles, skipped) = run(&mut s, "DOOR", "DOOR\nWAY");
+    assert_eq!((count, skipped), (2, 1));
+    assert!(!handles.contains(&title));
+    assert_eq!(value_of(&s, title), "DOOR SCHEDULE");
+    assert_eq!(value_of(&s, note), "{\\C1;FIRE} RATED\\PDOOR\\PWAYS");
 }

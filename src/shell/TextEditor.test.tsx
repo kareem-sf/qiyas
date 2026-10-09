@@ -124,3 +124,20 @@ test("editing a block's attributes edits the one chosen, and an error stays", as
   await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("refused"));
   expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ value: "1.0", tag: "WIDTH" }));
 });
+
+test("an attribute may be cleared", async () => {
+  const onSubmit = vi.fn(async () => {});
+  render(
+    <TextDialog
+      heading="text.editTitle"
+      value=""
+      multiline={false}
+      attributes={[["MARK", "D9"]]}
+      onSubmit={onSubmit}
+      onClose={() => {}}
+    />,
+  );
+  fireEvent.change(screen.getByRole("textbox", { name: "Text" }), { target: { value: "" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ value: "", tag: "MARK" })));
+});

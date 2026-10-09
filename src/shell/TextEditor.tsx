@@ -118,7 +118,10 @@ export function TextDialog(props: DialogProps) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const h = Number(height);
-  const valid = value.trim() !== "" && (props.height === undefined || (h > 0 && Number.isFinite(h)));
+  // An attribute may be cleared; a text may not.
+  const valid =
+    (attributes !== undefined || value.trim() !== "") &&
+    (props.height === undefined || (h > 0 && Number.isFinite(h)));
 
   useEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;

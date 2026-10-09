@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import type { Measurement } from "../api";
 import { NO_CHAIN, Ranges, type Batch, type Range } from "../viewport/batch";
-import { markSize, measurementBounds, overlaySegments, pointMarks } from "./overlay";
+import { markSize, matchBounds, measurementBounds, overlaySegments, pointMarks } from "./overlay";
 
 test("distance overlay follows the points to the cursor", () => {
   const s = overlaySegments(
@@ -94,4 +94,19 @@ test("a count's places are drawn as small crosses sized to the sheet", () => {
     ]),
   ).toBe(2);
   expect(markSize(null)).toBe(1);
+});
+
+test("a find's match is shown with room around it, when it is on the batch", () => {
+  const batch = {
+    origin: [100, 100],
+    segments: new Float32Array([0, 0, 2, 1]),
+    ranges: rangesOf([{ top: 7n, entity: 7n, chain: NO_CHAIN, first: 0, count: 1, flags: 0 }]),
+    chains: [],
+  } as unknown as Batch;
+  expect(matchBounds(7, batch)).toEqual([
+    [96, 96],
+    [106, 105],
+  ]);
+  expect(matchBounds(8, batch)).toBeNull();
+  expect(matchBounds(7, null)).toBeNull();
 });

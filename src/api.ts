@@ -753,8 +753,9 @@ export type Outcome =
       unlinked: number;
       joined_rows: number;
     }
-  /** A find and replace: how many replacements, and the entities changed. */
-  | { type: "replaced"; count: number; handles: number[] }
+  /** A find and replace: how many replacements, the entities changed, and how many texts were
+   *  left as they were (a text can't be left blank or break onto two lines). */
+  | { type: "replaced"; count: number; handles: number[]; skipped: number }
   /** A find: how many matches, and each entity holding one with its sheet. */
   | { type: "found"; count: number; matches: TextMatch[] }
   | { type: "nothing" }

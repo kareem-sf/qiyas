@@ -33,6 +33,19 @@ export function handlesBounds(handles: number[], batch: Batch | null): Bounds | 
   );
 }
 
+/** Around the entity `handle` (on the sheet) as drawn in `batch`, with twice its size of room on
+ *  every side, to show a find's match in its surroundings; `null` when it is not on it. */
+export function matchBounds(handle: number, batch: Batch | null): Bounds | null {
+  const box = handlesBounds([handle], batch);
+  if (!box) return null;
+  const [[x0, y0], [x1, y1]] = box;
+  const pad = Math.max(x1 - x0, y1 - y0) * 2;
+  return [
+    [x0 - pad, y0 - pad],
+    [x1 + pad, y1 + pad],
+  ];
+}
+
 /** What a take-off line measured: its entities, inside the blocks of its chain if it has one. */
 export function measurementTargets(m: Measurement): Target[] {
   return m.handles.map((handle) => ({ handle, chain: m.chain }));

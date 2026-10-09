@@ -25,7 +25,7 @@ const matches: TextMatch[] = [
 
 function setup() {
   const onFind = vi.fn(async (_q: FindQuery) => ({ count: 4, matches }));
-  const onReplaceAll = vi.fn(async (_q: FindQuery, _r: string) => 4);
+  const onReplaceAll = vi.fn(async (_q: FindQuery, _r: string) => ({ count: 4, skipped: 0 }));
   const onShow = vi.fn();
   const onClose = vi.fn();
   render(<FindReplaceDialog onFind={onFind} onReplaceAll={onReplaceAll} onShow={onShow} onClose={onClose} />);
@@ -69,6 +69,18 @@ test("replace all says how many it replaced", async () => {
   expect(onReplaceAll).toHaveBeenCalledWith(
     { find: "باب", scope: "sheet", match_case: false, whole_word: false },
     "مدخل",
+  );
+});
+
+test("replace all says how many texts it left as they were", async () => {
+  const onReplaceAll = vi.fn(async () => ({ count: 2, skipped: 1 }));
+  render(<FindReplaceDialog onFind={vi.fn()} onReplaceAll={onReplaceAll} onShow={vi.fn()} onClose={() => {}} />);
+  fireEvent.change(screen.getByLabelText("Find"), { target: { value: "DOOR" } });
+  fireEvent.click(screen.getByRole("button", { name: "Replace all" }));
+  await waitFor(() =>
+    expect(screen.getByRole("status").textContent).toBe(
+      "Replaced 2 · 1 left as they were: a text can't be blank or break onto two lines",
+    ),
   );
 });
 

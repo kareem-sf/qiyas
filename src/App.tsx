@@ -115,6 +115,7 @@ import { useAutoClear } from "./shell/useAutoClear";
 import {
   handlesBounds,
   markSize,
+  matchBounds,
   measurementBounds,
   measurementTargets,
   overlaySegments,
@@ -298,6 +299,8 @@ export default function App() {
   const fitNext = useRef(false);
   /** Measurements to fit instead of the whole sheet, when a conflict's Show changed the sheet. */
   const fitIds = useRef<string[] | null>(null);
+  /** The find match the next fit shows (Find next on another sheet). */
+  const fitMatch = useRef<number | null>(null);
   /** True while a layer change talks to the core; clicks meanwhile are dropped (the panel shows its
    *  buttons waiting, `layersBusy`), so they can't interleave. */
   const layerBusy = useRef(false);
@@ -342,7 +345,11 @@ export default function App() {
     fitNext.current = false;
     const ids = fitIds.current;
     fitIds.current = null;
-    const box = ids && unionBounds(items.filter((m) => ids.includes(m.id)), batch);
+    // A find's match on the sheet just shown wins over the take-off rows and the whole sheet.
+    const match = fitMatch.current;
+    fitMatch.current = null;
+    const box =
+      match !== null ? matchBounds(match, batch) : ids && unionBounds(items.filter((m) => ids.includes(m.id)), batch);
     if (box) viewport.current?.fitTo(box);
     else viewport.current?.fitExtents();
   }, [batch, fitTick]);
@@ -530,26 +537,26 @@ export default function App() {
   /** Replaces every match (one undo step), draws the change and highlights what changed. */
   async function replaceTexts(q: FindQuery, replace: string) {
     const outcome = await runCommand({ type: "find_replace", ...q, replace });
-    if (outcome.type !== "replaced" || outcome.count === 0) return 0;
-    await redraw();
-    setAiHighlight(outcome.handles);
-    await autosave();
-    return outcome.count;
+    if (outcome.type !== "replaced") return { count: 0, skipped: 0 };
+    if (outcome.count > 0) {
+      await redraw();
+      setAiHighlight(outcome.handles);
+      await autosave();
+    }
+    return { count: outcome.count, skipped: outcome.skipped };
   }
 
-  /** Shows one entity the find found: its sheet, zoomed to it with room around, highlighted. */
+  /** Shows one entity the find found, highlighted and zoomed to with room around; on another
+   *  sheet, that sheet is shown and its first fit goes to the match. */
   async function showMatch(m: TextMatch) {
-    if (m.sheet.toLowerCase() !== sheet.toLowerCase()) await chooseSheet(m.sheet);
-    const box = handlesBounds([m.handle], batchHeld.current);
-    if (box) {
-      const [[x0, y0], [x1, y1]] = box;
-      const pad = Math.max(x1 - x0, y1 - y0) * 2;
-      viewport.current?.fitTo([
-        [x0 - pad, y0 - pad],
-        [x1 + pad, y1 + pad],
-      ]);
-    }
     setAiHighlight([m.handle]);
+    if (m.sheet.toLowerCase() !== sheet.toLowerCase()) {
+      fitMatch.current = m.handle;
+      await chooseSheet(m.sheet);
+      return;
+    }
+    const box = matchBounds(m.handle, batchHeld.current);
+    if (box) viewport.current?.fitTo(box);
   }
 
   /** Makes `next` the drawing's drafting settings and saves them with the project. Throws when the

@@ -7,6 +7,7 @@
 //! New and edited text is stored in reading order and marked with `LOGICAL_TEXT_APP` xdata, so
 //! "Arabic text is reversed", which fixes the drawing's own old text, never turns it.
 
+use opencadcodec::entities::mtext_format::parse_mtext;
 use opencadcodec::entities::{AttachmentPoint, EntityCommon};
 use opencadcodec::xdata::{ExtendedDataRecord, XDataValue};
 use opencadcodec::{AppId, EntityType, Handle, MText, Text, Vector3};
@@ -39,6 +40,13 @@ pub(crate) struct Finder {
     find: Vec<char>,
     match_case: bool,
     whole_word: bool,
+}
+
+/// An entity with its matches replaced: how many, and whether the result fits.
+struct Hit {
+    entity: EntityType,
+    count: usize,
+    fits: bool,
 }
 
 /// How a string is read: which parts are codes, never searched.
@@ -360,8 +368,9 @@ impl Session {
                     .ok_or_else(|| {
                         invalid(format!("This block reference has no attribute {tag}"))
                     })?;
-                if !insert.attributes[i].is_multiline {
-                    check_one_line(value)?;
+                // A QS may clear an attribute.
+                if !insert.attributes[i].is_multiline && value.contains(['\n', '\r']) {
+                    return Err(invalid("This attribute takes one line"));
                 }
                 Some(i)
             }
@@ -430,16 +439,16 @@ impl Session {
     }
 
     /// The text of `e` with the matches replaced by `with` (counted only when `None`); `None`
-    /// when there is no match.
-    fn replaced(
-        finder: &Finder,
-        e: &EntityType,
-        with: Option<&str>,
-    ) -> Option<(EntityType, usize)> {
+    /// when there is no match. It does not fit when a text would be left blank or a single line
+    /// would take a line break.
+    fn replaced(finder: &Finder, e: &EntityType, with: Option<&str>) -> Option<Hit> {
         let mut e = e.clone();
+        let one_line = |v: &str| !v.contains(['\n', '\r']);
+        let mut fits = true;
         let count = match &mut e {
             EntityType::Text(t) => {
                 let (v, n) = finder.replace(&t.value, Mode::Text, with);
+                fits = one_line(&v) && !v.trim().is_empty();
                 t.value = v;
                 n
             }
@@ -451,16 +460,29 @@ impl Session {
             EntityType::Insert(insert) => {
                 let mut total = 0;
                 for a in &mut insert.attributes {
-                    let (v, n) = finder.replace(&a.value, Mode::Text, with);
-                    if n == 0 {
-                        continue;
+                    let n = match a.embedded_mtext.as_deref_mut().filter(|_| a.is_multiline) {
+                        // Every line is in the embedded MText; the attribute's own value is its
+                        // first line.
+                        Some(mtext) => {
+                            let (v, n) = finder.replace(&mtext.value, Mode::MText, with);
+                            if n > 0 {
+                                let plain = parse_mtext(&v, true).to_plain_text();
+                                a.value = plain.lines().next().unwrap_or_default().to_string();
+                                mtext.value = v;
+                            }
+                            n
+                        }
+                        None => {
+                            let (v, n) = finder.replace(&a.value, Mode::Text, with);
+                            fits &= n == 0 || one_line(&v);
+                            a.value = v;
+                            n
+                        }
+                    };
+                    if n > 0 {
+                        total += n;
+                        a.common.graphic_data = None;
                     }
-                    a.value = v;
-                    total += n;
-                    if let Some(mtext) = a.embedded_mtext.as_deref_mut() {
-                        mtext.value = finder.replace(&mtext.value, Mode::MText, with).0;
-                    }
-                    a.common.graphic_data = None;
                 }
                 total
             }
@@ -474,7 +496,11 @@ impl Session {
             _ => 0,
         };
         e.common_mut().graphic_data = None;
-        (count > 0).then_some((e, count))
+        (count > 0).then_some(Hit {
+            entity: e,
+            count,
+            fits,
+        })
     }
 
     /// `Command::FindText`: how many matches `finder` finds in `scope`, and the entities holding
@@ -485,8 +511,8 @@ impl Session {
         let mut matches = Vec::new();
         for (h, sheet) in self.text_candidates(scope) {
             let e = doc.get_entity(h).expect("listed from the drawing");
-            if let Some((_, n)) = Self::replaced(finder, e, None) {
-                count += n;
+            if let Some(hit) = Self::replaced(finder, e, None) {
+                count += hit.count;
                 matches.push(TextMatch {
                     handle: h.value(),
                     sheet,
@@ -497,33 +523,41 @@ impl Session {
     }
 
     /// `Command::FindReplace`: replaces every match of `finder` in `scope` with `with`; how
-    /// many, and the entities changed.
+    /// many, the entities changed, and how many entities were left as they were because the
+    /// result would not fit (a blank text, a line break in one line).
     pub(crate) fn find_replace(
         &mut self,
         finder: &Finder,
         with: &str,
         scope: TextScope,
-    ) -> (usize, Vec<u64>) {
+    ) -> (usize, Vec<u64>, usize) {
         let mut count = 0;
         let mut handles = Vec::new();
+        let mut skipped = 0;
         for (h, _) in self.text_candidates(scope) {
             let e = self
                 .drawing
                 .doc
                 .get_entity(h)
                 .expect("listed from the drawing");
-            if let Some((changed, n)) = Self::replaced(finder, e, Some(with)) {
-                *self.drawing.doc.get_entity_mut(h).expect("listed") = changed;
-                count += n;
-                handles.push(h.value());
+            match Self::replaced(finder, e, Some(with)) {
+                Some(hit) if hit.fits => {
+                    *self.drawing.doc.get_entity_mut(h).expect("listed") = hit.entity;
+                    count += hit.count;
+                    handles.push(h.value());
+                }
+                Some(_) => skipped += 1,
+                None => {}
             }
         }
-        (count, handles)
+        (count, handles, skipped)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use opencadcodec::entities::{AttributeEntity, Insert};
+
     use super::*;
 
     fn run(find: &str, text: &str, mode: Mode, case: bool, word: bool) -> (String, usize) {
@@ -563,6 +597,43 @@ mod tests {
         );
         // Matches don't overlap.
         assert_eq!(run("aa", "aaa", Mode::Text, true, false), ("Xa".into(), 1));
+    }
+
+    fn multiline_attribute(value: &str, mtext: &str) -> EntityType {
+        let mut a = AttributeEntity::new("NOTE".to_string(), value.to_string());
+        a.is_multiline = true;
+        a.embedded_mtext = Some(Box::new(MText::with_value(mtext, Vector3::ZERO)));
+        let mut insert = Insert::new("TAG", Vector3::ZERO);
+        insert.attributes.push(a);
+        EntityType::Insert(insert)
+    }
+
+    #[test]
+    fn a_multiline_attribute_is_searched_on_every_line() {
+        let finder = Finder::new("DOOR", true, false).unwrap();
+        let e = multiline_attribute("FIRE", "{\\C1;FIRE}\\PRATED DOOR");
+        let hit = Session::replaced(&finder, &e, Some("GATE")).unwrap();
+        assert_eq!(hit.count, 1);
+        let EntityType::Insert(insert) = hit.entity else {
+            unreachable!()
+        };
+        let a = &insert.attributes[0];
+        assert_eq!(
+            a.embedded_mtext.as_ref().unwrap().value,
+            "{\\C1;FIRE}\\PRATED GATE"
+        );
+        assert_eq!(
+            a.value, "FIRE",
+            "the attribute's own value is the first line"
+        );
+        // The first line changes it too.
+        let finder = Finder::new("FIRE", true, false).unwrap();
+        let hit = Session::replaced(&finder, &e, Some("SMOKE")).unwrap();
+        let EntityType::Insert(insert) = hit.entity else {
+            unreachable!()
+        };
+        assert_eq!(insert.attributes[0].value, "SMOKE");
+        assert!(hit.fits);
     }
 
     #[test]

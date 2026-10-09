@@ -8,8 +8,9 @@ export type FindQuery = { find: string; scope: TextScope; match_case: boolean; w
 type Props = {
   /** The matches of `query`: how many, and the entities holding them. */
   onFind(query: FindQuery): Promise<{ count: number; matches: TextMatch[] }>;
-  /** Replaces every match with `replace` (one undo step); how many were replaced. */
-  onReplaceAll(query: FindQuery, replace: string): Promise<number>;
+  /** Replaces every match with `replace` (one undo step): how many were replaced, and how many
+   *  texts were left as they were (a text can't be left blank or break onto two lines). */
+  onReplaceAll(query: FindQuery, replace: string): Promise<{ count: number; skipped: number }>;
   /** Shows one entity holding a match: its sheet, zoomed to it. */
   onShow(match: TextMatch): void;
   onClose(): void;
@@ -75,9 +76,11 @@ export function FindReplaceDialog({ onFind, onReplaceAll, onShow, onClose }: Pro
 
   const replaceAll = () =>
     act(async () => {
-      const n = await onReplaceAll(query, replace);
+      const { count, skipped } = await onReplaceAll(query, replace);
       setFound(null);
-      setStatus(n === 0 ? t("find.none") : t("find.replaced", { n }));
+      const parts = [count === 0 && skipped === 0 ? t("find.none") : t("find.replaced", { n: count })];
+      if (skipped > 0) parts.push(t("find.skipped", { n: skipped }));
+      setStatus(parts.join(" · "));
     });
 
   const ready = find !== "" && !busy;
