@@ -471,9 +471,6 @@
   "draw.prompt.inLine": "النقاط الثلاث على خط واحد: ابدأ من جديد",
   "draw.prompt.needTwo": "يلزم نقطتان أو أكثر: ابدأ من جديد",
   "draw.prompt.needThree": "يلزم ثلاث نقاط أو أكثر: ابدأ من جديد",
-  "cmd.badDistance": "اكتب مسافة أكبر من 0",
-  "cmd.drawUsage": "صيغة {name}: POLYGON عدد الأضلاع x,y نصف القطر [I|C] · DONUT القطر الداخلي الخارجي x,y · RAY أو XLINE x,y x,y · SOLID ثلاث أو أربع نقاط · TRACE العرض ثم النقاط · MLINE أو SKETCH نقاط"
-}
   "modify.group": "تعديل",
   "modify.move": "نقل",
   "modify.copy": "نسخ",
@@ -513,3 +510,6 @@
   "modify.prompt.centre": "مركز المصفوفة الدائرية",
   "modify.prompt.items": "عدد العناصر، مع الأصل",
   "modify.prompt.between": "الزاوية بين العناصر بالدرجات (Enter: لملء الدائرة)",
+  "cmd.badDistance": "اكتب مسافة أكبر من 0",
+  "cmd.drawUsage": "صيغة {name}: POLYGON عدد الأضلاع x,y نصف القطر [I|C] · DONUT القطر الداخلي الخارجي x,y · RAY أو XLINE x,y x,y · SOLID ثلاث أو أربع نقاط · TRACE العرض ثم النقاط · MLINE أو SKETCH نقاط"
+}

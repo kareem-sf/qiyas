@@ -471,9 +471,6 @@
   "draw.prompt.inLine": "The three points are in a line: start again",
   "draw.prompt.needTwo": "Needs two points or more: start again",
   "draw.prompt.needThree": "Needs three points or more: start again",
-  "cmd.badDistance": "Type a distance above 0",
-  "cmd.drawUsage": "{name} goes: POLYGON sides x,y radius [I|C] · DONUT inner outer x,y · RAY or XLINE x,y x,y · SOLID 3 or 4 points · TRACE width points · MLINE or SKETCH points"
-}
   "modify.group": "Modify",
   "modify.move": "Move",
   "modify.copy": "Copy",
@@ -513,3 +510,6 @@
   "modify.prompt.centre": "Centre of the polar array",
   "modify.prompt.items": "Number of items, the originals included",
   "modify.prompt.between": "Angle between items in degrees (Enter: fill the circle)",
+  "cmd.badDistance": "Type a distance above 0",
+  "cmd.drawUsage": "{name} goes: POLYGON sides x,y radius [I|C] · DONUT inner outer x,y · RAY or XLINE x,y x,y · SOLID 3 or 4 points · TRACE width points · MLINE or SKETCH points"
+}
