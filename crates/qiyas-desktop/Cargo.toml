@@ -32,6 +32,9 @@ getrandom = "0.4"
 # cancel it.
 tokio = { version = "1", features = ["macros", "sync", "time"] }
 tokio-util = "0.7"
+# The system clipboard for COPYCLIP and PASTECLIP (MIT OR Apache-2.0): text only, on Wayland
+# through its data-control protocol, else X11.
+arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }

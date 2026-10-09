@@ -1,6 +1,7 @@
 mod ai;
 mod blocks;
 mod commands;
+mod files;
 mod mcp;
 #[cfg(debug_assertions)]
 mod mock;
@@ -42,6 +43,18 @@ pub fn run() {
             commands::batch_version,
             commands::render_batch,
             commands::atlas_pages,
+            commands::sheet_batch,
+            commands::sheet_batch_version,
+            files::paper_views,
+            files::autosave_drawings,
+            files::recoverable_drawings,
+            files::recover_autosave,
+            files::discard_autosave,
+            files::recover_drawing,
+            files::sheet_set_open,
+            files::sheet_set_save,
+            files::sheet_set_entry,
+            files::sheet_set_from_tabs,
             commands::pick,
             commands::boundary_at,
             commands::pick_window,

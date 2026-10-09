@@ -18,6 +18,7 @@ use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 use tokio::sync::mpsc;
 
 use crate::ai::{self, AiRun, Turn};
+use crate::files;
 use crate::mcp::{self, McpStatus};
 use crate::secrets;
 use crate::settings::{self, Settings};
@@ -59,7 +60,7 @@ pub async fn open_drawing<R: Runtime>(
 }
 
 /// Puts `path` first in the recent list and writes the settings; a failed write is only logged.
-fn remember_recent(state: &AppState, path: &str) {
+pub(crate) fn remember_recent(state: &AppState, path: &str) {
     let mut settings = state
         .settings
         .lock()
@@ -196,6 +197,29 @@ pub async fn render_batch(
     })
 }
 
+/// Names the batch of the sheet `sheet` as `render_batch` names the current sheet's.
+#[tauri::command]
+pub async fn sheet_batch_version(sheet: String, state: State<'_, AppState>) -> Result<u64, String> {
+    with_session(&state, |s| Ok(s.sheet_batch_version(&sheet)))
+}
+
+/// `render_batch` for the sheet `sheet`, which stays off screen: model space for the viewports
+/// of a layout, or a split window's second view (`Session::sheet_batch_bytes_if`).
+#[tauri::command]
+pub async fn sheet_batch(
+    sheet: String,
+    if_version: Option<u64>,
+    px_per_unit: Option<f64>,
+    state: State<'_, AppState>,
+) -> Result<Response, String> {
+    with_session(&state, |s| {
+        Ok(Response::new(
+            s.sheet_batch_bytes_if(&sheet, if_version, px_per_unit)
+                .unwrap_or_else(|| NOT_MODIFIED.to_vec()),
+        ))
+    })
+}
+
 /// The glyph atlas pages changed after `since_version` (all when left out), in the binary layout
 /// of `Atlas::to_bytes`: `u64` version, `u32` page count, then per page `u32` index, width,
 /// height and byte length and the R8 bytes.
@@ -312,10 +336,26 @@ pub async fn table_cell_at(
     with_session(&state, |s| Ok(s.table_cell_at(handle, [x, y])))
 }
 
-/// Runs one command on the command bus; see `qiyas_core::Command`.
+/// Runs one command on the command bus; see `qiyas_core::Command`. A paste without text takes
+/// the system clipboard's; a copy's text goes onto the system clipboard (and comes back empty).
 #[tauri::command]
-pub async fn run_command(cmd: Command, state: State<'_, AppState>) -> Result<Outcome, String> {
-    with_session(&state, |s| s.run(cmd))
+pub async fn run_command(mut cmd: Command, state: State<'_, AppState>) -> Result<Outcome, String> {
+    if let Command::PasteFromClipboard {
+        text: text @ None, ..
+    } = &mut cmd
+    {
+        *text = Some(files::clipboard_text()?);
+    }
+    match with_session(&state, |s| s.run(cmd))? {
+        Outcome::Clipboard { text, count } => {
+            files::set_clipboard_text(&text)?;
+            Ok(Outcome::Clipboard {
+                text: String::new(),
+                count,
+            })
+        }
+        outcome => Ok(outcome),
+    }
 }
 
 /// Undoes the last take-off change; false when there was none.
@@ -873,7 +913,19 @@ mod tests {
                     crate::blocks::drawing_blocks,
                     crate::blocks::drawing_layers,
                     crate::blocks::write_block,
-                    crate::blocks::set_tool_palette
+                    crate::blocks::set_tool_palette,
+                    sheet_batch,
+                    sheet_batch_version,
+                    crate::files::paper_views,
+                    crate::files::autosave_drawings,
+                    crate::files::recoverable_drawings,
+                    crate::files::recover_autosave,
+                    crate::files::discard_autosave,
+                    crate::files::recover_drawing,
+                    crate::files::sheet_set_open,
+                    crate::files::sheet_set_save,
+                    crate::files::sheet_set_entry,
+                    crate::files::sheet_set_from_tabs
                 ])
                 .build(mock_context(noop_assets()))
                 .unwrap();
@@ -961,6 +1013,90 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn autosave_covers_every_tab_and_recovery_opens_the_autosave_in_a_tab() {
+        let ipc = Ipc::open();
+        let first = ipc.call("drawing_info", json!({})).unwrap()["path"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let line = json!({ "cmd": { "type": "draw", "kind": "line", "a": [0, 0], "b": [5, 5] } });
+        ipc.call("run_command", line.clone()).unwrap();
+        // A second drawing in its own tab, also changed: the first one is parked.
+        let folder = std::path::Path::new(&first).parent().unwrap();
+        let second = qiyas_core::fixtures::write_sample(folder, "dwg");
+        ipc.call("open_drawing", json!({ "path": second })).unwrap();
+        ipc.call("run_command", line).unwrap();
+
+        let run = ipc.call("autosave_drawings", json!({})).unwrap();
+        assert_eq!(run["written"].as_array().unwrap().len(), 2, "{run}");
+        assert!(run["failed"].as_array().unwrap().is_empty());
+        let found = ipc
+            .call(
+                "recoverable_drawings",
+                json!({ "paths": [first, second.display().to_string()] }),
+            )
+            .unwrap();
+        // Both autosaves are newer than their drawings.
+        assert_eq!(found.as_array().unwrap().len(), 2, "{found}");
+
+        let recovered = ipc
+            .call("recover_autosave", json!({ "path": first }))
+            .unwrap();
+        assert!(recovered["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("sample (recovered).dxf"));
+        let tabs = ipc.call("tabs", json!({})).unwrap();
+        assert_eq!(tabs["tabs"].as_array().unwrap().len(), 3);
+        assert_eq!(tabs["tabs"][2]["dirty"], json!(true));
+
+        ipc.call("discard_autosave", json!({ "path": first }))
+            .unwrap();
+        let found = ipc
+            .call("recoverable_drawings", json!({ "paths": [first] }))
+            .unwrap();
+        assert_eq!(found, json!([]));
+
+        // A sheet set of the open drawings, written beside them.
+        let qss = folder.join("Set.qss").display().to_string();
+        let made = ipc
+            .call("sheet_set_from_tabs", json!({ "qss": qss, "name": "Set" }))
+            .unwrap();
+        let set = made["set"].clone();
+        assert_eq!(set["drawings"].as_array().unwrap().len(), 2, "{made}");
+        let view = ipc
+            .call("sheet_set_save", json!({ "path": qss, "set": set }))
+            .unwrap();
+        assert_eq!(view["entries"][0]["missing"], json!(false));
+        assert_eq!(view["set"]["drawings"][0]["path"], json!("sample.dxf"));
+        assert_eq!(
+            ipc.call("sheet_set_open", json!({ "path": qss })).unwrap()["set"],
+            view["set"]
+        );
+    }
+
+    #[test]
+    fn model_space_draws_for_a_layout_without_leaving_it() {
+        let ipc = Ipc::open();
+        let info = ipc.call("drawing_info", json!({})).unwrap();
+        let layout = info["sheets"][1]["block"].as_str().unwrap().to_string();
+        let batch = ipc.bytes("sheet_batch", json!({ "sheet": "*Model_Space" }));
+        assert_eq!(&batch[..4], b"BYIQ");
+        let version = ipc
+            .call("sheet_batch_version", json!({ "sheet": "*Model_Space" }))
+            .unwrap();
+        let same = ipc.bytes(
+            "sheet_batch",
+            json!({ "sheet": "*Model_Space", "ifVersion": version }),
+        );
+        assert_eq!(same, NOT_MODIFIED.to_vec());
+        assert_eq!(
+            ipc.call("paper_views", json!({ "sheet": layout })).unwrap(),
+            json!([])
+        );
     }
 
     #[test]

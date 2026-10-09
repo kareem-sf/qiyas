@@ -237,3 +237,19 @@ fn recents_are_ordered_deduplicated_and_capped() {
     assert_ne!(s.recents[1], plan.display().to_string(), "listed once");
     assert_eq!(s.recents.len(), settings::MAX_RECENTS);
 }
+
+#[test]
+fn autosave_runs_every_five_minutes_by_default_and_zero_turns_it_off() {
+    let dir = tempfile::tempdir().unwrap();
+    assert_eq!(settings::load(dir.path()).autosave_minutes, 5);
+    let off = Settings {
+        autosave_minutes: 0,
+        ..Settings::default()
+    };
+    assert!(settings::validate(&off).is_ok());
+    let long = Settings {
+        autosave_minutes: 121,
+        ..Settings::default()
+    };
+    assert!(settings::validate(&long).unwrap_err().contains("120"));
+}

@@ -20,6 +20,9 @@ pub const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 /// Buttons the tool palette keeps at most.
 pub const MAX_PALETTE: usize = 100;
 
+/// The longest time between autosaves, in minutes.
+pub const MAX_AUTOSAVE_MINUTES: u32 = 120;
+
 /// What a tool palette button does: insert a block of the drawing, or run a command line.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -90,6 +93,9 @@ pub struct Settings {
     /// The user's tool palette, in order. Changed only by the palette itself
     /// (`set_tool_palette`), never by the Settings dialog.
     pub tool_palette: Vec<PaletteItem>,
+    /// Minutes between autosaves of drawings with unsaved changes (`<name>.sv$`); 0 turns
+    /// autosave off. At most `MAX_AUTOSAVE_MINUTES`.
+    pub autosave_minutes: u32,
 }
 
 impl Settings {
@@ -118,6 +124,7 @@ impl Default for Settings {
             aliases: BTreeMap::new(),
             recents: Vec::new(),
             tool_palette: Vec::new(),
+            autosave_minutes: 5,
         }
     }
 }
@@ -169,6 +176,11 @@ pub fn validate(s: &Settings) -> Result<(), String> {
     }
     if !["system", "light", "dark"].contains(&s.theme.as_str()) {
         return Err(format!("Unknown theme \"{}\"", s.theme));
+    }
+    if s.autosave_minutes > MAX_AUTOSAVE_MINUTES {
+        return Err(format!(
+            "Autosave runs every {MAX_AUTOSAVE_MINUTES} minutes at most (0 turns it off)"
+        ));
     }
     for (alias, command) in &s.aliases {
         if alias.is_empty() || alias.contains(char::is_whitespace) || command.trim().is_empty() {
