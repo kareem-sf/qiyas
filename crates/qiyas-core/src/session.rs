@@ -6,8 +6,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use opencadcodec::entities::EntityCommon;
 use opencadcodec::entities::Insert;
+use opencadcodec::objects::ObjectType;
 use opencadcodec::tables::normalize_name;
-use opencadcodec::{CadDocument, Color, DwgWriter, DxfWriter, EntityType, Handle};
+use opencadcodec::{BlockRecord, CadDocument, Color, DwgWriter, DxfWriter, EntityType, Handle};
 use opencadkernel::geom2d::{ring_nesting_depths, Curve};
 use qiyas_geom::{
     dimension_text, drawn_style, exact_area, exact_hatch_areas, exact_length, flatten_with,
@@ -590,12 +591,15 @@ impl Session {
         self.ucs.write_to(&mut doc);
         // PDF underlay and image links stay right from the new folder.
         rebase_links(&mut doc, &self.drawing.path, path);
+        // Left out of the file only: an undo after the save may still need them.
+        let purged = purge_for_save(&mut doc);
         let bytes = if dwg {
             DwgWriter::write_to_vec(&doc)
         } else {
             DxfWriter::new(&doc).write_to_vec()
-        }
-        .map_err(|e| CoreError::Unwritable(e.to_string()))?;
+        };
+        restore_purged(&mut doc, purged);
+        let bytes = bytes.map_err(|e| CoreError::Unwritable(e.to_string()))?;
         // Into a temp file first, so a failed save never damages the drawing already there.
         project::write_with_backup(path, &bytes)?;
         self.drawing.doc = doc;
@@ -1546,6 +1550,107 @@ fn crosses_box([x0, y0, x1, y1]: [f64; 4], lo: [f64; 2], hi: [f64; 2]) -> bool {
 }
 
 /// Model space holds no entity.
+/// What `purge_for_save` took out of a drawing: block records with their entities, and groups'
+/// member lists as they were.
+struct Purged {
+    blocks: Vec<(BlockRecord, Vec<std::sync::Arc<EntityType>>)>,
+    groups: Vec<(Handle, Vec<Handle>)>,
+}
+
+/// Takes out of `doc` what only clutters a saved file: anonymous dimension (`*Dn`) and table
+/// (`*Tn`) blocks no dimension, table or reference uses any more (an erase, a discarded edit in
+/// place), and group members that are gone. `restore_purged` puts them back.
+fn purge_for_save(doc: &mut CadDocument) -> Purged {
+    let mut used: HashSet<String> = HashSet::new();
+    // A dimension read with no block name may still own a block: then keep every `*D`.
+    let mut unnamed_dimension = false;
+    for e in doc.entities() {
+        match e {
+            EntityType::Dimension(d) => {
+                let name = &d.base().block_name;
+                unnamed_dimension |= name.is_empty();
+                used.insert(normalize_name(name));
+            }
+            EntityType::Table(t) => {
+                used.insert(normalize_name(&t.block_name));
+                if let Some(b) = qiyas_geom::table_block(doc, t) {
+                    used.insert(normalize_name(&b.name));
+                }
+            }
+            EntityType::Insert(i) => {
+                used.insert(normalize_name(&i.block_name));
+            }
+            _ => {}
+        }
+    }
+    let anonymous = |name: &str, kind: char| {
+        let mut chars = name.chars();
+        chars.next() == Some('*')
+            && chars.next().is_some_and(|c| c.eq_ignore_ascii_case(&kind))
+            && chars.clone().next().is_some()
+            && chars.all(|c| c.is_ascii_digit())
+    };
+    let orphans: Vec<String> = doc
+        .block_records
+        .iter()
+        .filter(|b| {
+            let n = b.name.as_str();
+            ((anonymous(n, 'D') && !unnamed_dimension) || anonymous(n, 'T'))
+                && !used.contains(&normalize_name(n))
+        })
+        .map(|b| b.name.clone())
+        .collect();
+    let mut purged = Purged {
+        blocks: Vec::new(),
+        groups: Vec::new(),
+    };
+    for name in orphans {
+        let Some(record) = doc.block_records.remove(&name) else {
+            continue;
+        };
+        let handles = record
+            .entity_handles
+            .iter()
+            .chain([&record.block_entity_handle, &record.block_end_handle]);
+        let entities = handles.filter_map(|&h| doc.remove_entity_arc(h)).collect();
+        purged.blocks.push((record, entities));
+    }
+    let exists = |h: &Handle| doc.get_entity(*h).is_some();
+    let stale: Vec<(Handle, Vec<Handle>, Vec<Handle>)> = doc
+        .objects
+        .iter()
+        .filter_map(|(&h, o)| match o {
+            ObjectType::Group(g) if !g.entities.iter().all(exists) => {
+                let live = g.entities.iter().copied().filter(exists).collect();
+                Some((h, g.entities.clone(), live))
+            }
+            _ => None,
+        })
+        .collect();
+    for (h, members, live) in stale {
+        if let Some(ObjectType::Group(g)) = doc.objects.get_mut(&h) {
+            g.entities = live;
+        }
+        purged.groups.push((h, members));
+    }
+    purged
+}
+
+/// Puts back what `purge_for_save` took out.
+fn restore_purged(doc: &mut CadDocument, purged: Purged) {
+    for (record, entities) in purged.blocks {
+        let _ = doc.block_records.add(record);
+        for e in entities {
+            doc.restore_entity_arc(e);
+        }
+    }
+    for (h, members) in purged.groups {
+        if let Some(ObjectType::Group(g)) = doc.objects.get_mut(&h) {
+            g.entities = members;
+        }
+    }
+}
+
 fn model_is_empty(drawing: &Drawing) -> bool {
     drawing.entities_in("*Model_Space").next().is_none()
 }

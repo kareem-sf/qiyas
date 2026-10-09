@@ -587,3 +587,84 @@ fn mirrored_insert_count_point_lands_where_it_is_drawn() {
     assert_eq!(items[0].kind, Kind::Count);
     assert_eq!(items[0].points, [[-40.0, 1.0]]);
 }
+
+#[test]
+fn a_saved_dwg_leaves_out_an_erased_dimensions_block_and_a_grouped_lines_handle() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::open(&qiyas_core::fixtures::write_sample(dir.path(), "dxf")).unwrap();
+    let added = |s: &mut Session, cmd: Command| match s.run(cmd).unwrap() {
+        qiyas_core::Outcome::Added { handles } => handles[0],
+        other => panic!("{other:?}"),
+    };
+    let line = |a: [f64; 2], b: [f64; 2]| Command::Draw(qiyas_core::DrawSpec::Line { a, b });
+    let a = added(&mut s, line([100.0, 0.0], [110.0, 0.0]));
+    let b = added(&mut s, line([100.0, 5.0], [110.0, 5.0]));
+    let t = |h: u64| qiyas_core::Target {
+        handle: h,
+        chain: Vec::new(),
+    };
+    s.run(Command::CreateGroup {
+        name: "PAIR".into(),
+        targets: vec![t(a), t(b)],
+    })
+    .unwrap();
+    let anonymous_d = |doc: &opencadcodec::CadDocument| {
+        doc.block_records
+            .iter()
+            .filter(|r| r.name.to_uppercase().starts_with("*D"))
+            .count()
+    };
+    let before = anonymous_d(&s.drawing.doc);
+    let dim = added(
+        &mut s,
+        Command::Dimension(qiyas_core::DimSpec::Linear {
+            p1: [100.0, 0.0],
+            p2: [110.0, 0.0],
+            line_point: [105.0, -2.0],
+            rotation: None,
+        }),
+    );
+    assert_eq!(anonymous_d(&s.drawing.doc), before + 1);
+    s.run(Command::DeleteEntities {
+        targets: vec![t(dim), t(a)],
+    })
+    .unwrap();
+    let out = dir.path().join("purged.dwg");
+    s.save_as(&out).unwrap();
+
+    let back = Session::open(&out).unwrap();
+    assert_eq!(
+        anonymous_d(&back.drawing.doc),
+        before,
+        "the erased dimension's block"
+    );
+    let group = back
+        .info()
+        .groups
+        .into_iter()
+        .find(|g| g.name == "PAIR")
+        .unwrap();
+    assert_eq!(group.handles.len(), 1, "{group:?}");
+    // In memory nothing went: an undo brings the dimension back with its block.
+    assert_eq!(anonymous_d(&s.drawing.doc), before + 1);
+    assert!(s.undo());
+    let EntityType::Dimension(d) = s
+        .drawing
+        .doc
+        .get_entity(opencadcodec::Handle::new(dim))
+        .unwrap()
+    else {
+        panic!("the dimension");
+    };
+    assert!(s.drawing.doc.block_records.contains(&d.base().block_name));
+    assert_eq!(
+        s.info()
+            .groups
+            .iter()
+            .find(|g| g.name == "PAIR")
+            .unwrap()
+            .handles
+            .len(),
+        2
+    );
+}
