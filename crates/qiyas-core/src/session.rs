@@ -89,6 +89,9 @@ pub struct Session {
     pub(crate) history: History,
     /// The block being edited in place, if one is (see `crate::blocks`).
     pub(crate) block_edit: Option<BlockEdit>,
+    /// The drawing whose autosave this one was recovered from; its first save deletes that
+    /// autosave (see `crate::autosave`).
+    pub(crate) recovered_from: Option<PathBuf>,
     /// Which session this is; see `NEXT_EPOCH`.
     epoch: u64,
     /// Counts the changes to the drawing itself (not the take-off), which is all a batch shows.
@@ -509,6 +512,7 @@ impl Session {
             ucs,
             history: History::default(),
             block_edit: None,
+            recovered_from: None,
             epoch: NEXT_EPOCH.fetch_add(1, Ordering::Relaxed),
             document_revision: 0,
             saved_revision: 0,
@@ -599,6 +603,9 @@ impl Session {
         // Saved: the autosaves of the old file and the new one are stale (best effort).
         let _ = crate::discard_autosave(&self.drawing.path);
         let _ = crate::discard_autosave(path);
+        if let Some(from) = self.recovered_from.take() {
+            let _ = crate::discard_autosave(&from);
+        }
         self.drawing.path = path.to_path_buf();
         self.save_project().map_err(|e| {
             CoreError::Unwritable(format!(
@@ -1274,6 +1281,7 @@ impl Session {
         self.document_revision += 1;
         self.empty_model = model_is_empty(&self.drawing);
         *self.cache.get_mut() = None;
+        self.others.get_mut().clear();
     }
 
     /// Which opening of a drawing this session is: no two sessions in one run share it. What the
@@ -1416,7 +1424,10 @@ impl Session {
             }
         }
         drop(text);
+        // Not held while `f` runs, so it may draw the sheet on screen.
+        drop(others);
         let out = f(&entry.2);
+        let mut others = self.others.borrow_mut();
         others.push(entry);
         if others.len() > OTHER_SHEETS {
             others.remove(0);
@@ -1435,6 +1446,10 @@ impl Session {
                 || c.arabic_reversed != self.arabic_reversed
         });
         if stale {
+            // Drawn here now: no copy kept beside it.
+            self.others
+                .borrow_mut()
+                .retain(|(name, _, _)| !name.eq_ignore_ascii_case(&self.sheet));
             let options = TextOptions {
                 arabic_reversed: self.arabic_reversed,
                 px_per_unit,
@@ -1585,6 +1600,27 @@ mod tests {
     use opencadcodec::Line;
 
     use super::*;
+
+    #[test]
+    fn a_sheet_drawn_on_screen_or_a_drawing_change_leaves_no_copy_beside_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = crate::fixtures::write_sample(dir.path(), "dxf");
+        let mut s = Session::open(&path).unwrap();
+        let layout = s.drawing.sheets()[1].block.clone();
+        s.set_sheet(&layout).unwrap();
+        s.batch();
+        s.with_model(None, |_| ());
+        assert_eq!(s.others.borrow().len(), 1);
+        // Model space on screen: drawn there, not kept twice.
+        s.set_sheet("*Model_Space").unwrap();
+        s.batch();
+        assert!(s.others.borrow().is_empty());
+        // A drawing change drops what was kept for other sheets.
+        s.with_sheet(&layout, None, |_| ());
+        assert_eq!(s.others.borrow().len(), 1);
+        s.drawing_changed();
+        assert!(s.others.borrow().is_empty());
+    }
 
     #[test]
     fn a_failed_drawing_change_is_put_back_and_is_no_step() {

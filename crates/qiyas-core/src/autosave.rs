@@ -1,11 +1,12 @@
 //! Autosave and recovery. `Session::autosave` writes a drawing with unsaved changes to
-//! `<name>.sv$` beside it (a whole DWG of the drawing as it is in memory, whatever its own
-//! format) and its project to `<name>.sv$.qiyas`, each into a temp file renamed over the last
+//! `<file name>.sv$` beside it (a whole DWG of the drawing as it is in memory, whatever its own
+//! format) and its project to `<file name>.sv$.qiyas`, each into a temp file renamed over the last
 //! (never while a block is edited in place: its temporary copies are on the sheet). The window
 //! asks every few minutes. `recoverable` finds an autosave newer than its drawing (or one whose
 //! drawing is gone); `Session::open_autosave` opens it as a new, unsaved drawing beside the
 //! original (`<name> (recovered).<ext>`) with its take-off, and `discard_autosave` deletes it. A
-//! successful save deletes the drawing's autosave.
+//! successful save deletes the drawing's autosave (and a recovered drawing's, the autosave it came
+//! from); so does closing it without saving (the desktop app).
 //!
 //! Recover (opening a damaged file) is an ordinary open: the reader is failsafe already;
 //! `Session::read_report` says what it read and what it dropped, by kind.
@@ -20,12 +21,15 @@ use serde::Serialize;
 use crate::project::{self, write_atomic};
 use crate::{CoreError, Session};
 
-/// The autosave of `drawing`: `<stem>.sv$` in its folder.
+/// The autosave of `drawing`: `<file name>.sv$` in its folder (`plan.dwg.sv$`), so a DWG and a
+/// DXF of one name keep their own.
 pub fn autosave_path(drawing: &Path) -> PathBuf {
-    drawing.with_extension("sv$")
+    let mut name = drawing.as_os_str().to_owned();
+    name.push(".sv$");
+    PathBuf::from(name)
 }
 
-/// The project kept with the autosave of `drawing`: `<stem>.sv$.qiyas`.
+/// The project kept with the autosave of `drawing`: `<file name>.sv$.qiyas`.
 fn autosave_project(drawing: &Path) -> PathBuf {
     let mut name = autosave_path(drawing).into_os_string();
     name.push(".qiyas");
@@ -225,6 +229,8 @@ impl Session {
         let mut s = Session::open_with(&autosave, &autosave_project(drawing), &name)?;
         s.drawing.path = recovered_path(drawing);
         s.mark_unsaved();
+        // Its first save deletes the autosave, so it is not offered again.
+        s.recovered_from = Some(drawing.to_path_buf());
         Ok(s)
     }
 

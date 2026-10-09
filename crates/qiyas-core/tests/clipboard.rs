@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 
 use opencadcodec::{CadDocument, Color, EntityType, Handle, Line};
-use qiyas_core::fixtures::{sample_doc, write_drawing};
+use qiyas_core::fixtures::{sample_doc, write_drawing, write_xref_pair};
 use qiyas_core::{Command, DimSpec, Outcome, Session, Target, CLIPBOARD_MARK};
 
 const MODEL: &str = "*Model_Space";
@@ -228,4 +228,44 @@ fn plain_text_pastes_as_a_text_at_the_point() {
         height: None,
     };
     assert!(b.run(empty).is_err());
+}
+
+#[test]
+fn an_xref_reference_stays_out_of_the_clipboard() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = write_xref_pair(dir.path());
+    let mut s = Session::open(&host).unwrap();
+    let doc = &s.drawing.doc;
+    let xref = doc
+        .entities_in_block(MODEL)
+        .find(|e| match e {
+            EntityType::Insert(i) => i.block_name == "plan-arch",
+            _ => false,
+        })
+        .map(|e| e.common().handle.value())
+        .expect("the host references an xref");
+    let others: Vec<u64> = doc
+        .entities_in_block(MODEL)
+        .map(|e| e.common().handle.value())
+        .filter(|&h| h != xref)
+        .collect();
+    assert!(s
+        .run(Command::CopyToClipboard {
+            targets: vec![t(xref)],
+            base: None,
+        })
+        .is_err());
+    let other = others[0];
+    {
+        match s
+            .run(Command::CopyToClipboard {
+                targets: vec![t(xref), t(other)],
+                base: None,
+            })
+            .unwrap()
+        {
+            Outcome::Clipboard { count, .. } => assert_eq!(count, 1),
+            o => panic!("{o:?}"),
+        }
+    }
 }

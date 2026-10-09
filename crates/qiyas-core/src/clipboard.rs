@@ -11,7 +11,7 @@ use std::io::Cursor;
 
 use opencadcodec::{BlockRecord, Vector3};
 use opencadcodec::{CadDocument, DxfReader, DxfReaderConfiguration, DxfWriter, EntityType, Handle};
-use qiyas_geom::{flatten_with, Xform};
+use qiyas_geom::{flatten_with, is_xref_block, Xform};
 
 use crate::blocks::Importer;
 use crate::modify::{place, place_keeping_blocks, Placing};
@@ -70,8 +70,8 @@ fn lower_left(session: &Session, handles: &[Handle]) -> Option<[f64; 2]> {
 impl Session {
     /// `Command::CopyToClipboard`: the clipboard text for the entities `targets` at the top of
     /// the sheet (locked layers too: nothing changes), taken from `base` (by default the lower
-    /// left corner of what they draw), and how many entities it holds. Viewports, images and PDF
-    /// underlays are left out.
+    /// left corner of what they draw), and how many entities it holds. Viewports, xref
+    /// references, images and PDF underlays are left out.
     pub(crate) fn copy_to_clipboard(
         &self,
         targets: &[Target],
@@ -96,7 +96,8 @@ impl Session {
             let mut importer = Importer::new(src, &mut doc);
             for &h in &handles {
                 let e = src.get_entity(h).expect("sheet_targets_any found it");
-                if matches!(e, EntityType::Viewport(_)) {
+                let xref = matches!(e, EntityType::Insert(i) if is_xref_block(src, &i.block_name));
+                if xref || matches!(e, EntityType::Viewport(_)) {
                     continue;
                 }
                 if let Some(added) = importer.copy(e, model)? {
@@ -105,7 +106,9 @@ impl Session {
             }
         }
         if copied.is_empty() {
-            return Err(invalid("Nothing to copy: viewports and pictures stay"));
+            return Err(invalid(
+                "Nothing to copy: viewports, pictures and xrefs stay",
+            ));
         }
         for &h in &copied {
             shift_in(&mut doc, h, [-base[0], -base[1]]);

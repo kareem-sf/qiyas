@@ -1,5 +1,5 @@
-//! Autosave and recovery: a drawing with unsaved changes is written to `<name>.sv$` (a whole
-//! DWG) with its project beside it as `<name>.sv$.qiyas`, atomically; an autosave newer than its
+//! Autosave and recovery: a drawing with unsaved changes is written to `<file>.sv$` (a whole
+//! DWG) with its project beside it as `<file>.sv$.qiyas`, atomically; an autosave newer than its
 //! drawing is offered back; a save deletes it. Recover opens a damaged file through the failsafe
 //! reader and says what it dropped.
 
@@ -57,11 +57,11 @@ fn autosave_writes_the_drawing_and_its_project_and_recovery_finds_them() {
     .unwrap();
     let written = s.autosave().unwrap().expect("an autosave");
     assert_eq!(written, autosave_path(&path));
-    assert_eq!(written, dir.path().join("sample.sv$"));
+    assert_eq!(written, dir.path().join("sample.dwg.sv$"));
     // Atomic: the temp files are gone, the drawing and project files sit side by side.
     assert_eq!(
         files(dir.path()),
-        ["sample.dwg", "sample.sv$", "sample.sv$.qiyas"]
+        ["sample.dwg", "sample.dwg.sv$", "sample.dwg.sv$.qiyas"]
     );
     // The drawing itself is untouched, and still has unsaved changes.
     assert!(s.is_dirty());
@@ -91,7 +91,7 @@ fn autosave_writes_the_drawing_and_its_project_and_recovery_finds_them() {
     discard_autosave(&path).unwrap();
     assert!(recoverable(&path).is_none());
     assert!(!written.exists());
-    assert!(!dir.path().join("sample.sv$.qiyas").exists());
+    assert!(!dir.path().join("sample.dwg.sv$.qiyas").exists());
 }
 
 #[test]
@@ -108,7 +108,7 @@ fn an_autosave_older_than_its_drawing_is_not_offered_and_a_save_deletes_it() {
     // A save deletes the autosave.
     s.save().unwrap();
     assert!(!written.exists());
-    assert!(!dir.path().join("sample.sv$.qiyas").exists());
+    assert!(!dir.path().join("sample.dwg.sv$.qiyas").exists());
     assert_eq!(s.autosave().unwrap(), None);
 }
 
@@ -177,4 +177,39 @@ fn recover_reports_what_a_damaged_drawing_lost() {
     let cut = dir.path().join("cut.dwg");
     std::fs::write(&cut, &bytes[..bytes.len() / 2]).unwrap();
     assert!(Session::open(&cut).is_err());
+}
+
+#[test]
+fn a_dwg_and_a_dxf_of_one_name_keep_their_own_autosaves() {
+    let dir = tempfile::tempdir().unwrap();
+    let dwg = write_sample(dir.path(), "dwg");
+    let dxf = write_sample(dir.path(), "dxf");
+    let mut a = Session::open(&dwg).unwrap();
+    let mut b = Session::open(&dxf).unwrap();
+    line(&mut a);
+    line(&mut b);
+    let (wa, wb) = (
+        a.autosave().unwrap().unwrap(),
+        b.autosave().unwrap().unwrap(),
+    );
+    assert_ne!(wa, wb);
+    assert_eq!(wb, dir.path().join("sample.dxf.sv$"));
+}
+
+#[test]
+fn the_recovered_drawings_first_save_deletes_the_autosave_it_came_from() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_sample(dir.path(), "dwg");
+    age(&path);
+    let mut s = Session::open(&path).unwrap();
+    line(&mut s);
+    let written = s.autosave().unwrap().unwrap();
+    let mut r = Session::open_autosave(&path).unwrap();
+    // Not yet saved: still offered.
+    assert!(recoverable(&path).is_some());
+    let target = dir.path().join("kept.dwg");
+    r.save_as(&target).unwrap();
+    assert!(!written.exists());
+    assert!(recoverable(&path).is_none());
+    assert!(!dir.path().join("sample.dwg.sv$.qiyas").exists());
 }
