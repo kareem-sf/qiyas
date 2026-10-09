@@ -879,6 +879,17 @@ impl Session {
         }
     }
 
+    /// Drops the drawn batch and pick index (for a drawing put aside in a tab, which on a big
+    /// drawing hold hundreds of MB); the next draw or pick builds them again.
+    pub fn park(&mut self) {
+        *self.cache.get_mut() = None;
+    }
+
+    /// The batch and pick index are built and kept (see `park`).
+    pub fn is_drawn(&self) -> bool {
+        self.cache.borrow().is_some()
+    }
+
     /// The drawing itself changed: the batch is drawn again and its version moves on.
     pub(crate) fn drawing_changed(&mut self) {
         self.document_revision += 1;

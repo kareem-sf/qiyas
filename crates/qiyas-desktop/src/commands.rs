@@ -1297,6 +1297,12 @@ mod tests {
         assert_eq!(list[1]["title"], "sample.dwg");
         assert_eq!(tabs["active"], list[1]["id"]);
         let (id1, id2) = (list[0]["id"].clone(), list[1]["id"].clone());
+        {
+            // The parked tab keeps no batch or pick index.
+            let state = ipc.webview.state::<AppState>();
+            let parked = state.parked.lock().unwrap();
+            assert!(parked.iter().all(|p| !p.session.is_drawn()));
+        }
 
         // Measure on the second drawing only.
         let cmd = json!({ "type": "measure_distance", "points": [[0.0, 0.0], [3.0, 0.0]] });
@@ -1325,6 +1331,13 @@ mod tests {
             let state = ipc.webview.state::<AppState>();
             let epoch = state.session.lock().unwrap().as_ref().unwrap().epoch();
             assert_eq!(crate::pdf::pictures(&state).epoch(), epoch);
+            // Back from parking, it draws and picks again: the rectangle's right edge.
+            let session = state.session.lock().unwrap();
+            let session = session.as_ref().unwrap();
+            assert!(session.pick([4.0, 1.5], 0.05).is_some());
+            assert!(session.is_drawn());
+            let parked = state.parked.lock().unwrap();
+            assert!(parked.iter().all(|p| !p.session.is_drawn()));
         }
 
         ipc.call("activate_tab", json!({ "id": id2 })).unwrap();

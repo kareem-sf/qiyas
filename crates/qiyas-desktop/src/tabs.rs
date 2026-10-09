@@ -1,6 +1,7 @@
 //! File tabs: several drawings open at once. The active one's session sits in
 //! `AppState::session`, where every IPC command, the assistant and the MCP server find it; the
-//! others are parked in `AppState::parked` and swapped in when their tab is chosen.
+//! others are parked in `AppState::parked` (without their batch and pick index, rebuilt on the
+//! next draw or pick) and swapped in when their tab is chosen.
 
 use std::path::Path;
 use std::sync::{MutexGuard, PoisonError};
@@ -102,7 +103,8 @@ pub(crate) fn add(state: &AppState, session: Session) -> u32 {
     let mut parked = lock(&state.parked);
     let id = list.next_id;
     list.next_id += 1;
-    if let (Some(old_id), Some(old)) = (list.active, active.take()) {
+    if let (Some(old_id), Some(mut old)) = (list.active, active.take()) {
+        old.park();
         parked.push(ParkedTab {
             id: old_id,
             session: old,
@@ -137,7 +139,8 @@ pub(crate) fn activate<R: Runtime>(
     new_conversation(app, state);
     let incoming = parked.remove(at).session;
     let outgoing = session.replace(incoming);
-    if let (Some(old_id), Some(old)) = (list.active, outgoing) {
+    if let (Some(old_id), Some(mut old)) = (list.active, outgoing) {
+        old.park();
         parked.push(ParkedTab {
             id: old_id,
             session: old,
