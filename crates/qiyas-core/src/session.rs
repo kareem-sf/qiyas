@@ -695,6 +695,63 @@ impl Session {
         })
     }
 
+    /// The entities a selection box picks on the sheet on screen, among what is drawn: with
+    /// `crossing`, each with a drawn segment inside or crossing `bounds` (`[[min_x, min_y],
+    /// [max_x, max_y]]`, drawing coordinates); otherwise each drawn wholly inside it. Always the
+    /// entity at the top of the sheet: a block reference, or an xref's reference, is picked whole
+    /// (never what is inside it), so `entity == top` and `chain` is empty. Sorted by handle.
+    pub fn pick_window(&self, bounds: [[f64; 2]; 2], crossing: bool) -> Vec<Picked> {
+        self.with_cache(None, |cached| {
+            let batch = &cached.batch;
+            let [ox, oy] = batch.origin;
+            // In the batch's own coordinates, as its segments are.
+            let lo = [bounds[0][0] - ox, bounds[0][1] - oy];
+            let hi = [bounds[1][0] - ox, bounds[1][1] - oy];
+            let segment = |i: usize| -> [f64; 4] {
+                let s = &batch.segments[4 * i..4 * i + 4];
+                [s[0], s[1], s[2], s[3]].map(f64::from)
+            };
+            let near = cached
+                .index
+                .within(bounds[0], bounds[1], usize::MAX, |_| true);
+            let mut tops = std::collections::BTreeSet::new();
+            if crossing {
+                for i in near {
+                    if crosses_box(segment(i), lo, hi) {
+                        tops.extend(batch.range_of(i).map(|r| r.top));
+                    }
+                }
+            } else {
+                let inside =
+                    |p: [f64; 2]| lo[0] <= p[0] && p[0] <= hi[0] && lo[1] <= p[1] && p[1] <= hi[1];
+                let reached: HashSet<u64> = near
+                    .into_iter()
+                    .filter_map(|i| batch.range_of(i))
+                    .map(|r| r.top)
+                    .collect();
+                let mut outside = HashSet::new();
+                for r in batch.ranges.iter().filter(|r| reached.contains(&r.top)) {
+                    let out = (r.first..r.first + r.count).any(|i| {
+                        let [x0, y0, x1, y1] = segment(i as usize);
+                        !inside([x0, y0]) || !inside([x1, y1])
+                    });
+                    if out {
+                        outside.insert(r.top);
+                    }
+                }
+                tops.extend(reached.difference(&outside));
+            }
+            tops.into_iter()
+                .map(|top| Picked {
+                    top,
+                    entity: top,
+                    chain: Vec::new(),
+                    xref: None,
+                })
+                .collect()
+        })
+    }
+
     /// Up to `max_entities` drawn entities with a segment within `tol` of `p`, nearest first (by
     /// handle and block-reference chain; text boxes left out), looking at no more than
     /// `max_segments` segments; and the sheet's point entities within `tol`.
@@ -1097,6 +1154,35 @@ impl Session {
         drop(text);
         f(cached)
     }
+}
+
+/// The segment `x0 y0 x1 y1` has a point in the box `lo hi` (Liang-Barsky clipping).
+fn crosses_box([x0, y0, x1, y1]: [f64; 4], lo: [f64; 2], hi: [f64; 2]) -> bool {
+    let (dx, dy) = (x1 - x0, y1 - y0);
+    let (mut t0, mut t1) = (0.0_f64, 1.0_f64);
+    for (p, q) in [
+        (-dx, x0 - lo[0]),
+        (dx, hi[0] - x0),
+        (-dy, y0 - lo[1]),
+        (dy, hi[1] - y0),
+    ] {
+        if p == 0.0 {
+            if q < 0.0 {
+                return false;
+            }
+        } else {
+            let t = q / p;
+            if p < 0.0 {
+                t0 = t0.max(t);
+            } else {
+                t1 = t1.min(t);
+            }
+            if t0 > t1 {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// Model space holds no entity.

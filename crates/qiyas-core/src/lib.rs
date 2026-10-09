@@ -1,6 +1,6 @@
 //! Qiyas core: the document, selection, undo and redo, command bus, PDF import and underlays,
 //! raster images, inquiry (geometry, divide and measure along, data extraction), drawing new
-//! entities.
+//! entities and modifying them.
 
 mod boq;
 mod commands;
@@ -13,6 +13,7 @@ mod error;
 pub mod fixtures;
 mod image;
 mod inquiry;
+mod modify;
 mod project;
 mod query;
 mod session;
@@ -34,6 +35,7 @@ pub use drawing::{short_layer_name, Drawing, LayerInfo, Sheet};
 pub use embed::{embed_measurements, read_embedded};
 pub use error::CoreError;
 pub use inquiry::{Field, POINT_LAYER};
+pub use modify::ModifySpec;
 pub use project::{project_path, Project};
 pub use query::{BlockCount, DimRow, EntityFilter, EntityRow, Page, TextRow};
 pub use session::{DrawingInfo, EntityInfo, Picked, Session, BATCH_TOL, EMPTY_MODEL};

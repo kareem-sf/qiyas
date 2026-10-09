@@ -13,7 +13,7 @@ use crate::session::{effective_block_name, locate, variant_name, xref_of_chain, 
 use crate::takeoff::in_metres;
 use crate::{
     AttachMode, Boq, Conflict, ConflictStatus, CoreError, Current, Drafting, DrawSpec,
-    EntityFilter, Kind, Measurement, PreparedPdf, Schedule, Session, SnapKind, Source,
+    EntityFilter, Kind, Measurement, ModifySpec, PreparedPdf, Schedule, Session, SnapKind, Source,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -230,6 +230,9 @@ pub enum Command {
     SetCurrent {
         current: Current,
     },
+    /// Moves, copies, turns, scales, mirrors, stretches, aligns, arrays or explodes entities at
+    /// the top of the sheet on screen (see `ModifySpec`): one undo step.
+    Modify(ModifySpec),
 }
 
 /// An entity as picked (see `Picked`): its handle and the block references it sits inside,
@@ -275,7 +278,8 @@ impl Command {
             // Entities only.
             Command::Calibrate { .. }
             | Command::SetImageDisplay { .. }
-            | Command::DeleteEntities { .. } => Some(Part::Document {
+            | Command::DeleteEntities { .. }
+            | Command::Modify(_) => Some(Part::Document {
                 tables: false,
                 takeoff: false,
             }),
@@ -597,6 +601,7 @@ impl Session {
                 self.set_current(current)?;
                 return Ok(Outcome::Changed);
             }
+            Command::Modify(spec) => return self.modify(spec),
         };
         measurement.source = source.name().to_string();
         self.takeoff.add(measurement.clone());
@@ -839,20 +844,32 @@ impl Session {
     /// Removes the entities `targets` from the sheet on screen, once every one is found at its
     /// top.
     fn delete_entities(&mut self, targets: &[Target]) -> Result<(), CoreError> {
+        for h in self.sheet_targets(targets)? {
+            self.drawing.doc.remove_entity_arc(h);
+        }
+        Ok(())
+    }
+
+    /// The handles of `targets` (each once, in order) when every one is an entity of the drawing
+    /// itself at the top of the sheet on screen (an empty chain: not inside a block, not an
+    /// xref's); otherwise why not.
+    pub(crate) fn sheet_targets(&self, targets: &[Target]) -> Result<Vec<Handle>, CoreError> {
         if targets.is_empty() {
-            return Err(invalid("Pick the entities to delete"));
+            return Err(invalid("Pick the entities first"));
         }
         let doc = &self.drawing.doc;
         let sheet = self.sheet_owner();
+        let mut handles: Vec<Handle> = Vec::with_capacity(targets.len());
+        let mut seen = std::collections::HashSet::with_capacity(targets.len());
         for Target { handle: h, chain } in targets {
             if !chain.is_empty() {
                 return Err(CoreError::InvalidCommand(match xref_of_chain(doc, chain) {
                     Some(name) => {
                         format!("Entity {h:X} belongs to the xref {name}, which is read-only")
                     }
-                    None => format!(
-                        "Entity {h:X} is inside a block: pick the block reference to delete it"
-                    ),
+                    None => {
+                        format!("Entity {h:X} is inside a block: pick the block reference instead")
+                    }
                 }));
             }
             let entity = doc
@@ -863,11 +880,11 @@ impl Session {
                     "Entity {h:X} is not on this sheet"
                 )));
             }
+            if seen.insert(*h) {
+                handles.push(Handle::new(*h));
+            }
         }
-        for t in targets {
-            self.drawing.doc.remove_entity_arc(Handle::new(t.handle));
-        }
-        Ok(())
+        Ok(handles)
     }
 }
 
