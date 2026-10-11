@@ -321,3 +321,5 @@ export function useTakeoff({
     renameRow,
   };
 }
+
+export type Takeoff = ReturnType<typeof useTakeoff>;

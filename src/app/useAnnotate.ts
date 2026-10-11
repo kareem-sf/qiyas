@@ -235,7 +235,6 @@ export function useAnnotate({
     });
   }
 
-
   /** Places TEXT's text, remembering its height and style for the next one. */
   function placeInPlace(request: Extract<TextRequest, { kind: "text" }>, draft: TextDraft) {
     setTextEditor(null);

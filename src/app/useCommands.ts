@@ -182,7 +182,6 @@ export function useCommands({
     if (changed) await autosave();
   }
 
-
   async function history(step: () => Promise<boolean>) {
     let changed = false;
     await run(async () => {

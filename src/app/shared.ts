@@ -6,6 +6,7 @@ import type { Batch } from "../viewport/batch";
 import type { Bounds, Point } from "../viewport/camera";
 import type { Theme } from "../viewport/gl";
 import type { useT } from "../i18n";
+import type { useTool } from "../tools/useTool";
 
 export const THEME_KEY = "qiyas.theme";
 
@@ -67,3 +68,6 @@ export const NO_VIEWPORTS: ViewportInfo[] = [];
 
 /** The translator `useT` gives. */
 export type T = ReturnType<typeof useT>;
+
+/** The tool in use (`useTool`'s state and handlers). */
+export type Measure = ReturnType<typeof useTool>;
