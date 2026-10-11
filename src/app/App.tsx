@@ -1,41 +1,32 @@
+/** The window: the composition root. It calls the hooks in an order that keeps their effects
+ *  where they were (shell, sheets' fit, the tool, the assistant, the drawings, the command line,
+ *  the selection) and hands their results to the top bar, the dialogs and the panels. Hooks
+ *  that call back into one made later (`apply`, `onCommand`, the tool's `cancel`) reach it
+ *  through a ref filled right after it exists. */
 import { useRef, useState } from "react";
-import {
-  entityInfo,
-  snap,
-  pick,
-  pickWindow,
-  boundaryAt,
-  undo,
-  type DrawingInfo,
-} from "../api";
+import { boundaryAt, entityInfo, pick, pickWindow, snap, undo, type DrawingInfo } from "../api";
 import { useLanguage, useT } from "../i18n";
-import {
-} from "../shell/AttachImageDialog";
-import {
-  metresPerUnit,
-} from "../shell/AttachPdfDialog";
-import {
-} from "../shell/BlockDialogs";
+import { metresPerUnit } from "../shell/AttachPdfDialog";
 import { CommandLine } from "../shell/CommandLine";
 import { StatusBar } from "../shell/StatusBar";
 import type { Action } from "../tools/commandParser";
 import { useTool } from "../tools/useTool";
-import { readProblems } from "./shared";
-import { useDrafting } from "./useDrafting";
 import { Dialogs, FileDialogs } from "./Dialogs";
 import { Header } from "./Header";
 import { LeftPanels, SidePanel, WorkArea } from "./Panels";
+import { readProblems } from "./shared";
 import { useAnnotate } from "./useAnnotate";
 import { useAssistantWiring } from "./useAssistantWiring";
 import { useAttach } from "./useAttach";
-import { useCommandLine } from "./useCommandLine";
 import { useBlocks } from "./useBlocks";
+import { useCommandLine } from "./useCommandLine";
 import { type Commands, useCommands, useToolChoice } from "./useCommands";
+import { useDrafting } from "./useDrafting";
 import { useAutosave, useDrawings, useFileTabs } from "./useDrawings";
 import { useLayers } from "./useLayers";
-import { useSheets } from "./useSheets";
 import { useOverlay } from "./useOverlay";
 import { useSelection } from "./useSelection";
+import { useSheets } from "./useSheets";
 import { useShell } from "./useShell";
 import { useTakeoff, useTakeoffState } from "./useTakeoff";
 
@@ -44,18 +35,8 @@ export default function App() {
   const { lang } = useLanguage();
   const [info, setInfo] = useState<DrawingInfo | null>(null);
   const shell = useShell();
-  const {
-    theme,
-    settingsOpen,
-    setSettingsOpen,
-    commandAliases,
-    setError,
-    setNotice,
-    setSideTab,
-    viewport,
-    run,
-    focusDrawing,
-  } = shell;
+  const { theme, settingsOpen, setSettingsOpen, commandAliases, setError, setNotice, setSideTab, viewport, run, focusDrawing } =
+    shell;
   const { fileTabs, setFileTabs, activeTab, setActiveTab, refreshTabs } = useFileTabs();
   const { autosaveOff, autosave } = useAutosave(t, setError);
   /** Bumped whenever another drawing comes on screen (open, tab switch, close): work started
@@ -64,15 +45,7 @@ export default function App() {
   const draftingState = useDrafting({ run, autosave });
   const { drafting, setDraftingState, setDraftingOpen, toggleDrafting } = draftingState;
   const takeoffState = useTakeoffState(switchGen);
-  const {
-    items,
-    setSelectedId,
-    setCompared,
-    aiHighlight,
-    setAiHighlight,
-    setInfoCard,
-    refreshTakeoffAndBoq,
-  } = takeoffState;
+  const { items, setSelectedId, setCompared, aiHighlight, setAiHighlight, setInfoCard, refreshTakeoffAndBoq } = takeoffState;
   /** The tool hook comes after the sheets (it takes their state); the sheets cancel it through this. */
   const measureRef = useRef<{ cancel(): void } | null>(null);
   const sheets = useSheets({ switchGen, viewport, run, autosave, setInfo, refreshTabs, items, measure: measureRef });
@@ -102,18 +75,10 @@ export default function App() {
     hidden,
     setHidden,
   });
-  const {
-    setGroupAsk,
-    runDrawingCommand,
-    runLayerCommand,
-    groupOf,
-    syncInfo,
-  } = layers;
+  const { setGroupAsk, runDrawingCommand, runLayerCommand, groupOf, syncInfo } = layers;
   const toolChoice = useToolChoice(focusDrawing);
   const { tool, lastPoint, preset, chooseTool } = toolChoice;
   const attach = useAttach({ t, setInfo, setNotice, viewport, batchHeld, redraw, syncPictures });
-  const {
-  } = attach;
   /** `apply` and `onCommand` come after the hooks that call them back (a block placed, a
    *  palette's command line); those reach them through these, filled once they exist. */
   const applyRef = useRef<Commands["apply"] | null>(null);
@@ -135,12 +100,7 @@ export default function App() {
     apply: applyRef,
     onCommand: onCommandRef,
   });
-  const {
-    setCreateBlockAsk,
-    setAttributesAsk,
-    setAttDefAt,
-    placeBlock,
-  } = blocks;
+  const { setCreateBlockAsk, setAttributesAsk, setAttDefAt, placeBlock } = blocks;
   const annotate = useAnnotate({
     t,
     switchGen,
@@ -162,13 +122,7 @@ export default function App() {
     setAttributesAsk,
     apply: applyRef,
   });
-  const {
-    setDimText,
-    currentTextHeight,
-    placeText,
-    openTextEdit,
-  } = annotate;
-
+  const { setDimText, currentTextHeight, placeText, openTextEdit } = annotate;
   const commands = useCommands({
     t,
     setInfo,
@@ -189,7 +143,6 @@ export default function App() {
   });
   const { apply, history } = commands;
   applyRef.current = apply;
-
   const measure = useTool(
     tool,
     {
@@ -279,11 +232,7 @@ export default function App() {
     takeoffState,
     apply,
   });
-  const {
-    selected,
-    boqLinked,
-    conflictLinked,
-  } = takeoff;
+  const { selected, boqLinked, conflictLinked } = takeoff;
   const { commandLineOn, commandInput, onCommand, clickDrawing, commandState, prompt, message } = useCommandLine({
     t,
     info,
@@ -303,18 +252,8 @@ export default function App() {
     takeoff,
   });
   onCommandRef.current = onCommand;
-  const selection = useSelection({
-    info,
-    tool,
-    measure,
-    batch,
-    redraw,
-    runLayerCommand,
-  });
+  const selection = useSelection({ info, tool, measure, batch, redraw, runLayerCommand });
   const { highlight, overlay } = useOverlay({ tool, measure, batch, selected, boqLinked, conflictLinked, aiHighlight });
-
-
-
 
   // An empty model is said next to the file name, not counted as a reading problem.
   const problems = info ? readProblems(info) : [];
@@ -381,22 +320,10 @@ export default function App() {
           drawings={drawings}
           selection={selection}
         />
-        <SidePanel
-          info={info}
-          drafting={drafting}
-          shell={shell}
-          takeoffState={takeoffState}
-          takeoff={takeoff}
-          ai={ai}
-        />
+        <SidePanel info={info} drafting={drafting} shell={shell} takeoffState={takeoffState} takeoff={takeoff} ai={ai} />
       </div>
       {commandLineOn && (
-        <CommandLine
-          state={commandState}
-          prompt={prompt}
-          onAction={onCommand}
-          inputRef={commandInput}
-        />
+        <CommandLine state={commandState} prompt={prompt} onAction={onCommand} inputRef={commandInput} />
       )}
       <StatusBar
         cursor={measure.cursor}
