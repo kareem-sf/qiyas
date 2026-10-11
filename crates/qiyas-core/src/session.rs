@@ -741,6 +741,17 @@ impl Session {
         self.with_cache(None, |cached| cached.batch.clone())
     }
 
+    /// The batch of the sheet `sheet` (block name), on screen or not, as `with_sheet` draws it
+    /// (pictures only on the sheet on screen); for the PDF plot.
+    pub fn sheet_batch(&self, sheet: &str) -> Batch {
+        self.with_sheet(sheet, None, Batch::clone)
+    }
+
+    /// The font file behind `ShapedGlyph::font` id `id` in this session's batches.
+    pub fn font_bytes(&self, id: u16) -> Option<&'static [u8]> {
+        self.text.borrow().font_bytes(id)
+    }
+
     /// Names what `batch` would give: it changes when the sheet, the hidden layers, the Arabic
     /// setting, the drawing itself (every drawing command, its undo and its redo) or its xrefs
     /// change, and not for take-off, BOQ or conflict changes or their undo or redo. Not for the zoom the glyphs are drawn for either: the window asks
