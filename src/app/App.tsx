@@ -8,37 +8,23 @@ import {
   undo,
   type DrawingInfo,
 } from "../api";
-import { AssistantPanel } from "../ai/AssistantPanel";
-import { BoqPanel } from "../boq/BoqPanel";
-import { ConflictsPanel } from "../boq/ConflictsPanel";
-import { openCount } from "../boq/conflictsMath";
 import { useLanguage, useT } from "../i18n";
 import {
-  ImageDisplayPanel,
 } from "../shell/AttachImageDialog";
 import {
   metresPerUnit,
 } from "../shell/AttachPdfDialog";
 import {
-  BlockEditBar,
 } from "../shell/BlockDialogs";
 import { CommandLine } from "../shell/CommandLine";
-import { FileTabs } from "../shell/FileTabs";
-import { AlongPrompt, InfoCard } from "../shell/InfoCard";
-import { LayersPanel } from "../shell/LayersPanel";
-import { PropertiesPanel } from "../shell/PropertiesPanel";
-import { InPlaceText } from "../shell/TextEditor";
-import { SheetTabs } from "../shell/SheetTabs";
 import { StatusBar } from "../shell/StatusBar";
-import { TakeoffPanel } from "../shell/TakeoffPanel";
 import type { Action } from "../tools/commandParser";
 import { useTool } from "../tools/useTool";
-import { SplitPane } from "../viewport/SplitPane";
-import { Viewport } from "../viewport/Viewport";
-import { NO_VIEWPORTS, readProblems } from "./shared";
+import { readProblems } from "./shared";
 import { useDrafting } from "./useDrafting";
 import { Dialogs, FileDialogs } from "./Dialogs";
 import { Header } from "./Header";
+import { LeftPanels, SidePanel, WorkArea } from "./Panels";
 import { useAnnotate } from "./useAnnotate";
 import { useAssistantWiring } from "./useAssistantWiring";
 import { useAttach } from "./useAttach";
@@ -63,13 +49,10 @@ export default function App() {
     settingsOpen,
     setSettingsOpen,
     commandAliases,
-    error,
     setError,
     setNotice,
-    sideTab,
     setSideTab,
     viewport,
-    viewportBox,
     run,
     focusDrawing,
   } = shell;
@@ -83,17 +66,10 @@ export default function App() {
   const takeoffState = useTakeoffState(switchGen);
   const {
     items,
-    itemTotals,
-    selectedId,
     setSelectedId,
-    bill,
-    boqCode,
-    conflicts,
-    compared,
     setCompared,
     aiHighlight,
     setAiHighlight,
-    infoCard,
     setInfoCard,
     refreshTakeoffAndBoq,
   } = takeoffState;
@@ -103,11 +79,6 @@ export default function App() {
   const {
     batch,
     batchHeld,
-    inset,
-    split,
-    setSplit,
-    atlas,
-    pictures,
     setRenderProgress,
     setArabicReversed,
     sheet,
@@ -115,10 +86,8 @@ export default function App() {
     hidden,
     setHidden,
     fitMatch,
-    syncAtlas,
     redraw,
     syncPictures,
-    redrawGlyphs,
     chooseSheet,
   } = sheets;
   const layers = useLayers({
@@ -135,30 +104,15 @@ export default function App() {
   });
   const {
     setGroupAsk,
-    layersBusy,
     runDrawingCommand,
     runLayerCommand,
     groupOf,
     syncInfo,
-    toggleLayer,
-    isolateLayer,
-    showAll,
-    setLayerProp,
-    renameLayer,
-    deleteLayer,
-    newLayer,
-    openLayerStates,
-    openTranslator,
-    setViewportFrozen,
-    setCurrentState,
-    ownLayers,
-    makeCurrent,
   } = layers;
   const toolChoice = useToolChoice(focusDrawing);
   const { tool, lastPoint, preset, chooseTool } = toolChoice;
   const attach = useAttach({ t, setInfo, setNotice, viewport, batchHeld, redraw, syncPictures });
   const {
-    pending,
   } = attach;
   /** `apply` and `onCommand` come after the hooks that call them back (a block placed, a
    *  palette's command line); those reach them through these, filled once they exist. */
@@ -186,7 +140,6 @@ export default function App() {
     setAttributesAsk,
     setAttDefAt,
     placeBlock,
-    closeBlockEdit,
   } = blocks;
   const annotate = useAnnotate({
     t,
@@ -211,13 +164,9 @@ export default function App() {
   });
   const {
     setDimText,
-    textEditor,
-    setTextEditor,
     currentTextHeight,
-    currentTextStyle,
     placeText,
     openTextEdit,
-    placeInPlace,
   } = annotate;
 
   const commands = useCommands({
@@ -267,7 +216,7 @@ export default function App() {
     info?.ucs,
   );
   measureRef.current = measure;
-  const { assistant, showCard, undoCard, openSettings } = useAssistantWiring({
+  const ai = useAssistantWiring({
     lang,
     switchGen,
     info,
@@ -287,6 +236,7 @@ export default function App() {
     syncInfo,
     measure,
   });
+  const { assistant } = ai;
   const drawings = useDrawings({
     t,
     switchGen,
@@ -315,11 +265,6 @@ export default function App() {
     lastPoint,
     measure,
   });
-  const {
-    switching,
-    switchTab,
-    closeFileTab,
-  } = drawings;
   const takeoff = useTakeoff({
     t,
     info,
@@ -335,21 +280,9 @@ export default function App() {
     apply,
   });
   const {
-    onImportBoq,
-    onCompare,
-    onExportConflicts,
     selected,
     boqLinked,
     conflictLinked,
-    selectRow,
-    selectBoq,
-    showConflict,
-    resolveConflict,
-    openBoqTab,
-    linkRow,
-    setTolerance,
-    removeRow,
-    renameRow,
   } = takeoff;
   const { commandLineOn, commandInput, onCommand, clickDrawing, commandState, prompt, message } = useCommandLine({
     t,
@@ -370,7 +303,7 @@ export default function App() {
     takeoff,
   });
   onCommandRef.current = onCommand;
-  const { imageChosen, setImageChosen, pickedInfo, setPickedProperty, setChosenDisplay } = useSelection({
+  const selection = useSelection({
     info,
     tool,
     measure,
@@ -383,11 +316,9 @@ export default function App() {
 
 
 
-  const openConflicts = openCount(conflicts);
   // An empty model is said next to the file name, not counted as a reading problem.
   const problems = info ? readProblems(info) : [];
   const sheetShown = info?.sheets.find((s) => s.block.toLowerCase() === sheet.toLowerCase());
-  const sheetName = sheetShown?.name ?? sheet;
   // Named views are of model space.
   const onModel = sheetShown?.is_model ?? false;
   // Unknown units are measured as millimetres; the status bar says so.
@@ -423,256 +354,41 @@ export default function App() {
         drawings={drawings}
       />
       <div className="middle">
-        <div className="left">
-          <LayersPanel
-            layers={info?.layers ?? []}
-            hidden={hidden}
-            theme={theme}
-            busy={layersBusy}
-            onToggle={toggleLayer}
-            onIsolate={isolateLayer}
-            onShowAll={showAll}
-            current={info?.current.layer}
-            onMakeCurrent={info ? makeCurrent : undefined}
-            linetypes={info?.linetypes}
-            onSetLayer={info ? setLayerProp : undefined}
-            onRenameLayer={info ? renameLayer : undefined}
-            onDeleteLayer={info ? deleteLayer : undefined}
-            onNewLayer={info ? newLayer : undefined}
-            onLayerStates={info ? openLayerStates : undefined}
-            onTranslate={info ? openTranslator : undefined}
-            viewports={sheetShown?.is_model ? NO_VIEWPORTS : info?.viewports}
-            onViewportFrozen={info ? setViewportFrozen : undefined}
-          />
-          <PropertiesPanel
-            entity={pickedInfo}
-            units={info?.units ?? "metres"}
-            precision={drafting?.precision ?? 3}
-            sheet={sheetName}
-            layers={ownLayers}
-            linetypes={info?.linetypes}
-            onSet={info && pickedInfo ? setPickedProperty : undefined}
-            current={info?.current}
-            onSetCurrent={info ? setCurrentState : undefined}
-          />
-        </div>
-        <main className="work">
-          {info?.block_edit && (
-            <BlockEditBar
-              name={info.block_edit}
-              onSave={() => closeBlockEdit(true)}
-              onDiscard={() => closeBlockEdit(false)}
-            />
-          )}
-          <FileTabs
-            tabs={fileTabs}
-            active={activeTab}
-            onSelect={(id) => id !== activeTab && switchTab(id)}
-            onClose={(id) => closeFileTab(id)}
-          />
-          <div className="views">
-            <div className="viewport" ref={viewportBox} tabIndex={0}>
-              <Viewport
-                ref={viewport}
-                batch={batch}
-                atlas={atlas}
-                onZoomHint={redrawGlyphs}
-                pictures={pictures}
-                onPictureHint={(px, visible) => run(() => syncPictures(batchHeld.current, px, visible))}
-                highlight={highlight}
-                overlay={overlay}
-                tool={tool}
-                theme={theme}
-                onClick={clickDrawing}
-                boxes={measure.boxes && !pending}
-                onBox={(bounds, crossing, shift) => {
-                  if (switching.current === 0) measure.onBox(bounds, crossing, shift);
-                }}
-                grid={drafting?.grid ? drafting.grid_spacing : null}
-                ucs={info?.ucs}
-                inset={inset}
-                onMove={measure.onMove}
-                onWindowZoomed={measure.cancel}
-              />
-              {measure.asking && info && (
-                <AlongPrompt
-                  key={measure.asking}
-                  kind={measure.asking}
-                  units={info.units}
-                  onAnswer={(value) => {
-                    measure.answer(value);
-                    focusDrawing();
-                  }}
-                  onCancel={() => {
-                    measure.cancel();
-                    focusDrawing();
-                  }}
-                />
-              )}
-              {textEditor && info && (
-                <InPlaceText
-                  key={textEditor.key}
-                  at={textEditor.at}
-                  styles={info.text_styles}
-                  style={currentTextStyle}
-                  height={textEditor.request.height ?? currentTextHeight}
-                  onSubmit={(d) => placeInPlace(textEditor.request, d)}
-                  onCancel={() => {
-                    setTextEditor(null);
-                    focusDrawing();
-                  }}
-                />
-              )}
-              {imageChosen && (
-                <ImageDisplayPanel
-                  value={imageChosen.display}
-                  onCommit={(display) => setChosenDisplay(imageChosen.handle, display)}
-                  onClose={() => setImageChosen(null)}
-                />
-              )}
-            </div>
-            {split && info && (
-              <SplitPane
-                sheets={info.sheets}
-                mainSheet={sheet}
-                mainBatch={batch}
-                mainInset={inset}
-                atlas={atlas}
-                theme={theme}
-                ucs={info.ucs}
-                syncAtlas={syncAtlas}
-                onError={(e) => setError(String(e))}
-                onClose={() => setSplit(false)}
-              />
-            )}
-          </div>
-          {error && (
-            <div className="error" role="alert">
-              {error}
-            </div>
-          )}
-          {info && <SheetTabs sheets={info.sheets} active={sheet} onSelect={chooseSheet} />}
-        </main>
-        {/* The BOQ table and the conflicts need more room than the take-off. */}
-        <div className={sideTab === "boq" || sideTab === "conflicts" ? "side wide" : "side"}>
-          <div className="side-tabs" role="tablist">
-            <button
-              type="button"
-              role="tab"
-              id="tab-takeoff"
-              aria-controls="panel-takeoff"
-              aria-selected={sideTab === "takeoff"}
-              onClick={() => setSideTab("takeoff")}
-            >
-              {t("takeoff")}
-            </button>
-            <button
-              type="button"
-              role="tab"
-              id="tab-boq"
-              aria-controls="panel-boq"
-              aria-selected={sideTab === "boq"}
-              onClick={() => setSideTab("boq")}
-            >
-              {t("boq")}
-            </button>
-            <button
-              type="button"
-              role="tab"
-              id="tab-conflicts"
-              aria-controls="panel-conflicts"
-              aria-selected={sideTab === "conflicts"}
-              onClick={() => setSideTab("conflicts")}
-            >
-              {t("conflicts")}
-              {openConflicts > 0 && (
-                <span className="tab-count" title={t("conflicts.openCount", { n: openConflicts })}>
-                  {openConflicts}
-                </span>
-              )}
-            </button>
-            <button
-              type="button"
-              role="tab"
-              id="tab-assistant"
-              aria-controls="panel-assistant"
-              aria-selected={sideTab === "assistant"}
-              onClick={() => setSideTab("assistant")}
-            >
-              {t("assistant")}
-              {assistant.busy && <span className="spinner" aria-hidden="true" />}
-            </button>
-          </div>
-          {infoCard && <InfoCard info={infoCard} onClose={() => setInfoCard(null)} />}
-          {/* All stay mounted, so a draft, a search or a running answer survives a tab switch. */}
-          <div
-            className="side-panel"
-            role="tabpanel"
-            id="panel-takeoff"
-            aria-labelledby="tab-takeoff"
-            hidden={sideTab !== "takeoff"}
-          >
-            <TakeoffPanel
-              items={items}
-              totals={itemTotals}
-              selectedId={selectedId}
-              onSelect={selectRow}
-              onRemove={removeRow}
-              onRename={renameRow}
-              boq={bill}
-              onLink={linkRow}
-              precision={drafting?.precision ?? 3}
-            />
-          </div>
-          <div
-            className="side-panel"
-            role="tabpanel"
-            id="panel-boq"
-            aria-labelledby="tab-boq"
-            hidden={sideTab !== "boq"}
-          >
-            <BoqPanel
-              boq={bill}
-              takeoff={items}
-              selectedCode={boqCode}
-              onSelect={selectBoq}
-              onImport={info ? onImportBoq : undefined}
-              onTolerance={setTolerance}
-            />
-          </div>
-          <div
-            className="side-panel"
-            role="tabpanel"
-            id="panel-conflicts"
-            aria-labelledby="tab-conflicts"
-            hidden={sideTab !== "conflicts"}
-          >
-            <ConflictsPanel
-              conflicts={conflicts}
-              compared={compared}
-              hasBoq={bill !== null}
-              onCompare={info ? onCompare : undefined}
-              onExport={info ? onExportConflicts : undefined}
-              onShow={showConflict}
-              onResolve={resolveConflict}
-              onOpenBoq={openBoqTab}
-            />
-          </div>
-          <div
-            className="side-panel"
-            role="tabpanel"
-            id="panel-assistant"
-            aria-labelledby="tab-assistant"
-            hidden={sideTab !== "assistant"}
-          >
-            <AssistantPanel
-              assistant={assistant}
-              onShow={showCard}
-              onUndo={undoCard}
-              onSettings={openSettings}
-            />
-          </div>
-        </div>
+        <LeftPanels
+          info={info}
+          sheetShown={sheetShown}
+          theme={theme}
+          drafting={drafting}
+          sheets={sheets}
+          layers={layers}
+          selection={selection}
+        />
+        <WorkArea
+          info={info}
+          fileTabs={fileTabs}
+          activeTab={activeTab}
+          tool={tool}
+          measure={measure}
+          clickDrawing={clickDrawing}
+          highlight={highlight}
+          overlay={overlay}
+          drafting={drafting}
+          shell={shell}
+          sheets={sheets}
+          attach={attach}
+          blocks={blocks}
+          annotate={annotate}
+          drawings={drawings}
+          selection={selection}
+        />
+        <SidePanel
+          info={info}
+          drafting={drafting}
+          shell={shell}
+          takeoffState={takeoffState}
+          takeoff={takeoff}
+          ai={ai}
+        />
       </div>
       {commandLineOn && (
         <CommandLine

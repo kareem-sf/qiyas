@@ -166,3 +166,5 @@ export function useAssistantWiring({
 
   return { assistant, showCard, undoCard, openSettings };
 }
+
+export type AssistantWiring = ReturnType<typeof useAssistantWiring>;

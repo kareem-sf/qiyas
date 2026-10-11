@@ -83,3 +83,5 @@ export function useSelection({ info, tool, measure, batch, redraw, runLayerComma
 
   return { imageChosen, setImageChosen, pickedInfo, setPickedProperty, setChosenDisplay };
 }
+
+export type Selection = ReturnType<typeof useSelection>;
