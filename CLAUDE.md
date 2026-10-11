@@ -30,8 +30,8 @@ All the crates above exist; `qiyas-pdf` reads PDFs (import, underlays), PDF plot
 Pinned libraries (git revs in the workspace `Cargo.toml`): opencadcodec `a35f43e` (DWG/DXF) and
 opencadkernel `99b6b48` (`geom2d` for snaps and edits, `offset` for polyline offsets: it brings
 cavalier_contours, MIT OR Apache-2.0). Both MPL-2.0. Licence texts of code we ship
-live in `LICENSES/` (opencadcodec, opencadkernel, pdfium); add one there for every new non-MIT
-library. Font licences sit beside the fonts in `crates/qiyas-render/fonts/`.
+live in `LICENSES/` (opencadcodec, opencadkernel, pdfium, foldhash's Zlib, clipboard-win's and
+error-code's BSL-1.0); add one there for every new non-MIT library. Font licences sit beside the fonts in `crates/qiyas-render/fonts/`.
 
 Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example write_test_plan`) and `samples/test-boq.xlsx` (written by `cargo run -p qiyas-boq --example write_test_boq`); the exact quantities and the two conflicts the BOQ must give are in `samples/test-plan.md`. `cargo run -p qiyas-ai --example phase2_walkthrough` measures, imports, links and compares them through the AI tools, no model needed.
 
@@ -61,7 +61,9 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
 - Never push or release without the founder's yes.
 - Run the app: `pnpm tauri dev --config crates/qiyas-desktop/tauri.conf.json`.
 - The `.qiyas` project file is saved next to the drawing after every command.
-- Save keeps a `.bak` of the original drawing (e.g. `villa.dwg.bak`) before writing over it.
+- Save keeps a `.bak` of the original drawing (e.g. `villa.dwg.bak`) before writing over it. The
+  file leaves out anonymous `*Dn`/`*Tn` blocks nothing uses any more and erased group members
+  (`purge_for_save`); the drawing in memory keeps them, so an undo after the save finds them.
 - Autosave writes `<file>.sv$` and `<file>.sv$.qiyas` (`plan.dwg.sv$`) beside a drawing with
   unsaved changes (see Clipboard, viewports, UCS, sheet sets and recovery); a save, or closing it
   with Don't Save, deletes them.
@@ -106,7 +108,11 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
 - The batch also carries fill triangles (section 12, `u32` colour each, bit 24 =
   `FILL_BACKGROUND`) and their ranges (13), only when there are fills; GL draws fills under the
   lines, then wipeouts in the background colour over all lines (they hide line work under them,
-  even lines drawn later: no draw order yet), then the wipeout frames. Solid hatches, 2D solids
+  even lines drawn later: no draw order yet), then the wipeout frames. A fill keeps its rings in
+  its own coordinates with the reference's transform (`FlatFill::xf`), so a fill inside a block
+  is triangulated once per build and mapped through every reference; a fill of more than 2,000
+  corners draws its outline only (the kernel's ear clipping slows down with the square of them;
+  `cargo test -p qiyas-render --release --test fills fill_in_a_block` guards it). Solid hatches, 2D solids
   and traces fill; gradient hatches fill with their first colour; pattern hatches draw pattern
   lines clipped to the boundary (range flag `PATTERN`, never part of a hatch boundary, left out
   when denser than 20,000 lines); rays and xlines run across the sheet without growing its
@@ -131,10 +137,15 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
 - Home tab, Draw: Line (C close, U undo the last line), Polyline (A arc, L line, C close, U
   undo; Esc keeps what is drawn), Rectangle, Circle (2P, 3P, typed radius), Arc (three points,
   or C centre first), Ellipse, Spline, Point, Hatch, Revision cloud, Wipeout.
-- Hatch: click inside. `Session::boundary_at` runs `arrangement::bounded_faces` over the drawn
-  segments in a box about 50 screen pixels across, growing it 4 times until the region found
-  fits inside the box; regions inside it become islands. More than 50,000 segments in the box
-  is `TooDense` (the prompt says zoom in), never a ring from part of them. Type a pattern
+- Hatch: click inside. `Session::boundary_at` runs `arrangement::bounded_faces` over the entities
+  drawn in a box about 50 screen pixels across, flattened again at `MEASURE_TOL` (f64), growing
+  the box 4 times until the region found fits inside it; regions inside it become islands. An
+  edge along a drawn circle or arc comes back as that arc (`Boundary::Ring::bulges`, passed on
+  as `DrawSpec::Hatch::bulges`). An entity inside an arrayed reference keeps its drawn
+  segments (`locate` places one cell). More than 50,000 drawn segments in the box, text boxes
+  and pattern lines not counted, or 4 times as many flattened again, is `TooDense` (the prompt
+  says zoom in), never a ring from part of them. A hatch
+  measures even-odd (islands taken away), each path exactly when it is a bulged polyline. Type a pattern
   (SOLID, ANSI31, ANSI37, LINE, NET, DASH, BRICK), S scale, A angle; the default scale is
   0.025 / metres per unit (25 in millimetres).
 - Command line: L, PL, REC, C, A, EL, SPL, PO, H, REVCLOUD, WIPEOUT; typed whole: POLYGON (POL)
@@ -162,9 +173,12 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
   refuse them; the window leaves them out of a selection for those tools and says how many.
   Images and PDF underlays move but are not copied.
 - The take-off follows edits in the same undo step (`Session::follow_takeoff`): rows measuring
-  a moved, turned, scaled, mirrored, stretched or aligned entity are measured again; erase and
-  explode keep the row's value but drop its link. Erasing an image or underlay cleans its
-  definition's link.
+  a moved, turned, scaled, mirrored, stretched or aligned entity are measured again; a row
+  measuring an erased or exploded entity and others too is measured again without it (a count
+  counts one less); one measuring only erased ones keeps its value but drops its link.
+  `Outcome::TakeoffFollowed` (erase, or a placing tool that left a row unmeasurable; `Changed`
+  otherwise) and `Exploded` say how many rows were measured again and unlinked; the window shows
+  it. Erasing an image or underlay cleans its definition's link.
 - `Session::pick_window(bounds, crossing)` (IPC `pick_window`): a window takes entities drawn
   wholly inside, a crossing those with a segment touching it (clipped exactly); always the entity
   at the top of the sheet (a block or xref reference whole), with its kind. The select tool
@@ -201,7 +215,8 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
   plain runs (codes such as `\C1;` and braces are never matched), attribute values (a multiline
   one's embedded MText, every line) and dimension overrides (`<>` kept) on the sheet or every
   sheet, not inside block definitions; one undo step, `Outcome::Replaced { count, handles,
-  skipped }` (none when nothing changes). A TEXT the result would leave blank or break into two
+  skipped }` (none when nothing changes). Entities on a locked layer, or outside a block edited
+  in place (`Session::is_locked`), are left as they are and counted in `skipped`. A TEXT the result would leave blank or break into two
   lines, or a single-line attribute it would break, is left as it is and counted in `skipped`. `FindText` lists the
   matches (`Outcome::Found`), no step. `DrawingInfo` has `text_styles` and `text_style`;
   `EntityInfo::plain_text` is an MText's text without codes.
@@ -267,7 +282,8 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
   typed) is kept in `QIYAS_FIELD` xdata (on a table: row, column, code per cell). `Command::Field
   { at, height, field }` adds a one-line text; codes typed into Text, MText or a cell count too.
   `UpdateFields` works them all out again; area and length fields follow every modify, edit and
-  erase in the same step (`follow_fields`). Metres and square metres (`in_metres`, as the
+  erase in the same step (`follow_fields`). A locked field text or table (`Session::is_locked`)
+  is left as it is: `Outcome::Updated { count, skipped }` (`Changed` when none was). Metres and square metres (`in_metres`, as the
   take-off), 3 decimals; UTC date; `####` when the entity is gone. Not worked out on open. Find
   and replace leaves field texts and field cells as they are and counts them in `skipped`.
 - Annotate tab, Tables group: Table (click, then rows, columns and sizes), Edit table (or a double
@@ -284,8 +300,10 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
   (current layer; attributes from the block's ATTDEFs, constants excepted; `from_path` copies a
   missing block with its layers, linetypes, styles and nested blocks from another drawing, read
   only), `WriteBlock { name, path }` (a new .dwg in the drawing's folder, never the drawing
-  itself; the Save dialog's path goes through IPC `write_block`), `AttDef` (current layer; drawn on a sheet as its tag; inside a block
-  only constants draw), `EditAttributes`, `EditAttDef`, `SyncAttributes` (ATTSYNC, values kept),
+  itself; the Save dialog's path goes through IPC `write_block`, keeping a `.bak` of a file it
+  replaces, written through a temp file), `AttDef` (current layer; drawn on a sheet as its tag; inside a block
+  only constants draw), `EditAttributes`, `EditAttDef`, `SyncAttributes` (ATTSYNC, values kept; a locked reference is left and counted,
+  `Outcome::Updated`),
   `RedefineBlock { name, from_path }`. One undo step each; WBLOCK is none. Constant ATTDEFs are
   never prompted (`AttDefInfo::constant`).
 - Edit in place (`EditBlockInPlace { target }`, a sheet reference, not arrayed, even scale, no
@@ -373,7 +391,12 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
   height }` reads it through the block `Importer` (new handles; a missing layer comes with its
   colour, a block or style of that name already there is kept), base at `at`, one step; as a
   block (PASTEBLOCK) a new `A$Cnnnnnnnn` block under one reference; plain text becomes a Text
-  (MText for several lines) 2.5 mm at the annotation scale. The desktop `run_command` fills `text`
+  (MText for several lines) 2.5 mm at the annotation scale. A clipboard drawing over 32 MB,
+  plain text over 64 KB or more than 100,000 entities is refused; one in other units (INSUNITS,
+  unitless as millimetres) is scaled to the drawing's (as a block, the reference's scale). The
+  block `Importer` (paste, WBLOCK, Design Center, redefine) refuses blocks nested more than 32
+  deep and drops the source's handles (linetype, colour book, visual styles, material, plot
+  style, view representation, attribute definitions; a complex linetype's text style is copied). The desktop `run_command` fills `text`
   from the system clipboard (`arboard`, one `Clipboard` kept in `AppState`: on X11 a dropped one
   takes its copy with it) and puts a copy's text on it. Home tab, Clipboard group;
   Ctrl+C (COPYCLIP), Ctrl+Shift+C (COPYBASE), Ctrl+V (PASTECLIP), Ctrl+Shift+V (PASTEBLOCK); Ctrl+C
@@ -544,5 +567,7 @@ In this repo, `docs/` (write new specs, plans, checks and reports here, never in
 - Plan (Phase 1a): `docs/superpowers/plans/2026-10-08-qiyas-foundation.md`
 - Plan (Phase 2, AI and BOQ): `docs/superpowers/plans/2026-10-08-qiyas-phase2-ai-boq.md`
 - Plan (Phase 1b, drawing I/O): `docs/superpowers/plans/2026-10-08-qiyas-phase1b-drawing-io.md`
+- Plan (Phase 3, edit and annotate): `docs/superpowers/plans/2026-10-08-qiyas-phase3-edit-annotate.md`
 - Checks: `docs/2026-10-08-qiyas-foundation-check.md`, `docs/2026-10-09-qiyas-phase2-check.md`,
-  `docs/2026-10-09-qiyas-phase1b-check.md`
+  `docs/2026-10-09-qiyas-phase1b-check.md`, `docs/2026-10-09-qiyas-phase3-check.md`
+- Deferred (Phase 3, left for later): `docs/2026-10-09-qiyas-phase3-deferred.md`

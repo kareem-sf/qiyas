@@ -3,9 +3,12 @@
 
 use std::f64::consts::{FRAC_PI_2, PI};
 
-use opencadcodec::entities::{BoundaryEdge, HatchPatternType};
-use opencadcodec::{Color, EntityType, Handle, LineWeight};
-use qiyas_core::fixtures::write_sample;
+use opencadcodec::entities::{BoundaryEdge, HatchPatternType, Insert};
+use opencadcodec::{
+    BlockRecord, CadDocument, Circle, Color, EntityType, Handle, Layer, LineWeight, LwPolyline,
+    Vector2, Vector3,
+};
+use qiyas_core::fixtures::{write_drawing, write_sample};
 use qiyas_core::{Boundary, Command, CoreError, Current, DrawSpec, HatchPattern, Outcome, Session};
 
 const MODEL: &str = "*Model_Space";
@@ -1394,4 +1397,128 @@ fn hatch_by_click_inside_a_circle_follows_the_circle_not_its_chords() {
     let want = 9.0 - PI * 0.75 * 0.75;
     let rel = (measurement.value - want).abs() / want;
     assert!(rel < 1e-4, "{} vs {want}", measurement.value);
+}
+
+/// A drawing in metres with block CELL (a 1 x 1 square on layer 0 and a circle of radius 0.3 at
+/// its middle on layer OWN), placed once at (300, 300) at scale 2 on A-WALL, and as a 2 x 2
+/// array 5 apart at (400, 300).
+fn block_session() -> (tempfile::TempDir, Session) {
+    let dir = tempfile::tempdir().unwrap();
+    let mut doc = CadDocument::new();
+    doc.header.insertion_units = 6;
+    for name in ["A-WALL", "OWN"] {
+        let mut layer = Layer::new(name);
+        layer.handle = doc.allocate_handle();
+        doc.layers.add(layer).unwrap();
+    }
+    let mut record = BlockRecord::new("CELL");
+    record.handle = doc.allocate_handle();
+    record.block_entity_handle = doc.allocate_handle();
+    record.block_end_handle = doc.allocate_handle();
+    let owner = record.handle;
+    doc.block_records.add(record).unwrap();
+    let mut square = LwPolyline::new();
+    for (x, y) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)] {
+        square.add_point(Vector2::new(x, y));
+    }
+    square.is_closed = true;
+    let mut circle = Circle::from_center_radius(Vector3::new(0.5, 0.5, 0.0), 0.3);
+    circle.common.layer = "OWN".to_string();
+    for mut e in [EntityType::LwPolyline(square), EntityType::Circle(circle)] {
+        e.common_mut().owner_handle = owner;
+        doc.add_entity(e).unwrap();
+    }
+    let mut once = Insert::new("CELL", Vector3::new(300.0, 300.0, 0.0)).with_scale(2.0, 2.0, 2.0);
+    once.common.layer = "A-WALL".to_string();
+    doc.add_entity(EntityType::Insert(once)).unwrap();
+    let mut array = Insert::new("CELL", Vector3::new(400.0, 300.0, 0.0));
+    array.column_count = 2;
+    array.row_count = 2;
+    array.column_spacing = 5.0;
+    array.row_spacing = 5.0;
+    doc.add_entity(EntityType::Insert(array)).unwrap();
+    let path = write_drawing(&doc, &dir.path().join("cells.dxf"));
+    let session = Session::open(&path).unwrap();
+    (dir, session)
+}
+
+#[test]
+fn hatch_by_click_inside_a_block_follows_its_entities_and_an_array_cell_as_drawn() {
+    let (_dir, mut s) = block_session();
+    // Inside the single reference: the square at scale 2, with the circle an exact island.
+    let Boundary::Ring {
+        ring,
+        holes,
+        bulges,
+    } = s.boundary_at([300.2, 300.2], 0.5)
+    else {
+        panic!("a ring");
+    };
+    assert!(close(signed_area(&ring).abs(), 4.0), "{ring:?}");
+    assert_eq!(holes.len(), 1, "{holes:?}");
+    // The island's ring is the circle flattened at `MEASURE_TOL`; its bulges make it exact.
+    let want = PI * 0.6 * 0.6;
+    let hole = signed_area(&holes[0]).abs();
+    assert!((hole - want).abs() / want < 5e-3, "{hole} vs {want}");
+    assert!(bulges[0].iter().all(|b| *b == 0.0), "straight sides");
+    assert!(
+        bulges[1].iter().all(|b| *b != 0.0),
+        "the island is the circle"
+    );
+    let EntityType::Hatch(h) = one(
+        &mut s,
+        DrawSpec::Hatch {
+            boundary_handles: Vec::new(),
+            points: ring,
+            holes,
+            bulges,
+            pattern: HatchPattern::Solid,
+        },
+    ) else {
+        panic!("a hatch");
+    };
+    let Outcome::Measured { measurement } = s
+        .run(Command::MeasureEntity {
+            handle: h.common.handle.value(),
+            chain: Vec::new(),
+        })
+        .unwrap()
+    else {
+        panic!("measured");
+    };
+    let want = 4.0 - want;
+    let rel = (measurement.value - want).abs() / want;
+    assert!(rel < 1e-4, "{} vs {want}", measurement.value);
+    // The measurement is a step of its own: two undos take the hatch off the sheet.
+    assert!(
+        s.undo() && s.undo(),
+        "the hatch goes before the layers are hidden"
+    );
+    assert!(!s
+        .drawing
+        .doc
+        .entities_in_block(MODEL)
+        .any(|e| matches!(e, EntityType::Hatch(_))));
+    // The square is on layer 0 inside the block, so it is drawn on the reference's layer: it
+    // stays when layer 0 is hidden. The circle on OWN goes with its layer.
+    s.set_layer_hidden("0", true);
+    let Boundary::Ring { ring, holes, .. } = s.boundary_at([300.2, 300.2], 0.5) else {
+        panic!("a ring with layer 0 hidden");
+    };
+    assert!(close(signed_area(&ring).abs(), 4.0), "{ring:?}");
+    assert_eq!(holes.len(), 1);
+    s.set_layer_hidden("0", false);
+    s.set_layer_hidden("OWN", true);
+    let ring = ring_of(s.boundary_at([300.2, 300.2], 0.5));
+    assert!(close(signed_area(&ring).abs(), 4.0), "{ring:?}");
+    s.set_layer_hidden("OWN", false);
+    // Inside a cell of the array, the first or another: the cell as drawn.
+    for cell in [[400.2, 300.2], [405.2, 305.2]] {
+        let Boundary::Ring { ring, holes, .. } = s.boundary_at(cell, 0.5) else {
+            panic!("a ring in the cell at {cell:?}");
+        };
+        let area = signed_area(&ring).abs();
+        assert!((area - 1.0).abs() < 1e-3, "{area} at {cell:?}");
+        assert_eq!(holes.len(), 1, "{holes:?}");
+    }
 }

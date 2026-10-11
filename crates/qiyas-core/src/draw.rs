@@ -15,11 +15,11 @@ use opencadcodec::{
     Vector2, Vector3,
 };
 use opencadkernel::geom2d::{bounded_faces, Curve, Line as KernelLine, NurbsCurve, Tolerance};
-use qiyas_geom::{flatten, flatten_with, snap_shapes, Paint, Xform};
+use qiyas_geom::{flatten, flatten_within, snap_shapes, Paint, Xform};
 use qiyas_render::layer_shown_with;
 use serde::{Deserialize, Serialize};
 
-use crate::session::{locate, MEASURE_TOL};
+use crate::session::{locate, Near, MEASURE_TOL};
 use crate::{CoreError, Session};
 
 /// The drawing state new entities take: their layer, colour, linetype and lineweight. Saved in
@@ -930,9 +930,10 @@ impl Session {
             };
             let lo = [p[0] - radius, p[1] - radius];
             let hi = [p[0] + radius, p[1] + radius];
-            // The entities drawn there, flattened again as finely as they are measured.
-            let (segments, rounds) = self.exact_near(&near.sources, lo, hi);
-            if segments.len() > max {
+            // The entities drawn there, flattened again as finely as they are measured: curves
+            // take more segments than drawn, so the cap is the drawn one's, with room for them.
+            let (segments, rounds) = self.exact_near(&near, lo, hi);
+            if segments.len() > max.saturating_mul(4) {
                 return Boundary::TooDense;
             }
             if let Some(found) = region_around(&segments, p, radius, lo, hi) {
@@ -948,57 +949,94 @@ impl Session {
 }
 
 impl Session {
-    /// The outlines of `sources` (handle and chain, as drawn) flattened at `MEASURE_TOL` in
-    /// drawing coordinates: the segments reaching into the box `lo hi`, texts and hidden layers
-    /// left out, and the circles and arcs among the entities' true shapes.
-    fn exact_near(
-        &self,
-        sources: &[(u64, Vec<u64>)],
-        lo: [f64; 2],
-        hi: [f64; 2],
-    ) -> (Vec<[f64; 4]>, Vec<Round>) {
+    /// The line work of `near`'s entities flattened again at `MEASURE_TOL` in drawing
+    /// coordinates, as the sheet draws them (multiline elements, rays across the box, no texts,
+    /// pattern lines or hidden layers): the segments reaching into the box `lo hi`, and the
+    /// circles and arcs among the entities' true shapes. An entity inside an arrayed block
+    /// reference keeps its drawn segments.
+    fn exact_near(&self, near: &Near, lo: [f64; 2], hi: [f64; 2]) -> (Vec<[f64; 4]>, Vec<Round>) {
         let xrefs = self.xref_docs();
         let doc = &self.drawing.doc;
         let mut segments = Vec::new();
         let mut rounds = Vec::new();
-        for (handle, chain) in sources {
-            let Ok(located) = locate(doc, &xrefs, *handle, chain) else {
+        let reaches = |[x0, y0, x1, y1]: [f64; 4]| {
+            x0.min(x1) <= hi[0] && x0.max(x1) >= lo[0] && y0.min(y1) <= hi[1] && y0.max(y1) >= lo[1]
+        };
+        let across = (hi[0] - lo[0]).hypot(hi[1] - lo[1]);
+        for (i, (handle, chain)) in near.sources.iter().enumerate() {
+            let arrayed = chain.iter().any(|&h| {
+                matches!(doc.get_entity(Handle::new(h)),
+                    Some(EntityType::Insert(r)) if r.row_count > 1 || r.column_count > 1)
+            });
+            let located = locate(doc, &xrefs, *handle, chain)
+                .ok()
+                .filter(|_| !arrayed);
+            let Some(located) = located else {
+                let drawn = near.drawn.iter().filter(|(k, _)| *k == i);
+                segments.extend(drawn.map(|(_, s)| *s));
                 continue;
             };
-            let flat = flatten_with(
+            let mut budget = qiyas_geom::MAX_WORK;
+            let flat = flatten_within(
                 located.doc,
                 &xrefs,
                 located.entity,
                 &located.xf,
                 MEASURE_TOL,
+                &mut budget,
             );
             for f in flat.paths {
-                if f.paint != Paint::Outline || f.text.is_some() {
-                    continue;
-                }
-                let layer = match &located.xref {
-                    Some(x) if !f.layer.contains('|') => format!("{x}|{}", f.layer),
-                    _ => f.layer.clone(),
+                // Layer "0" inside a block is drawn on the reference's layer.
+                let own = if f.layer == "0" {
+                    &located.layer
+                } else {
+                    &f.layer
                 };
-                if !layer_shown_with(doc, &xrefs, &self.visibility, &layer) {
+                let layer = match &located.xref {
+                    Some(x) if !own.contains('|') => format!("{x}|{own}"),
+                    _ => own.clone(),
+                };
+                if f.text.is_some() || !layer_shown_with(doc, &xrefs, &self.visibility, &layer) {
                     continue;
                 }
                 let pts = &f.path.points;
-                let n = pts.len();
-                let count = if f.path.closed && n > 2 {
-                    n
-                } else {
-                    n.saturating_sub(1)
-                };
-                for i in 0..count {
-                    let (a, b) = (pts[i], pts[(i + 1) % n]);
-                    let reaches = a[0].min(b[0]) <= hi[0]
-                        && a[0].max(b[0]) >= lo[0]
-                        && a[1].min(b[1]) <= hi[1]
-                        && a[1].max(b[1]) >= lo[1];
-                    if reaches {
-                        segments.push([a[0], a[1], b[0], b[1]]);
+                match f.paint {
+                    Paint::Outline => {
+                        let n = pts.len();
+                        let count = if f.path.closed && n > 2 {
+                            n
+                        } else {
+                            n.saturating_sub(1)
+                        };
+                        for k in 0..count {
+                            let (a, b) = (pts[k], pts[(k + 1) % n]);
+                            let seg = [a[0], a[1], b[0], b[1]];
+                            if reaches(seg) {
+                                segments.push(seg);
+                            }
+                        }
                     }
+                    // Across the box: as far as the box is wide past the base point both ways.
+                    Paint::Infinite { both_ways } => {
+                        let [a, b] = [pts[0], pts[1]];
+                        let len = (b[0] - a[0]).hypot(b[1] - a[1]);
+                        if len < 1e-12 {
+                            continue;
+                        }
+                        let far = across
+                            + (a[0] - (lo[0] + hi[0]) / 2.0).hypot(a[1] - (lo[1] + hi[1]) / 2.0);
+                        let d = [(b[0] - a[0]) / len * far, (b[1] - a[1]) / len * far];
+                        let from = if both_ways {
+                            [a[0] - d[0], a[1] - d[1]]
+                        } else {
+                            a
+                        };
+                        let seg = [from[0], from[1], a[0] + d[0], a[1] + d[1]];
+                        if reaches(seg) {
+                            segments.push(seg);
+                        }
+                    }
+                    _ => {}
                 }
             }
             let shapes = snap_shapes(located.doc, located.entity, &located.xf, MEASURE_TOL);

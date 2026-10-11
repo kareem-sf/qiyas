@@ -40,6 +40,8 @@ pub(crate) struct Near {
     /// The entities the drawn segments there draw (handle and block chain, as `locate` takes them), once
     /// each.
     pub sources: Vec<(u64, Vec<u64>)>,
+    /// The drawn segments (absolute `x0 y0 x1 y1`), each with the index of its source.
+    pub drawn: Vec<(usize, [f64; 4])>,
     /// The square held the whole sheet: there is nothing further out.
     pub whole_sheet: bool,
 }
@@ -977,15 +979,25 @@ impl Session {
             }
             let [b0, b1] = batch.bounds;
             let whole_sheet = lo[0] <= b0[0] && lo[1] <= b0[1] && hi[0] >= b1[0] && hi[1] >= b1[1];
+            let [ox, oy] = batch.origin;
             let mut sources: Vec<(u64, Vec<u64>)> = Vec::new();
-            let mut seen = HashSet::new();
-            for r in found.iter().filter_map(|&i| batch.range_of(i)) {
-                if seen.insert((r.entity, r.chain)) {
+            let mut seen: HashMap<(u64, u32), usize> = HashMap::new();
+            let mut drawn = Vec::with_capacity(found.len());
+            for i in found {
+                let Some(r) = batch.range_of(i) else {
+                    continue;
+                };
+                let source = *seen.entry((r.entity, r.chain)).or_insert_with(|| {
                     sources.push((r.entity, batch.chain_of(r).to_vec()));
-                }
+                    sources.len() - 1
+                });
+                let s = &batch.segments[4 * i..4 * i + 4];
+                let at = |k: usize, o: f64| f64::from(s[k]) + o;
+                drawn.push((source, [at(0, ox), at(1, oy), at(2, ox), at(3, oy)]));
             }
             Some(Near {
                 sources,
+                drawn,
                 whole_sheet,
             })
         })
