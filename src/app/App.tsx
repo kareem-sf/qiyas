@@ -122,7 +122,7 @@ import { PropertiesPanel } from "../shell/PropertiesPanel";
 import { RecoverReportDialog, RecoveryDialog } from "../shell/RecoveryDialog";
 import { drop, enqueue, type RecoveryAsk } from "../shell/recoveryQueue";
 import { SheetSetManager, type SheetSetApi } from "../shell/SheetSetManager";
-import { Ribbon, type Tool } from "../shell/Ribbon";
+import { Ribbon } from "../shell/Ribbon";
 import { SettingsDialog } from "../shell/SettingsDialog";
 import { DimStylePanel } from "../shell/DimStylePanel";
 import { DesignCenter } from "../shell/DesignCenter";
@@ -161,6 +161,7 @@ import { SplitPane } from "../viewport/SplitPane";
 import { Viewport } from "../viewport/Viewport";
 import { NO_VIEWPORTS, type Pending, readProblems, typing, unionBounds } from "./shared";
 import { useDrafting } from "./useDrafting";
+import { useCommands, useToolChoice } from "./useCommands";
 import { useAutosave, useFileTabs } from "./useDrawings";
 import { useLayers } from "./useLayers";
 import { useSheets } from "./useSheets";
@@ -293,6 +294,8 @@ export default function App() {
     ownLayers,
     makeCurrent,
   } = layers;
+  const toolChoice = useToolChoice(focusDrawing);
+  const { tool, setTool, lastPoint, preset, chooseTool } = toolChoice;
   /** Autosaves to offer back (on launch, or before opening `then`), one question at a time. */
   const [recoveries, setRecoveries] = useState<RecoveryAsk[]>([]);
   const recovery = recoveries[0] ?? null;
@@ -310,7 +313,6 @@ export default function App() {
   const [pending, setPending] = useState<Pending | null>(null);
   const [pickedInsert, setPickedInsert] = useState<Point | null>(null);
   const [calibration, setCalibration] = useState<[Point, Point] | null>(null);
-  const [tool, setTool] = useState<Tool>("select");
   const [opening, setOpening] = useState(false);
   const [xrefsOpen, setXrefsOpen] = useState(false);
   const [extractOpen, setExtractOpen] = useState(false);
@@ -377,10 +379,6 @@ export default function App() {
   const [commandLineOn, setCommandLineOn] = useState(true);
   const commandInput = useRef<HTMLInputElement>(null);
   const focusCommandLine = useRef(false);
-  /** The last point clicked or typed, for the command line's `@`. */
-  const lastPoint = useRef<Point | null>(null);
-  /** DIVIDE n or MEASURE step typed on the command line: the answer once the entity is clicked. */
-  const preset = useRef<{ tool: Tool; value: number } | null>(null);
   /** What the select tool picked, for the properties palette. */
   const [pickedInfo, setPickedInfo] = useState<EntityInfo | null>(null);
   /** Drawing changes waiting or running; while any is, clicks and tool input on the canvas are
@@ -392,124 +390,31 @@ export default function App() {
   const infoRef = useRef(info);
   infoRef.current = info;
 
-  /** Runs a take-off command; a new measurement becomes the selected row. An inquiry's answer
-   *  shows in the info card. */
-  async function apply(given: Command) {
-    // Plain text pastes as a text as tall as new text is.
-    const cmd: Command =
-      given.type === "paste_from_clipboard" ? { ...given, height: currentTextHeight } : given;
-    // BLOCK's base point is clicked: the name comes from its dialog.
-    if (cmd.type === "create_block" && cmd.name === "") {
-      await run(async () => setCreateBlockAsk({ cmd, names: (await readBlocks()).map((b) => b.name) }));
-      return;
-    }
-    // GROUP's entities are picked: the name comes from its dialog.
-    if (cmd.type === "create_group" && cmd.name === "") {
-      setGroupAsk(cmd);
-      return;
-    }
-    // A copy goes onto the system clipboard and changes nothing; back to Select.
-    if (cmd.type === "copy_to_clipboard") {
-      await run(async () => {
-        const outcome = await runCommand(cmd);
-        if (outcome.type === "clipboard") setNotice(t("clip.copied", { n: outcome.count }));
-        chooseTool("select");
-      });
-      return;
-    }
-    // The UCS is view state: the info carries it to the cursor, typed points and the grid; the
-    // project file keeps it.
-    if (cmd.type === "ucs" || cmd.type === "ucs_object") {
-      let set = false;
-      await run(async () => {
-        await runCommand(cmd);
-        await syncInfo();
-        set = true;
-        const world = cmd.type === "ucs" && cmd.origin[0] === 0 && cmd.origin[1] === 0 && cmd.x_axis[0] > 0 && cmd.x_axis[1] === 0;
-        setNotice(t(world ? "ucs.worldSet" : "ucs.set"));
-      });
-      if (set) await autosave();
-      return;
-    }
-    // Groups and matched properties change what the layers panel and the palette show.
-    if (cmd.type === "ungroup" || cmd.type === "match_properties") {
-      await run(async () => {
-        await runDrawingCommand(cmd);
-      });
-      return;
-    }
-    let changed = false;
-    await run(async () => {
-      const outcome = await runCommand(cmd);
-      if (outcome.type === "nothing") return;
-      if (outcome.type === "info") {
-        setInfoCard({ title: outcome.title, rows: outcome.rows });
-        return;
-      }
-      changed = true;
-      await refreshTakeoffAndBoq();
-      // Divide, measure along, the draws and the modifies change the drawing itself.
-      const drawingChanged = [
-        "divide_along",
-        "measure_along",
-        "draw",
-        "modify",
-        "edit",
-        "delete_entities",
-        "text",
-        "mtext",
-        "edit_text",
-        "find_replace",
-        "dimension",
-        "dim_edit",
-        "dim_break",
-        "dim_space",
-        "dim_jog_line",
-        "leader",
-        "mleader",
-        "tolerance",
-        "insert_block",
-        "edit_block_in_place",
-        "paste_from_clipboard",
-        "mview",
-      ];
-      if (drawingChanged.includes(cmd.type)) {
-        await redraw();
-      }
-      // A new viewport shows in the layers panel's VP freeze column.
-      if (cmd.type === "mview") await syncInfo();
-      if (cmd.type === "paste_from_clipboard" && outcome.type === "added") {
-        setNotice(t("clip.pasted", { n: outcome.handles.length }));
-      }
-      // An edit in place began: the bar to end it shows, and Select works on the block.
-      if (cmd.type === "edit_block_in_place") {
-        setInfo(await drawingInfo());
-        chooseTool("select");
-      }
-      if (outcome.type === "measured") setSelectedId(outcome.measurement.id);
-      if (outcome.type === "exploded" || outcome.type === "takeoff_followed") {
-        const notes: string[] = [];
-        if (outcome.type === "exploded" && outcome.left_alone > 0) {
-          notes.push(t("modify.leftAlone", { n: outcome.left_alone }));
-        }
-        if (outcome.remeasured > 0) notes.push(t("modify.remeasured", { n: outcome.remeasured }));
-        if (outcome.unlinked > 0) notes.push(t("modify.unlinked", { n: outcome.unlinked }));
-        if (notes.length > 0) setNotice(notes.join(" · "));
-      }
-      if (outcome.type === "edited") {
-        const notes: string[] = [];
-        if (cmd.type === "edit" && cmd.kind === "overkill") {
-          notes.push(t("edit.removed", { n: outcome.removed.length }));
-        } else if (outcome.left_alone > 0) {
-          notes.push(t("edit.leftAlone", { n: outcome.left_alone }));
-        }
-        if (outcome.unlinked > 0) notes.push(t("edit.unlinked", { n: outcome.unlinked }));
-        if (outcome.joined_rows > 1) notes.push(t("edit.joinedRows", { n: outcome.joined_rows }));
-        if (notes.length > 0) setNotice(notes.join(" · "));
-      }
-    });
-    if (changed) await autosave();
-  }
+  /** The height new text takes: the last one used, else 2.5 mm on paper in drawing units at the
+   *  annotation scale. */
+  const currentTextHeight =
+    textHeight ?? (0.0025 / metresPerUnit(info?.units ?? "unknown")) * (info?.annotation_factor ?? 1);
+  /** The style new text takes: the last one used when the drawing has it, else its current one. */
+  const currentTextStyle =
+    textStyle !== null && info?.text_styles.includes(textStyle) ? textStyle : (info?.text_style ?? "Standard");
+  const { apply, history } = useCommands({
+    t,
+    setInfo,
+    info,
+    setNotice,
+    run,
+    autosave,
+    redraw,
+    refreshTakeoffAndBoq,
+    setInfoCard,
+    setSelectedId,
+    chooseTool,
+    syncInfo,
+    runDrawingCommand,
+    setGroupAsk,
+    setCreateBlockAsk,
+    currentTextHeight,
+  });
 
   const measure = useTool(
     tool,
@@ -538,13 +443,6 @@ export default function App() {
   );
   measureRef.current = measure;
 
-  /** The height new text takes: the last one used, else 2.5 mm on paper in drawing units at the
-   *  annotation scale. */
-  const currentTextHeight =
-    textHeight ?? (0.0025 / metresPerUnit(info?.units ?? "unknown")) * (info?.annotation_factor ?? 1);
-  /** The style new text takes: the last one used when the drawing has it, else its current one. */
-  const currentTextStyle =
-    textStyle !== null && info?.text_styles.includes(textStyle) ? textStyle : (info?.text_style ?? "Standard");
 
   /** A text tool placed a text: TEXT opens the in-place editor where it starts, MTEXT the MText
    *  dialog. */
@@ -843,19 +741,6 @@ export default function App() {
     if (box) viewport.current?.fitTo(box);
   }
 
-  async function history(step: () => Promise<boolean>) {
-    let changed = false;
-    await run(async () => {
-      if (!info || !(await step())) return;
-      changed = true;
-      await refreshTakeoffAndBoq();
-      // The step may have been a PDF import, an underlay or a calibration.
-      await redraw();
-      // Or a layer change: the panel shows the layers and hidden ones as they are now.
-      await syncInfo();
-    });
-    if (changed) await autosave();
-  }
 
 
   /** Does what a tool's result asks of the window: another sheet, other layers, a zoom. */
@@ -1527,11 +1412,6 @@ export default function App() {
     if (!pendingPoint(world)) measure.onClick(world, screen, worldPerPixel, shift);
   }
 
-  function chooseTool(next: Tool) {
-    preset.current = null;
-    setTool(next);
-    focusDrawing();
-  }
 
   /** Escape: drops what is waiting (an insert point, a measure, a prompt) and every highlight.
    *  `escKey` for the Esc key itself (or ESC typed), which keeps a polyline drawn so far. */
