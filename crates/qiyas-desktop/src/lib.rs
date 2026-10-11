@@ -23,6 +23,9 @@ pub fn run() {
             }
             let config_dir = app.path().app_config_dir()?;
             app.manage(state::AppState::new(config_dir));
+            app.manage(files::Locks::default());
+            files::install_panic_hook(app.handle().clone());
+            files::start_watch(app.handle().clone());
             pdf::use_bundled_pdfium(app.handle());
             mcp::restart(app.handle());
             Ok(())
@@ -110,6 +113,11 @@ pub fn run() {
             blocks::write_block,
             blocks::set_tool_palette,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Qiyas");
+        .build(tauri::generate_context!())
+        .expect("error while running Qiyas")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                files::release_locks(app);
+            }
+        });
 }

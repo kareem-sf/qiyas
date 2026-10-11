@@ -1,15 +1,26 @@
 //! Files beyond open and save: the system clipboard (`arboard`), autosave and recovery of
 //! drawings, Recover (a damaged file opened with a report of what was dropped), and sheet sets.
+//!
+//! Crash recovery: a watch thread (`start_watch`) keeps a lock file beside every open drawing
+//! (`Locks`, `qiyas_core::take_lock`) and autosaves a drawing after every 20 changes; quitting
+//! removes the locks (`release_locks`), a crash leaves them. The panic hook
+//! (`install_panic_hook`) autosaves every drawing with changes, best effort, within 5 s.
 
-use std::path::Path;
-use std::sync::{MutexGuard, PoisonError};
+use std::collections::BTreeSet;
+use std::io::Write;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Mutex, MutexGuard, PoisonError, TryLockError};
+use std::time::Duration;
 
 use qiyas_core::{
-    recoverable, sheet_set_entries, sheet_set_entry as entry_for, Drawing, DrawingInfo, ReadReport,
-    Recoverable, Session, SheetSet, SheetSetDrawing, SheetSetEntry,
+    autosave_all, recoverable, release_lock, sheet_set_entries, sheet_set_entry as entry_for,
+    take_lock, AutosaveRun, Drawing, DrawingInfo, ReadReport, Recoverable, Session, SheetSet,
+    SheetSetDrawing, SheetSetEntry,
 };
 use serde::Serialize;
-use tauri::{AppHandle, Runtime, State};
+use tauri::{AppHandle, Manager, Runtime, State};
 
 use crate::commands::{new_conversation, remember_recent, with_session};
 use crate::state::AppState;
@@ -44,34 +55,208 @@ pub(crate) fn set_clipboard_text(state: &AppState, text: &str) -> Result<(), Str
         .map_err(|e| format!("The clipboard could not be written: {e}"))
 }
 
-/// What one autosave round did: the autosaves written, and why others could not be.
-#[derive(Serialize, Debug, Default)]
-pub struct AutosaveRun {
-    pub written: Vec<String>,
-    pub failed: Vec<String>,
+/// Runs `f` on every open drawing, the one on screen first, under the lock order of `tabs`:
+/// tabs, session, parked.
+fn with_open<T>(state: &AppState, f: impl FnOnce(Vec<&Session>) -> T) -> T {
+    let _list = lock(&state.tabs);
+    let session = lock(&state.session);
+    let parked = lock(&state.parked);
+    f(session
+        .iter()
+        .chain(parked.iter().map(|p| &p.session))
+        .collect())
 }
 
 /// Autosaves every open drawing with unsaved changes, the one on screen and those parked in
 /// other tabs (see `Session::autosave`).
 #[tauri::command]
 pub async fn autosave_drawings(state: State<'_, AppState>) -> Result<AutosaveRun, String> {
-    let mut run = AutosaveRun::default();
-    let mut one = |s: &Session| match s.autosave() {
-        Ok(Some(path)) => run.written.push(path.display().to_string()),
-        Ok(None) => {}
-        Err(e) => run
-            .failed
-            .push(format!("{}: {e}", s.drawing.path.display())),
+    Ok(with_open(&state, |open| autosave_all(open)))
+}
+
+/// The lock files this app holds beside its open drawings (`qiyas_core::take_lock`), kept in
+/// step with the tabs by the watch (`tick`) and removed when Qiyas quits (`release_locks`).
+#[derive(Default)]
+pub struct Locks(Mutex<HeldLocks>);
+
+#[derive(Default)]
+struct HeldLocks {
+    held: BTreeSet<PathBuf>,
+    /// Qiyas is quitting: no lock is taken any more.
+    released: bool,
+}
+
+impl Locks {
+    /// Locks every drawing in `open` not held yet (files only: a recovered drawing not saved yet
+    /// has none), unless another Qiyas has it (tried again on the next beat); unlocks the held
+    /// ones no longer open (closed, or saved under another name).
+    fn sync<'a>(&self, open: impl IntoIterator<Item = &'a Path>) {
+        let mut locks = lock(&self.0);
+        if locks.released {
+            return;
+        }
+        let open: BTreeSet<PathBuf> = open
+            .into_iter()
+            .filter(|p| p.is_file())
+            .map(Path::to_path_buf)
+            .collect();
+        let closed: Vec<PathBuf> = locks.held.difference(&open).cloned().collect();
+        for path in closed {
+            let _ = release_lock(&path);
+            locks.held.remove(&path);
+        }
+        for path in open {
+            if !locks.held.contains(&path) && take_lock(&path).unwrap_or(false) {
+                locks.held.insert(path);
+            }
+        }
+    }
+
+    /// Removes every lock this app holds; none is taken after (Qiyas quits).
+    fn release_all(&self) {
+        let mut locks = lock(&self.0);
+        locks.released = true;
+        for path in std::mem::take(&mut locks.held) {
+            let _ = release_lock(&path);
+        }
+    }
+}
+
+/// How often the watch looks at the open drawings.
+const WATCH_EVERY: Duration = Duration::from_secs(1);
+
+/// One beat of the watch: the lock files follow the open drawings, and a drawing with 20
+/// changes since it was last saved or autosaved is autosaved (`Session::autosave_due`).
+fn tick(state: &AppState, locks: &Locks) -> AutosaveRun {
+    with_open(state, |open| {
+        locks.sync(open.iter().map(|s| s.drawing.path.as_path()));
+        autosave_all(open.into_iter().filter(|s| s.autosave_due()))
+    })
+}
+
+/// Starts the watch: `tick` every second while Qiyas runs.
+pub(crate) fn start_watch<R: Runtime>(app: AppHandle<R>) {
+    let watch = move || loop {
+        std::thread::sleep(WATCH_EVERY);
+        let (Some(state), Some(locks)) = (app.try_state::<AppState>(), app.try_state::<Locks>())
+        else {
+            continue;
+        };
+        // A panic in one beat (a writer bug) must not stop the next ones.
+        if let Ok(run) = catch_unwind(AssertUnwindSafe(|| tick(&state, &locks))) {
+            for failed in run.failed {
+                eprintln!("Autosave failed: {failed}");
+            }
+        }
     };
-    // The lock order of `tabs`: tabs, session, parked.
-    let _list = lock(&state.tabs);
-    if let Some(s) = lock(&state.session).as_ref() {
-        one(s);
+    if let Err(e) = std::thread::Builder::new()
+        .name("qiyas-watch".into())
+        .spawn(watch)
+    {
+        eprintln!("The autosave watch could not start: {e}");
     }
-    for p in lock(&state.parked).iter() {
-        one(&p.session);
+}
+
+/// Qiyas quits: the lock files of its drawings go (a crash leaves them behind).
+pub(crate) fn release_locks<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(locks) = app.try_state::<Locks>() {
+        locks.release_all();
     }
-    Ok(run)
+}
+
+/// How long the panic hook waits for its autosaves.
+const FLUSH_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// A panic flush is running; a panic meanwhile (in it, or elsewhere) starts no other.
+static FLUSHING: AtomicBool = AtomicBool::new(false);
+
+/// Ends a panic flush when dropped: when it finishes, panics, or never starts.
+struct Flushing;
+
+impl Drop for Flushing {
+    fn drop(&mut self) {
+        FLUSHING.store(false, Ordering::SeqCst);
+    }
+}
+
+/// After the usual panic report, autosaves every drawing with unsaved changes it can get at
+/// once (`flush_dirty`), waiting at most `FLUSH_TIMEOUT`. Never panics itself.
+pub(crate) fn install_panic_hook<R: Runtime>(app: AppHandle<R>) {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        previous(info);
+        if FLUSHING.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let flushing = Flushing;
+        let app = app.clone();
+        let flushed = flush_within(FLUSH_TIMEOUT, move || {
+            let _flushing = flushing;
+            app.try_state::<AppState>().map(|state| flush_dirty(&state))
+        });
+        let mut err = std::io::stderr();
+        let _ = match flushed {
+            Some(Some(f)) => writeln!(
+                err,
+                "Autosaved after the error: {} written, {} failed {:?}, {} held by another thread",
+                f.run.written.len(),
+                f.run.failed.len(),
+                f.run.failed,
+                f.busy
+            ),
+            Some(None) => Ok(()),
+            None => writeln!(err, "The autosave after the error did not finish"),
+        };
+    }));
+}
+
+/// Runs `f` on its own thread and waits for it at most `limit`: its result, or `None` when it
+/// panicked, took longer (it is left to finish on its own) or no thread could start.
+fn flush_within<T: Send + 'static>(
+    limit: Duration,
+    f: impl FnOnce() -> T + Send + 'static,
+) -> Option<T> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("qiyas-flush".into())
+        .spawn(move || {
+            if let Ok(done) = catch_unwind(AssertUnwindSafe(f)) {
+                let _ = tx.send(done);
+            }
+        })
+        .ok()?;
+    rx.recv_timeout(limit).ok()
+}
+
+/// What a panic flush did: the autosaves, and how many of the two places drawings live (the one
+/// on screen, the parked ones) another thread held, so were left (the command that panicked
+/// holds its drawing).
+#[derive(Debug)]
+struct Flushed {
+    run: AutosaveRun,
+    busy: usize,
+}
+
+/// `lock`, never waiting: `None` when another thread holds it.
+fn try_lock<T>(m: &Mutex<T>) -> Option<MutexGuard<'_, T>> {
+    match m.try_lock() {
+        Ok(held) => Some(held),
+        Err(TryLockError::Poisoned(p)) => Some(p.into_inner()),
+        Err(TryLockError::WouldBlock) => None,
+    }
+}
+
+/// Autosaves every open drawing with unsaved changes that no other thread holds.
+fn flush_dirty(state: &AppState) -> Flushed {
+    let session = try_lock(&state.session);
+    let parked = try_lock(&state.parked);
+    let busy = usize::from(session.is_none()) + usize::from(parked.is_none());
+    let on_screen = session.as_deref().and_then(Option::as_ref);
+    let others = parked.as_deref().into_iter().flatten().map(|p| &p.session);
+    Flushed {
+        run: autosave_all(on_screen.into_iter().chain(others)),
+        busy,
+    }
 }
 
 /// The autosaves of `paths` newer than their drawings (the recent drawings at launch, or the
@@ -262,4 +447,139 @@ pub async fn paper_views(
             None => s.paper_views(),
         })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    use qiyas_core::fixtures::{sample_doc, write_drawing};
+    use qiyas_core::{
+        autosave_path, lock_path, read_lock, AutosaveRun, Command, DrawSpec, Session,
+        AUTOSAVE_EVERY,
+    };
+
+    use super::*;
+
+    fn line(s: &mut Session, y: f64) {
+        s.run(Command::Draw(DrawSpec::Line {
+            a: [100.0, y],
+            b: [101.0, y],
+        }))
+        .unwrap();
+    }
+
+    /// The app's state with `a.dwg` and `b.dwg` open in two tabs, `b` on screen.
+    fn two_open(dir: &Path) -> (AppState, PathBuf, PathBuf) {
+        let state = AppState::new(dir.join("config"));
+        let a = write_drawing(&sample_doc(), &dir.join("a.dwg"));
+        let b = write_drawing(&sample_doc(), &dir.join("b.dwg"));
+        tabs::add(&state, Session::open(&a).unwrap());
+        tabs::add(&state, Session::open(&b).unwrap());
+        (state, a, b)
+    }
+
+    #[test]
+    fn tick_locks_open_drawings_autosaves_when_due_and_unlocks_closed_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let (state, a, b) = two_open(dir.path());
+        let locks = Locks::default();
+        assert_eq!(tick(&state, &locks), AutosaveRun::default());
+        for p in [&a, &b] {
+            assert_eq!(read_lock(p).unwrap().pid, std::process::id());
+        }
+
+        // 19 changes: not yet; the 20th: the next beat autosaves it, once.
+        for i in 0..AUTOSAVE_EVERY - 1 {
+            line(lock(&state.session).as_mut().unwrap(), i as f64);
+        }
+        assert!(tick(&state, &locks).written.is_empty());
+        line(lock(&state.session).as_mut().unwrap(), 99.0);
+        assert_eq!(
+            tick(&state, &locks).written,
+            [autosave_path(&b).display().to_string()]
+        );
+        assert!(tick(&state, &locks).written.is_empty());
+        assert!(!autosave_path(&a).exists());
+
+        // b's tab closed: its lock goes on the next beat; a's stays.
+        *lock(&state.session) = None;
+        tick(&state, &locks);
+        assert!(!lock_path(&b).exists());
+        assert!(lock_path(&a).exists());
+    }
+
+    #[test]
+    fn release_locks_removes_every_held_lock_and_takes_none_after() {
+        let dir = tempfile::tempdir().unwrap();
+        let (state, a, b) = two_open(dir.path());
+        let locks = Locks::default();
+        tick(&state, &locks);
+        assert!(lock_path(&a).exists() && lock_path(&b).exists());
+        locks.release_all();
+        assert!(!lock_path(&a).exists() && !lock_path(&b).exists());
+        // A beat of the watch while Qiyas quits takes none again.
+        tick(&state, &locks);
+        assert!(!lock_path(&a).exists() && !lock_path(&b).exists());
+    }
+
+    #[test]
+    fn flush_within_gives_the_result_or_returns_at_the_timeout() {
+        assert_eq!(flush_within(Duration::from_secs(5), || 7), Some(7));
+
+        // A flush stuck on a lock: back after the limit, the flush left to finish on its own.
+        let gate = Arc::new(Mutex::new(()));
+        let held = gate.lock().unwrap();
+        let stuck = Arc::clone(&gate);
+        let start = Instant::now();
+        let done = flush_within(Duration::from_millis(200), move || {
+            let _wait = stuck.lock();
+            1
+        });
+        let took = start.elapsed();
+        assert_eq!(done, None);
+        assert!(
+            took >= Duration::from_millis(200) && took < Duration::from_secs(2),
+            "{took:?}"
+        );
+        drop(held);
+
+        // A flush that panics is no result, and no panic here.
+        let failed = flush_within(Duration::from_secs(5), || -> u8 { panic!("flush failed") });
+        assert_eq!(failed, None);
+    }
+
+    #[test]
+    fn flush_dirty_autosaves_what_it_can_and_skips_a_held_drawing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (state, a, b) = two_open(dir.path());
+        line(lock(&state.session).as_mut().unwrap(), 1.0);
+        line(&mut lock(&state.parked)[0].session, 1.0);
+
+        // The drawing on screen is held (by the command that panicked): skipped, not waited for.
+        let held = lock(&state.session);
+        let flushed = flush_dirty(&state);
+        drop(held);
+        assert_eq!(flushed.busy, 1);
+        assert_eq!(
+            flushed.run.written,
+            [autosave_path(&a).display().to_string()]
+        );
+        assert!(!autosave_path(&b).exists());
+
+        // A panic while holding it poisons the lock; its drawing is autosaved all the same.
+        let session = Arc::clone(&state.session);
+        let _ = std::thread::spawn(move || {
+            let _held = session.lock().unwrap();
+            panic!("a command failed");
+        })
+        .join();
+        assert!(state.session.is_poisoned());
+        let flushed = flush_dirty(&state);
+        assert_eq!(flushed.busy, 0);
+        assert_eq!(flushed.run.written.len(), 2);
+        assert!(autosave_path(&b).exists());
+    }
 }
