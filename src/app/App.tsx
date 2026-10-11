@@ -1,5 +1,5 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   blocks as readBlocks,
   clearRecents,
@@ -9,7 +9,6 @@ import {
   views as readViews,
   calibrate,
   IMAGE_EXTENSIONS,
-  imageDisplay,
   imageSize,
   pdfPageCount,
   pdfPageSize,
@@ -21,13 +20,9 @@ import {
   redo,
   reloadXrefs,
   boundaryAt,
-  runCommand,
   setXrefPath,
   undo,
   type DrawingInfo,
-  type EntityInfo,
-  type EntityProp,
-  type ImageDisplay,
   type NamedView,
 } from "../api";
 import { AssistantPanel } from "../ai/AssistantPanel";
@@ -104,6 +99,7 @@ import { type Commands, useCommands, useToolChoice } from "./useCommands";
 import { useAutosave, useDrawings, useFileTabs } from "./useDrawings";
 import { useLayers } from "./useLayers";
 import { useSheets } from "./useSheets";
+import { useSelection } from "./useSelection";
 import { useShell } from "./useShell";
 import { useTakeoff, useTakeoffState } from "./useTakeoff";
 
@@ -350,12 +346,6 @@ export default function App() {
     replaceTexts,
     showMatch,
   } = annotate;
-  /** The image the select tool has chosen, and its brightness, contrast and fade. */
-  const [imageChosen, setImageChosen] = useState<{ handle: number; display: ImageDisplay } | null>(
-    null,
-  );
-  /** What the select tool picked, for the properties palette. */
-  const [pickedInfo, setPickedInfo] = useState<EntityInfo | null>(null);
 
   const commands = useCommands({
     t,
@@ -534,57 +524,16 @@ export default function App() {
     takeoff,
   });
   onCommandRef.current = onCommand;
+  const { imageChosen, setImageChosen, pickedInfo, setPickedProperty, setChosenDisplay } = useSelection({
+    info,
+    tool,
+    measure,
+    batch,
+    redraw,
+    runLayerCommand,
+  });
 
-  /** The palette's edit of the picked entity (a drawing's own, at the top of the sheet). */
-  const setPickedProperty = useCallback(
-    (prop: EntityProp, value: boolean | string | number | [number, number]) => {
-      if (!pickedInfo) return;
-      runLayerCommand({ type: "set_property", target: { handle: pickedInfo.handle, chain: [] }, prop, value });
-    },
-    [pickedInfo, info],
-  );
 
-  /** Sets the chosen image's brightness, contrast and fade (one undo step), then draws it. */
-  async function setChosenDisplay(handle: number, display: ImageDisplay) {
-    await runCommand({ type: "set_image_display", handle, ...display });
-    await redraw();
-  }
-
-  // An image chosen with the select tool shows its brightness, contrast and fade; read again when
-  // the batch changes (a set, an undo or a redo).
-  const chosen = measure.highlighted;
-  const chosenHandle = chosen && chosen.chain.length === 0 ? chosen.handle : null;
-  useEffect(() => {
-    if (chosenHandle === null) {
-      setImageChosen(null);
-      return;
-    }
-    let gone = false;
-    imageDisplay(chosenHandle)
-      .then((display) => !gone && setImageChosen(display ? { handle: chosenHandle, display } : null))
-      .catch(() => !gone && setImageChosen(null));
-    return () => {
-      gone = true;
-    };
-  }, [chosenHandle, batch]);
-
-  // The select tool's pick, for the properties palette; read again when the batch changes (an
-  // undo, a redo, another sheet).
-  const pickedTarget = tool === "select" ? measure.highlighted : null;
-  const pickedKey = pickedTarget ? `${pickedTarget.handle}:${pickedTarget.chain.join(",")}` : null;
-  useEffect(() => {
-    if (!pickedTarget) {
-      setPickedInfo(null);
-      return;
-    }
-    let gone = false;
-    entityInfo(pickedTarget.handle, pickedTarget.chain)
-      .then((found) => !gone && setPickedInfo(found))
-      .catch(() => !gone && setPickedInfo(null));
-    return () => {
-      gone = true;
-    };
-  }, [pickedKey, batch]);
 
   const highlight = useMemo(() => {
     const rows = [...(selected ? [selected] : []), ...boqLinked, ...conflictLinked];
