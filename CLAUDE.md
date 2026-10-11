@@ -35,6 +35,16 @@ error-code's BSL-1.0); add one there for every new non-MIT library. Font licence
 
 Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example write_test_plan`) and `samples/test-boq.xlsx` (written by `cargo run -p qiyas-boq --example write_test_boq`); the exact quantities and the two conflicts the BOQ must give are in `samples/test-plan.md`. `cargo run -p qiyas-ai --example phase2_walkthrough` measures, imports, links and compares them through the AI tools, no model needed.
 
+Frontend layout: `src/main.tsx` renders `src/app/App.tsx`, the composition root (`src/App.tsx`
+re-exports it). It calls the hooks in `src/app/` in this order, which keeps their effects in the
+order they always ran: `useShell`, `useFileTabs`, `useAutosave`, `useDrafting`,
+`useTakeoffState`, `useSheets`, `useLayers`, `useToolChoice`, `useAttach`, `useBlocks`,
+`useAnnotate`, `useCommands`, `useTool`, `useAssistantWiring`, `useDrawings`, `useTakeoff`,
+`useCommandLine`, `useSelection`, `useOverlay`. It hands `apply`, `onCommand` and the tool's
+`cancel` to hooks made before them through refs filled right after they exist, and renders
+`Header`, `Dialogs` and `Panels`. Dialogs and panels themselves are in `src/shell/`, the canvas
+in `src/viewport/`, the tools in `src/tools/`; `src/app/App.test.tsx` checks the wiring.
+
 ## Global constraints
 
 - Desktop only. No web build, no CI workflows. Local check is `scripts/check.sh`.
