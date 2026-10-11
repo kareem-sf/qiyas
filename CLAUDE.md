@@ -453,8 +453,20 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
   `<name> (recovered).<ext>` with its take-off, unsaved, then Save As (its first save deletes the
   autosave it came from, `Session::recovered_from`); Discard deletes it; Later opens the drawing
   itself. Questions wait their turn (`recoveryQueue.ts`, e.g. a sheet set's Open all). A save, or
-  Don't Save on closing a tab or the window, deletes the drawing's autosave. Lock files and the panic hook
-  are Phase 4's.
+  Don't Save on closing a tab or the window, deletes the drawing's autosave. Besides the timer,
+  the app's 1 s watch (`files::start_watch`) autosaves a drawing after every 20 changes to it
+  (steps, undos, redos; a save or an autosave starts the count again, `Session::autosave_due`).
+- Lock files (`autosave.rs`, `files::Locks`): while a drawing is open the watch keeps
+  `<file>.qlock` beside it (JSON `pid`, `host`, `started_at`), removed when it is closed, saved
+  under another name, or Qiyas quits (`RunEvent::Exit`). A lock on this computer whose process
+  has ended means Qiyas closed unexpectedly: `recoverable` sets `crashed` and offers the autosave
+  even when it is older than the drawing. A running process's lock, or another computer's, is
+  `locked_elsewhere`: reported only, never taken over, no read-only open. A dead lock is replaced
+  when the drawing is opened again and removed with its autosave (Discard, or the recovered
+  drawing's first save). Windows tells a live process with `tasklist` (untested here).
+- Panic hook (`files::install_panic_hook`): after the usual report, autosaves every drawing with
+  unsaved changes on its own thread, at most 5 s, best effort: `try_lock`, so the drawing whose
+  command panicked (its lock held) is skipped; a panic during it starts no other.
 - RECOVER (Home tab, Recover…): opens a damaged drawing through the failsafe reader (as every open
   does) and `RecoverReportDialog` lists what it read and dropped by kind (`ReadReport`: DWG object
   types by number, else the reader's code). A truncated DWG loses its file header and does not
