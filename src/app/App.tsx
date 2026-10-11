@@ -1,62 +1,37 @@
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ask, message as messageDialog, open, save } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  activateTab,
   blocks as readBlocks,
   clearRecents,
   drawingBlocks,
-  getSettings,
   setToolPalette,
-  closeTab,
   EMPTY_MODEL,
   recents as readRecents,
-  tabs as readTabs,
   views as readViews,
   calibrate,
   IMAGE_EXTENSIONS,
   imageDisplay,
   imageSize,
-  isDirty,
   pdfPageCount,
   pdfPageSize,
   pdfThumbnails,
   compare,
-  drawingInfo,
   entityInfo,
-  getDrafting,
   snap,
   exportConflicts,
-  exportTable,
-  exportTakeoff,
   importBoq,
-  openDrawing,
   pick,
   pickWindow,
   redo,
   reloadXrefs,
   boundaryAt,
   runCommand,
-  saveDrawing,
-  saveDrawingAs,
   setXrefPath,
   undo,
-  autosaveDrawings,
-  discardAutosave,
-  recoverableDrawings,
-  recoverAutosave,
-  recoverDrawing,
-  sheetSetEntry,
-  sheetSetFromTabs,
-  sheetSetOpen,
-  sheetSetSave,
-  type ReadReport,
   type Conflict,
   type DrawingInfo,
-  type EntityFilter,
   type EntityInfo,
   type EntityProp,
-  type Field,
   type ImageDisplay,
   type Measurement,
   type NamedView,
@@ -89,16 +64,14 @@ import { CommandLine } from "../shell/CommandLine";
 import { DraftingSettings } from "../shell/DraftingSettings";
 import { ExtractDialog } from "../shell/ExtractDialog";
 import { FindReplaceDialog } from "../shell/FindReplaceDialog";
-import { cycleTab, FileTabs } from "../shell/FileTabs";
-import { isStale, serial } from "../shell/switcher";
+import { FileTabs } from "../shell/FileTabs";
 import { AlongPrompt, InfoCard } from "../shell/InfoCard";
 import { GroupNameDialog, LayerStatesDialog } from "../shell/LayerDialogs";
 import { LayersPanel } from "../shell/LayersPanel";
 import { LayerTranslator } from "../shell/LayerTranslator";
 import { PropertiesPanel } from "../shell/PropertiesPanel";
 import { RecoverReportDialog, RecoveryDialog } from "../shell/RecoveryDialog";
-import { drop, enqueue, type RecoveryAsk } from "../shell/recoveryQueue";
-import { SheetSetManager, type SheetSetApi } from "../shell/SheetSetManager";
+import { SheetSetManager } from "../shell/SheetSetManager";
 import { Ribbon } from "../shell/Ribbon";
 import { SettingsDialog } from "../shell/SettingsDialog";
 import { DimStylePanel } from "../shell/DimStylePanel";
@@ -112,7 +85,6 @@ import { SheetTabs } from "../shell/SheetTabs";
 import { StatusBar } from "../shell/StatusBar";
 import { TakeoffPanel } from "../shell/TakeoffPanel";
 import { XrefManager } from "../shell/XrefManager";
-import { leaveDrawing, readChoice } from "../shell/unsaved";
 import {
   markSize,
   measurementBounds,
@@ -137,7 +109,7 @@ import { useAssistantWiring } from "./useAssistantWiring";
 import { useAttach } from "./useAttach";
 import { useBlocks } from "./useBlocks";
 import { type Commands, useCommands, useToolChoice } from "./useCommands";
-import { useAutosave, useFileTabs } from "./useDrawings";
+import { useAutosave, useDrawings, useFileTabs } from "./useDrawings";
 import { useLayers } from "./useLayers";
 import { useSheets } from "./useSheets";
 import { useShell } from "./useShell";
@@ -393,33 +365,16 @@ export default function App() {
     replaceTexts,
     showMatch,
   } = annotate;
-  /** Autosaves to offer back (on launch, or before opening `then`), one question at a time. */
-  const [recoveries, setRecoveries] = useState<RecoveryAsk[]>([]);
-  const recovery = recoveries[0] ?? null;
-  /** What RECOVER read and dropped from a damaged drawing. */
-  const [recoverReport, setRecoverReport] = useState<{ path: string; report: ReadReport } | null>(null);
-  const [sheetSetShown, setSheetSetShown] = useState(false);
   /** The image the select tool has chosen, and its brightness, contrast and fade. */
   const [imageChosen, setImageChosen] = useState<{ handle: number; display: ImageDisplay } | null>(
     null,
   );
-  const [opening, setOpening] = useState(false);
-  const [xrefsOpen, setXrefsOpen] = useState(false);
-  const [extractOpen, setExtractOpen] = useState(false);
   /** The command line shows (Ctrl+9), its input, and whether to focus it once shown. */
   const [commandLineOn, setCommandLineOn] = useState(true);
   const commandInput = useRef<HTMLInputElement>(null);
   const focusCommandLine = useRef(false);
   /** What the select tool picked, for the properties palette. */
   const [pickedInfo, setPickedInfo] = useState<EntityInfo | null>(null);
-  /** Drawing changes waiting or running; while any is, clicks and tool input on the canvas are
-   *  ignored (they would land on a drawing about to go). */
-  const switching = useRef(0);
-  /** Opens, switches and closes reach the core one at a time, in the order asked. */
-  const inTurn = useRef(serial()).current;
-  /** The drawing on screen now, for checks inside queued work. */
-  const infoRef = useRef(info);
-  infoRef.current = info;
 
   const { apply, history } = useCommands({
     t,
@@ -488,419 +443,71 @@ export default function App() {
     syncInfo,
     measure,
   });
+  const drawings = useDrawings({
+    t,
+    switchGen,
+    info,
+    setInfo,
+    setError,
+    setNotice,
+    run,
+    settingsOpen,
+    fileTabs,
+    setFileTabs,
+    setActiveTab,
+    refreshTabs,
+    autosaveOff,
+    autosave,
+    setDraftingState,
+    sheets,
+    setArabicReversed,
+    setSheetBlock,
+    setHidden,
+    redraw,
+    takeoffState,
+    refreshTakeoffAndBoq,
+    attach,
+    preset,
+    lastPoint,
+    measure,
+  });
+  const {
+    opening,
+    recovery,
+    setRecoveries,
+    recoverReport,
+    setRecoverReport,
+    sheetSetShown,
+    setSheetSetShown,
+    xrefsOpen,
+    setXrefsOpen,
+    extractOpen,
+    setExtractOpen,
+    switching,
+    openPath,
+    openFile,
+    recoverFrom,
+    discardFrom,
+    recoverFile,
+    sheetSetApi,
+    openAll,
+    switchTab,
+    cycleTabs,
+    closeFileTab,
+    saveFile,
+    saveFileAs,
+    xrefsChanged,
+    locateXref,
+    exportFile,
+    extractRows,
+    exportExtract,
+  } = drawings;
 
 
 
 
 
 
-  /** Before the open drawing is left: asks "Save changes to the drawing?" when the drawing itself
-   *  has unsaved changes, and saves when told to. False when the user cancels. */
-  async function leaveOpenDrawing(): Promise<boolean> {
-    if (!info) return true;
-    const labels = { yes: t("unsaved.yes"), no: t("unsaved.no"), cancel: t("unsaved.cancel") };
-    return leaveDrawing({
-      isDirty,
-      ask: async () => {
-        const choice = readChoice(
-          await messageDialog(t("unsaved.question"), {
-            title: t("appName"),
-            kind: "warning",
-            buttons: labels,
-          }),
-          labels,
-        );
-        // Don't Save: its autosave goes too (the window closing, or the tab). The drawing on
-        // screen now: closing the window shows each drawing before asking.
-        if (choice === "discard") await discardAutosave((await drawingInfo()).path).catch(() => {});
-        return choice;
-      },
-      // The drawing on screen now: closing the window shows each drawing before asking.
-      confirmSave: async () => confirmRecoveredSave(await drawingInfo()),
-      save: saveDrawing,
-    });
-  }
-  /** Before the window closes: asks about each open drawing with unsaved changes in turn, showing
-   *  it first. False when the user cancels one. */
-  async function leaveAllDrawings(): Promise<boolean> {
-    const { tabs: open } = await readTabs();
-    for (const tab of open.filter((f) => f.dirty)) {
-      if (!(await switchTab(tab.id))) return false;
-      if (!(await leaveOpenDrawing())) return false;
-    }
-    return true;
-  }
-  const leaveRef = useRef(leaveAllDrawings);
-  leaveRef.current = leaveAllDrawings;
-
-  // Closing the window with unsaved drawing changes asks first; a failed save keeps it open.
-  useEffect(() => {
-    let gone = false;
-    let off: (() => void) | null = null;
-    getCurrentWindow()
-      .onCloseRequested(async (event) => {
-        try {
-          if (!(await leaveRef.current())) event.preventDefault();
-        } catch (e) {
-          event.preventDefault();
-          setError(t("save.failed", { error: String(e) }));
-        }
-      })
-      .then((unlisten) => (gone ? unlisten() : (off = unlisten)))
-      .catch(() => {});
-    return () => {
-      gone = true;
-      off?.();
-    };
-  }, []);
-
-  // On launch: the recent drawings' autosaves newer than them are offered back.
-  useEffect(() => {
-    (async () => {
-      const paths = (await readRecents()).map((r) => r.path);
-      const found = await recoverableDrawings(paths);
-      if (found.length > 0) setRecoveries((q) => enqueue(q, found, null, true));
-    })().catch(() => {});
-  }, []);
-
-  // Autosave: every few minutes (settings, 5 by default, 0 off) the drawings with unsaved changes
-  // are written to <name>.sv$ beside them, with their project.
-  useEffect(() => {
-    let timer = 0;
-    let gone = false;
-    getSettings()
-      .then((s) => {
-        const minutes = s.autosave_minutes ?? 5;
-        if (gone || !(minutes > 0)) return;
-        timer = window.setInterval(() => {
-          autosaveDrawings()
-            .then((done) => {
-              if (done.failed.length > 0) setError(t("autosave.failed", { error: done.failed.join("; ") }));
-            })
-            .catch((e) => setError(t("autosave.failed", { error: String(e) })));
-        }, minutes * 60_000);
-      })
-      .catch(() => {});
-    return () => {
-      gone = true;
-      clearInterval(timer);
-    };
-  }, [settingsOpen]);
-
-  /** Forgets everything the window holds about the drawing on screen: the batch, the glyph atlas
-   *  and the pictures (all per drawing), the selection, the tool's points, prompts and dialogs. */
-  function resetDrawingView() {
-    sheets.reset();
-    autosaveOff.current = false;
-    takeoffState.reset();
-    attach.reset();
-    setXrefsOpen(false);
-    setExtractOpen(false);
-    preset.current = null;
-    measure.cancel();
-    lastPoint.current = null;
-  }
-
-  /** Another drawing comes on screen: earlier work for the one there goes stale. */
-  function beginShow(): number {
-    switchGen.current += 1;
-    return switchGen.current;
-  }
-
-  /** Shows the drawing the core has on screen now (just opened, or its tab chosen) as its session
-   *  keeps it: its sheet, hidden layers, take-off, BOQ and conflicts. `gen` is `beginShow`'s; a
-   *  later drawing change stops it at the next step. */
-  async function showDrawing(next: DrawingInfo, gen: number) {
-    resetDrawingView();
-    setArabicReversed(next.arabic_reversed);
-    setInfo(next);
-    setSheetBlock(next.sheet);
-    setHidden(new Set(next.hidden_layers));
-    const drafting = await getDrafting();
-    if (isStale(gen, switchGen.current)) return;
-    setDraftingState(drafting);
-    await refreshTakeoffAndBoq();
-    if (isStale(gen, switchGen.current)) return;
-    await redraw(true);
-  }
-
-  /** After the last tab closed: an empty window. */
-  function showNoDrawing() {
-    beginShow();
-    resetDrawingView();
-    sheets.clear();
-    setInfo(null);
-    setDraftingState(null);
-    takeoffState.clear();
-  }
-
-  /** Runs a drawing change (open, tab switch, close) in turn after those asked before it; canvas
-   *  input is ignored until all are done. */
-  async function drawingChange<T>(job: () => Promise<T>): Promise<T> {
-    switching.current += 1;
-    try {
-      return await inTurn(job);
-    } finally {
-      switching.current -= 1;
-    }
-  }
-
-  /** Opens the drawing at `path` in a new tab, or shows its tab when it is open already; nothing
-   *  happens when it is the drawing on screen. An autosave newer than the drawing is offered first
-   *  (`recover` false skips that: the user chose to open the drawing itself). */
-  async function openPath(path: string, recover = true) {
-    if (recover) {
-      const found = await recoverableDrawings([path]).catch(() => []);
-      const open = fileTabs.some((f) => f.path === path);
-      if (found.length > 0 && !open) {
-        setRecoveries((q) => enqueue(q, found, path));
-        return;
-      }
-    }
-    setOpening(true);
-    await drawingChange(() =>
-      run(async () => {
-        const next = await openDrawing(path);
-        // The drawing on screen asked for again: the core changed nothing.
-        if (infoRef.current && next.path === infoRef.current.path) return;
-        await showDrawing(next, beginShow());
-      }),
-    );
-    setOpening(false);
-  }
-
-  async function openFile() {
-    const path = await open({ filters: [{ name: "Drawings", extensions: ["dwg", "dxf"] }] });
-    if (typeof path !== "string") return;
-    await openPath(path);
-  }
-
-  /** Recover: the autosave of `drawing` opens in a new tab as a new drawing beside it, and Save As
-   *  asks where it goes. */
-  async function recoverFrom(drawing: string) {
-    let shown = false;
-    await drawingChange(async () => {
-      const next = await recoverAutosave(drawing);
-      await showDrawing(next, beginShow());
-      await refreshTabs();
-      shown = true;
-    });
-    dropRecovery(drawing);
-    if (shown) await saveFileAs();
-  }
-
-  /** Discard: the autosave of `drawing` is deleted; the drawing about to open opens. */
-  async function discardFrom(drawing: string) {
-    await discardAutosave(drawing);
-    const then = recovery?.then;
-    dropRecovery(drawing);
-    if (then === drawing) await openPath(drawing, false);
-  }
-
-  /** `drawing` is dealt with: the question goes when nothing is left in it. */
-  function dropRecovery(drawing: string) {
-    setRecoveries((q) => drop(q, drawing));
-  }
-
-  /** RECOVER: a damaged drawing opens in a new tab through the failsafe reader, and the dialog
-   *  says what was dropped. */
-  async function recoverFile() {
-    const path = await open({ filters: [{ name: "Drawings", extensions: ["dwg", "dxf"] }] });
-    if (typeof path !== "string") return;
-    await drawingChange(() =>
-      run(async () => {
-        const { info: next, report } = await recoverDrawing(path);
-        await showDrawing(next, beginShow());
-        await refreshTabs();
-        setRecoverReport({ path, report });
-      }),
-    );
-  }
-
-  /** The sheet set manager's file dialogs and core commands. */
-  const sheetSetApi: SheetSetApi = {
-    open: sheetSetOpen,
-    save: sheetSetSave,
-    fromTabs: sheetSetFromTabs,
-    entry: sheetSetEntry,
-    pickNew: async () =>
-      (await save({ filters: [{ name: t("sheetSet.title"), extensions: ["qss"] }] })) ?? null,
-    pickOpen: async () => {
-      const path = await open({ filters: [{ name: t("sheetSet.title"), extensions: ["qss"] }] });
-      return typeof path === "string" ? path : null;
-    },
-    pickDrawing: async () => {
-      const path = await open({ filters: [{ name: "Drawings", extensions: ["dwg", "dxf"] }] });
-      return typeof path === "string" ? path : null;
-    },
-  };
-
-  /** Opens every drawing of a sheet set, a tab each, one after another. */
-  async function openAll(paths: string[]) {
-    for (const path of paths) await openPath(path);
-  }
-
-  /** Shows the drawing of tab `id` (call inside `drawingChange`); false when that failed (the
-   *  error shows). */
-  async function activate(id: number): Promise<boolean> {
-    let ok = false;
-    await run(async () => {
-      const gen = beginShow();
-      const next = await activateTab(id);
-      if (isStale(gen, switchGen.current)) return;
-      // Work started while the core was switching (a zoom's glyphs) may have read the old drawing
-      // under the new generation: bump it again now that the new one is in place.
-      await showDrawing(next, beginShow());
-      ok = true;
-    });
-    return ok;
-  }
-
-  /** Shows the drawing of tab `id`, after any drawing change already asked for. */
-  const switchTab = (id: number) => drawingChange(() => activate(id));
-
-  /** Shows the tab after (`step` 1) or before (-1) the one on screen, as the core has them. */
-  const cycleTabs = (step: 1 | -1) =>
-    drawingChange(async () => {
-      const now = await readTabs().catch(() => null);
-      const next = now && cycleTab(now.tabs, now.active, step);
-      if (now && next !== null && next !== now.active) await activate(next);
-    });
-
-  /** Closes tab `id` (the one on screen when null). A drawing with unsaved changes is shown first
-   *  and asks "Save changes to the drawing?"; Cancel keeps it open. */
-  const closeFileTab = (id: number | null) =>
-    drawingChange(async () => {
-      const now = await readTabs().catch(() => null);
-      const tab = now?.tabs.find((f) => f.id === (id ?? now.active));
-      if (!now || !tab) return;
-      try {
-        if (tab.dirty && (!(await activate(tab.id)) || !(await leaveOpenDrawing()))) return;
-      } catch (e) {
-        setError(t("save.failed", { error: String(e) }));
-        return;
-      }
-      await run(async () => {
-        // On screen before the close: shown above when it had unsaved changes.
-        const shown = tab.dirty ? tab.id : now.active;
-        const left = await closeTab(tab.id, tab.dirty);
-        setFileTabs(left.tabs);
-        setActiveTab(left.active);
-        if (left.active === null) showNoDrawing();
-        else if (left.active !== shown) {
-          const gen = beginShow();
-          const next = await drawingInfo();
-          if (!isStale(gen, switchGen.current)) await showDrawing(next, gen);
-        }
-      });
-    });
-
-  /** Writes the drawing with `write`, then shows its new layers and entities. */
-  async function saveWith(write: () => Promise<void>) {
-    const gen = switchGen.current;
-    await run(async () => {
-      let next: DrawingInfo | null = null;
-      try {
-        await write().catch((e) => {
-          throw t("save.failed", { error: String(e) });
-        });
-      } finally {
-        // Even a failed save may have written the drawing and moved to its new path.
-        next = await drawingInfo().catch(() => null);
-        if (next && !isStale(gen, switchGen.current)) setInfo(next);
-      }
-      // The save wrote the project file too: autosave can try again.
-      autosaveOff.current = false;
-      await redraw();
-      setNotice(t("save.done", { path: next?.path ?? "" }));
-    });
-  }
-
-  /** A drawing that opened with problems is rewritten with only what Qiyas could read, so a save
-   *  over its own file asks first; the core keeps the original as a `.bak` either way. True to
-   *  save. */
-  async function confirmRecoveredSave(of: DrawingInfo): Promise<boolean> {
-    // An xref's problems are not the drawing's own: saving never touches the xref. Nor is an
-    // empty model something the reader lost.
-    if (readProblems(of).length <= of.xrefs.reduce((n, x) => n + x.problems.length, 0)) return true;
-    return ask(t("save.confirmRecovered"), { title: t("appName"), kind: "warning" });
-  }
-
-  /** Saves over the drawing's own file, after `confirmRecoveredSave`. */
-  async function saveFile() {
-    if (!info) return;
-    if (!(await confirmRecoveredSave(info))) return;
-    await saveWith(saveDrawing);
-  }
-
-  /** Shows the xrefs as the core now has them (their layers, problems and drawing) and saves the
-   *  project, which remembers a file chosen for one. Errors go to the xrefs dialog. */
-  async function xrefsChanged(next: DrawingInfo) {
-    setInfo(next);
-    await redraw();
-    await autosave();
-  }
-
-  /** Asks for the file of the xref `name` and loads it from there. */
-  async function locateXref(name: string) {
-    const path = await open({ filters: [{ name: "Drawings", extensions: ["dwg", "dxf"] }] });
-    if (typeof path !== "string") return;
-    await xrefsChanged(await setXrefPath(name, path));
-  }
-
-  /** Asks where to save the drawing, as DWG or DXF, and saves it there. */
-  async function saveFileAs() {
-    if (!info) return;
-    const path = await save({
-      defaultPath: info.path,
-      filters: [
-        { name: "DWG", extensions: ["dwg"] },
-        { name: "DXF", extensions: ["dxf"] },
-      ],
-    });
-    if (!path) return;
-    await saveWith(() => saveDrawingAs(path));
-  }
-
-  /** Asks where to save the Excel take-off, next to the drawing by default, and writes it. */
-  async function exportFile() {
-    if (!info) return;
-    const path = await save({
-      defaultPath: `${info.path.replace(/\.[^.\\/]*$/, "")}-takeoff.xlsx`,
-      filters: [{ name: "Excel", extensions: ["xlsx"] }],
-    });
-    if (!path) return;
-    await run(async () => {
-      await exportTakeoff(path).catch((e) => {
-        throw t("export.failed", { error: String(e) });
-      });
-      setNotice(t("export.done", { path }));
-    });
-  }
-
-  /** Extract data: runs each filter on the sheet shown and gathers the rows. */
-  async function extractRows(filters: EntityFilter[], fields: Field[]): Promise<string[][]> {
-    const rows: string[][] = [];
-    for (const filter of filters) {
-      const outcome = await runCommand({ type: "extract_data", filter, fields });
-      if (outcome.type === "table") rows.push(...outcome.rows);
-    }
-    return rows;
-  }
-
-  /** Asks where to save the extracted table, next to the drawing by default, and writes it. */
-  async function exportExtract(columns: string[], rows: string[][]) {
-    if (!info) return;
-    const path = await save({
-      defaultPath: `${info.path.replace(/\.[^.\\/]*$/, "")}-data.xlsx`,
-      filters: [{ name: "Excel", extensions: ["xlsx"] }],
-    });
-    if (!path) return;
-    await exportTable(path, columns, rows).catch((e) => {
-      throw t("export.failed", { error: String(e) });
-    });
-    setNotice(t("extract.done", { path }));
-  }
 
   /** Asks for an Excel BOQ and makes it the drawing's BOQ (an undo step), then shows it. */
   async function importBoqFile() {
