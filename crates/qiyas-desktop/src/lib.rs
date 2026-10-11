@@ -6,6 +6,7 @@ mod mcp;
 #[cfg(debug_assertions)]
 mod mock;
 mod pdf;
+mod plot;
 pub mod secrets;
 pub mod settings;
 mod state;
@@ -112,6 +113,14 @@ pub fn run() {
             blocks::drawing_layers,
             blocks::write_block,
             blocks::set_tool_palette,
+            plot::paper_catalog,
+            plot::plot_pdf,
+            plot::plot_and_print,
+            plot::print_pdf,
+            plot::list_printers,
+            plot::default_printer,
+            plot::load_plot_style,
+            plot::save_plot_style,
         ])
         .build(tauri::generate_context!())
         .expect("error while running Qiyas")

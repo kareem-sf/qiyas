@@ -3874,6 +3874,7 @@ dependencies = [
  "qiyas-boq",
  "qiyas-core",
  "qiyas-pdf",
+ "qiyas-plot",
  "qiyas-takeoff",
  "serde",
  "serde_json",
