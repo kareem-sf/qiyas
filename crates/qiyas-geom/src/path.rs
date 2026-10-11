@@ -24,6 +24,16 @@ impl Path {
         }
     }
 
+    /// A closed path split at its crossings into simple loops (itself when it has none); none
+    /// when open. A ring that touches itself round a pinched-in hole gives the hole as a loop.
+    pub fn loops(&self) -> Vec<Vec<[f64; 2]>> {
+        let mut out = Vec::new();
+        if self.closed {
+            split_loops(distinct(&self.points, true), &mut out);
+        }
+        out
+    }
+
     /// True when two non-adjacent segments meet (parallel overlaps are not detected).
     pub fn self_intersects(&self) -> bool {
         first_crossing(&distinct(&self.points, self.closed), self.closed).is_some()
@@ -92,19 +102,26 @@ fn shoelace(points: &[[f64; 2]]) -> f64 {
     (twice / 2.0).abs()
 }
 
-/// Splits a closed ring at its first crossing until every loop is simple, then
-/// sums the loop areas. Each split leaves both loops with fewer points, so it ends.
+/// The loop areas of a closed ring split at its crossings, added.
 fn loops_area(points: &[[f64; 2]]) -> f64 {
-    let points = distinct(points, true);
+    let mut loops = Vec::new();
+    split_loops(distinct(points, true), &mut loops);
+    loops.iter().map(|l| shoelace(l)).sum()
+}
+
+/// Splits a closed ring at its first crossing until every loop is simple, into `out`. Each
+/// split leaves both loops with fewer points, so it ends.
+fn split_loops(points: Vec<[f64; 2]>, out: &mut Vec<Vec<[f64; 2]>>) {
     match first_crossing(&points, true) {
-        None => shoelace(&points),
+        None => out.push(points),
         Some((i, j, x)) => {
             let mut outer: Vec<[f64; 2]> = points[..=i].to_vec();
             outer.push(x);
             outer.extend_from_slice(&points[j + 1..]);
             let mut inner = vec![x];
             inner.extend_from_slice(&points[i + 1..=j]);
-            loops_area(&outer) + loops_area(&inner)
+            split_loops(distinct(&outer, true), out);
+            split_loops(distinct(&inner, true), out);
         }
     }
 }

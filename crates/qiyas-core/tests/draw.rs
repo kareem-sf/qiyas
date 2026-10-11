@@ -1675,3 +1675,49 @@ fn a_hatch_by_click_with_an_island_keeps_its_paths_through_dwg_and_dxf() {
         assert!((got - want).abs() < 1e-9, "{ext}: {got} vs {want}");
     }
 }
+
+#[test]
+fn hatch_by_click_beside_an_island_touching_the_wall_leaves_it_out() {
+    let (_dir, mut s) = sample_session();
+    // A 10 x 10 room with a triangle (area 3) against its left wall, touching it at one point:
+    // the region found walks round the triangle, touching itself there.
+    square(&mut s, [4000.0, 4000.0], [4010.0, 4010.0]);
+    for (a, b) in [
+        ([4000.0, 4005.0], [4003.0, 4004.0]),
+        ([4003.0, 4004.0], [4003.0, 4006.0]),
+        ([4003.0, 4006.0], [4000.0, 4005.0]),
+    ] {
+        draw(&mut s, DrawSpec::Line { a, b });
+    }
+    let Boundary::Ring {
+        ring,
+        holes,
+        bulges,
+    } = s.boundary_at([4008.0, 4008.0], 0.5)
+    else {
+        panic!("a ring");
+    };
+    assert!(close(signed_area(&ring).abs(), 97.0), "{ring:?}");
+    let EntityType::Hatch(h) = one(
+        &mut s,
+        DrawSpec::Hatch {
+            boundary_handles: Vec::new(),
+            points: ring,
+            holes,
+            bulges,
+            pattern: HatchPattern::Solid,
+        },
+    ) else {
+        panic!("a hatch");
+    };
+    let Outcome::Measured { measurement } = s
+        .run(Command::MeasureEntity {
+            handle: h.common.handle.value(),
+            chain: Vec::new(),
+        })
+        .unwrap()
+    else {
+        panic!("measured");
+    };
+    assert!(close(measurement.value, 97.0), "{}", measurement.value);
+}

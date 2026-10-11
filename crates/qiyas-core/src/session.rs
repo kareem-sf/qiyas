@@ -1384,19 +1384,28 @@ impl Session {
             exact.unwrap_or_else(|| match entity {
                 // A hatch's boundary paths fill even-odd: an island is taken away. Each path
                 // exactly when it is a bulged polyline that does not cross itself (one outline
-                // per path, in order).
+                // per path, in order); one that crosses or touches itself counts as its simple
+                // loops, flattened, so a click region's pinched-in island is taken away too.
                 EntityType::Hatch(_) => {
                     let exact = exact_hatch_areas(entity, xf).filter(|a| a.len() == closed.len());
-                    let areas: Vec<f64> = closed
-                        .iter()
-                        .enumerate()
-                        .map(|(i, p)| match &exact {
-                            Some(a) if !crossing[i] => a[i],
-                            _ => p.area(),
-                        })
-                        .collect();
-                    let rings: Vec<Vec<[f64; 2]>> =
-                        closed.iter().map(|p| p.points.clone()).collect();
+                    let mut rings: Vec<Vec<[f64; 2]>> = Vec::new();
+                    let mut areas: Vec<f64> = Vec::new();
+                    for (i, p) in closed.iter().enumerate() {
+                        if crossing[i] {
+                            for points in p.loops() {
+                                let area = qiyas_geom::Path {
+                                    points: points.clone(),
+                                    closed: true,
+                                }
+                                .area();
+                                rings.push(points);
+                                areas.push(area);
+                            }
+                        } else {
+                            rings.push(p.points.clone());
+                            areas.push(exact.as_ref().map_or_else(|| p.area(), |a| a[i]));
+                        }
+                    }
                     let depths = ring_nesting_depths(&rings);
                     areas
                         .iter()
