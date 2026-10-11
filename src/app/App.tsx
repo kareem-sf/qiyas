@@ -5,7 +5,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   activateTab,
   aiUndo,
-  aliases as readAliases,
   blocks as readBlocks,
   blockThumbnail,
   clearRecents,
@@ -38,7 +37,6 @@ import {
   entityInfo,
   tableCellAt,
   getDrafting,
-  setDrafting,
   snap,
   exportConflicts,
   exportTable,
@@ -56,7 +54,6 @@ import {
   runCommand,
   saveDrawing,
   saveDrawingAs,
-  saveProject,
   SESSION_CHANGED,
   setLayerHidden,
   setSheet,
@@ -85,7 +82,6 @@ import {
   type Command,
   type Conflict,
   type Current,
-  type Drafting,
   type DrawingInfo,
   type EntityFilter,
   type EntityInfo,
@@ -98,7 +94,6 @@ import {
   type Measurement,
   type NamedView,
   type PaletteItem,
-  type TabInfo,
   type TextMatch,
   type Total,
 } from "../api";
@@ -122,7 +117,6 @@ import {
   metresPerUnit,
   type AttachRequest,
 } from "../shell/AttachPdfDialog";
-import { blurAfterClick } from "../shell/blurAfterClick";
 import {
   AttDefDialog,
   AttributeManager,
@@ -161,7 +155,6 @@ import { StatusBar } from "../shell/StatusBar";
 import { TakeoffPanel } from "../shell/TakeoffPanel";
 import { XrefManager } from "../shell/XrefManager";
 import { leaveDrawing, readChoice } from "../shell/unsaved";
-import { useAutoClear } from "../shell/useAutoClear";
 import {
   handlesBounds,
   markSize,
@@ -171,9 +164,8 @@ import {
   overlaySegments,
   pointMarks,
 } from "../tools/overlay";
-import { mergeAliases } from "../tools/aliases";
 import { parse, type Action, type Expect, type ParseState } from "../tools/commandParser";
-import { shortcutFor, type DraftingToggle } from "../tools/shortcuts";
+import { shortcutFor } from "../tools/shortcuts";
 import type { DimRequest } from "../tools/dimTools";
 import type { TextRequest } from "../tools/textTools";
 import { useTool } from "../tools/useTool";
@@ -189,30 +181,45 @@ import {
   type Target,
 } from "../viewport/batch";
 import type { Bounds, Point } from "../viewport/camera";
-import type { Theme } from "../viewport/gl";
 import { refreshSheet, type HeldSheet } from "../viewport/inset";
 import { SplitPane } from "../viewport/SplitPane";
-import { Viewport, type ViewportHandle } from "../viewport/Viewport";
-import {
-  initialTheme,
-  MODEL,
-  NO_VIEWPORTS,
-  type Pending,
-  readProblems,
-  THEME_KEY,
-  TOGGLED,
-  typing,
-  unionBounds,
-} from "./shared";
+import { Viewport } from "../viewport/Viewport";
+import { MODEL, NO_VIEWPORTS, type Pending, readProblems, typing, unionBounds } from "./shared";
+import { useDrafting } from "./useDrafting";
+import { useAutosave, useFileTabs } from "./useDrawings";
+import { useShell } from "./useShell";
 
 export default function App() {
   const t = useT();
   const { lang, setLang } = useLanguage();
-  const [theme, setTheme] = useState<Theme>(initialTheme);
+  const shell = useShell();
+  const {
+    theme,
+    chooseTheme,
+    aboutOpen,
+    setAboutOpen,
+    settingsOpen,
+    setSettingsOpen,
+    commandAliases,
+    loadAliases,
+    error,
+    setError,
+    notice,
+    setNotice,
+    sideTab,
+    setSideTab,
+    viewport,
+    viewportBox,
+    run,
+    focusDrawing,
+  } = shell;
+  const { fileTabs, setFileTabs, activeTab, setActiveTab, refreshTabs } = useFileTabs();
+  const { autosaveOff, autosave } = useAutosave(t, setError);
+  const { drafting, setDraftingState, draftingOpen, setDraftingOpen, saveDrafting, toggleDrafting } = useDrafting({
+    run,
+    autosave,
+  });
   const [info, setInfo] = useState<DrawingInfo | null>(null);
-  /** The open drawings' file tabs, and the one on screen. */
-  const [fileTabs, setFileTabs] = useState<TabInfo[]>([]);
-  const [activeTab, setActiveTab] = useState<number | null>(null);
   const [batch, setBatch] = useState<Batch | null>(null);
   /** The batch in hand and the core's version of it (`batchVersion`), so a redraw that changed
    *  nothing on the sheet doesn't fetch the whole batch again. */
@@ -259,12 +266,7 @@ export default function App() {
   const [sheet, setSheetBlock] = useState("");
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [tool, setTool] = useState<Tool>("select");
-  /** The drawing's snaps, ortho, polar, grid and display precision; null with no drawing. */
-  const [drafting, setDraftingState] = useState<Drafting | null>(null);
-  const [draftingOpen, setDraftingOpen] = useState(false);
   const [opening, setOpening] = useState(false);
-  const [aboutOpen, setAboutOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [xrefsOpen, setXrefsOpen] = useState(false);
   const [extractOpen, setExtractOpen] = useState(false);
   const [findOpen, setFindOpen] = useState(false);
@@ -337,9 +339,6 @@ export default function App() {
   const [commandLineOn, setCommandLineOn] = useState(true);
   const commandInput = useRef<HTMLInputElement>(null);
   const focusCommandLine = useRef(false);
-  /** The user's command line aliases from the settings. */
-  const [userAliases, setUserAliases] = useState<Record<string, string>>({});
-  const commandAliases = useMemo(() => mergeAliases(userAliases), [userAliases]);
   /** The last point clicked or typed, for the command line's `@`. */
   const lastPoint = useRef<Point | null>(null);
   /** DIVIDE n or MEASURE step typed on the command line: the answer once the entity is clicked. */
@@ -348,9 +347,6 @@ export default function App() {
   const [pickedInfo, setPickedInfo] = useState<EntityInfo | null>(null);
   /** What the last inquiry (geometry, ID point) found, shown until closed. */
   const [infoCard, setInfoCard] = useState<Info | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  /** A one-off status bar message, e.g. after an export; the next action clears it. */
-  const [notice, setNotice] = useState<string | null>(null);
   const [items, setItems] = useState<Measurement[]>([]);
   const [itemTotals, setItemTotals] = useState<Total[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -364,12 +360,8 @@ export default function App() {
   const [compared, setCompared] = useState(false);
   /** The measurements a conflict's Show pointed at. */
   const [conflictIds, setConflictIds] = useState<string[]>([]);
-  /** The right panel's tab. */
-  const [sideTab, setSideTab] = useState<"takeoff" | "boq" | "conflicts" | "assistant">("takeoff");
   /** Entities the assistant pointed at (Show on a tool card, or a zoom it asked for). */
   const [aiHighlight, setAiHighlight] = useState<number[]>([]);
-  const viewport = useRef<ViewportHandle>(null);
-  const viewportBox = useRef<HTMLDivElement>(null);
   /** Set when the next batch is a new drawing or sheet, so the view fits it once it is drawn. */
   const fitNext = useRef(false);
   /** Measurements to fit instead of the whole sheet, when a conflict's Show changed the sheet. */
@@ -381,9 +373,6 @@ export default function App() {
   const layerBusy = useRef(false);
   /** The same, for the layers panel to show: its buttons wait and the cursor says so. */
   const [layersBusy, setLayersBusy] = useState(false);
-  /** Set when autosave failed for this drawing, so the error shows once, not after every click. A new
-   *  open or a successful save turns autosave back on. */
-  const autosaveOff = useRef(false);
   /** Bumped whenever another drawing comes on screen (open, tab switch, close): work started
    *  before is stale (`isStale`) and drops its results. */
   const switchGen = useRef(0);
@@ -395,24 +384,6 @@ export default function App() {
   /** The drawing on screen now, for checks inside queued work. */
   const infoRef = useRef(info);
   infoRef.current = info;
-
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-  }, [theme]);
-
-  // Space pans the drawing; a button the mouse just clicked must not take it as a press.
-  useEffect(blurAfterClick, []);
-  // A notice goes with the next command (`run`), or on its own after a few seconds.
-  useAutoClear(notice, () => setNotice(null));
-
-  /** Reads the user's command line aliases (at start and after the settings close). */
-  const loadAliases = () =>
-    readAliases()
-      .then(setUserAliases)
-      .catch(() => {});
-  useEffect(() => {
-    loadAliases();
-  }, []);
 
   // Runs after the viewport has taken the new batch (child effects run first).
   useEffect(() => {
@@ -428,26 +399,6 @@ export default function App() {
     if (box) viewport.current?.fitTo(box);
     else viewport.current?.fitExtents();
   }, [batch, fitTick]);
-
-  function chooseTheme(next: Theme) {
-    setTheme(next);
-    try {
-      localStorage.setItem(THEME_KEY, next);
-    } catch {
-      // Storage blocked: the choice lasts for this session only.
-    }
-  }
-
-  /** Runs an IPC step, showing its error in the status bar. */
-  async function run(step: () => Promise<void>) {
-    setNotice(null);
-    try {
-      await step();
-      setError(null);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
 
   /** Re-reads the take-off, the BOQ and the conflicts, after anything that may have changed them. */
   async function refreshTakeoffAndBoq() {
@@ -465,18 +416,6 @@ export default function App() {
     setConflicts(nextConflicts);
     // Conflicts kept in the project file come from an earlier comparison.
     if (nextConflicts.length > 0) setCompared(true);
-  }
-
-  /** Saves the take-off next to the drawing. A failure is shown once and turns autosave off, but the
-   *  work goes on. */
-  async function autosave() {
-    if (autosaveOff.current) return;
-    try {
-      await saveProject();
-    } catch (e) {
-      autosaveOff.current = true;
-      setError(t("project.autosaveOff", { error: String(e) }));
-    }
   }
 
   /** Runs a take-off command; a new measurement becomes the selected row. An inquiry's answer
@@ -964,25 +903,6 @@ export default function App() {
     if (box) viewport.current?.fitTo(box);
   }
 
-  /** Makes `next` the drawing's drafting settings and saves them with the project. Throws when the
-   *  core refuses them. */
-  async function saveDrafting(next: Drafting) {
-    await setDrafting(next);
-    setDraftingState(next);
-    await autosave();
-  }
-
-  /** Turns one drafting switch on or off (status bar or F3, F7, F8, F10). Ortho and polar exclude
-   *  each other, as in AutoCAD. */
-  function toggleDrafting(toggle: DraftingToggle) {
-    if (!drafting) return;
-    const key = TOGGLED[toggle];
-    const next: Drafting = { ...drafting, [key]: !drafting[key] };
-    if (toggle === "ortho" && next.ortho) next.polar = false;
-    if (toggle === "polar" && next.polar) next.ortho = false;
-    run(() => saveDrafting(next));
-  }
-
   async function history(step: () => Promise<boolean>) {
     let changed = false;
     await run(async () => {
@@ -1004,17 +924,6 @@ export default function App() {
     if (isStale(gen, switchGen.current)) return;
     setInfo(next);
     setHidden(new Set(next.hidden_layers));
-  }
-
-  /** Reads the file tabs again (titles, unsaved dots, the active one). */
-  async function refreshTabs() {
-    try {
-      const next = await readTabs();
-      setFileTabs(next.tabs);
-      setActiveTab(next.active);
-    } catch {
-      // The tabs keep what they showed; the next refresh tries again.
-    }
   }
 
   /** Fetches the atlas pages `next` needs that the window doesn't hold yet. */
@@ -1979,9 +1888,6 @@ export default function App() {
     }
     if (!pendingPoint(world)) measure.onClick(world, screen, worldPerPixel, shift);
   }
-
-  // Hand the keyboard back to the drawing, so Space pans instead of pressing a button.
-  const focusDrawing = () => viewportBox.current?.focus();
 
   function chooseTool(next: Tool) {
     preset.current = null;

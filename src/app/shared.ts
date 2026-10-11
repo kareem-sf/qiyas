@@ -5,6 +5,7 @@ import { measurementBounds } from "../tools/overlay";
 import type { Batch } from "../viewport/batch";
 import type { Bounds, Point } from "../viewport/camera";
 import type { Theme } from "../viewport/gl";
+import type { useT } from "../i18n";
 
 export const THEME_KEY = "qiyas.theme";
 
@@ -63,3 +64,6 @@ export function initialTheme(): Theme {
 
 /** No viewports: the layers panel's VP freeze column hides (one array, so the memo holds). */
 export const NO_VIEWPORTS: ViewportInfo[] = [];
+
+/** The translator `useT` gives. */
+export type T = ReturnType<typeof useT>;
