@@ -1,19 +1,30 @@
-/** The side panel's state: the take-off rows and totals, the BOQ, the conflicts, the inquiry
- *  info card, and what each highlights on the drawing. (The panel's handlers join this file as
- *  `useTakeoff`.) */
-import { useState, type RefObject } from "react";
+/** The side panel: its state (`useTakeoffState`: the take-off rows and totals, the BOQ, the
+ *  conflicts, the inquiry info card, and what each highlights on the drawing) and its handlers
+ *  (`useTakeoff`: BOQ import, compare, export, selecting rows, BOQ items and conflicts). */
+import { useCallback, useMemo, useRef, useState, type RefObject } from "react";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   boq as readBoq,
+  compare,
   conflicts as readConflicts,
+  exportConflicts,
+  importBoq,
   takeoff,
   totals,
   type Boq,
   type Conflict,
+  type DrawingInfo,
   type Measurement,
   type Total,
 } from "../api";
+import type { ResolveCommand } from "../boq/ConflictsPanel";
 import type { Info } from "../shell/InfoCard";
 import { isStale } from "../shell/switcher";
+import { measurementBounds } from "../tools/overlay";
+import { type T, unionBounds } from "./shared";
+import type { Commands } from "./useCommands";
+import type { Shell } from "./useShell";
+import type { Sheets } from "./useSheets";
 
 export function useTakeoffState(switchGen: RefObject<number>) {
   const [items, setItems] = useState<Measurement[]>([]);
@@ -95,3 +106,218 @@ export function useTakeoffState(switchGen: RefObject<number>) {
 }
 
 export type TakeoffState = ReturnType<typeof useTakeoffState>;
+
+type Deps = Pick<Shell, "run" | "setNotice" | "setSideTab" | "viewport"> &
+  Pick<Sheets, "sheet" | "batch" | "chooseSheet"> &
+  Pick<Commands, "apply"> & {
+    t: T;
+    info: DrawingInfo | null;
+    autosave(): Promise<void>;
+    takeoffState: TakeoffState;
+  };
+
+/** The side panel's handlers. Those handed to the memoised panels are stable between pointer
+ *  moves; the ones with no dependencies keep the first `apply` they were given, as before. */
+export function useTakeoff({
+  t,
+  info,
+  setNotice,
+  run,
+  autosave,
+  setSideTab,
+  viewport,
+  sheet,
+  batch,
+  chooseSheet,
+  takeoffState,
+  apply,
+}: Deps) {
+  const {
+    items,
+    selectedId,
+    setSelectedId,
+    bill,
+    boqCode,
+    setBoqCode,
+    setConflicts,
+    setCompared,
+    conflictIds,
+    setConflictIds,
+    setAiHighlight,
+    refreshTakeoffAndBoq,
+  } = takeoffState;
+
+  /** Asks for an Excel BOQ and makes it the drawing's BOQ (an undo step), then shows it. */
+  async function importBoqFile() {
+    if (!info) return;
+    const path = await open({ filters: [{ name: "Excel", extensions: ["xlsx", "xlsm"] }] });
+    if (typeof path !== "string") return;
+    let changed = false;
+    await run(async () => {
+      await importBoq(path);
+      changed = true;
+      setBoqCode(null);
+      setSideTab("boq");
+      await refreshTakeoffAndBoq();
+    });
+    if (changed) await autosave();
+  }
+
+  // Stable for the memoised BOQ panel, which would otherwise re-render on every pointer move.
+  const importBoqRef = useRef(importBoqFile);
+  importBoqRef.current = importBoqFile;
+  const onImportBoq = useCallback(() => importBoqRef.current(), []);
+
+  /** Compares the BOQ and the take-off with the drawings (an undo step) and shows the conflicts. */
+  async function compareNow() {
+    if (!info) return;
+    let changed = false;
+    await run(async () => {
+      const found = await compare();
+      changed = true;
+      setConflicts(found);
+      setCompared(true);
+      setSideTab("conflicts");
+      setNotice(
+        found.length === 0 ? t("conflicts.none") : t("conflicts.found", { n: found.length }),
+      );
+    });
+    if (changed) await autosave();
+  }
+
+  /** Asks where to save the conflicts workbook, next to the drawing by default, and writes it. */
+  async function exportConflictsFile() {
+    if (!info) return;
+    const path = await save({
+      defaultPath: `${info.path.replace(/\.[^.\\/]*$/, "")}-conflicts.xlsx`,
+      filters: [{ name: "Excel", extensions: ["xlsx"] }],
+    });
+    if (!path) return;
+    await run(async () => {
+      await exportConflicts(path).catch((e) => {
+        throw t("export.failed", { error: String(e) });
+      });
+      setNotice(t("export.done", { path }));
+    });
+  }
+
+  // Stable for the memoised conflicts panel.
+  const compareRef = useRef(compareNow);
+  compareRef.current = compareNow;
+  const onCompare = useCallback(() => compareRef.current(), []);
+  const exportConflictsRef = useRef(exportConflictsFile);
+  exportConflictsRef.current = exportConflictsFile;
+  const onExportConflicts = useCallback(() => exportConflictsRef.current(), []);
+
+  /** The selected row, when it was measured on the sheet in view. */
+  const selected = items.find(
+    (m) => m.id === selectedId && m.sheet.toLowerCase() === sheet.toLowerCase(),
+  );
+
+  const onSheet = (m: Measurement) => m.sheet.toLowerCase() === sheet.toLowerCase();
+
+  /** The measurements on the sheet in view linked to the selected BOQ item. */
+  const boqLinked = useMemo(
+    () =>
+      boqCode !== null && bill?.items.some((i) => i.code === boqCode)
+        ? items.filter((m) => m.boq_code === boqCode && onSheet(m))
+        : [],
+    [boqCode, bill, items, sheet],
+  );
+
+  /** The measurements on the sheet in view that a conflict's Show pointed at. */
+  const conflictLinked = useMemo(
+    () => items.filter((m) => conflictIds.includes(m.id) && onSheet(m)),
+    [conflictIds, items, sheet],
+  );
+
+  const selectRow = useCallback(
+    (id: string) => {
+      setSelectedId(id);
+      setBoqCode(null);
+      setConflictIds([]);
+      const m = items.find((i) => i.id === id);
+      if (m?.sheet.toLowerCase() !== sheet.toLowerCase()) return;
+      const bounds = measurementBounds(m, batch);
+      if (bounds) viewport.current?.fitTo(bounds);
+    },
+    [items, sheet, batch],
+  );
+  /** Selects a BOQ item: its linked measurements on this sheet light up and fill the view. */
+  const selectBoq = useCallback(
+    (code: string) => {
+      setBoqCode(code);
+      setSelectedId(null);
+      setAiHighlight([]);
+      setConflictIds([]);
+      const linked = items.filter((m) => code !== "" && m.boq_code === code && onSheet(m));
+      const box = unionBounds(linked, batch);
+      if (box) viewport.current?.fitTo(box);
+    },
+    [items, sheet, batch],
+  );
+  /** Shows what a conflict is about: its measurements lit up and filling the view (moving to their
+   *  sheet when none is on this one); else its BOQ item in the BOQ tab; else its first sheet. */
+  const showConflict = useCallback(
+    (c: Conflict) => {
+      const involved = items.filter((m) => c.measurements.includes(m.id));
+      if (involved.length > 0) {
+        setSelectedId(null);
+        setBoqCode(null);
+        setAiHighlight([]);
+        setConflictIds(involved.map((m) => m.id));
+        const here = involved.filter(onSheet);
+        if (here.length > 0) {
+          const box = unionBounds(here, batch);
+          if (box) viewport.current?.fitTo(box);
+        } else {
+          const ids = involved.filter((m) => m.sheet === involved[0].sheet).map((m) => m.id);
+          chooseSheet(involved[0].sheet, ids);
+        }
+      } else if (c.boq_code) {
+        setSideTab("boq");
+        selectBoq(c.boq_code);
+      } else {
+        const target = info?.sheets.find((s) => c.sheets.includes(s.name));
+        if (target && target.block.toLowerCase() !== sheet.toLowerCase()) chooseSheet(target.block);
+      }
+    },
+    [items, sheet, batch, info, selectBoq],
+  );
+  const resolveConflict = useCallback((cmd: ResolveCommand) => apply(cmd), []);
+  const openBoqTab = useCallback(() => setSideTab("boq"), []);
+  const linkRow = useCallback(
+    (id: string, code: string | null) => apply({ type: "link_boq", id, code }),
+    [],
+  );
+  const setTolerance = useCallback(
+    (code: string, percent: number | null) => apply({ type: "set_boq_tolerance", code, percent }),
+    [],
+  );
+  const removeRow = useCallback((id: string) => apply({ type: "remove_measurement", id }), []);
+  const renameRow = useCallback(
+    (id: string, text: string) => apply({ type: "set_description", id, text }),
+    [],
+  );
+
+  return {
+    importBoqFile,
+    onImportBoq,
+    compareNow,
+    onCompare,
+    exportConflictsFile,
+    onExportConflicts,
+    selected,
+    boqLinked,
+    conflictLinked,
+    selectRow,
+    selectBoq,
+    showConflict,
+    resolveConflict,
+    openBoqTab,
+    linkRow,
+    setTolerance,
+    removeRow,
+    renameRow,
+  };
+}
