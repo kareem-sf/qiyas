@@ -1151,11 +1151,26 @@ export type AutosaveRun = { written: string[]; failed: string[] };
 /** Autosaves every open drawing with unsaved changes (`<name>.sv$` beside it). */
 export const autosaveDrawings = () => invoke<AutosaveRun>("autosave_drawings");
 
-/** An autosave newer than its drawing: the drawing, the autosave, when it was written (seconds
- *  since 1970). */
-export type Recoverable = { drawing: string; autosave: string; saved_at: number };
+/** Who has a drawing open (its `<file>.qlock`): the process, its computer, and when it took the
+ *  lock (seconds since 1970). */
+export type DrawingLock = { pid: number; host: string; started_at: number };
 
-/** The autosaves of `paths` newer than their drawings. */
+/** An autosave to offer back: newer than its drawing (or the drawing is gone), or left by a Qiyas
+ *  that closed unexpectedly (`crashed`, then whatever its age). Times in seconds since 1970. */
+export type Recoverable = {
+  drawing: string;
+  autosave: string;
+  /** When the autosave was written. */
+  saved_at: number;
+  /** When the drawing was last written; null when it is gone. */
+  drawing_at: number | null;
+  /** A lock on this computer whose process has ended: Qiyas closed with the drawing open. */
+  crashed: boolean;
+  /** The drawing is open in another Qiyas (a running process's lock, or another computer's). */
+  locked_elsewhere: DrawingLock | null;
+};
+
+/** The autosaves of `paths` to offer back: newer than their drawings, or left by a crash. */
 export const recoverableDrawings = (paths: string[]) =>
   invoke<Recoverable[]>("recoverable_drawings", { paths });
 

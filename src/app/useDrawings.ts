@@ -37,7 +37,7 @@ import {
   type TabInfo,
 } from "../api";
 import { cycleTab } from "../shell/FileTabs";
-import { drop, enqueue, type RecoveryAsk } from "../shell/recoveryQueue";
+import { drop, enqueue, localTime, type RecoveryAsk } from "../shell/recoveryQueue";
 import type { SheetSetApi } from "../shell/SheetSetManager";
 import { isStale, serial } from "../shell/switcher";
 import { leaveDrawing, readChoice } from "../shell/unsaved";
@@ -218,7 +218,7 @@ export function useDrawings({
     };
   }, []);
 
-  // On launch: the recent drawings' autosaves newer than them are offered back.
+  // On launch: the recent drawings' autosaves newer than them, or left by a crash, are offered back.
   useEffect(() => {
     (async () => {
       const paths = (await readRecents()).map((r) => r.path);
@@ -340,8 +340,9 @@ export function useDrawings({
   }
 
   /** Recover: the autosave of `drawing` opens in a new tab as a new drawing beside it, and Save As
-   *  asks where it goes. */
+   *  asks where it goes; then the status bar says which autosave it came from. */
   async function recoverFrom(drawing: string) {
+    const savedAt = recovery?.items.find((i) => i.drawing === drawing)?.saved_at;
     let shown = false;
     await drawingChange(async () => {
       const next = await recoverAutosave(drawing);
@@ -350,7 +351,10 @@ export function useDrawings({
       shown = true;
     });
     dropRecovery(drawing);
-    if (shown) await saveFileAs();
+    if (!shown) return;
+    await saveFileAs();
+    // The time isolated (FSI … PDI): it keeps its own order inside Arabic.
+    if (savedAt !== undefined) setNotice(t("recovery.done", { time: `\u2068${localTime(savedAt)}\u2069` }));
   }
 
   /** Discard: the autosave of `drawing` is deleted; the drawing about to open opens. */

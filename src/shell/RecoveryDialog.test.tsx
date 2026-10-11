@@ -2,8 +2,11 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import type { ReadReport, Recoverable } from "../api";
-import { LanguageProvider } from "../i18n";
+import { LanguageProvider, useLanguage } from "../i18n";
+import ar from "../i18n/ar.json";
+import en from "../i18n/en.json";
 import { RecoverReportDialog, RecoveryDialog } from "./RecoveryDialog";
+import { localTime } from "./recoveryQueue";
 
 beforeAll(() => {
   HTMLDialogElement.prototype.showModal ??= function (this: HTMLDialogElement) {
@@ -15,12 +18,139 @@ beforeAll(() => {
   };
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  // The Arabic test's choice is remembered: the next starts in English again.
+  localStorage.clear();
+});
 
-const items: Recoverable[] = [
-  { drawing: "/jobs/villa.dwg", autosave: "/jobs/villa.sv$", saved_at: 1_760_000_000 },
-  { drawing: "/jobs/tower.dxf", autosave: "/jobs/tower.sv$", saved_at: 1_760_000_100 },
-];
+const newer = (drawing: string, saved_at: number, more: Partial<Recoverable> = {}): Recoverable => ({
+  drawing,
+  autosave: `${drawing}.sv$`,
+  saved_at,
+  drawing_at: saved_at - 600,
+  crashed: false,
+  locked_elsewhere: null,
+  ...more,
+});
+
+const items: Recoverable[] = [newer("/jobs/villa.dwg", 1_760_000_000), newer("/jobs/tower.dxf", 1_760_000_100)];
+
+const noop = async () => {};
+
+function show(list: Recoverable[]) {
+  render(
+    <LanguageProvider>
+      <RecoveryDialog items={list} onRecover={noop} onDiscard={noop} onClose={() => {}} />
+    </LanguageProvider>,
+  );
+}
+
+test("not crashed: a newer autosave exists, with the autosave's and the drawing's times", () => {
+  show(items.slice(0, 1));
+  expect(screen.getByRole("heading").textContent).toBe(en["recovery.title"]);
+  expect(en["recovery.title"]).toBe("A newer autosave exists");
+  const row = screen.getByRole("listitem").textContent ?? "";
+  expect(row).toContain(localTime(1_760_000_000));
+  expect(row).toContain(localTime(1_760_000_000 - 600));
+  expect(row).not.toContain(en["recovery.older"]);
+  expect(screen.queryByRole("note")).toBeNull();
+  expect(screen.getByRole("button", { name: "Later" })).toBeTruthy();
+});
+
+test("crashed: Qiyas closed unexpectedly last time, Recover, Discard and Later as before", async () => {
+  const onRecover = vi.fn(async () => {});
+  const onDiscard = vi.fn(async () => {});
+  // The autosave may be older than the drawing after a crash: the row says so.
+  const crashed = newer("/jobs/villa.dwg", 1_760_000_000, { drawing_at: 1_760_000_900, crashed: true });
+  render(
+    <LanguageProvider>
+      <RecoveryDialog items={[crashed]} onRecover={onRecover} onDiscard={onDiscard} onClose={() => {}} />
+    </LanguageProvider>,
+  );
+  expect(screen.getByRole("heading").textContent).toBe("Qiyas closed unexpectedly last time");
+  const row = screen.getByRole("listitem").textContent ?? "";
+  expect(row).toContain(localTime(1_760_000_000));
+  expect(row).toContain(localTime(1_760_000_900));
+  expect(row).toContain(en["recovery.older"]);
+  // One drawing, or all crashed: the heading says it, the row doesn't repeat it.
+  expect(row).not.toContain(en["recovery.crashedItem"]);
+
+  fireEvent.click(screen.getByRole("button", { name: "Recover" }));
+  await waitFor(() => expect(onRecover).toHaveBeenCalledWith("/jobs/villa.dwg"));
+  fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+  await waitFor(() => expect(onDiscard).toHaveBeenCalledWith("/jobs/villa.dwg"));
+  expect(screen.getByRole("button", { name: "Later" })).toBeTruthy();
+});
+
+test("crashed and newer together: the crash heads the dialog and marks its own rows", () => {
+  show([
+    newer("/jobs/villa.dwg", 1_760_000_000, { crashed: true }),
+    newer("/jobs/tower.dxf", 1_760_000_100),
+  ]);
+  expect(screen.getByRole("heading").textContent).toBe(en["recovery.crashedTitle"]);
+  const [crashedRow, newerRow] = screen.getAllByRole("listitem").map((r) => r.textContent ?? "");
+  expect(crashedRow).toContain(en["recovery.crashedItem"]);
+  expect(newerRow).not.toContain(en["recovery.crashedItem"]);
+});
+
+test("open in another Qiyas: a warning with its PID and computer; Recover and Discard still work", async () => {
+  const onRecover = vi.fn(async () => {});
+  const onDiscard = vi.fn(async () => {});
+  const locked = newer("/jobs/villa.dwg", 1_760_000_000, {
+    locked_elsewhere: { pid: 4242, host: "site-office-pc", started_at: 1_759_990_000 },
+  });
+  render(
+    <LanguageProvider>
+      <RecoveryDialog items={[locked]} onRecover={onRecover} onDiscard={onDiscard} onClose={() => {}} />
+    </LanguageProvider>,
+  );
+  expect(screen.getByRole("note").textContent).toBe(
+    "This drawing is open in another Qiyas window (PID 4242 on site-office-pc)",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Recover" }));
+  await waitFor(() => expect(onRecover).toHaveBeenCalledWith("/jobs/villa.dwg"));
+  fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+  await waitFor(() => expect(onDiscard).toHaveBeenCalledWith("/jobs/villa.dwg"));
+});
+
+test("in Arabic the times, the PID and the computer are isolated, so they read in their own order", () => {
+  function Arabic() {
+    const { setLang } = useLanguage();
+    return (
+      <>
+        <button type="button" onClick={() => setLang("ar")}>
+          ar
+        </button>
+        <RecoveryDialog
+          items={[
+            newer("/jobs/villa.dwg", 1_760_000_000, {
+              drawing_at: null,
+              crashed: true,
+              locked_elsewhere: { pid: 77, host: "qs-laptop", started_at: 1 },
+            }),
+          ]}
+          onRecover={noop}
+          onDiscard={noop}
+          onClose={() => {}}
+        />
+      </>
+    );
+  }
+  render(
+    <LanguageProvider>
+      <Arabic />
+    </LanguageProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "ar", hidden: true }));
+  expect(screen.getByRole("heading").textContent).toBe(ar["recovery.crashedTitle"]);
+  const note = screen.getByRole("note");
+  expect([...note.querySelectorAll("bdi")].map((b) => b.textContent)).toEqual(["77", "qs-laptop"]);
+  const row = screen.getByRole("listitem");
+  expect([...row.querySelectorAll("bdi")].map((b) => b.textContent)).toContain(localTime(1_760_000_000));
+  // The drawing is gone: no drawing time, it says so.
+  expect(row.textContent).toContain(ar["recovery.drawingGone"]);
+});
 
 test("each autosave newer than its drawing is offered: recover or discard it", async () => {
   const onRecover = vi.fn(async () => {});
@@ -31,7 +161,7 @@ test("each autosave newer than its drawing is offered: recover or discard it", a
       <RecoveryDialog items={items} onRecover={onRecover} onDiscard={onDiscard} onClose={onClose} />
     </LanguageProvider>,
   );
-  expect(screen.getByRole("heading").textContent).toBe("Recover autosaved drawings");
+  expect(screen.getByRole("heading").textContent).toBe("A newer autosave exists");
   const rows = screen.getAllByRole("listitem");
   expect(rows).toHaveLength(2);
   expect(rows[0].textContent).toContain("villa.dwg");

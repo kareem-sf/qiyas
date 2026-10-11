@@ -1,11 +1,20 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { ReadReport, Recoverable } from "../api";
 import { useT } from "../i18n";
+import { localTime } from "./recoveryQueue";
 
 /** The file name and the folder of `path`. */
 function split(path: string): [string, string] {
   const at = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
   return at < 0 ? [path, ""] : [path.slice(at + 1), path.slice(0, at)];
+}
+
+/** `text` (a translation with `{name}` holes) with each hole filled from `vars` in its own
+ *  `<bdi>`, so a date, a PID or a computer's name keeps its own order inside Arabic. */
+function fill(text: string, vars: Record<string, string | number>): ReactNode[] {
+  return text
+    .split(/\{(\w+)\}/)
+    .map((part, i) => (i % 2 === 1 ? <bdi key={i}>{vars[part] ?? `{${part}}`}</bdi> : part));
 }
 
 /** Shows the modal dialog once mounted, and gives the focus back when it goes. */
@@ -20,7 +29,7 @@ function useModal() {
 }
 
 type Props = {
-  /** The autosaves newer than their drawings (`recoverableDrawings`). */
+  /** The autosaves to offer back (`recoverableDrawings`), crashed ones first (`enqueue`). */
   items: Recoverable[];
   /** Opens the autosave of the drawing as a new drawing; an error stays in the dialog. */
   onRecover(drawing: string): Promise<void>;
@@ -29,11 +38,16 @@ type Props = {
   onClose(): void;
 };
 
-/** On launch and on open: each autosave newer than its drawing, to recover (opened as a new
- *  drawing beside it, then Save As) or discard (deleted). */
+/** On launch and on open: each autosave newer than its drawing, or left when Qiyas closed
+ *  unexpectedly (then whatever its age: the row says when it is older than the drawing), to
+ *  recover (opened as a new drawing beside it, then Save As) or discard (deleted). A drawing open
+ *  in another Qiyas is warned about and still opens. */
 export function RecoveryDialog({ items, onRecover, onDiscard, onClose }: Props) {
   const t = useT();
   const dialog = useModal();
+  const crashed = items.some((i) => i.crashed);
+  /** Crashed and newer drawings together: the heading speaks of the crash, rows mark their own. */
+  const mixed = crashed && items.some((i) => !i.crashed);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -59,7 +73,7 @@ export function RecoveryDialog({ items, onRecover, onDiscard, onClose }: Props) 
       onKeyDown={(e) => e.stopPropagation()}
     >
       <h2 id="recovery-title" className="heading">
-        {t("recovery.title")}
+        {t(crashed ? "recovery.crashedTitle" : "recovery.title")}
       </h2>
       <p>{t("recovery.intro")}</p>
       <ul className="recovery-list">
@@ -70,9 +84,16 @@ export function RecoveryDialog({ items, onRecover, onDiscard, onClose }: Props) 
               <span className="recovery-file" dir="auto">
                 <strong>{name}</strong> <span className="muted">{folder}</span>
               </span>
+              {mixed && item.crashed && <span className="warn">{t("recovery.crashedItem")}</span>}
+              <span className="muted">{fill(t("recovery.savedAt"), { time: localTime(item.saved_at) })}</span>
               <span className="muted">
-                {t("recovery.savedAt", { time: new Date(item.saved_at * 1000).toLocaleString() })}
+                {item.drawing_at == null
+                  ? t("recovery.drawingGone")
+                  : fill(t("recovery.drawingAt"), { time: localTime(item.drawing_at) })}
               </span>
+              {item.drawing_at != null && item.saved_at < item.drawing_at && (
+                <span className="warn">{t("recovery.older")}</span>
+              )}
               <span className="actions">
                 <button type="button" disabled={busy} onClick={() => act(() => onRecover(item.drawing))}>
                   {t("recovery.recover")}
@@ -81,6 +102,14 @@ export function RecoveryDialog({ items, onRecover, onDiscard, onClose }: Props) 
                   {t("recovery.discard")}
                 </button>
               </span>
+              {item.locked_elsewhere && (
+                <p className="recovery-warning" role="note">
+                  {fill(t("recovery.lockedElsewhere"), {
+                    pid: item.locked_elsewhere.pid,
+                    host: item.locked_elsewhere.host,
+                  })}
+                </p>
+              )}
             </li>
           );
         })}

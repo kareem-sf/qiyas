@@ -2229,3 +2229,14 @@ button.close {
 :is(.recovery, .sheet-set) .muted {
   color: var(--muted);
 }
+.recovery-list .warn {
+  color: var(--warn);
+}
+/* A drawing open in another Qiyas: a line of its own under the row. */
+.recovery-warning {
+  flex-basis: 100%;
+  margin: 0;
+  padding: 2px 8px;
+  border-inline-start: 3px solid var(--warn);
+  color: var(--warn);
+}
