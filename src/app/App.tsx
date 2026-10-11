@@ -30,9 +30,7 @@ import {
   pdfPageSize,
   pdfThumbnails,
   underlayImage,
-  boq as readBoq,
   compare,
-  conflicts as readConflicts,
   drawingInfo,
   entityInfo,
   tableCellAt,
@@ -59,8 +57,6 @@ import {
   setSheet,
   setXrefPath,
   TAKEOFF_CHANGED,
-  takeoff,
-  totals,
   undo,
   autosaveDrawings,
   discardAutosave,
@@ -78,7 +74,6 @@ import {
   type ReadReport,
   type AiUi,
   type BlockInfo,
-  type Boq,
   type Command,
   type Conflict,
   type Current,
@@ -95,7 +90,6 @@ import {
   type NamedView,
   type PaletteItem,
   type TextMatch,
-  type Total,
 } from "../api";
 import { AssistantPanel } from "../ai/AssistantPanel";
 import type { ToolCardItem } from "../ai/messages";
@@ -133,7 +127,7 @@ import { ExtractDialog } from "../shell/ExtractDialog";
 import { FindReplaceDialog, type FindQuery } from "../shell/FindReplaceDialog";
 import { cycleTab, FileTabs } from "../shell/FileTabs";
 import { isStale, serial } from "../shell/switcher";
-import { AlongPrompt, InfoCard, type Info } from "../shell/InfoCard";
+import { AlongPrompt, InfoCard } from "../shell/InfoCard";
 import { GroupNameDialog, LayerStatesDialog } from "../shell/LayerDialogs";
 import { LayersPanel } from "../shell/LayersPanel";
 import { LayerTranslator } from "../shell/LayerTranslator";
@@ -188,6 +182,7 @@ import { MODEL, NO_VIEWPORTS, type Pending, readProblems, typing, unionBounds } 
 import { useDrafting } from "./useDrafting";
 import { useAutosave, useFileTabs } from "./useDrawings";
 import { useShell } from "./useShell";
+import { useTakeoffState } from "./useTakeoff";
 
 export default function App() {
   const t = useT();
@@ -215,10 +210,34 @@ export default function App() {
   } = shell;
   const { fileTabs, setFileTabs, activeTab, setActiveTab, refreshTabs } = useFileTabs();
   const { autosaveOff, autosave } = useAutosave(t, setError);
+  /** Bumped whenever another drawing comes on screen (open, tab switch, close): work started
+   *  before is stale (`isStale`) and drops its results. */
+  const switchGen = useRef(0);
   const { drafting, setDraftingState, draftingOpen, setDraftingOpen, saveDrafting, toggleDrafting } = useDrafting({
     run,
     autosave,
   });
+  const takeoffState = useTakeoffState(switchGen);
+  const {
+    items,
+    itemTotals,
+    selectedId,
+    setSelectedId,
+    bill,
+    boqCode,
+    setBoqCode,
+    conflicts,
+    setConflicts,
+    compared,
+    setCompared,
+    conflictIds,
+    setConflictIds,
+    aiHighlight,
+    setAiHighlight,
+    infoCard,
+    setInfoCard,
+    refreshTakeoffAndBoq,
+  } = takeoffState;
   const [info, setInfo] = useState<DrawingInfo | null>(null);
   const [batch, setBatch] = useState<Batch | null>(null);
   /** The batch in hand and the core's version of it (`batchVersion`), so a redraw that changed
@@ -345,23 +364,6 @@ export default function App() {
   const preset = useRef<{ tool: Tool; value: number } | null>(null);
   /** What the select tool picked, for the properties palette. */
   const [pickedInfo, setPickedInfo] = useState<EntityInfo | null>(null);
-  /** What the last inquiry (geometry, ID point) found, shown until closed. */
-  const [infoCard, setInfoCard] = useState<Info | null>(null);
-  const [items, setItems] = useState<Measurement[]>([]);
-  const [itemTotals, setItemTotals] = useState<Total[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  /** The drawing's imported BOQ. */
-  const [bill, setBill] = useState<Boq | null>(null);
-  /** The BOQ item whose linked measurements are shown. */
-  const [boqCode, setBoqCode] = useState<string | null>(null);
-  /** The last comparison's conflicts. */
-  const [conflicts, setConflicts] = useState<Conflict[]>([]);
-  /** A comparison ran for this drawing, so no conflicts means none were found. */
-  const [compared, setCompared] = useState(false);
-  /** The measurements a conflict's Show pointed at. */
-  const [conflictIds, setConflictIds] = useState<string[]>([]);
-  /** Entities the assistant pointed at (Show on a tool card, or a zoom it asked for). */
-  const [aiHighlight, setAiHighlight] = useState<number[]>([]);
   /** Set when the next batch is a new drawing or sheet, so the view fits it once it is drawn. */
   const fitNext = useRef(false);
   /** Measurements to fit instead of the whole sheet, when a conflict's Show changed the sheet. */
@@ -373,9 +375,6 @@ export default function App() {
   const layerBusy = useRef(false);
   /** The same, for the layers panel to show: its buttons wait and the cursor says so. */
   const [layersBusy, setLayersBusy] = useState(false);
-  /** Bumped whenever another drawing comes on screen (open, tab switch, close): work started
-   *  before is stale (`isStale`) and drops its results. */
-  const switchGen = useRef(0);
   /** Drawing changes waiting or running; while any is, clicks and tool input on the canvas are
    *  ignored (they would land on a drawing about to go). */
   const switching = useRef(0);
@@ -399,24 +398,6 @@ export default function App() {
     if (box) viewport.current?.fitTo(box);
     else viewport.current?.fitExtents();
   }, [batch, fitTick]);
-
-  /** Re-reads the take-off, the BOQ and the conflicts, after anything that may have changed them. */
-  async function refreshTakeoffAndBoq() {
-    const gen = switchGen.current;
-    const [nextItems, nextTotals, nextBoq, nextConflicts] = await Promise.all([
-      takeoff(),
-      totals(),
-      readBoq(),
-      readConflicts(),
-    ]);
-    if (isStale(gen, switchGen.current)) return;
-    setItems(nextItems);
-    setItemTotals(nextTotals);
-    setBill(nextBoq);
-    setConflicts(nextConflicts);
-    // Conflicts kept in the project file come from an earlier comparison.
-    if (nextConflicts.length > 0) setCompared(true);
-  }
 
   /** Runs a take-off command; a new measurement becomes the selected row. An inquiry's answer
    *  shows in the info card. */
@@ -1283,12 +1264,7 @@ export default function App() {
     picturesHeld.current = new Map();
     setPictures(new Map());
     autosaveOff.current = false;
-    setSelectedId(null);
-    setBoqCode(null);
-    setAiHighlight([]);
-    setConflictIds([]);
-    setCompared(false);
-    setInfoCard(null);
+    takeoffState.reset();
     setPending(null);
     setPickedInsert(null);
     setCalibration(null);
@@ -1333,10 +1309,7 @@ export default function App() {
     setDraftingState(null);
     setSheetBlock("");
     setHidden(new Set());
-    setItems([]);
-    setItemTotals([]);
-    setBill(null);
-    setConflicts([]);
+    takeoffState.clear();
   }
 
   /** Runs a drawing change (open, tab switch, close) in turn after those asked before it; canvas
