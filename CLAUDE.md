@@ -16,7 +16,8 @@ qiyas/
     qiyas-takeoff   the comparison engine: take-off and drawings against the BOQ
                     (conflicts); the BOQ, schedule and conflict types live in qiyas-core
     qiyas-boq       Excel in and out (calamine to read, rust_xlsxwriter to write)
-    qiyas-pdf       PDF import as vectors and text, PDF underlay pages, PDF plot (later phase)
+    qiyas-pdf       PDF import as vectors and text, PDF underlay pages
+    qiyas-plot      plot a sheet to PDF, plot styles (CTB/STB), print through the OS
     qiyas-ai        the 32 AI tools over the command bus, the agent loop, the Claude and
                     OpenAI-compatible clients, the MCP server
     qiyas-mcp       the stdio bridge Claude Desktop and Claude Code start (bundled beside the app)
@@ -26,7 +27,7 @@ qiyas/
   scripts/check.sh  cargo fmt, clippy, test, a release speed test, tsc, vitest, in one run
 ```
 
-All the crates above exist; `qiyas-pdf` reads PDFs (import, underlays), PDF plot comes later.
+All the crates above exist; `qiyas-pdf` reads PDFs (import, underlays), `qiyas-plot` writes them.
 
 Pinned libraries (git revs in the workspace `Cargo.toml`): opencadcodec `a35f43e` (DWG/DXF) and
 opencadkernel `99b6b48` (`geom2d` for snaps and edits, `offset` for polyline offsets: it brings
@@ -510,6 +511,45 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
   window gets a picture per zoom (64 to 2048 px) through the same `underlay_image` IPC as PDFs.
 - Picking an image (Select tool, click its frame) shows brightness, contrast and fade sliders
   (`set_image_display`, one undo step per release).
+
+## Plot
+
+- `crates/qiyas-plot` (`plot_pdf(session, &PlotJob)`, lopdf, MIT) writes one sheet to a one-page
+  PDF as the screen draws it, from the session's own batches (`Session::sheet_batch`,
+  `model_batch`): a layout draws model space in each viewport first (clipped to its frame,
+  without the layers it freezes, through `paper_views_of`), then its own batch: pictures, fills
+  as filled paths, lines, wipeouts in the paper's white, their frames, then text.
+  `PlotJob { sheet, area: "extents" | {"window": [[x, y], [x, y]]} | "layout", paper: { name,
+  w_mm, h_mm }, orientation, scale: "fit" | {"ratio": [num, den]}, centre, style, lineweights,
+  output }`. Model space scales by its units (`Units::to_metres`), a layout's units are taken as
+  millimetres (the codec keeps no plot settings); "layout" is a layout's limits, else its
+  extents. Fit leaves a 5 mm margin; not centred puts the area's lower left at the page's.
+  `paper_catalog()`: ISO A0 to A4, ANSI A to E, ARCH A to E1, portrait.
+- Lines are paper millimetres: the plot style's lineweight, else the entity's with `lineweights`
+  (ByLayer and ByBlock resolved as inside blocks, Default 0.25 mm), else the thinnest line. White
+  plots black. Layers set not to plot are left out. Arcs are as flattened for the screen
+  (`BATCH_TOL`).
+- Text is real PDF text: each font used becomes an embedded TrueType subset (`subsetter`, Type0,
+  Identity-H) with a ToUnicode map from the shaped text (`LaidText::text`, `Session::font_bytes`).
+  A text with a glyph that doesn't map back to its characters, or a font that can't be embedded
+  (CFF outlines, restricted), draws as outlines.
+- Pictures (on the sheet on screen only, as the window draws them) are embedded at 200 dpi;
+  those that can't be drawn (PDF support missing, file gone) are listed in `PlotOutput::skipped`.
+- By command a plot goes only in the drawing's folder (`output` a name inside it or a subfolder;
+  none: `<drawing>-<sheet>.pdf` beside it), written beside the target then moved over it.
+  `plot_pdf_to` writes anywhere: the Save dialog later, and `plot_and_print`'s spool PDF in
+  `<temp>/qiyas-plot/`.
+- Plot styles (`ctb.rs`): `PlotStyle::{load, save, parse, to_bytes, apply, default_ctb}` read
+  and write CTB and STB files (48-byte header, adler32, lengths, zlib text; plain text read too),
+  keeping keys Qiyas doesn't know. A CTB's pen is the ACI of the drawn colour (exact, else
+  nearest); an STB's style is the layer's plot style name, else Normal. Screen 0 is "no plot";
+  screening fades toward white; grayscale greys.
+- Printing (`print.rs`) hands the PDF to the OS: Linux `lp -d <printer>` (no printer: the PDF
+  viewer through `xdg-open`), macOS `lpr`, Windows the PDF handler's Print or PrintTo verb. Tests
+  only use `print_dry_run` and `print_plan`.
+- IPC (`qiyas-desktop/src/plot.rs`): `paper_catalog`, `plot_pdf`, `plot_and_print`,
+  `print_pdf`, `list_printers`, `default_printer`, `load_plot_style`, `save_plot_style`. The
+  Plot dialog, the plot style editor and the Output tab are the frontend half.
 
 ## Inquiry
 
