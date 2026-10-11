@@ -20,6 +20,7 @@ qiyas/
     qiyas-ai        the 32 AI tools over the command bus, the agent loop, the Claude and
                     OpenAI-compatible clients, the MCP server
     qiyas-mcp       the stdio bridge Claude Desktop and Claude Code start (bundled beside the app)
+    qiyas-cli       the command line without a window: convert, run a script, take off, batch
     qiyas-desktop   the Tauri app: IPC, file dialogs, settings, keychain, assistant, MCP switch
   src/              React + TypeScript + Vite: viewport, ribbon, command line, panels
   scripts/check.sh  cargo fmt, clippy, test, a release speed test, tsc, vitest, in one run
@@ -574,6 +575,71 @@ their measurements are marked `mcp`).
   `pnpm tauri build --config crates/qiyas-desktop/tauri.bundle.conf.json` ships it beside the
   app. The external binary lives in that extra config, not `tauri.conf.json`, so plain builds
   and tests don't need the sidecar built first.
+
+## Scripts and the command line tool
+
+- Command scripts (`qiyas-core/src/script.rs`, `.scr`): one command per line, its points on the
+  same line or the lines after it; a line starting with `;` is a comment; blank lines are
+  skipped; words in any case. Points as the window's command line: `x,y`, `@dx,dy`, `@d<angle`
+  (degrees), drawing units, world coordinates, Arabic digits and `٫`/`،` accepted; the last
+  point carries across commands for `@`. Double quotes keep a name with spaces together. The
+  whole file is checked before anything runs; an error is `line N: …`, and a run stops at the
+  first failing step with its line.
+
+  | Line | Does |
+  |---|---|
+  | `OPEN <path>` | Opens the drawing (reads its `.qiyas` if beside it). The rest of the line is the path. |
+  | `SAVEAS <path> [dwg\|dxf]` | Save As; the format word gives a path without extension its extension (a mismatch is an error). Project file saved beside it. |
+  | `SAVE` | Saves over the drawing, keeping `.bak` as the app does. |
+  | `QUIT` | Ends the run; later lines are checked, never run. |
+  | `DELAY <ms>` | Waits (whole milliseconds; it really sleeps). |
+  | `LAYOFF <name…>` / `LAYON <name…>` | Hides / shows layers, one step per name. |
+  | `LAYFRZ <name…>` / `LAYTHW <name…>` | Freezes / thaws layers. |
+  | `LAYER CURRENT <name>` | Makes the layer current. |
+  | `COUNT <block>` | `CountBlock` on the sheet (the counts go in the batch report). |
+  | `DI` / `DIST p1 p2` | `MeasureDistance`; exactly 2 points. |
+  | `AA` / `AREA p1 p2 p3…` | `MeasureArea`; 3 points or more; a blank line or the end of the file ends them. |
+  | `MEASURE <handle hex>` | `MeasureEntity` of the drawing's own entity. |
+  | `EXPORT <xlsx path>` | The take-off to Excel. |
+  | `IMPORTBOQ <xlsx path>` | BOQ from Excel, then `SetBoq`. |
+  | `COMPARE` | `compare_session`, default tolerance. |
+  | `ZOOM E\|EXTENTS\|IN\|OUT` | Nothing headless (`W` is refused). |
+  | `ECHO <text>` | Prints the text in the report. |
+  | `{"type":…}` | Any `Command` in its wire form, e.g. `{"type":"draw","kind":"line","a":[0,0],"b":[0,5]}`. |
+
+  Not in the grammar on purpose: `ME` (measure along) and UCS (points are world). Paths are
+  relative to the script's folder (written ones, SAVEAS and EXPORT, to the batch's `--out`
+  folder when given) and must stay inside the script's folder, the drawing's folder or the out
+  folder. `{name}` in a path is the drawing's file name without extension
+  (`EXPORT {name}.xlsx`: one workbook per drawing of a batch). Only SAVE, SAVEAS and EXPORT
+  write; the `.qiyas` beside a drawing is read on open and written only by SAVE and SAVEAS.
+  Excel and the comparison come through `script::Host` (`qiyas-cli` gives `qiyas-boq` and
+  `qiyas-takeoff`). The ribbon's Manage, Run script is not built yet.
+- `qiyas-cli` (`crates/qiyas-cli`, clap without colour): no window, and never the settings, the
+  keychain, MCP or the AI (it depends on qiyas-core, qiyas-boq and qiyas-takeoff only).
+  - `convert <in> <out> [--version 2000|2004|2007|2010|2013|2018]`: DWG or DXF by the output's
+    extension, in the input's version unless given. A Save As: `.bak` when the output exists, the
+    project file beside the output.
+  - `run <script.scr> [drawing]`: prints `line N: <what it did>` per step.
+  - `takeoff <drawing> --count DOOR [--count …] [--export out.xlsx]`: adds the counts to the
+    drawing's take-off (read from its `.qiyas`, which is not written) and writes the workbook;
+    at least one of the two.
+  - `batch <folder|set.qss> --script x.scr [--out <folder>] [--jobs N]`: the folder's own
+    `.dwg`/`.dxf` files sorted by name (not subfolders; `.bak` and `.sv$` fall out) or the sheet
+    set's drawings in its order; the script is checked once before any drawing is opened; one
+    line per drawing in that order, `<path> ok COLUMN=6 DOOR=3`, `<path> warning (N problems
+    reading it) …` (the reader repaired or skipped something; the script still ran) or
+    `<path> error <message>`; then `N drawings: A ok, W with warnings, F failed`. Jobs 1 to 64
+    (default 1), each worker with its own session.
+  - `--quiet` prints nothing on stdout; `--json` prints one JSON document (batch:
+    `{files: [{path, status, problems, counts, error}], total, ok, warnings, failed}`).
+  - Any error is one line on stderr, `qiyas-cli: …`, exit 1 (2 for a mistake in the
+    arguments); a batch with a failed drawing exits 1 (`qiyas-cli: F of N drawings failed`).
+    A panic (the reader on a damaged DWG) is caught: `crashed: <message>`, and the batch goes on.
+  - Damaged drawings (tested): a DWG cut off in the middle does not open at all ("no usable
+    drawing data"); junk bytes in the middle open cleanly, open with problems (a warning), are
+    refused, or panic the reader (an error).
+  - `cargo run -p qiyas-cli -- batch plans --script count.scr --out out --jobs 2`.
 
 ## Where the plans live
 
