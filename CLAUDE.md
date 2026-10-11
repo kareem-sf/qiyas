@@ -159,7 +159,10 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
   segments (`locate` places one cell). More than 50,000 drawn segments in the box, text boxes
   and pattern lines not counted, or 4 times as many flattened again, is `TooDense` (the prompt
   says zoom in), never a ring from part of them. A hatch
-  measures even-odd (islands taken away), each path exactly when it is a bulged polyline. Type a pattern
+  measures even-odd (islands taken away), each path exactly when it is a bulged polyline; a path
+  that crosses or touches itself counts as its simple loops (`Path::loops`), so a click region's
+  island against its wall is taken away too. An island's path keeps the polyline flag (the DWG
+  writer writes a polyline edge whole only under it). Type a pattern
   (SOLID, ANSI31, ANSI37, LINE, NET, DASH, BRICK), S scale, A angle; the default scale is
   0.025 / metres per unit (25 in millimetres).
 - Command line: L, PL, REC, C, A, EL, SPL, PO, H, REVCLOUD, WIPEOUT; typed whole: POLYGON (POL)
