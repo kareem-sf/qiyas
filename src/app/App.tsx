@@ -17,8 +17,6 @@ import {
   recents as readRecents,
   tabs as readTabs,
   views as readViews,
-  attachImage,
-  attachPdf,
   calibrate,
   IMAGE_EXTENSIONS,
   imageDisplay,
@@ -90,13 +88,11 @@ import {
   AttachImageDialog,
   defaultImageWidth,
   ImageDisplayPanel,
-  type AttachImageRequest,
 } from "../shell/AttachImageDialog";
 import {
   AttachPdfDialog,
   CalibrateDialog,
   metresPerUnit,
-  type AttachRequest,
 } from "../shell/AttachPdfDialog";
 import {
   AttDefDialog,
@@ -151,16 +147,15 @@ import type { DimRequest } from "../tools/dimTools";
 import type { TextRequest } from "../tools/textTools";
 import { useTool } from "../tools/useTool";
 import {
-  newPictureBounds,
   parseThumbnails,
-  type Batch,
   type Target,
 } from "../viewport/batch";
 import type { Point } from "../viewport/camera";
 import { SplitPane } from "../viewport/SplitPane";
 import { Viewport } from "../viewport/Viewport";
-import { NO_VIEWPORTS, type Pending, readProblems, typing, unionBounds } from "./shared";
+import { NO_VIEWPORTS, readProblems, typing, unionBounds } from "./shared";
 import { useDrafting } from "./useDrafting";
+import { useAttach } from "./useAttach";
 import { useCommands, useToolChoice } from "./useCommands";
 import { useAutosave, useFileTabs } from "./useDrawings";
 import { useLayers } from "./useLayers";
@@ -296,23 +291,32 @@ export default function App() {
   } = layers;
   const toolChoice = useToolChoice(focusDrawing);
   const { tool, setTool, lastPoint, preset, chooseTool } = toolChoice;
+  const attach = useAttach({ t, setInfo, setNotice, viewport, batchHeld, redraw, syncPictures });
+  const {
+    attachOpen,
+    setAttachOpen,
+    attachImageOpen,
+    setAttachImageOpen,
+    pending,
+    setPending,
+    pickedInsert,
+    setPickedInsert,
+    calibration,
+    setCalibration,
+    attachPdfPage,
+    attachImageFile,
+    pendingPoint,
+  } = attach;
   /** Autosaves to offer back (on launch, or before opening `then`), one question at a time. */
   const [recoveries, setRecoveries] = useState<RecoveryAsk[]>([]);
   const recovery = recoveries[0] ?? null;
   /** What RECOVER read and dropped from a damaged drawing. */
   const [recoverReport, setRecoverReport] = useState<{ path: string; report: ReadReport } | null>(null);
   const [sheetSetShown, setSheetSetShown] = useState(false);
-  const [attachOpen, setAttachOpen] = useState(false);
-  const [attachImageOpen, setAttachImageOpen] = useState(false);
   /** The image the select tool has chosen, and its brightness, contrast and fade. */
   const [imageChosen, setImageChosen] = useState<{ handle: number; display: ImageDisplay } | null>(
     null,
   );
-  /** A click the window waits for (see `Pending`), the insert point it gave, and the two
-   *  calibration points once both are picked. */
-  const [pending, setPending] = useState<Pending | null>(null);
-  const [pickedInsert, setPickedInsert] = useState<Point | null>(null);
-  const [calibration, setCalibration] = useState<[Point, Point] | null>(null);
   const [opening, setOpening] = useState(false);
   const [xrefsOpen, setXrefsOpen] = useState(false);
   const [extractOpen, setExtractOpen] = useState(false);
@@ -951,11 +955,7 @@ export default function App() {
     sheets.reset();
     autosaveOff.current = false;
     takeoffState.reset();
-    setPending(null);
-    setPickedInsert(null);
-    setCalibration(null);
-    setAttachOpen(false);
-    setAttachImageOpen(false);
+    attach.reset();
     setXrefsOpen(false);
     setExtractOpen(false);
     preset.current = null;
@@ -1336,39 +1336,7 @@ export default function App() {
     [pickedInfo, info],
   );
 
-  /** Attaches a PDF page from the dialog, then draws it: an underlay's picture is fetched before
-   *  the dialog closes, so its progress shows there. Errors go to the dialog. */
-  async function attachPdfPage(r: AttachRequest) {
-    const before = batchHeld.current;
-    const added = await attachPdf(r.path, r.page, r.at, r.scale, r.mode);
-    setInfo(await drawingInfo());
-    await redraw();
-    const view = viewport.current;
-    if (r.mode === "underlay" && view) {
-      showNewPicture(before);
-      await syncPictures(batchHeld.current, view.pxPerUnit(), view.visible());
-    } else {
-      setNotice(t("attachPdf.imported", { n: added }));
-    }
-  }
 
-  /** Attaches an image from the dialog, then draws it with its picture. Errors go to the dialog. */
-  async function attachImageFile(r: AttachImageRequest) {
-    const before = batchHeld.current;
-    await attachImage(r.path, r.at, r.width);
-    setInfo(await drawingInfo());
-    await redraw();
-    const view = viewport.current;
-    showNewPicture(before);
-    if (view) await syncPictures(batchHeld.current, view.pxPerUnit(), view.visible());
-  }
-
-  /** Fits the view to the picture the batch on screen has and `before` did not (one just
-   *  attached), so it never lands off screen. */
-  function showNewPicture(before: Batch | null) {
-    const box = newPictureBounds(before, batchHeld.current);
-    if (box) viewport.current?.fitTo(box);
-  }
 
   /** Sets the chosen image's brightness, contrast and fade (one undo step), then draws it. */
   async function setChosenDisplay(handle: number, display: ImageDisplay) {
@@ -1376,22 +1344,6 @@ export default function App() {
     await redraw();
   }
 
-  /** Gives `p` to the PDF or image insert point or the calibration waiting for one. False when
-   *  none is. */
-  function pendingPoint(p: Point): boolean {
-    if (pending?.kind === "insert") {
-      setPickedInsert(p);
-      setPending(null);
-    } else if (pending?.kind === "calibrate" && !pending.first) {
-      setPending({ kind: "calibrate", first: p });
-    } else if (pending?.kind === "calibrate" && pending.first) {
-      setCalibration([pending.first, p]);
-      setPending(null);
-    } else {
-      return false;
-    }
-    return true;
-  }
 
   /** A click in the drawing: the one a PDF or image insert point or a calibration waits for, else
    *  the tool's. */
