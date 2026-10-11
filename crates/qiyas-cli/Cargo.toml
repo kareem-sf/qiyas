@@ -1,0 +1,22 @@
+[package]
+name = "qiyas-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# The headless command line: convert, run a script, take off, batch. No window, no settings,
+# keychain, MCP or AI: only the core, Excel and the comparison.
+[dependencies]
+qiyas-core = { path = "../qiyas-core" }
+qiyas-boq = { path = "../qiyas-boq" }
+qiyas-takeoff = { path = "../qiyas-takeoff" }
+opencadcodec.workspace = true
+# Arguments (MIT OR Apache-2.0); no colour or suggestions, so fewer crates come along.
+clap = { version = "4.6", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+calamine.workspace = true
