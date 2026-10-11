@@ -9,7 +9,6 @@ import {
   blockThumbnail,
   clearRecents,
   drawingBlocks,
-  drawingLayers,
   getSettings,
   setToolPalette,
   writeBlock,
@@ -49,7 +48,6 @@ import {
   saveDrawing,
   saveDrawingAs,
   SESSION_CHANGED,
-  setLayerHidden,
   setXrefPath,
   TAKEOFF_CHANGED,
   undo,
@@ -67,7 +65,6 @@ import {
   type BlockInfo,
   type Command,
   type Conflict,
-  type Current,
   type DrawingInfo,
   type EntityFilter,
   type EntityInfo,
@@ -75,7 +72,6 @@ import {
   type FieldKind,
   type Field,
   type ImageDisplay,
-  type LayerProp,
   type TableInfo,
   type Measurement,
   type NamedView,
@@ -166,6 +162,7 @@ import { Viewport } from "../viewport/Viewport";
 import { NO_VIEWPORTS, type Pending, readProblems, typing, unionBounds } from "./shared";
 import { useDrafting } from "./useDrafting";
 import { useAutosave, useFileTabs } from "./useDrawings";
+import { useLayers } from "./useLayers";
 import { useSheets } from "./useSheets";
 import { useShell } from "./useShell";
 import { useTakeoffState } from "./useTakeoff";
@@ -254,6 +251,48 @@ export default function App() {
     saveView,
     deleteView,
   } = sheets;
+  const layers = useLayers({
+    switchGen,
+    info,
+    setInfo,
+    setError,
+    run,
+    autosave,
+    redraw,
+    refreshTakeoffAndBoq,
+    hidden,
+    setHidden,
+  });
+  const {
+    layerStatesOpen,
+    setLayerStatesOpen,
+    translatorOpen,
+    setTranslatorOpen,
+    groupAsk,
+    setGroupAsk,
+    groupSelect,
+    setGroupSelect,
+    layersBusy,
+    runDrawingCommand,
+    runLayerCommand,
+    groupOf,
+    loadLayerStandard,
+    syncInfo,
+    applyHidden,
+    toggleLayer,
+    isolateLayer,
+    showAll,
+    setLayerProp,
+    renameLayer,
+    deleteLayer,
+    newLayer,
+    openLayerStates,
+    openTranslator,
+    setViewportFrozen,
+    setCurrentState,
+    ownLayers,
+    makeCurrent,
+  } = layers;
   /** Autosaves to offer back (on launch, or before opening `then`), one question at a time. */
   const [recoveries, setRecoveries] = useState<RecoveryAsk[]>([]);
   const recovery = recoveries[0] ?? null;
@@ -316,13 +355,6 @@ export default function App() {
   const [palette, setPalette] = useState<PaletteItem[] | null>(null);
   /** BATTMAN is open on these blocks. */
   const [managerBlocks, setManagerBlocks] = useState<BlockInfo[] | null>(null);
-  /** LAYSTATE's and LAYTRANS's dialogs are open. */
-  const [layerStatesOpen, setLayerStatesOpen] = useState(false);
-  const [translatorOpen, setTranslatorOpen] = useState(false);
-  /** GROUP's entities are picked: the command waiting for the group's name. */
-  const [groupAsk, setGroupAsk] = useState<Extract<Command, { type: "create_group" }> | null>(null);
-  /** Clicking a grouped entity selects its group (AutoCAD's PICKSTYLE); Ctrl picks one alone. */
-  const [groupSelect, setGroupSelect] = useState(true);
   /** The block palette's thumbnails, revoked when it closes. */
   const thumbUrls = useRef<string[]>([]);
   /** The text height and style new text takes: the last ones used; null until then (2.5 mm in
@@ -351,11 +383,6 @@ export default function App() {
   const preset = useRef<{ tool: Tool; value: number } | null>(null);
   /** What the select tool picked, for the properties palette. */
   const [pickedInfo, setPickedInfo] = useState<EntityInfo | null>(null);
-  /** True while a layer change talks to the core; clicks meanwhile are dropped (the panel shows its
-   *  buttons waiting, `layersBusy`), so they can't interleave. */
-  const layerBusy = useRef(false);
-  /** The same, for the layers panel to show: its buttons wait and the cursor says so. */
-  const [layersBusy, setLayersBusy] = useState(false);
   /** Drawing changes waiting or running; while any is, clicks and tool input on the canvas are
    *  ignored (they would land on a drawing about to go). */
   const switching = useRef(0);
@@ -650,41 +677,6 @@ export default function App() {
   /** Runs a block command from a dialog or the edit bar, then draws it and reads the take-off
    *  (rows may lose their links) and the drawing's state (an edit in place may end) again; an
    *  error goes back to the caller. */
-  /** Runs a layer, group or property command (its error goes to the caller), then reads the
-   *  drawing again: the batch, the take-off, the layers, groups and hidden layers. */
-  async function runDrawingCommand(cmd: Command) {
-    const gen = switchGen.current;
-    const outcome = await runCommand(cmd);
-    await redraw();
-    await refreshTakeoffAndBoq();
-    const next = await drawingInfo();
-    if (!isStale(gen, switchGen.current)) {
-      setInfo(next);
-      setHidden(new Set(next.hidden_layers));
-    }
-    await autosave();
-    return outcome;
-  }
-
-  /** `runDrawingCommand` with its error in the status bar. */
-  const runLayerCommand = (cmd: Command) =>
-    run(async () => {
-      await runDrawingCommand(cmd);
-    });
-
-  /** The group the top-level entity `handle` is in, while group selection is on. */
-  function groupOf(handle: number) {
-    if (!groupSelect) return null;
-    return info?.groups?.find((g) => g.selectable && g.handles.includes(handle)) ?? null;
-  }
-
-  /** Asks for a drawing and reads its layers, for the layer translator's standard. */
-  async function loadLayerStandard() {
-    const path = await open({ filters: [{ name: "Drawings", extensions: ["dwg", "dxf"] }] });
-    if (typeof path !== "string") return null;
-    return { path, layers: await drawingLayers(path) };
-  }
-
   async function runBlock(cmd: Command) {
     const gen = switchGen.current;
     const outcome = await runCommand(cmd);
@@ -865,14 +857,6 @@ export default function App() {
     if (changed) await autosave();
   }
 
-  /** Reads the drawing's info again (layers, groups, current state) and the hidden layers. */
-  async function syncInfo() {
-    const gen = switchGen.current;
-    const next = await drawingInfo();
-    if (isStale(gen, switchGen.current)) return;
-    setInfo(next);
-    setHidden(new Set(next.hidden_layers));
-  }
 
   /** Does what a tool's result asks of the window: another sheet, other layers, a zoom. */
   function applyAiUi(ui: AiUi) {
@@ -1457,80 +1441,6 @@ export default function App() {
   exportConflictsRef.current = exportConflictsFile;
   const onExportConflicts = useCallback(() => exportConflictsRef.current(), []);
 
-  /** Moves the hidden set to `target`, one core call per changed layer. Whatever happens, the panel
-   *  shows the calls that went through and the canvas is redrawn from the core. */
-  async function applyHidden(target: Set<string>) {
-    if (layerBusy.current) return;
-    layerBusy.current = true;
-    setLayersBusy(true);
-    const done = new Set(hidden);
-    let failure: string | null = null;
-    try {
-      for (const l of info?.layers ?? []) {
-        const hide = target.has(l.name);
-        if (done.has(l.name) === hide) continue;
-        await setLayerHidden(l.name, hide);
-        if (hide) done.add(l.name);
-        else done.delete(l.name);
-      }
-    } catch (e) {
-      failure = String(e);
-    }
-    setHidden(done);
-    try {
-      await redraw();
-    } catch (e) {
-      failure ??= String(e);
-    }
-    setError(failure);
-    layerBusy.current = false;
-    setLayersBusy(false);
-  }
-
-  // Stable between pointer moves, so the memoised layers panel doesn't re-render with the cursor.
-  const toggleLayer = useCallback(
-    (name: string) => {
-      const next = new Set(hidden);
-      if (next.has(name)) next.delete(name);
-      else next.add(name);
-      applyHidden(next);
-    },
-    [hidden, info],
-  );
-
-  /** Shows only `name`: hides every other layer and unhides it. */
-  const isolateLayer = useCallback(
-    (name: string) =>
-      applyHidden(new Set(info?.layers.map((l) => l.name).filter((n) => n !== name))),
-    [hidden, info],
-  );
-
-  const showAll = useCallback(() => applyHidden(new Set()), [hidden, info]);
-
-  /** One property of the drawing's layer `name` (one undo step). */
-  const setLayerProp = useCallback(
-    (name: string, prop: LayerProp, value: boolean | string | number) =>
-      runLayerCommand({ type: "set_layer", name, prop, value }),
-    [info],
-  );
-
-  // The layers panel's handlers, stable between pointer moves so the memoised panel doesn't
-  // render again with the cursor.
-  const renameLayer = useCallback(
-    (from: string, to: string) => runLayerCommand({ type: "rename_layer", from, to }),
-    [info],
-  );
-  const deleteLayer = useCallback((name: string) => runLayerCommand({ type: "delete_layer", name }), [info]);
-  const newLayer = useCallback((name: string) => runLayerCommand({ type: "new_layer", name }), [info]);
-  const openLayerStates = useCallback(() => setLayerStatesOpen(true), []);
-  const openTranslator = useCallback(() => setTranslatorOpen(true), []);
-
-  /** The viewport `viewport` freezes `layer` inside it, or thaws it. */
-  const setViewportFrozen = useCallback(
-    (viewport: number, layer: string, frozen: boolean) =>
-      runLayerCommand({ type: "set_viewport_frozen", viewport: { handle: viewport, chain: [] }, layer, frozen }),
-    [info],
-  );
 
   /** The palette's edit of the picked entity (a drawing's own, at the top of the sheet). */
   const setPickedProperty = useCallback(
@@ -1539,40 +1449,6 @@ export default function App() {
       runLayerCommand({ type: "set_property", target: { handle: pickedInfo.handle, chain: [] }, prop, value });
     },
     [pickedInfo, info],
-  );
-
-  /** What new entities are drawn with, from the palette (not an undo step). */
-  const setCurrentState = useCallback(
-    (current: Current) => {
-      const gen = switchGen.current;
-      run(async () => {
-        await runCommand({ type: "set_current", current });
-        const next = await drawingInfo();
-        if (isStale(gen, switchGen.current)) return;
-        setInfo(next);
-        await autosave();
-      });
-    },
-    [info],
-  );
-
-  /** The drawing's own layers (not its xrefs'), for the palette. */
-  const ownLayers = useMemo(() => info?.layers.map((l) => l.name).filter((n) => !n.includes("|")) ?? [], [info]);
-
-  /** Draws new entities on layer `name` from now on (saved with the project, not an undo step). */
-  const makeCurrent = useCallback(
-    (name: string) => {
-      if (!info) return;
-      const gen = switchGen.current;
-      run(async () => {
-        await runCommand({ type: "set_current", current: { ...info.current, layer: name } });
-        const next = await drawingInfo();
-        if (isStale(gen, switchGen.current)) return;
-        setInfo(next);
-        await autosave();
-      });
-    },
-    [info],
   );
 
   /** Attaches a PDF page from the dialog, then draws it: an underlay's picture is fetched before
