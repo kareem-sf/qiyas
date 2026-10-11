@@ -43,7 +43,10 @@ order they always ran: `useShell`, `useFileTabs`, `useAutosave`, `useDrafting`,
 `useCommandLine`, `useSelection`, `useOverlay`. It hands `apply`, `onCommand` and the tool's
 `cancel` to hooks made before them through refs filled right after they exist, and renders
 `Header`, `Dialogs` and `Panels`. Dialogs and panels themselves are in `src/shell/`, the canvas
-in `src/viewport/`, the tools in `src/tools/`; `src/app/App.test.tsx` checks the wiring.
+in `src/viewport/`, the tools in `src/tools/`; `src/app/App.test.tsx` checks the wiring. The
+three late refs are `measureRef` (`useSheets` cancels the tool when the sheet changes), `applyRef`
+(`useBlocks`, `useAnnotate`) and `onCommandRef` (the tool palette in `useBlocks`); they are called
+with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test for each.
 
 ## Global constraints
 

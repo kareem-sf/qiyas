@@ -39,6 +39,8 @@ vi.mock("@tauri-apps/api/core", () => ({
           .map((drawing) => ({ drawing, autosave: `${drawing}.sv$`, saved_at: 1 }));
       case "open_drawing":
         return info(args!.path as string);
+      case "drawing_info":
+        return info(PLAN);
       case "get_drafting":
         return {
           osnap: true,
@@ -89,7 +91,10 @@ vi.mock("../viewport/Viewport", () => ({
 function info(path: string) {
   return {
     path,
-    sheets: [{ name: "Model", block: "*Model_Space", is_model: true }],
+    sheets: [
+      { name: "Model", block: "*Model_Space", is_model: true },
+      { name: "Layout1", block: "*Paper_Space", is_model: false },
+    ],
     layers: [{ name: "0", color: [255, 255, 255], off: false, frozen: false, locked: false }],
     units: "millimetres",
     problems: [],
@@ -249,4 +254,20 @@ test("hooks made before apply and onCommand reach them: TEXT's text, a tool pale
   expect(core.calls.filter((c) => c.startsWith("run_command"))).toEqual([
     `run_command {"cmd":{"type":"divide_along","handle":42,"chain":[],"count":3}}`,
   ]);
+});
+
+test("another sheet cancels the tool in use, which is made after the sheets", async () => {
+  await mount();
+  await clickOpen();
+  const prompt = () => document.querySelector<HTMLInputElement>("input[aria-autocomplete]")!.labels![0].textContent;
+
+  await typeLine("L");
+  canvas.props!.onClick([10, 10], [100, 100], 1, false);
+  await settle();
+  expect(prompt()).toBe(en["draw.prompt.nextPoint"]);
+
+  // useSheets reaches the tool's cancel through the root's measureRef.
+  await typeLine("SHEET Layout1");
+  expect(core.calls).toContain(`set_sheet {"block":"*Paper_Space"}`);
+  expect(prompt()).toBe(en["draw.prompt.firstPoint"]);
 });
