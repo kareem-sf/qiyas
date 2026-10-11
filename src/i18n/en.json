@@ -881,6 +881,7 @@
   "recovery.drawingGone": "The drawing is no longer there",
   "recovery.older": "This autosave is older than the drawing",
   "recovery.lockedElsewhere": "This drawing is open in another Qiyas window (PID {pid} on {host})",
+  "recovery.openAnyway": "Open anyway",
   "recovery.done": "Recovered from autosave of {time}",
   "recover.title": "Recovered {name}",
   "recover.summary": "{entities} entities read; {decoded} of {records} records decoded, {skipped} skipped.",

@@ -542,6 +542,7 @@ export function FileDialogs({ drawings }: { drawings: Drawings }) {
     setRecoveries,
     recoverFrom,
     discardFrom,
+    openAnyway,
     openPath,
     recoverReport,
     setRecoverReport,
@@ -559,6 +560,7 @@ export function FileDialogs({ drawings }: { drawings: Drawings }) {
           items={recovery.items}
           onRecover={recoverFrom}
           onDiscard={discardFrom}
+          onOpen={openAnyway}
           onClose={() => {
             const then = recovery.then;
             setRecoveries((q) => q.filter((r) => r.id !== recovery.id));

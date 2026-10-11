@@ -343,16 +343,15 @@ export function useDrawings({
    *  asks where it goes; then the status bar says which autosave it came from. */
   async function recoverFrom(drawing: string) {
     const savedAt = recovery?.items.find((i) => i.drawing === drawing)?.saved_at;
-    let shown = false;
-    await drawingChange(async () => {
+    const recovered = await drawingChange(async () => {
       const next = await recoverAutosave(drawing);
       await showDrawing(next, beginShow());
       await refreshTabs();
-      shown = true;
+      return next;
     });
     dropRecovery(drawing);
-    if (!shown) return;
-    await saveFileAs();
+    // The recovered drawing itself: this render's `info` is the one before it (none at launch).
+    await saveAs(recovered);
     // The time isolated (FSI … PDI): it keeps its own order inside Arabic.
     if (savedAt !== undefined) setNotice(t("recovery.done", { time: `\u2068${localTime(savedAt)}\u2069` }));
   }
@@ -363,6 +362,13 @@ export function useDrawings({
     const then = recovery?.then;
     dropRecovery(drawing);
     if (then === drawing) await openPath(drawing, false);
+  }
+
+  /** Open anyway: a drawing open in another Qiyas opens here (once, even when it is the drawing
+   *  about to open); its autosave is that Qiyas's and stays. */
+  async function openAnyway(drawing: string) {
+    dropRecovery(drawing);
+    await openPath(drawing, false);
   }
 
   /** `drawing` is dealt with: the question goes when nothing is left in it. */
@@ -518,9 +524,13 @@ export function useDrawings({
 
   /** Asks where to save the drawing, as DWG or DXF, and saves it there. */
   async function saveFileAs() {
-    if (!info) return;
+    if (info) await saveAs(info);
+  }
+
+  /** Save As for `of`, the drawing on screen (given, as one just recovered is not in `info` yet). */
+  async function saveAs(of: DrawingInfo) {
     const path = await save({
-      defaultPath: info.path,
+      defaultPath: of.path,
       filters: [
         { name: "DWG", extensions: ["dwg"] },
         { name: "DXF", extensions: ["dxf"] },
@@ -587,6 +597,7 @@ export function useDrawings({
     openFile,
     recoverFrom,
     discardFrom,
+    openAnyway,
     recoverFile,
     sheetSetApi,
     openAll,

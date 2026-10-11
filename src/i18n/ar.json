@@ -881,6 +881,7 @@
   "recovery.drawingGone": "الرسم لم يعد موجودًا",
   "recovery.older": "هذه النسخة المحفوظة تلقائيًا أقدم من الرسم",
   "recovery.lockedElsewhere": "هذا الرسم مفتوح في نافذة قياس أخرى (رقم العملية {pid} على {host})",
+  "recovery.openAnyway": "افتحه على أي حال",
   "recovery.done": "تمت الاستعادة من النسخة المحفوظة تلقائيًا في {time}",
   "recover.title": "تمت استعادة {name}",
   "recover.summary": "قُرئ {entities} عنصرًا؛ فُكّ {decoded} من {records} سجلًا، وتُخطّي {skipped}.",

@@ -35,14 +35,17 @@ type Props = {
   onRecover(drawing: string): Promise<void>;
   /** Deletes the autosave of the drawing. */
   onDiscard(drawing: string): Promise<void>;
+  /** Opens the drawing itself, open in another Qiyas: its autosave is that Qiyas's, left alone. */
+  onOpen(drawing: string): Promise<void>;
   onClose(): void;
 };
 
 /** On launch and on open: each autosave newer than its drawing, or left when Qiyas closed
  *  unexpectedly (then whatever its age: the row says when it is older than the drawing), to
  *  recover (opened as a new drawing beside it, then Save As) or discard (deleted). A drawing open
- *  in another Qiyas is warned about and still opens. */
-export function RecoveryDialog({ items, onRecover, onDiscard, onClose }: Props) {
+ *  in another Qiyas is warned about and only opens anyway (or Later): Discard would delete that
+ *  Qiyas's autosave. */
+export function RecoveryDialog({ items, onRecover, onDiscard, onOpen, onClose }: Props) {
   const t = useT();
   const dialog = useModal();
   const crashed = items.some((i) => i.crashed);
@@ -95,12 +98,20 @@ export function RecoveryDialog({ items, onRecover, onDiscard, onClose }: Props) 
                 <span className="warn">{t("recovery.older")}</span>
               )}
               <span className="actions">
-                <button type="button" disabled={busy} onClick={() => act(() => onRecover(item.drawing))}>
-                  {t("recovery.recover")}
-                </button>
-                <button type="button" disabled={busy} onClick={() => act(() => onDiscard(item.drawing))}>
-                  {t("recovery.discard")}
-                </button>
+                {item.locked_elsewhere ? (
+                  <button type="button" disabled={busy} onClick={() => act(() => onOpen(item.drawing))}>
+                    {t("recovery.openAnyway")}
+                  </button>
+                ) : (
+                  <>
+                    <button type="button" disabled={busy} onClick={() => act(() => onRecover(item.drawing))}>
+                      {t("recovery.recover")}
+                    </button>
+                    <button type="button" disabled={busy} onClick={() => act(() => onDiscard(item.drawing))}>
+                      {t("recovery.discard")}
+                    </button>
+                  </>
+                )}
               </span>
               {item.locked_elsewhere && (
                 <p className="recovery-warning" role="note">

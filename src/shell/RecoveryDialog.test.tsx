@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import type { ReadReport, Recoverable } from "../api";
 import { LanguageProvider, useLanguage } from "../i18n";
@@ -41,7 +41,7 @@ const noop = async () => {};
 function show(list: Recoverable[]) {
   render(
     <LanguageProvider>
-      <RecoveryDialog items={list} onRecover={noop} onDiscard={noop} onClose={() => {}} />
+      <RecoveryDialog items={list} onRecover={noop} onDiscard={noop} onOpen={noop} onClose={() => {}} />
     </LanguageProvider>,
   );
 }
@@ -65,7 +65,7 @@ test("crashed: Qiyas closed unexpectedly last time, Recover, Discard and Later a
   const crashed = newer("/jobs/villa.dwg", 1_760_000_000, { drawing_at: 1_760_000_900, crashed: true });
   render(
     <LanguageProvider>
-      <RecoveryDialog items={[crashed]} onRecover={onRecover} onDiscard={onDiscard} onClose={() => {}} />
+      <RecoveryDialog items={[crashed]} onRecover={onRecover} onDiscard={onDiscard} onOpen={noop} onClose={() => {}} />
     </LanguageProvider>,
   );
   expect(screen.getByRole("heading").textContent).toBe("Qiyas closed unexpectedly last time");
@@ -94,24 +94,35 @@ test("crashed and newer together: the crash heads the dialog and marks its own r
   expect(newerRow).not.toContain(en["recovery.crashedItem"]);
 });
 
-test("open in another Qiyas: a warning with its PID and computer; Recover and Discard still work", async () => {
-  const onRecover = vi.fn(async () => {});
+test("open in another Qiyas: a warning with its PID and computer; only Open anyway and Later", async () => {
+  const onOpen = vi.fn(async () => {});
   const onDiscard = vi.fn(async () => {});
   const locked = newer("/jobs/villa.dwg", 1_760_000_000, {
     locked_elsewhere: { pid: 4242, host: "site-office-pc", started_at: 1_759_990_000 },
   });
   render(
     <LanguageProvider>
-      <RecoveryDialog items={[locked]} onRecover={onRecover} onDiscard={onDiscard} onClose={() => {}} />
+      <RecoveryDialog
+        items={[locked, newer("/jobs/tower.dxf", 1_760_000_100)]}
+        onRecover={noop}
+        onDiscard={onDiscard}
+        onOpen={onOpen}
+        onClose={() => {}}
+      />
     </LanguageProvider>,
   );
   expect(screen.getByRole("note").textContent).toBe(
     "This drawing is open in another Qiyas window (PID 4242 on site-office-pc)",
   );
-  fireEvent.click(screen.getByRole("button", { name: "Recover" }));
-  await waitFor(() => expect(onRecover).toHaveBeenCalledWith("/jobs/villa.dwg"));
-  fireEvent.click(screen.getByRole("button", { name: "Discard" }));
-  await waitFor(() => expect(onDiscard).toHaveBeenCalledWith("/jobs/villa.dwg"));
+  const [lockedRow, otherRow] = screen.getAllByRole("listitem");
+  // Discard would delete the other Qiyas's autosave, and Recover open its work twice.
+  expect(within(lockedRow).getAllByRole("button").map((b) => b.textContent)).toEqual(["Open anyway"]);
+  expect(within(otherRow).getAllByRole("button").map((b) => b.textContent)).toEqual(["Recover", "Discard"]);
+  expect(screen.getByRole("button", { name: "Later" })).toBeTruthy();
+
+  fireEvent.click(within(lockedRow).getByRole("button", { name: "Open anyway" }));
+  await waitFor(() => expect(onOpen).toHaveBeenCalledWith("/jobs/villa.dwg"));
+  expect(onDiscard).not.toHaveBeenCalled();
 });
 
 test("in Arabic the times, the PID and the computer are isolated, so they read in their own order", () => {
@@ -132,6 +143,7 @@ test("in Arabic the times, the PID and the computer are isolated, so they read i
           ]}
           onRecover={noop}
           onDiscard={noop}
+          onOpen={noop}
           onClose={() => {}}
         />
       </>
@@ -158,7 +170,7 @@ test("each autosave newer than its drawing is offered: recover or discard it", a
   const onClose = vi.fn();
   render(
     <LanguageProvider>
-      <RecoveryDialog items={items} onRecover={onRecover} onDiscard={onDiscard} onClose={onClose} />
+      <RecoveryDialog items={items} onRecover={onRecover} onDiscard={onDiscard} onOpen={noop} onClose={onClose} />
     </LanguageProvider>,
   );
   expect(screen.getByRole("heading").textContent).toBe("A newer autosave exists");
@@ -183,6 +195,7 @@ test("a failed recovery says why and keeps the dialog", async () => {
           throw "The autosave could not be read";
         }}
         onDiscard={async () => {}}
+        onOpen={noop}
         onClose={() => {}}
       />
     </LanguageProvider>,
