@@ -17,8 +17,9 @@ use crate::fonts::Fonts;
 /// Glyph sizes kept in the atlas, in pixels per text height. A text is drawn from the smallest
 /// size at least as big as it shows on screen (the largest when it shows bigger).
 pub const SIZE_BUCKETS: [u16; 9] = [8, 12, 16, 24, 32, 48, 64, 96, 128];
-/// Text height as a share of the em: CAD text height is the height of a capital letter.
-const CAP_EM: f32 = 0.7;
+/// Text height as a share of the em: CAD text height is the height of a capital letter. One em
+/// is `1 / CAP_EM` text units.
+pub const CAP_EM: f32 = 0.7;
 /// Default MTEXT line pitch, in text heights, at line spacing factor 1.
 const LINE_PITCH: f64 = 5.0 / 3.0;
 /// Where a text's bottom sits under its baseline, in text heights (bottom alignment).
@@ -60,6 +61,20 @@ pub struct LaidText {
     /// y axes (a wide width factor or fit stretches x), for the glyph size.
     pub world_size: f64,
     pub glyphs: Vec<ShapedGlyph>,
+    /// The text as shaped (an MText's lines joined with `\n`): `ShapedGlyph::cluster` is a
+    /// byte offset into it, so a glyph can be mapped back to the characters it draws.
+    pub text: String,
+}
+
+/// A text laid out (`TextEngine::lay_out_text`): its glyphs in text units, the transform placing
+/// them, its box (four corners in drawing coordinates, for picking) and the text as shaped (see
+/// `LaidText::text`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Laid {
+    pub xf: Xform,
+    pub glyphs: Vec<ShapedGlyph>,
+    pub corners: [[f64; 2]; 4],
+    pub text: String,
 }
 
 /// A glyph quad for the GPU: `corners` relative to the batch origin in the order top-left,
@@ -151,6 +166,12 @@ impl TextEngine {
     /// The atlas pages changed after `since`.
     pub fn atlas_pages(&self, since: Option<u64>) -> impl Iterator<Item = PageView<'_>> {
         self.atlas.pages_since(since)
+    }
+
+    /// The font file of font `id` (as `ShapedGlyph::font` names it), whole, for embedding its
+    /// glyphs elsewhere (the PDF plot); `None` for an id this engine never gave out.
+    pub fn font_bytes(&self, id: u16) -> Option<&'static [u8]> {
+        self.fonts.bytes(id)
     }
 
     /// Forgets the styles and lines of the last build (a new drawing or sheet may differ).
@@ -334,12 +355,24 @@ impl TextEngine {
         text: &FlatText,
         arabic_reversed: bool,
     ) -> Option<(Xform, Vec<ShapedGlyph>, [[f64; 2]; 4])> {
+        self.lay_out_text(doc, xrefs, text, arabic_reversed)
+            .map(|l| (l.xf, l.glyphs, l.corners))
+    }
+
+    /// `lay_out_with`, keeping the text as shaped beside the glyphs (`Laid::text`).
+    pub fn lay_out_text(
+        &mut self,
+        doc: &CadDocument,
+        xrefs: &XrefDocs,
+        text: &FlatText,
+        arabic_reversed: bool,
+    ) -> Option<Laid> {
         let arabic_reversed = arabic_reversed && !text.logical;
         let style = self.style(doc, xrefs, &text.style);
         let height = [text.height, style.height]
             .into_iter()
             .find(|h| *h > 0.0 && h.is_finite())?;
-        let (local, glyphs, [x0, y0, x1, y1]) = match text.layout {
+        let (local, glyphs, [x0, y0, x1, y1], shaped) = match text.layout {
             TextLayout::Line {
                 insertion,
                 alignment,
@@ -399,7 +432,7 @@ impl TextEngine {
                     .then(&Xform::scale(sx, sy))
                     .then(&Xform::rotate(angle))
                     .then(&Xform::translate(at[0], at[1]));
-                (local, line.glyphs, [0.0, 0.0, w, 1.0])
+                (local, line.glyphs, [0.0, 0.0, w, 1.0], value.into_owned())
             }
             TextLayout::Block {
                 insertion,
@@ -413,7 +446,8 @@ impl TextEngine {
                 let mut lines = Vec::new();
                 for paragraph in plain.split('\n') {
                     for line in self.wrap(&style.chain, paragraph, wrap, arabic_reversed) {
-                        lines.push(self.shape_line(&style.chain, &line, arabic_reversed));
+                        let shaped = self.shape_line(&style.chain, &line, arabic_reversed);
+                        lines.push((line, shaped));
                     }
                 }
                 let factor = if line_spacing > 0.0 {
@@ -426,18 +460,26 @@ impl TextEngine {
                 let (col, row) = (f64::from(attachment % 3), f64::from(attachment / 3));
                 let total = 1.0 + pitch * (lines.len().max(1) - 1) as f64;
                 let mut glyphs = Vec::new();
+                let mut shaped = String::new();
                 let (mut x0, mut x1) = (f64::INFINITY, f64::NEG_INFINITY);
                 let mut last_baseline = -1.0;
-                for (i, line) in lines.iter().enumerate() {
+                for (i, (text, line)) in lines.iter().enumerate() {
                     let w = f64::from(line.width);
                     let x = -col * w / 2.0;
                     let y = -1.0 - pitch * i as f64 + row * total / 2.0;
                     x0 = x0.min(x);
                     x1 = x1.max(x + w);
                     last_baseline = y;
+                    // Clusters count from the line's start: move them to the joined text.
+                    if i > 0 {
+                        shaped.push('\n');
+                    }
+                    let base = shaped.len() as u32;
+                    shaped.push_str(text);
                     glyphs.extend(line.glyphs.iter().map(|g| ShapedGlyph {
                         x: g.x + x as f32,
                         y: g.y + y as f32,
+                        cluster: g.cluster + base,
                         ..*g
                     }));
                 }
@@ -448,12 +490,17 @@ impl TextEngine {
                 let local = Xform::scale(height, height)
                     .then(&Xform::rotate(rotation))
                     .then(&Xform::translate(insertion[0], insertion[1]));
-                (local, glyphs, [x0, last_baseline, x1, top])
+                (local, glyphs, [x0, last_baseline, x1, top], shaped)
             }
         };
         let xf = local.then(&text.xf);
         let corners = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(|p| xf.apply(p));
-        Some((xf, glyphs, corners))
+        Some(Laid {
+            xf,
+            glyphs,
+            corners,
+            text: shaped,
+        })
     }
 
     /// `paragraph` broken into lines no wider than `width` text heights (a word wider than that

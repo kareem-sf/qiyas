@@ -507,13 +507,14 @@ fn build(
             // A laid-out text's box is the box of what it draws.
             let laid = match (&flat.text, text.as_mut()) {
                 (Some(t), Some((engine, options))) => {
-                    engine.lay_out_with(doc, xrefs, t, options.arabic_reversed)
+                    engine.lay_out_text(doc, xrefs, t, options.arabic_reversed)
                 }
                 _ => None,
             };
             let first = absolute.len();
             match &laid {
-                Some((_, _, c)) => {
+                Some(l) => {
+                    let c = &l.corners;
                     for i in 0..4 {
                         let (a, b) = (c[i], c[(i + 1) % 4]);
                         absolute.push([a[0], a[1], b[0], b[1]]);
@@ -532,7 +533,8 @@ fn build(
                 continue;
             }
             let chain = chain_id(&mut batch.chains, &mut chain_index, &flat.chain);
-            if let Some((xf, glyphs, _)) = laid {
+            if let Some(l) = laid {
+                let xf = l.xf;
                 let along = xf.m[0][0].hypot(xf.m[1][0]);
                 let up = xf.m[0][1].hypot(xf.m[1][1]);
                 batch.texts.push(LaidText {
@@ -542,7 +544,8 @@ fn build(
                     color: rgb,
                     world_size: along.max(up),
                     xf,
-                    glyphs,
+                    glyphs: l.glyphs,
+                    text: l.text,
                 });
             }
             let flags = if flat.text.is_some() {

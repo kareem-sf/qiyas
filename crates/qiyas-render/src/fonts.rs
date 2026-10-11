@@ -66,6 +66,13 @@ impl Fonts {
         &self.list[usize::from(id)]
     }
 
+    /// The whole font file of font `id`; `None` for an unknown id.
+    pub fn bytes(&self, id: u16) -> Option<&'static [u8]> {
+        self.list
+            .get(usize::from(id))
+            .map(|f| f.face.raw_face().data)
+    }
+
     /// The fonts to try for a style whose font file is `file` (e.g. `arial.ttf`, `romans.shx`,
     /// `txt`): that file when it is a TrueType or OpenType font found in the computer's font
     /// folders, then Noto Sans, then Noto Sans Arabic. SHX fonts map to the Noto pair.
