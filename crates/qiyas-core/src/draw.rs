@@ -5,9 +5,9 @@
 use std::f64::consts::{PI, TAU};
 
 use opencadcodec::entities::{
-    BoundaryEdge, BoundaryPath, BoundaryPathFlags, CircularArcEdge, Hatch,
-    HatchPattern as CodecPattern, HatchPatternLine, HatchPatternType, MLine, MLineJustification,
-    PolylineEdge, Ray, Solid, Wipeout, XLine,
+    BoundaryEdge, BoundaryPath, CircularArcEdge, Hatch, HatchPattern as CodecPattern,
+    HatchPatternLine, HatchPatternType, MLine, MLineJustification, PolylineEdge, Ray, Solid,
+    Wipeout, XLine,
 };
 use opencadcodec::objects::ObjectType;
 use opencadcodec::{
@@ -806,7 +806,9 @@ impl Session {
                 for (i, hole) in holes.iter().enumerate() {
                     check_ring(hole, "hatch island")?;
                     let mut path = ring_path(hole, bulges_of(i + 1));
-                    path.flags = BoundaryPathFlags::DEFAULT;
+                    // Not external, still a polyline path: the DWG writer writes a polyline
+                    // edge whole only under the polyline flag.
+                    path.flags.set_external(false);
                     hatch.add_path(path);
                 }
             }

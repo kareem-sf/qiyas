@@ -1594,3 +1594,84 @@ fn hatch_by_click_is_closed_by_a_construction_line_or_a_ray_crossing_the_box() {
     );
     assert_eq!(s.boundary_at(click, 0.5), Boundary::None);
 }
+
+#[test]
+fn a_hatch_by_click_with_an_island_keeps_its_paths_through_dwg_and_dxf() {
+    let (dir, mut s) = sample_session();
+    // A 3 x 3 square with a circle in it: hatched by a click, the circle is a bulged island.
+    draw(
+        &mut s,
+        DrawSpec::Circle {
+            centre: [500.0, 500.0],
+            radius: 0.75,
+        },
+    );
+    square(&mut s, [498.5, 498.5], [501.5, 501.5]);
+    let Boundary::Ring {
+        ring,
+        holes,
+        bulges,
+    } = s.boundary_at([498.7, 498.7], 0.5)
+    else {
+        panic!("a ring");
+    };
+    assert_eq!(holes.len(), 1);
+    let EntityType::Hatch(drawn) = one(
+        &mut s,
+        DrawSpec::Hatch {
+            boundary_handles: Vec::new(),
+            points: ring,
+            holes,
+            bulges,
+            pattern: HatchPattern::Solid,
+        },
+    ) else {
+        panic!("a hatch");
+    };
+    // Each path is one closed polyline edge, flagged as one; only the first is external.
+    assert!(drawn.paths.iter().all(|p| p.is_polyline()));
+    assert!(drawn.paths[0].flags.is_external());
+    assert!(!drawn.paths[1].flags.is_external());
+    let handle = drawn.common.handle.value();
+    let area = |s: &mut Session| match s
+        .run(Command::MeasureEntity {
+            handle,
+            chain: Vec::new(),
+        })
+        .unwrap()
+    {
+        Outcome::Measured { measurement } => measurement.value,
+        other => panic!("{other:?}"),
+    };
+    let want = area(&mut s);
+    assert!((want - (9.0 - PI * 0.75 * 0.75)).abs() < 1e-6, "{want}");
+    for ext in ["dwg", "dxf"] {
+        let path = dir.path().join(format!("island.{ext}"));
+        s.save_as(&path).unwrap();
+        let mut back = Session::open(&path).unwrap();
+        let Some(EntityType::Hatch(read)) = back.drawing.doc.get_entity(Handle::new(handle)) else {
+            panic!("the hatch back from {ext}");
+        };
+        assert_eq!(read.paths.len(), drawn.paths.len(), "{ext}");
+        for (a, b) in drawn.paths.iter().zip(&read.paths) {
+            assert_eq!(a.flags, b.flags, "{ext}");
+            let ([BoundaryEdge::Polyline(a)], [BoundaryEdge::Polyline(b)]) =
+                (a.edges.as_slice(), b.edges.as_slice())
+            else {
+                panic!("one polyline edge each from {ext}: {b:?}");
+            };
+            assert_eq!(a.vertices.len(), b.vertices.len(), "{ext}");
+            assert!(a.vertices.iter().zip(&b.vertices).all(|(p, q)| [
+                p.x - q.x,
+                p.y - q.y,
+                p.z - q.z
+            ]
+            .iter()
+            .all(|d| d.abs() < 1e-9)));
+        }
+        // The sheet draws (no stray coordinates in the pick index) and measures the same.
+        assert!(!back.batch().segments.is_empty());
+        let got = area(&mut back);
+        assert!((got - want).abs() < 1e-9, "{ext}: {got} vs {want}");
+    }
+}
