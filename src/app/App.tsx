@@ -1,10 +1,8 @@
-import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ask, message as messageDialog, open, save } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   activateTab,
-  aiUndo,
   blocks as readBlocks,
   clearRecents,
   drawingBlocks,
@@ -20,7 +18,6 @@ import {
   imageDisplay,
   imageSize,
   isDirty,
-  PDF_PROGRESS,
   pdfPageCount,
   pdfPageSize,
   pdfThumbnails,
@@ -42,9 +39,7 @@ import {
   runCommand,
   saveDrawing,
   saveDrawingAs,
-  SESSION_CHANGED,
   setXrefPath,
-  TAKEOFF_CHANGED,
   undo,
   autosaveDrawings,
   discardAutosave,
@@ -56,7 +51,6 @@ import {
   sheetSetOpen,
   sheetSetSave,
   type ReadReport,
-  type AiUi,
   type Conflict,
   type DrawingInfo,
   type EntityFilter,
@@ -68,8 +62,6 @@ import {
   type NamedView,
 } from "../api";
 import { AssistantPanel } from "../ai/AssistantPanel";
-import type { ToolCardItem } from "../ai/messages";
-import { useAssistant } from "../ai/useAssistant";
 import { BoqPanel } from "../boq/BoqPanel";
 import { ConflictsPanel, type ResolveCommand } from "../boq/ConflictsPanel";
 import { openCount } from "../boq/conflictsMath";
@@ -122,7 +114,6 @@ import { TakeoffPanel } from "../shell/TakeoffPanel";
 import { XrefManager } from "../shell/XrefManager";
 import { leaveDrawing, readChoice } from "../shell/unsaved";
 import {
-  handlesBounds,
   markSize,
   measurementBounds,
   measurementTargets,
@@ -142,6 +133,7 @@ import { Viewport } from "../viewport/Viewport";
 import { NO_VIEWPORTS, readProblems, typing, unionBounds } from "./shared";
 import { useDrafting } from "./useDrafting";
 import { useAnnotate } from "./useAnnotate";
+import { useAssistantWiring } from "./useAssistantWiring";
 import { useAttach } from "./useAttach";
 import { useBlocks } from "./useBlocks";
 import { type Commands, useCommands, useToolChoice } from "./useCommands";
@@ -476,119 +468,31 @@ export default function App() {
   );
   measureRef.current = measure;
   onCommandRef.current = onCommand;
-
-
-
-
-
-  /** Does what a tool's result asks of the window: another sheet, other layers, a zoom. */
-  function applyAiUi(ui: AiUi) {
-    run(async () => {
-      if (ui.action === "show_sheet" && ui.sheet) {
-        setSheetBlock(ui.sheet);
-        measure.cancel();
-        await redraw(true);
-      } else if (ui.action === "redraw") {
-        if (ui.hidden) {
-          // The model may write a layer's name in another case; the panel uses the drawing's.
-          const names = new Set(ui.hidden.map((n) => n.toUpperCase()));
-          setHidden(new Set(info?.layers.map((l) => l.name).filter((n) => names.has(n.toUpperCase()))));
-        }
-        await redraw();
-      } else if (ui.bounds) {
-        setAiHighlight(ui.handles ?? []);
-        viewport.current?.fitTo(ui.bounds);
-      }
-    });
-  }
-
-  const assistant = useAssistant({
+  const { assistant, showCard, undoCard, openSettings } = useAssistantWiring({
     lang,
-    // The take-off is drawn from `items`; the batch is fetched again only when the drawing
-    // itself changed (divide_along, measure_along).
-    onMutated: async (tool) => {
-      if (tool === "compare_boq") setCompared(true);
-      await run(async () => {
-        await refreshTakeoffAndBoq();
-        await redraw();
-      });
-      await autosave();
-    },
-    onUi: applyAiUi,
-    onNeedSettings: () => setSettingsOpen(true),
+    switchGen,
+    info,
+    setInfo,
+    run,
+    autosave,
+    setSettingsOpen,
+    viewport,
+    batch,
+    setSheetBlock,
+    setHidden,
+    setRenderProgress,
+    redraw,
+    refreshTakeoffAndBoq,
+    setCompared,
+    setAiHighlight,
+    syncInfo,
+    measure,
   });
 
-  // An outside AI app changed the take-off through the MCP server: show it and save it, as after
-  // the assistant's changes. The listener is set up once and calls the latest code through this.
-  const onMcpChange = useRef<() => Promise<void>>(async () => {});
-  onMcpChange.current = async () => {
-    await run(async () => {
-      await refreshTakeoffAndBoq();
-      await redraw();
-    });
-    await autosave();
-  };
-  // An outside AI app showed another sheet, hid or showed layers, or asked for a zoom: follow it,
-  // so the sheet tabs, the layers panel and the canvas show what the session now shows.
-  const onMcpUi = useRef<(ui: AiUi) => void>(() => {});
-  onMcpUi.current = (ui) => {
-    run(async () => {
-      const gen = switchGen.current;
-      const next = await drawingInfo();
-      if (isStale(gen, switchGen.current)) return;
-      setInfo(next);
-      applyAiUi(ui);
-    });
-  };
-  useEffect(() => {
-    let gone = false;
-    const offs: (() => void)[] = [];
-    const keep = (unlisten: () => void) => {
-      if (gone) unlisten();
-      else offs.push(unlisten);
-    };
-    listen(TAKEOFF_CHANGED, () => onMcpChange.current()).then(keep);
-    listen<number>(PDF_PROGRESS, (e) => setRenderProgress(e.payload)).then(keep);
-    listen<AiUi>(SESSION_CHANGED, (e) => onMcpUi.current(e.payload)).then(keep);
-    return () => {
-      gone = true;
-      offs.forEach((off) => off());
-    };
-  }, []);
 
-  const showCard = useCallback(
-    (card: ToolCardItem) => {
-      setAiHighlight(card.handles);
-      const bounds = card.ui?.bounds ?? handlesBounds(card.handles, batch);
-      if (bounds) viewport.current?.fitTo(bounds);
-    },
-    [batch],
-  );
 
-  const { markUndone, markUndoStale } = assistant;
-  /** Undoes the card's change, unless the take-off changed since (then the card says so). */
-  const undoCard = useCallback(
-    async (card: ToolCardItem) => {
-      let undone = false;
-      await run(async () => {
-        undone = await aiUndo();
-        if (undone) {
-          await refreshTakeoffAndBoq();
-          await redraw();
-          await syncInfo();
-        }
-      });
-      if (undone) {
-        markUndone(card.id);
-        await autosave();
-      } else {
-        markUndoStale(card.id);
-      }
-    },
-    [markUndone, markUndoStale],
-  );
 
-  const openSettings = useCallback(() => setSettingsOpen(true), []);
+
 
   /** Before the open drawing is left: asks "Save changes to the drawing?" when the drawing itself
    *  has unsaved changes, and saves when told to. False when the user cancels. */
