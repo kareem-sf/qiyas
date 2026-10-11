@@ -735,7 +735,7 @@ fn an_xrefs_entities_never_join_a_group() {
 }
 
 #[test]
-fn find_replace_update_fields_and_sync_attributes_leave_locked_entities_and_count_them() {
+fn find_replace_and_sync_attributes_leave_locked_entities_but_fields_follow() {
     let (_dir, mut s) = open(&qiyas_core::fixtures::schedule_doc(), "locked.dxf");
     let added = |o: Outcome| match o {
         Outcome::Added { handles } => handles[0],
@@ -809,7 +809,8 @@ fn find_replace_update_fields_and_sync_attributes_leave_locked_entities_and_coun
     );
     assert_eq!(value(&s, text), "ZQX");
 
-    // The rectangle (layer 0) grows; its locked field keeps its value until it is unlocked.
+    // The rectangle (layer 0) grows: its field on the locked layer follows in the same step (a
+    // field is a derived value; the lock stops the user, not the field), and undo puts it back.
     assert_eq!(value(&s, field), "2.000");
     s.run(Command::Modify(qiyas_core::ModifySpec::Scale {
         targets: vec![t(rect)],
@@ -818,19 +819,38 @@ fn find_replace_update_fields_and_sync_attributes_leave_locked_entities_and_coun
         copy: false,
     }))
     .unwrap();
+    assert_eq!(value(&s, field), "8.000");
+    assert!(s.undo());
     assert_eq!(value(&s, field), "2.000");
-    let out = s.run(Command::UpdateFields).unwrap();
+    assert!(s.redo());
+    assert_eq!(value(&s, field), "8.000");
+    assert!(matches!(
+        s.run(Command::UpdateFields).unwrap(),
+        Outcome::Changed
+    ));
+    assert_eq!(value(&s, field), "8.000");
+    // Find and replace still leaves the locked field text as it is.
+    let out = s
+        .run(Command::FindReplace {
+            find: "8.000".into(),
+            replace: "9".into(),
+            scope: qiyas_core::TextScope::Drawing,
+            match_case: true,
+            whole_word: false,
+        })
+        .unwrap();
     assert!(
         matches!(
             out,
-            Outcome::Updated {
+            Outcome::Replaced {
                 count: 0,
-                skipped: 1
+                skipped: 1,
+                ..
             }
         ),
         "{out:?}"
     );
-    assert_eq!(value(&s, field), "2.000");
+    assert_eq!(value(&s, field), "8.000");
 
     // TAG has no MARK definition: syncing would drop the locked reference's MARK.
     let out = s
@@ -854,13 +874,17 @@ fn find_replace_update_fields_and_sync_attributes_leave_locked_entities_and_coun
     };
     assert_eq!(marks(&s), 1);
 
-    // Unlocked, all three go through.
+    // Unlocked, both go through.
     set_layer(&mut s, "A-DOOR", LayerProp::Locked, json!(false));
-    assert!(matches!(
-        s.run(Command::UpdateFields).unwrap(),
-        Outcome::Changed
-    ));
-    assert_eq!(value(&s, field), "8.000");
+    s.run(Command::FindReplace {
+        find: "ZQX".into(),
+        replace: "DONE".into(),
+        scope: qiyas_core::TextScope::Drawing,
+        match_case: true,
+        whole_word: false,
+    })
+    .unwrap();
+    assert_eq!(value(&s, text), "DONE");
     s.run(Command::SyncAttributes {
         block: "TAG".into(),
     })

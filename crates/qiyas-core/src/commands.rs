@@ -809,9 +809,9 @@ pub enum Outcome {
         remeasured: usize,
         unlinked: usize,
     },
-    /// An update of fields or of block references' attributes that left locked entities as they
-    /// were (on a locked layer, or outside the block edited in place; `Changed` when none): how
-    /// many texts, tables or references changed, and how many locked ones were left.
+    /// An update of block references' attributes that left locked references as they were (on a
+    /// locked layer, or outside the block edited in place; `Changed` when none): how many
+    /// references changed, and how many locked ones were left.
     Updated {
         count: usize,
         skipped: usize,
@@ -1300,8 +1300,8 @@ impl Session {
                 return Ok(Outcome::Added { handles: vec![h] });
             }
             Command::UpdateFields => {
-                let (count, skipped) = self.update_fields(false)?;
-                return Ok(Self::updated(count, skipped));
+                self.update_fields(false)?;
+                return Ok(Outcome::Changed);
             }
             Command::CreateBlock {
                 name,
@@ -1763,8 +1763,9 @@ impl Session {
     }
 
     /// The entity `h` is locked: on a locked layer, or on the sheet outside the block edited in
-    /// place. Commands that change entities they look for themselves (find and replace, update
-    /// fields, sync attributes) leave it as it is and count it.
+    /// place. Commands that change entities they look for themselves (find and replace, sync
+    /// attributes) leave it as it is and count it. Fields are not held by it: they are derived
+    /// values (`update_fields`).
     pub(crate) fn is_locked(&self, h: Handle) -> bool {
         let doc = &self.drawing.doc;
         let on_locked_layer = doc.get_entity(h).is_some_and(|e| {

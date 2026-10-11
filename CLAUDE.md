@@ -282,8 +282,9 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
   typed) is kept in `QIYAS_FIELD` xdata (on a table: row, column, code per cell). `Command::Field
   { at, height, field }` adds a one-line text; codes typed into Text, MText or a cell count too.
   `UpdateFields` works them all out again; area and length fields follow every modify, edit and
-  erase in the same step (`follow_fields`). A locked field text or table (`Session::is_locked`)
-  is left as it is: `Outcome::Updated { count, skipped }` (`Changed` when none was). Metres and square metres (`in_metres`, as the
+  erase in the same step (`follow_fields`). A field is a derived value: one on a locked layer, or
+  outside a block edited in place, is worked out too (as AutoCAD); the lock stops only the user's
+  own changes (find and replace, attribute sync, edits). Metres and square metres (`in_metres`, as the
   take-off), 3 decimals; UTC date; `####` when the entity is gone. Not worked out on open. Find
   and replace leaves field texts and field cells as they are and counts them in `skipped`.
 - Annotate tab, Tables group: Table (click, then rows, columns and sizes), Edit table (or a double
@@ -342,7 +343,9 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
   changes what it is given (modify, edit, erase, set and match properties, text, dimension and
   table edits, blocks); `sheet_targets_any` lets them through where they are only read or not
   changed (cutters and boundaries, what a dimension or field measures, groups, a viewport's
-  freezes, a match's source). A document step that moves `Session::current`, the hidden layers
+  freezes, a match's source). Field values on a locked layer still follow what they read
+  (`follow_fields`, `UpdateFields`): the lock blocks user-initiated changes only (find and
+  replace, attribute sync, edits). A document step that moves `Session::current`, the hidden layers
   or the layer states' hidden layers keeps them as they were (`undo::ViewState`) and undo and
   redo put them back. Layer states are AutoCAD's own (`ACAD_LAYERSTATES` XRecords, codec
   `capture_layer_state`): `SaveLayerState` (Qiyas's current layer as the state's; the layer
