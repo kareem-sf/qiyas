@@ -1,5 +1,5 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { useMemo, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import {
   blocks as readBlocks,
   clearRecents,
@@ -74,18 +74,9 @@ import { SheetTabs } from "../shell/SheetTabs";
 import { StatusBar } from "../shell/StatusBar";
 import { TakeoffPanel } from "../shell/TakeoffPanel";
 import { XrefManager } from "../shell/XrefManager";
-import {
-  markSize,
-  measurementTargets,
-  overlaySegments,
-  pointMarks,
-} from "../tools/overlay";
 import type { Action } from "../tools/commandParser";
 import { useTool } from "../tools/useTool";
-import {
-  parseThumbnails,
-  type Target,
-} from "../viewport/batch";
+import { parseThumbnails } from "../viewport/batch";
 import { SplitPane } from "../viewport/SplitPane";
 import { Viewport } from "../viewport/Viewport";
 import { NO_VIEWPORTS, readProblems } from "./shared";
@@ -99,6 +90,7 @@ import { type Commands, useCommands, useToolChoice } from "./useCommands";
 import { useAutosave, useDrawings, useFileTabs } from "./useDrawings";
 import { useLayers } from "./useLayers";
 import { useSheets } from "./useSheets";
+import { useOverlay } from "./useOverlay";
 import { useSelection } from "./useSelection";
 import { useShell } from "./useShell";
 import { useTakeoff, useTakeoffState } from "./useTakeoff";
@@ -532,56 +524,10 @@ export default function App() {
     redraw,
     runLayerCommand,
   });
+  const { highlight, overlay } = useOverlay({ tool, measure, batch, selected, boqLinked, conflictLinked, aiHighlight });
 
 
 
-  const highlight = useMemo(() => {
-    const rows = [...(selected ? [selected] : []), ...boqLinked, ...conflictLinked];
-    const targets: Target[] = [
-      ...rows.flatMap(measurementTargets),
-      ...aiHighlight.map((handle) => ({ handle, chain: [] })),
-    ];
-    if (measure.highlighted !== null) targets.push(measure.highlighted);
-    for (const handle of measure.selection) targets.push({ handle, chain: [] });
-    return targets;
-  }, [selected, boqLinked, conflictLinked, measure.highlighted, measure.selection, aiHighlight]);
-
-  const selectedOverlay = useMemo(() => {
-    const rows = selected ? [selected] : [...boqLinked, ...conflictLinked];
-    // A count's points are the counted places: small crosses, not a line.
-    const size = markSize(batch?.bounds ?? null);
-    const outlines = rows
-      .filter((m) => m.points.length > 0)
-      .map((m) =>
-        m.kind === "count"
-          ? pointMarks(m.points, size)
-          : overlaySegments(m.points, null, m.kind === "area" ? "area" : "distance"),
-      );
-    if (outlines.length === 0) return null;
-    const all = new Float64Array(outlines.reduce((n, o) => n + o.length, 0));
-    outlines.reduce((at, o) => (all.set(o, at), at + o.length), 0);
-    return all;
-  }, [selected, boqLinked, conflictLinked, batch]);
-  const rubberBand = useMemo(
-    () =>
-      measure.preview && measure.preview.length > 0
-        ? measure.preview
-        : measure.points.length > 0
-          ? overlaySegments(measure.points, measure.cursor, tool)
-          : null,
-    [measure.preview, measure.points, measure.cursor, tool],
-  );
-  // A measure in progress hides the selected row's outline; the snap marker goes over either.
-  const overlay = useMemo(() => {
-    const lines = rubberBand ?? selectedOverlay;
-    const marker = measure.marker;
-    if (!marker) return lines;
-    if (!lines) return marker;
-    const all = new Float64Array(lines.length + marker.length);
-    all.set(lines);
-    all.set(marker, lines.length);
-    return all;
-  }, [rubberBand, selectedOverlay, measure.marker]);
 
   const openConflicts = openCount(conflicts);
   // An empty model is said next to the file name, not counted as a reading problem.
