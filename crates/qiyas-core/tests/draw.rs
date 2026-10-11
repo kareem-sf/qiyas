@@ -1522,3 +1522,75 @@ fn hatch_by_click_inside_a_block_follows_its_entities_and_an_array_cell_as_drawn
         assert_eq!(holes.len(), 1, "{holes:?}");
     }
 }
+
+#[test]
+fn hatch_by_click_beside_a_multiline_wall_stops_at_its_drawn_face() {
+    let (_dir, mut s) = sample_session();
+    // A room closed on its left by a multiline wall along x = 2000, scale 2: the Standard
+    // style's elements at +-0.5 put its faces at x = 1999 and x = 2001. The three other sides
+    // are lines meeting the wall's centre line.
+    for (a, b) in [
+        ([2000.0, 2000.0], [2010.0, 2000.0]),
+        ([2010.0, 2000.0], [2010.0, 2010.0]),
+        ([2010.0, 2010.0], [2000.0, 2010.0]),
+    ] {
+        draw(&mut s, DrawSpec::Line { a, b });
+    }
+    draw(
+        &mut s,
+        DrawSpec::MLine {
+            points: vec![[2000.0, 1995.0], [2000.0, 2015.0]],
+            style: None,
+            scale: Some(2.0),
+        },
+    );
+    // The room as drawn runs to the wall's face (9 x 10), not to its centre line (10 x 10).
+    let ring = ring_of(s.boundary_at([2005.0, 2005.0], 0.5));
+    assert!(close(signed_area(&ring).abs(), 90.0), "{ring:?}");
+    assert!(ring.iter().all(|p| p[0] >= 2001.0 - 1e-9), "{ring:?}");
+}
+
+#[test]
+fn hatch_by_click_is_closed_by_a_construction_line_or_a_ray_crossing_the_box() {
+    let (_dir, mut s) = sample_session();
+    // A U open at the top: on its own, nothing closes around a click inside it.
+    for (a, b) in [
+        ([3000.0, 3000.0], [3010.0, 3000.0]),
+        ([3000.0, 3000.0], [3000.0, 3010.0]),
+        ([3010.0, 3000.0], [3010.0, 3010.0]),
+    ] {
+        draw(&mut s, DrawSpec::Line { a, b });
+    }
+    let click = [3005.0, 3004.0];
+    assert_eq!(s.boundary_at(click, 0.5), Boundary::None);
+    // A construction line across it at y = 3008, its base point outside the U: a 10 x 8 room.
+    draw(
+        &mut s,
+        DrawSpec::XLine {
+            origin: [3020.0, 3008.0],
+            dir: [1.0, 0.0],
+        },
+    );
+    let ring = ring_of(s.boundary_at(click, 0.5));
+    assert!(close(signed_area(&ring).abs(), 80.0), "{ring:?}");
+    assert!(s.undo());
+    // A ray from the same point towards the U closes it the same way; one pointing away does not.
+    draw(
+        &mut s,
+        DrawSpec::Ray {
+            origin: [3020.0, 3008.0],
+            dir: [-1.0, 0.0],
+        },
+    );
+    let ring = ring_of(s.boundary_at(click, 0.5));
+    assert!(close(signed_area(&ring).abs(), 80.0), "{ring:?}");
+    assert!(s.undo());
+    draw(
+        &mut s,
+        DrawSpec::Ray {
+            origin: [3020.0, 3008.0],
+            dir: [1.0, 0.0],
+        },
+    );
+    assert_eq!(s.boundary_at(click, 0.5), Boundary::None);
+}
