@@ -468,6 +468,13 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
   `locked_elsewhere`: reported only, never taken over, no read-only open. A dead lock is replaced
   when the drawing is opened again and removed with its autosave (Discard, or the recovered
   drawing's first save). Windows tells a live process with `tasklist` (untested here).
+  `RecoveryDialog` heads a question with "Qiyas closed unexpectedly last time" when any of its
+  drawings crashed (those come first, `enqueue`; rows say so only beside newer ones), else "A
+  newer autosave exists"; each row gives the autosave's and the drawing's time in the user's
+  locale (`localTime`, in `<bdi>`), says when the autosave is older than the drawing, and warns
+  "This drawing is open in another Qiyas window (PID … on …)" for `locked_elsewhere` (Recover,
+  Discard and Later still work). After a Recover the status bar says "Recovered from autosave of
+  <time>".
 - Panic hook (`files::install_panic_hook`): after the usual report, autosaves every drawing with
   unsaved changes on its own thread, at most 5 s, best effort: `try_lock`, so the drawing whose
   command panicked (its lock held) is skipped; a panic during it starts no other.
