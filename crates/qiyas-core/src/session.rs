@@ -100,10 +100,12 @@ pub struct Session {
     /// Which session this is; see `NEXT_EPOCH`.
     epoch: u64,
     /// Counts the changes to the drawing itself (not the take-off), which is all a batch shows.
-    document_revision: u64,
+    pub(crate) document_revision: u64,
     /// `document_revision` at the last save (or the open): the drawing has unsaved changes
     /// when they differ.
-    saved_revision: u64,
+    pub(crate) saved_revision: u64,
+    /// `document_revision` at the last autosave attempt (see `crate::autosave`).
+    pub(crate) autosave_revision: std::cell::Cell<u64>,
     /// Model space holds nothing (`EMPTY_MODEL` is then among the problems); looked at again on
     /// every drawing change.
     empty_model: bool,
@@ -521,6 +523,7 @@ impl Session {
             epoch: NEXT_EPOCH.fetch_add(1, Ordering::Relaxed),
             document_revision: 0,
             saved_revision: 0,
+            autosave_revision: std::cell::Cell::new(0),
             empty_model,
             cache: RefCell::new(None),
             others: RefCell::new(Vec::new()),

@@ -20,6 +20,11 @@ thiserror.workspace = true
 time.workspace = true
 uuid.workspace = true
 
+# Crash recovery: whether a lock file's process is alive (`kill(pid, 0)`) and the computer's
+# name (MIT OR Apache-2.0). Windows uses std only.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tempfile.workspace = true
 # Integration tests don't see the library's cfg(test), so they turn the fixtures on this way.

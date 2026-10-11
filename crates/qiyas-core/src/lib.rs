@@ -46,7 +46,9 @@ mod xref;
 
 pub use self::image::{draw_picture, image_size, ImageDisplay, IMAGE_EXTENSIONS, IMAGE_LAYER};
 pub use autosave::{
-    autosave_path, discard_autosave, recoverable, Dropped, ReadReport, Recoverable,
+    autosave_all, autosave_path, discard_autosave, lock_path, read_lock, recoverable, release_lock,
+    take_lock, AutosaveRun, DrawingLock, Dropped, LockStatus, ReadReport, Recoverable,
+    AUTOSAVE_EVERY,
 };
 pub use blocks::{drawing_blocks, AttDefInfo, BlockInfo};
 pub use boq::{Boq, BoqItem};
