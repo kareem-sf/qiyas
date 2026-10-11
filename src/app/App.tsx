@@ -2,11 +2,8 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useRef, useState } from "react";
 import {
   blocks as readBlocks,
-  clearRecents,
   drawingBlocks,
   setToolPalette,
-  recents as readRecents,
-  views as readViews,
   calibrate,
   IMAGE_EXTENSIONS,
   imageSize,
@@ -17,13 +14,11 @@ import {
   snap,
   pick,
   pickWindow,
-  redo,
   reloadXrefs,
   boundaryAt,
   setXrefPath,
   undo,
   type DrawingInfo,
-  type NamedView,
 } from "../api";
 import { AssistantPanel } from "../ai/AssistantPanel";
 import { BoqPanel } from "../boq/BoqPanel";
@@ -61,7 +56,6 @@ import { LayerTranslator } from "../shell/LayerTranslator";
 import { PropertiesPanel } from "../shell/PropertiesPanel";
 import { RecoverReportDialog, RecoveryDialog } from "../shell/RecoveryDialog";
 import { SheetSetManager } from "../shell/SheetSetManager";
-import { Ribbon } from "../shell/Ribbon";
 import { SettingsDialog } from "../shell/SettingsDialog";
 import { DimStylePanel } from "../shell/DimStylePanel";
 import { DesignCenter } from "../shell/DesignCenter";
@@ -81,6 +75,7 @@ import { SplitPane } from "../viewport/SplitPane";
 import { Viewport } from "../viewport/Viewport";
 import { NO_VIEWPORTS, readProblems } from "./shared";
 import { useDrafting } from "./useDrafting";
+import { Header } from "./Header";
 import { useAnnotate } from "./useAnnotate";
 import { useAssistantWiring } from "./useAssistantWiring";
 import { useAttach } from "./useAttach";
@@ -97,12 +92,11 @@ import { useTakeoff, useTakeoffState } from "./useTakeoff";
 
 export default function App() {
   const t = useT();
-  const { lang, setLang } = useLanguage();
+  const { lang } = useLanguage();
   const [info, setInfo] = useState<DrawingInfo | null>(null);
   const shell = useShell();
   const {
     theme,
-    chooseTheme,
     aboutOpen,
     setAboutOpen,
     settingsOpen,
@@ -158,7 +152,6 @@ export default function App() {
     pictures,
     renderProgress,
     setRenderProgress,
-    arabicReversed,
     setArabicReversed,
     sheet,
     setSheetBlock,
@@ -169,10 +162,7 @@ export default function App() {
     redraw,
     syncPictures,
     redrawGlyphs,
-    chooseArabicReversed,
     chooseSheet,
-    saveView,
-    deleteView,
   } = sheets;
   const layers = useLayers({
     switchGen,
@@ -193,8 +183,6 @@ export default function App() {
     setTranslatorOpen,
     groupAsk,
     setGroupAsk,
-    groupSelect,
-    setGroupSelect,
     layersBusy,
     runDrawingCommand,
     runLayerCommand,
@@ -226,7 +214,6 @@ export default function App() {
     pending,
     setPending,
     pickedInsert,
-    setPickedInsert,
     calibration,
     setCalibration,
     attachPdfPage,
@@ -261,7 +248,6 @@ export default function App() {
     attDefAt,
     setAttDefAt,
     blockPaletteOpen,
-    setBlockPaletteOpen,
     designCenter,
     setDesignCenter,
     palette,
@@ -275,9 +261,6 @@ export default function App() {
     placeBlock,
     writeBlockFile,
     closeBlockEdit,
-    openAttributeManager,
-    openDesignCenter,
-    openToolPalettes,
     addToPalette,
     runPaletteItem,
   } = blocks;
@@ -328,11 +311,9 @@ export default function App() {
     placeText,
     openTextEdit,
     runDimStyle,
-    openDimStyle,
     runText,
     runTable,
     insertField,
-    updateFields,
     placeInPlace,
     findTexts,
     replaceTexts,
@@ -447,19 +428,14 @@ export default function App() {
     setExtractOpen,
     switching,
     openPath,
-    openFile,
     recoverFrom,
     discardFrom,
-    recoverFile,
     sheetSetApi,
     openAll,
     switchTab,
     closeFileTab,
-    saveFile,
-    saveFileAs,
     xrefsChanged,
     locateXref,
-    exportFile,
     extractRows,
     exportExtract,
   } = drawings;
@@ -478,11 +454,8 @@ export default function App() {
     apply,
   });
   const {
-    importBoqFile,
     onImportBoq,
-    compareNow,
     onCompare,
-    exportConflictsFile,
     onExportConflicts,
     selected,
     boqLinked,
@@ -541,120 +514,21 @@ export default function App() {
 
   return (
     <div className="app">
-      <header className="top">
-        <Ribbon
-          active={tool}
-          onTool={chooseTool}
-          onOpen={openFile}
-          loadRecents={readRecents}
-          onOpenRecent={openPath}
-          onClearRecents={clearRecents}
-          onSave={info ? saveFile : undefined}
-          onSaveAs={info ? saveFileAs : undefined}
-          onExport={info ? exportFile : undefined}
-          onImportBoq={info ? importBoqFile : undefined}
-          onCompare={info ? compareNow : undefined}
-          onExportConflicts={info ? exportConflictsFile : undefined}
-          onUndo={() => history(undo)}
-          onRedo={() => history(redo)}
-          onZoomExtents={() => {
-            viewport.current?.fitExtents();
-            focusDrawing();
-          }}
-          onXrefs={info ? () => setXrefsOpen(true) : undefined}
-          onAttachPdf={
-            info
-              ? () => {
-                  setPickedInsert(null);
-                  setAttachOpen(true);
-                }
-              : undefined
-          }
-          onAttachImage={
-            info
-              ? () => {
-                  setPickedInsert(null);
-                  setAttachImageOpen(true);
-                }
-              : undefined
-          }
-          onCalibrate={
-            batch && batch.imageTable.length > 0
-              ? () => {
-                  measure.cancel();
-                  setPending({ kind: "calibrate", first: null });
-                  focusDrawing();
-                }
-              : undefined
-          }
-          onExtract={info ? () => setExtractOpen(true) : undefined}
-          onFind={info ? () => setFindOpen(true) : undefined}
-          onDimStyle={info ? openDimStyle : undefined}
-          onUpdateFields={info ? updateFields : undefined}
-          onInsertBlock={info ? () => setBlockPaletteOpen(true) : undefined}
-          onWriteBlock={info ? () => setBlockPaletteOpen(true) : undefined}
-          onAttributeManager={info ? openAttributeManager : undefined}
-          onDesignCenter={info ? openDesignCenter : undefined}
-          onToolPalettes={info ? openToolPalettes : undefined}
-          onLayerStates={info ? () => setLayerStatesOpen(true) : undefined}
-          onTranslateLayers={info ? () => setTranslatorOpen(true) : undefined}
-          groupSelect={groupSelect}
-          onGroupSelect={setGroupSelect}
-          split={split}
-          onSplit={info ? setSplit : undefined}
-          onUcsWorld={info ? () => apply({ type: "ucs", origin: [0, 0], x_axis: [1, 0] }) : undefined}
-          onSheetSet={() => setSheetSetShown(true)}
-          onRecover={recoverFile}
-          arabicReversed={arabicReversed}
-          onArabicReversed={info ? chooseArabicReversed : undefined}
-          {...(onModel && {
-            loadViews: readViews,
-            onGoToView: (v: NamedView) => {
-              viewport.current?.fitTo(v.bounds);
-              focusDrawing();
-            },
-            onSaveView: saveView,
-            onDeleteView: deleteView,
-          })}
-        />
-        <div className="prefs">
-          <div role="group" aria-label={t("language")}>
-            <span>{t("language")}</span>
-            <button type="button" lang="en" aria-pressed={lang === "en"} onClick={() => setLang("en")}>
-              {t("langEn")}
-            </button>
-            <button type="button" lang="ar" aria-pressed={lang === "ar"} onClick={() => setLang("ar")}>
-              {t("langAr")}
-            </button>
-          </div>
-          <div role="group" aria-label={t("theme")}>
-            <span>{t("theme")}</span>
-            <button type="button" aria-pressed={theme === "light"} onClick={() => chooseTheme("light")}>
-              {t("light")}
-            </button>
-            <button type="button" aria-pressed={theme === "dark"} onClick={() => chooseTheme("dark")}>
-              {t("dark")}
-            </button>
-          </div>
-          <button
-            type="button"
-            className="gear"
-            aria-haspopup="dialog"
-            aria-label={t("settings")}
-            title={t("settings")}
-            onClick={() => setSettingsOpen(true)}
-          >
-            <svg viewBox="0 0 16 16" aria-hidden="true">
-              <circle cx="8" cy="8" r="2.2" />
-              <path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4" />
-              <circle cx="8" cy="8" r="4.6" />
-            </svg>
-          </button>
-          <button type="button" aria-haspopup="dialog" onClick={() => setAboutOpen(true)}>
-            {t("about")}
-          </button>
-        </div>
-      </header>
+      <Header
+        info={info}
+        onModel={onModel}
+        measure={measure}
+        shell={shell}
+        toolChoice={toolChoice}
+        commands={commands}
+        sheets={sheets}
+        layers={layers}
+        attach={attach}
+        blocks={blocks}
+        annotate={annotate}
+        drawings={drawings}
+        takeoff={takeoff}
+      />
       {aboutOpen && <About theme={theme} onClose={() => setAboutOpen(false)} />}
       {xrefsOpen && info && (
         <XrefManager
