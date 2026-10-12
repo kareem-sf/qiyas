@@ -44,7 +44,7 @@ import {
 import { useLanguage } from "../i18n";
 import { cycleTab } from "../shell/FileTabs";
 import { useOpenRequests } from "../shell/openRequests";
-import { atLaunch, drop, enqueue, localTime, offered, type RecoveryAsk } from "../shell/recoveryQueue";
+import { atLaunch, drop, enqueue, forgetThen, localTime, offered, type RecoveryAsk } from "../shell/recoveryQueue";
 import type { SheetSetApi } from "../shell/SheetSetManager";
 import { isStale, serial } from "../shell/switcher";
 import { leaveDrawing, readChoice } from "../shell/unsaved";
@@ -367,7 +367,8 @@ export function useDrawings({
       await refreshTabs();
       return next;
     });
-    setRecoveries((q) => drop(q, ask.id, drawing, copy));
+    // Its older copies stay listed; Later no longer opens the original beside the recovered one.
+    setRecoveries((q) => forgetThen(drop(q, ask.id, drawing, copy), ask.id, drawing));
     // The recovered drawing itself: this render's `info` is the one before it (none at launch).
     const savedTo = await saveAs(recovered);
     // Times and paths isolated (FSI … PDI): they keep their own order inside Arabic. One notice,
@@ -379,17 +380,18 @@ export function useDrawings({
   }
 
   /** Discard: the autosave of `drawing` (or its older `copy`) is deleted; the drawing about to
-   *  open opens once its own autosave is dealt with. */
+   *  open opens once nothing is left to ask about it (its older copies too). */
   async function discardFrom(ask: RecoveryAsk, drawing: string, copy?: string) {
     await discardAutosave(copy ?? drawing);
+    const done = !drop([ask], ask.id, drawing, copy)[0]?.items.some((i) => i.drawing === drawing);
     setRecoveries((q) => drop(q, ask.id, drawing, copy));
-    if (!copy && ask.then === drawing) await openPath(drawing, false);
+    if (done && ask.then === drawing) await openPath(drawing, false);
   }
 
   /** Open anyway: a drawing open in another Qiyas opens here (once, even when it is the drawing
    *  about to open); its autosave is that Qiyas's and stays. */
   async function openAnyway(ask: RecoveryAsk, drawing: string) {
-    setRecoveries((q) => drop(q, ask.id, drawing));
+    setRecoveries((q) => forgetThen(drop(q, ask.id, drawing), ask.id, drawing));
     await openPath(drawing, false);
   }
 

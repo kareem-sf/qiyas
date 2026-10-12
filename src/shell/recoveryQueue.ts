@@ -38,6 +38,10 @@ export const offered = (items: Recoverable[]) =>
  *  Qiyas (its open warns) or crash copies alone (listed before the drawing's open). */
 export const atLaunch = (items: Recoverable[]) => items.filter((i) => toRecover(i) && i.locked_elsewhere == null);
 
+/** `q` with question `id` no longer opening `drawing` afterwards (it was recovered or opened). */
+export const forgetThen = (q: RecoveryAsk[], id: number, drawing: string) =>
+  q.map((ask) => (ask.id === id && ask.then === drawing ? { ...ask, then: null } : ask));
+
 /** What Later opens: the drawing the question was asked before, unless it is open in another
  *  Qiyas (Open anyway is the way there); the launch question opens nothing. */
 export function laterOpens(ask: RecoveryAsk): string | null {
@@ -56,16 +60,19 @@ export function refusedBy(message: string): { pid: string; host: string } | null
   return m ? { pid: m[1], host: m[2] } : null;
 }
 
-/** `q` with `drawing` (or only its older `copy`) dealt with in question `id`, the one the click
- *  came from: the row goes once nothing is left in it, the question once it is empty, and a
- *  drawing gone from it is no longer what Later opens. */
+/** `q` with `drawing`'s autosave (or only its older `copy`) dealt with in question `id`, the one
+ *  the click came from: the row stays while older copies are left (as copies only), the question
+ *  goes once it is empty, and a drawing gone from it is no longer what Later opens. */
 export function drop(q: RecoveryAsk[], id: number, drawing: string, copy?: string): RecoveryAsk[] {
   return q.flatMap((ask) => {
     if (ask.id !== id) return [ask];
     const items = ask.items.flatMap((i) => {
       if (i.drawing !== drawing) return [i];
-      if (copy === undefined) return [];
-      const left = { ...i, older_copies: (i.older_copies ?? []).filter((c) => c.path !== copy) };
+      const copies = (i.older_copies ?? []).filter((c) => c.path !== copy);
+      const left =
+        copy === undefined
+          ? { ...i, autosave: null, saved_at: null, crashed: false, locked_elsewhere: null, older_copies: copies }
+          : { ...i, older_copies: copies };
       return left.autosave != null || left.locked_elsewhere != null || left.older_copies.length > 0 ? [left] : [];
     });
     if (items.length === 0) return [];

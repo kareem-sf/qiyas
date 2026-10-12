@@ -456,7 +456,7 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
   offers what `offered` (`recoveryQueue.ts`) keeps of `recoverable`'s answers: an autosave newer
   than its drawing (the same second too) or whose drawing is gone, a crash's autosave at any age,
   and before an open only (never at launch, `atLaunch`) a drawing open in another Qiyas and older
-  crash copies. An older autosave alone is not asked about (something else moved the drawing on
+  autosaves (`older_copies`). An older autosave alone is not asked about (something else moved the drawing on
   after it: rare), nor a crash that left nothing autosaved (Rust replaces its lock on the next
   open). Recover opens it in a new tab as
   `<name> (recovered).<ext>` with its take-off, unsaved, then Save As (its first save deletes the
@@ -498,11 +498,12 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
   Discard) the autosave offered, never a crash copy.
   `RecoveryDialog` heads a question with "Qiyas closed unexpectedly last time" when any of its
   drawings crashed with an autosave (those come first, `enqueue`; rows say so only beside newer
-  ones), else "A newer autosave exists", "Open in another Qiyas window" or "Autosaves kept from a
-  crash"; each row gives the autosave's and the drawing's time in the app's language
+  ones), else "A newer autosave exists", "Open in another Qiyas window" or "Older autosaves of
+  this drawing"; each row gives the autosave's and the drawing's time in the app's language
   (`localTime(secs, lang)`, in `<bdi>`), says when the autosave is older than the drawing, lists
-  "Older copies from a crash" under it, each with its own Recover and Discard (by the copy's
-  path), and warns "This drawing is open in another Qiyas window (PID … on …)" for
+  its older autosaves under it, each saying whether a crash or an earlier window left it, with
+  its own Recover and Discard (by the copy's path; dealing with the main autosave keeps them
+  listed, and Discard opens the drawing about to open once nothing is left to ask about it), and warns "This drawing is open in another Qiyas window (PID … on …)" for
   `locked_elsewhere`: a drawing open elsewhere offers Open anyway and Later only (no Discard: it
   would delete that Qiyas's autosave; nor Recover). Recover, Discard and Open anyway act on the
   question they were clicked in (`drop` by its id; a drawing dealt with is no longer what Later

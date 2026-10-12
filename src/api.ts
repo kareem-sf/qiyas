@@ -1155,16 +1155,17 @@ export const autosaveDrawings = () => invoke<AutosaveRun>("autosave_drawings");
  *  lock (seconds since 1970). */
 export type DrawingLock = { pid: number; host: string; started_at: number };
 
-/** An autosave a crash left, kept aside as `<file>.sv$.crash-<utc>` (`recover_autosave` and
- *  `discard_autosave` take its path). */
-export type OlderCopy = { path: string; saved_at: number };
+/** An older autosave of a drawing (`recover_autosave` and `discard_autosave` take its path): one a
+ *  crash left, kept aside as `<file>.sv$.crash-<utc>`, or an earlier Qiyas window's on this
+ *  computer that has ended (`<file>.sv$.<pid>`). */
+export type OlderCopy = { path: string; saved_at: number; kind: "crash" | "instance" };
 
 /** What there is to say about a drawing before it opens: its autosave (`<file>.sv$` whatever its
- *  age, else the newest `<file>.sv$.<pid>`; `offered` in `recoveryQueue.ts` decides), a crash,
- *  another Qiyas holding it, older crash copies. Times in seconds since 1970. */
+ *  age; `offered` in `recoveryQueue.ts` decides), a crash, another Qiyas holding it, older
+ *  autosaves. Times in seconds since 1970. */
 export type Recoverable = {
   drawing: string;
-  /** The autosave offered, never a crash copy; null when there is none. */
+  /** The drawing's `<file>.sv$`; null when there is none. */
   autosave: string | null;
   /** When the autosave was written; null for a lock alone. */
   saved_at: number | null;
@@ -1174,7 +1175,7 @@ export type Recoverable = {
   crashed: boolean;
   /** The drawing is open in another Qiyas (a running process's lock, or another computer's). */
   locked_elsewhere: DrawingLock | null;
-  /** Autosaves earlier crashes left, newest first (offered once already, as the crash's `.sv$`). */
+  /** Older autosaves: crash copies and ended windows' own, newest first. */
   older_copies: OlderCopy[];
 };
 

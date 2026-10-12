@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import type { Recoverable } from "../api";
-import { atLaunch, drop, enqueue, laterOpens, localTime, offered, refusedBy, type RecoveryAsk } from "./recoveryQueue";
+import { atLaunch, drop, enqueue, forgetThen, laterOpens, localTime, offered, refusedBy, type RecoveryAsk } from "./recoveryQueue";
 
 const item = (drawing: string, crashed = false): Recoverable => ({
   drawing,
@@ -12,7 +12,11 @@ const item = (drawing: string, crashed = false): Recoverable => ({
   older_copies: [],
 });
 
-const copy = (drawing: string, stamp: string, saved_at: number) => ({ path: `${drawing}.sv$.crash-${stamp}`, saved_at });
+const copy = (drawing: string, stamp: string, saved_at: number) => ({
+  path: `${drawing}.sv$.crash-${stamp}`,
+  saved_at,
+  kind: "crash" as const,
+});
 
 test("crashed drawings are asked about first, each kind in the order found", () => {
   const q = enqueue([], [item("/a.dwg"), item("/b.dwg", true), item("/c.dwg"), item("/d.dwg", true)], null, true);
@@ -151,4 +155,25 @@ test("before an open: a crash's autosave (even older), a newer one (the same sec
     "/held.dwg",
     "/copies.dwg",
   ]);
+});
+
+test("the main autosave dealt with: the row stays while older copies are left, as copies only", () => {
+  const a = { ...item("/a.dwg", true), older_copies: [copy("/a.dwg", "1", 0)] };
+  let q = enqueue([], [a, item("/b.dwg")], "/a.dwg");
+  q = drop(q, q[0].id, "/a.dwg");
+  const row = q[0].items.find((i) => i.drawing === "/a.dwg")!;
+  expect([row.autosave, row.saved_at, row.crashed, row.older_copies.length]).toEqual([null, null, false, 1]);
+  // Still asked about: Later (or the last copy's Discard) opens it.
+  expect(q[0].then).toBe("/a.dwg");
+  // Without older copies the row goes.
+  q = drop(q, q[0].id, "/b.dwg");
+  expect(q[0].items.map((i) => i.drawing)).toEqual(["/a.dwg"]);
+});
+
+test("a recovered drawing is no longer what Later opens, even while its older copies stay", () => {
+  const a = { ...item("/a.dwg"), older_copies: [copy("/a.dwg", "1", 0)] };
+  let q = enqueue([], [a], "/a.dwg");
+  q = forgetThen(drop(q, q[0].id, "/a.dwg"), q[0].id, "/a.dwg");
+  expect(q[0].items[0].older_copies).toHaveLength(1);
+  expect(laterOpens(q[0])).toBeNull();
 });

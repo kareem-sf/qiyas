@@ -152,7 +152,11 @@ export function RecoveryDialog({ items, onRecover, onDiscard, onOpen, onClose }:
                   <ul aria-labelledby={`recovery-copies-${n}`}>
                     {copies.map((c) => (
                       <li key={c.path}>
-                        <span className="muted">{fill(t("recovery.savedAt"), { time: time(c.saved_at) })}</span>
+                        <span className="muted">
+                          {fill(t(c.kind === "instance" ? "recovery.copyInstance" : "recovery.copyCrash"), {
+                            time: time(c.saved_at),
+                          })}
+                        </span>
                         <span className="actions">
                           <button type="button" disabled={busy} onClick={() => act(() => onRecover(item.drawing, c.path))}>
                             {t("recovery.recover")}

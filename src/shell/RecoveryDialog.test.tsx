@@ -156,8 +156,8 @@ test("older copies from a crash are listed under the row, each with its own Reco
   const onRecover = vi.fn(async () => {});
   const onDiscard = vi.fn(async () => {});
   const copies = [
-    { path: "/jobs/villa.dwg.sv$.crash-20261011-090000", saved_at: 1_760_170_000 },
-    { path: "/jobs/villa.dwg.sv$.crash-20261010-090000", saved_at: 1_760_080_000 },
+    { path: "/jobs/villa.dwg.sv$.4242", saved_at: 1_760_170_000, kind: "instance" as const },
+    { path: "/jobs/villa.dwg.sv$.crash-20261010-090000", saved_at: 1_760_080_000, kind: "crash" as const },
   ];
   render(
     <LanguageProvider>
@@ -174,6 +174,9 @@ test("older copies from a crash are listed under the row, each with its own Reco
   const list = screen.getByRole("list", { name: en["recovery.olderCopies"] });
   const rows = within(list).getAllByRole("listitem");
   expect(rows.map((r) => r.textContent)).toEqual(copies.map((c) => expect.stringContaining(localTime(c.saved_at, "en"))));
+  // Each says where it came from.
+  expect(rows[0].textContent).toContain("from an earlier window");
+  expect(rows[1].textContent).toContain("from a crash");
   // Nothing autosaved beside the copies: no Recover or Discard of the drawing itself.
   const [drawingRow] = screen.getAllByRole("listitem");
   expect([...drawingRow.querySelectorAll(":scope > .actions button")]).toHaveLength(0);
