@@ -1265,6 +1265,92 @@ export const drawingLayers = (path: string) => invoke<LayerInfo[]>("drawing_laye
 /** WBLOCK to a .dwg the user chose in the Save dialog. */
 export const writeBlock = (name: string, path: string) => invoke<void>("write_block", { name, path });
 
+/** A paper size in millimetres, portrait (the catalog's short side first). */
+export type Paper = { name: string; w_mm: number; h_mm: number };
+
+/** What part of a sheet a plot takes: everything drawn, a layout's limits (else its extents; model
+ *  space's extents), or two corners in sheet coordinates. */
+export type PlotArea = "extents" | "layout" | { window: [P, P] };
+
+/** Fit to the paper (5 mm margin), or `num` paper millimetres per `den` sheet millimetres (1:100
+ *  is [1, 100]); model space is in the drawing's units, a layout's are taken as millimetres. */
+export type PlotScale = "fit" | { ratio: [number, number] };
+
+/** One pen of a CTB (`Color_1` to `Color_255`, by the drawn colour's ACI) or a named style of an
+ *  STB (by the layer's plot style name). */
+export type PlotStyleEntry = {
+  name: string;
+  localized_name: string;
+  description: string;
+  /** The pen's colour; null plots with the object's. */
+  color: [number, number, number] | null;
+  /** Bit 0 dither, bit 1 grayscale. */
+  color_policy: number;
+  physical_pen: number;
+  virtual_pen: number;
+  /** Screening, 0 to 100: 100 plots the colour as it is; 0 does not plot. */
+  screen: number;
+  linepattern_size: number;
+  linetype: number;
+  adaptive_linetype: boolean;
+  /** Index into `PlotStyle.lineweights`; 0 plots the object's lineweight. */
+  lineweight: number;
+  fill_style: number;
+  end_style: number;
+  join_style: number;
+  /** Keys Qiyas does not know, kept as written. */
+  extra: [string, string][];
+};
+
+/** A CTB or STB plot style table as `load_plot_style` reads it. */
+export type PlotStyle = {
+  kind: "ctb" | "stb";
+  description: string;
+  scale_factor: number;
+  apply_factor: boolean;
+  /** How lineweights are shown: 0 millimetres, 1 inches. */
+  display_units: number;
+  styles: PlotStyleEntry[];
+  /** The lineweights in millimetres the pens choose from (index 0, 0.00, is the object's). */
+  lineweights: number[];
+  extra: [string, string][];
+};
+
+/** One plot: which sheet (its block, e.g. `*Model_Space`), area, paper, scale and plot style,
+ *  and the PDF: a name or path inside the drawing's folder, or null for `<drawing>-<sheet>.pdf`
+ *  beside it. */
+export type PlotJob = {
+  sheet: string;
+  area: PlotArea;
+  paper: Paper;
+  orientation: "portrait" | "landscape";
+  scale: PlotScale;
+  centre: boolean;
+  style: PlotStyle | null;
+  lineweights: boolean;
+  output: string | null;
+};
+
+/** A plot written, and what was left out of it (pictures not found, ...). */
+export type PlotOutput = { path: string; skipped: string[] };
+
+/** The built-in paper sizes, portrait: ISO A0 to A4, ANSI A to E, ARCH A to E1. */
+export const paperCatalog = () => invoke<Paper[]>("paper_catalog");
+/** Plots `job` to its PDF; only inside the drawing's folder for now (see `PlotJob`). */
+export const plotPdf = (job: PlotJob) => invoke<PlotOutput>("plot_pdf", { job });
+/** Plots `job` to a PDF in the temporary folder and prints it on `printer` (null: on Linux the
+ *  PDF viewer opens, elsewhere the default printer); what happened, in English. */
+export const plotAndPrint = (job: PlotJob, printer: string | null) =>
+  invoke<string>("plot_and_print", { job, printer });
+/** The printers this computer knows, and the default one. */
+export const listPrinters = () => invoke<string[]>("list_printers");
+export const defaultPrinter = () => invoke<string | null>("default_printer");
+/** Reads a CTB or STB plot style file. */
+export const loadPlotStyle = (path: string) => invoke<PlotStyle>("load_plot_style", { path });
+/** Writes a plot style: a CTB to a `.ctb` file, an STB to `.stb`. */
+export const savePlotStyle = (path: string, style: PlotStyle) =>
+  invoke<void>("save_plot_style", { path, style });
+
 /** Rejects a port outside 1024–65535 or an unknown effort. */
 export const setSettings = (settings: Settings) => invoke<void>("set_settings", { settings });
 

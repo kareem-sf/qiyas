@@ -9,10 +9,13 @@ import {
   drawingBlocks,
   IMAGE_EXTENSIONS,
   imageSize,
+  loadPlotStyle,
+  paperCatalog,
   pdfPageCount,
   pdfPageSize,
   pdfThumbnails,
   reloadXrefs,
+  savePlotStyle,
   setToolPalette,
   setXrefPath,
   type DrawingInfo,
@@ -32,6 +35,8 @@ import { FieldDialog } from "../shell/FieldDialog";
 import { FindReplaceDialog } from "../shell/FindReplaceDialog";
 import { GroupNameDialog, LayerStatesDialog } from "../shell/LayerDialogs";
 import { LayerTranslator } from "../shell/LayerTranslator";
+import { PlotDialog } from "../shell/PlotDialog";
+import { PlotStyleEditor } from "../shell/PlotStyleEditor";
 import { RecoverReportDialog, RecoveryDialog } from "../shell/RecoveryDialog";
 import { ScriptResultDialog } from "../shell/ScriptResultDialog";
 import { SettingsDialog } from "../shell/SettingsDialog";
@@ -48,6 +53,7 @@ import type { Blocks } from "./useBlocks";
 import type { DraftingState } from "./useDrafting";
 import type { Drawings } from "./useDrawings";
 import type { Layers } from "./useLayers";
+import type { Plot } from "./usePlot";
 import type { Shell } from "./useShell";
 import type { Sheets } from "./useSheets";
 
@@ -62,10 +68,11 @@ type Props = {
   blocks: Blocks;
   annotate: Annotate;
   drawings: Drawings;
+  plot: Plot;
 };
 
 /** The dialogs over the drawing (between the top bar and the panels). */
-export function Dialogs({ info, shell, assistant, drafting: draftingState, sheets, layers, attach, blocks, annotate, drawings }: Props) {
+export function Dialogs({ info, shell, assistant, drafting: draftingState, sheets, layers, attach, blocks, annotate, drawings, plot }: Props) {
   const t = useT();
   const { theme, aboutOpen, setAboutOpen, settingsOpen, setSettingsOpen, loadAliases, run, setNotice, focusDrawing } =
     shell;
@@ -213,6 +220,38 @@ export function Dialogs({ info, shell, assistant, drafting: draftingState, sheet
             await redraw();
           }}
           onClose={() => setCalibration(null)}
+        />
+      )}
+      {plot.plotAsk && info && (
+        <PlotDialog
+          sheet={plot.plotAsk.sheet}
+          drawingPath={info.path}
+          units={info.units}
+          batch={batch}
+          setup={plot.plotAsk.setup}
+          stylePath={plot.plotAsk.stylePath}
+          picked={plot.pickedWindow}
+          picking={plot.windowPick !== null}
+          papers={paperCatalog}
+          printers={plot.printers}
+          chooseStyle={plot.chooseStyle}
+          loadStyle={loadPlotStyle}
+          choosePdf={plot.choosePdf}
+          onPickWindow={plot.startWindowPick}
+          onKeep={plot.keep}
+          onPlotPdf={plot.plotToPdf}
+          onPrint={plot.print}
+          onClose={plot.closePlot}
+        />
+      )}
+      {plot.stylesAsk && (
+        <PlotStyleEditor
+          initialPath={plot.stylesAsk.initialPath}
+          chooseOpen={plot.chooseStyle}
+          chooseSave={plot.chooseStyleSave}
+          load={loadPlotStyle}
+          save={savePlotStyle}
+          onClose={plot.closeStyles}
         />
       )}
       {extractOpen && info && (

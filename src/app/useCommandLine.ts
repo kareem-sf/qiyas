@@ -16,6 +16,7 @@ import type { Commands, ToolChoice } from "./useCommands";
 import type { DraftingState } from "./useDrafting";
 import type { Drawings } from "./useDrawings";
 import type { Layers } from "./useLayers";
+import type { Plot } from "./usePlot";
 import type { Shell } from "./useShell";
 import type { Sheets } from "./useSheets";
 import type { Takeoff, TakeoffState } from "./useTakeoff";
@@ -56,6 +57,7 @@ type Deps = {
   >;
   takeoffState: Pick<TakeoffState, "setInfoCard" | "setSelectedId" | "setBoqCode" | "setAiHighlight" | "setConflictIds">;
   takeoff: Pick<Takeoff, "importBoqFile" | "compareNow">;
+  plot: Pick<Plot, "windowPick" | "pickPoint" | "cancelPick" | "openPlot" | "quickPrint" | "printAll" | "openStyles">;
 };
 
 export function useCommandLine({
@@ -75,6 +77,7 @@ export function useCommandLine({
   drawings,
   takeoffState,
   takeoff,
+  plot,
 }: Deps) {
   const { run, setError, notice, setNotice, setSideTab, viewport, commandAliases } = shell;
   const { toggleDrafting } = drafting;
@@ -103,17 +106,19 @@ export function useCommandLine({
   } = drawings;
   const { setInfoCard, setSelectedId, setBoqCode, setAiHighlight, setConflictIds } = takeoffState;
   const { importBoqFile, compareNow } = takeoff;
+  const { windowPick, pickPoint, cancelPick, openPlot, quickPrint, printAll, openStyles } = plot;
   /** The command line shows (Ctrl+9), its input, and whether to focus it once shown. */
   const [commandLineOn, setCommandLineOn] = useState(true);
   const commandInput = useRef<HTMLInputElement>(null);
   const focusCommandLine = useRef(false);
 
-  /** A click in the drawing: the one a PDF or image insert point or a calibration waits for, else
-   *  the tool's. */
+  /** A click in the drawing: the one a plot window, a PDF or image insert point or a calibration
+   *  waits for, else the tool's. */
   function clickDrawing(world: Point, screen: Point, worldPerPixel: number, shift: boolean) {
     // The drawing under the click may be about to go.
     if (switching.current > 0) return;
     lastPoint.current = world;
+    if (pickPoint(world)) return;
     if (pending?.kind === "fieldTarget") {
       // The entity at the top of the sheet a field reads.
       run(async () => {
@@ -132,6 +137,7 @@ export function useCommandLine({
   function cancelAll(escKey = false) {
     preset.current = null;
     setPending(null);
+    cancelPick();
     setTextEditor(null);
     setInfoCard(null);
     if (escKey) measure.escape();
@@ -195,7 +201,7 @@ export function useCommandLine({
       case "point":
         if (switching.current > 0) return;
         lastPoint.current = a.p;
-        if (!pendingPoint(a.p)) measure.typePoint(a.p);
+        if (!pickPoint(a.p) && !pendingPoint(a.p)) measure.typePoint(a.p);
         return;
       case "number":
         answerAlong(a.value);
@@ -275,6 +281,11 @@ export function useCommandLine({
       openFile();
       return;
     }
+    // A plot style file needs no drawing.
+    if (what === "plotStyles") {
+      openStyles();
+      return;
+    }
     // Both open drawings: none needs to be open.
     if (what === "recover") {
       recoverFile();
@@ -318,6 +329,12 @@ export function useCommandLine({
         return setXrefsOpen(true);
       case "extract":
         return setExtractOpen(true);
+      case "plot":
+        return openPlot();
+      case "quickPrint":
+        return quickPrint();
+      case "printAll":
+        return printAll();
       case "find":
         return setFindOpen(true);
       case "dimStyle":
@@ -433,6 +450,8 @@ export function useCommandLine({
   const emptyModel = info?.problems.includes(EMPTY_MODEL) ?? false;
   const message = opening
     ? t("opening")
+    : windowPick
+      ? t(windowPick.first ? "plot.pickSecond" : "plot.pickFirst")
     : pending
       ? t(
           pending.kind === "insert"
@@ -459,7 +478,10 @@ export function useCommandLine({
   // What the command line waits for, and its prompt.
   let expect: Expect = "command";
   let promptKey = "cmd.prompt.command";
-  if (pending) {
+  if (windowPick) {
+    expect = "point";
+    promptKey = windowPick.first ? "cmd.prompt.otherCorner" : "cmd.prompt.firstCorner";
+  } else if (pending) {
     expect = "point";
     promptKey =
       pending.kind === "insert"

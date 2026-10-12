@@ -57,6 +57,12 @@ export type Run =
   | "layerTranslate"
   | "vpLayer"
   | "properties"
+  /** PLOT (and PRINT) opens the Plot dialog; QUICKPRINT prints the view; PUBLISH prints every
+   *  layout; STYLESMANAGER edits a plot style. */
+  | "plot"
+  | "quickPrint"
+  | "printAll"
+  | "plotStyles"
   /** VPORTS: two views side by side and back (`vports2` two, `vports1` one). */
   | "vports"
   | "vports1"
@@ -112,6 +118,11 @@ const RUNS: Partial<Record<CommandName, Run>> = {
   XREF: "xrefs",
   CALIBRATE: "calibrate",
   EXTRACT: "extract",
+  PLOT: "plot",
+  PRINT: "plot",
+  QUICKPRINT: "quickPrint",
+  PUBLISH: "printAll",
+  STYLESMANAGER: "plotStyles",
   FIND: "find",
   DIMSTYLE: "dimStyle",
   UPDATEFIELD: "updateFields",

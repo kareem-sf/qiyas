@@ -399,6 +399,14 @@ test("layers, groups and properties from the command line", () => {
   expect(parse("matchprop", cmd)).toEqual({ type: "tool", tool: "matchprop" });
 });
 
+test("the plot and print commands: PLOT and PRINT, QUICKPRINT, PUBLISH, STYLESMANAGER", () => {
+  expect(parse("PLOT", cmd)).toEqual({ type: "run", what: "plot" });
+  expect(parse("print", cmd)).toEqual({ type: "run", what: "plot" });
+  expect(parse("QUICKPRINT", cmd)).toEqual({ type: "run", what: "quickPrint" });
+  expect(parse("Publish", cmd)).toEqual({ type: "run", what: "printAll" });
+  expect(parse("STYLESMANAGER", cmd)).toEqual({ type: "run", what: "plotStyles" });
+});
+
 test("typed points are read in the UCS", () => {
   const ucs = { origin: [10, 5] as [number, number], x_axis: [0, 1] as [number, number] };
   const p = (line: string, last: [number, number] | null = null) =>

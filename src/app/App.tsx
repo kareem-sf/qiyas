@@ -25,6 +25,7 @@ import { useDrafting } from "./useDrafting";
 import { useAutosave, useDrawings, useFileTabs } from "./useDrawings";
 import { useLayers } from "./useLayers";
 import { useOverlay } from "./useOverlay";
+import { usePlot } from "./usePlot";
 import { useSelection } from "./useSelection";
 import { useSheets } from "./useSheets";
 import { useShell } from "./useShell";
@@ -233,6 +234,7 @@ export default function App() {
     apply,
   });
   const { selected, boqLinked, conflictLinked } = takeoff;
+  const plot = usePlot({ t, info, sheet, viewport, run, setError, setNotice, focusDrawing, measure });
   const { commandLineOn, commandInput, onCommand, clickDrawing, commandState, prompt, message } = useCommandLine({
     t,
     info,
@@ -250,6 +252,7 @@ export default function App() {
     drawings,
     takeoffState,
     takeoff,
+    plot,
   });
   onCommandRef.current = onCommand;
   const selection = useSelection({ info, tool, measure, batch, redraw, runLayerCommand });
@@ -279,6 +282,7 @@ export default function App() {
         annotate={annotate}
         drawings={drawings}
         takeoff={takeoff}
+        plot={plot}
       />
       <Dialogs
         info={info}
@@ -291,6 +295,7 @@ export default function App() {
         blocks={blocks}
         annotate={annotate}
         drawings={drawings}
+        plot={plot}
       />
       <div className="middle">
         <LeftPanels

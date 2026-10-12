@@ -9,6 +9,7 @@ import type { Blocks } from "./useBlocks";
 import type { Commands, ToolChoice } from "./useCommands";
 import type { Drawings } from "./useDrawings";
 import type { Layers } from "./useLayers";
+import type { Plot } from "./usePlot";
 import type { Shell } from "./useShell";
 import type { Sheets } from "./useSheets";
 import type { Takeoff } from "./useTakeoff";
@@ -28,6 +29,7 @@ type Props = {
   annotate: Annotate;
   drawings: Drawings;
   takeoff: Takeoff;
+  plot: Plot;
 };
 
 export function Header({
@@ -44,6 +46,7 @@ export function Header({
   annotate,
   drawings,
   takeoff,
+  plot,
 }: Props) {
   const t = useT();
   const { lang, setLang } = useLanguage();
@@ -86,6 +89,10 @@ export function Header({
         onImportBoq={info ? importBoqFile : undefined}
         onCompare={info ? compareNow : undefined}
         onExportConflicts={info ? exportConflictsFile : undefined}
+        onPlot={info ? plot.openPlot : undefined}
+        onQuickPrint={info ? plot.quickPrint : undefined}
+        onPrintAll={info?.sheets.some((s) => !s.is_model) ? plot.printAll : undefined}
+        onPlotStyles={plot.openStyles}
         onUndo={() => history(undo)}
         onRedo={() => history(redo)}
         onZoomExtents={() => {

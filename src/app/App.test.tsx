@@ -9,6 +9,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { LanguageProvider } from "../i18n";
 import en from "../i18n/en.json";
 import App from "./App";
+import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 
 const PLAN = "/d/plan.dwg";
 
@@ -80,6 +81,19 @@ vi.mock("@tauri-apps/api/core", () => ({
         return new Uint8Array([0x51, 0x49, 0x4e, 0x4d, 0, 0, 0, 0]).buffer;
       case "pick":
         return { top: 42, entity: 42, chain: [], xref: null, kind: "Line" };
+      case "paper_catalog":
+        return [
+          { name: "ISO A3", w_mm: 297, h_mm: 420 },
+          { name: "ISO A4", w_mm: 210, h_mm: 297 },
+        ];
+      case "list_printers":
+        return ["Office"];
+      case "default_printer":
+        return "Office";
+      case "plot_pdf":
+        return { path: (args!.job as { output: string }).output, skipped: ["Image a.png", "Image b.png"] };
+      case "plot_and_print":
+        return `Sent to ${args!.printer}`;
       case "run_command":
         return { type: "added", handles: [7, 8, 9, 10] };
       default:
@@ -276,6 +290,90 @@ test("hooks made before apply and onCommand reach them: TEXT's text, a tool pale
   expect(core.calls.filter((c) => c.startsWith("run_command"))).toEqual([
     `run_command {"cmd":{"type":"divide_along","handle":42,"chain":[],"count":3}}`,
   ]);
+});
+
+const A4 = { name: "ISO A4", w_mm: 210, h_mm: 297 };
+
+test("PLOT: a window clicked in the drawing (usePlot through the command line) is plotted to the PDF chosen", async () => {
+  await mount();
+  await clickOpen();
+  const status = () => screen.getByRole("status").textContent;
+
+  await typeLine("PLOT");
+  expect(screen.getByRole("heading", { name: en["plot.title"] })).toBeTruthy();
+  fireEvent.change(screen.getByRole("combobox", { name: en["plot.area"] }), { target: { value: "window" } });
+  fireEvent.click(screen.getByRole("button", { name: en["plot.pickWindow"] }));
+  await settle();
+  // The first corner clicked, the other typed: both reach the plot, not the tool.
+  expect(status()).toBe(en["plot.pickFirst"]);
+  canvas.props!.onClick([0, 0], [0, 0], 1, false);
+  await settle();
+  expect(status()).toBe(en["plot.pickSecond"]);
+  await typeLine("10,5");
+  expect(screen.getByText("0, 0 – 10, 5")).toBeTruthy();
+
+  core.calls.length = 0;
+  vi.mocked(saveDialog).mockResolvedValueOnce("/d/plan.pdf");
+  fireEvent.click(screen.getByRole("button", { name: en["plot.toPdf"] }));
+  await settle();
+  expect(vi.mocked(saveDialog)).toHaveBeenLastCalledWith({
+    defaultPath: "/d/plan.pdf",
+    filters: [{ name: "PDF", extensions: ["pdf"] }],
+  });
+  const job = {
+    sheet: "*Model_Space",
+    area: { window: [[0, 0], [10, 5]] },
+    paper: A4,
+    orientation: "landscape",
+    scale: "fit",
+    centre: true,
+    style: null,
+    lineweights: true,
+    output: "/d/plan.pdf",
+  };
+  expect(core.calls).toEqual([`plot_pdf ${JSON.stringify({ job })}`]);
+  expect(status()).toBe("Plotted to /d/plan.pdf — 2 pictures were not plotted");
+});
+
+test("QUICKPRINT and the Output tab: quick print, print all layouts and the plot style editor", async () => {
+  await mount();
+  await clickOpen();
+  const status = () => screen.getByRole("status").textContent;
+  const printed = () => core.calls.filter((c) => c.startsWith("plot_and_print")).map((c) => JSON.parse(c.slice(15)));
+  core.calls.length = 0;
+
+  // The canvas is faked (no view): the sheet's extents, fitted, on the default printer.
+  await typeLine("QUICKPRINT");
+  expect(printed()).toEqual([
+    {
+      job: {
+        sheet: "*Model_Space",
+        area: "extents",
+        paper: A4,
+        orientation: "landscape",
+        scale: "fit",
+        centre: true,
+        style: null,
+        lineweights: true,
+        output: null,
+      },
+      printer: "Office",
+    },
+  ]);
+  expect(status()).toBe("Sent to Office");
+
+  fireEvent.click(screen.getByRole("tab", { name: en.output }));
+  for (const key of ["plot.button", "plot.quickPrint", "plot.printAll", "plot.styles"] as const) {
+    expect((screen.getByRole("button", { name: en[key] }) as HTMLButtonElement).disabled).toBe(false);
+  }
+  core.calls.length = 0;
+  fireEvent.click(screen.getByRole("button", { name: en["plot.printAll"] }));
+  await settle();
+  expect(printed().map((p) => [p.job.sheet, p.job.area, p.printer])).toEqual([["*Paper_Space", "layout", "Office"]]);
+  expect(status()).toBe("1 layouts, one print job each: Sent to Office");
+
+  fireEvent.click(screen.getByRole("button", { name: en["plot.styles"] }));
+  expect(screen.getByRole("heading", { name: en["plotStyle.title"] })).toBeTruthy();
 });
 
 test("another sheet cancels the tool in use, which is made after the sheets", async () => {

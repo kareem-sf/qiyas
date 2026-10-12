@@ -28,6 +28,12 @@ type Props = {
   onImportBoq?(): void;
   onCompare?(): void;
   onExportConflicts?(): void;
+  /** The Output tab: the Plot dialog (PLOT), quick print of the view (QUICKPRINT), every layout
+   *  printed (PUBLISH) and the plot style editor (STYLESMANAGER). */
+  onPlot?(): void;
+  onQuickPrint?(): void;
+  onPrintAll?(): void;
+  onPlotStyles?(): void;
   onZoomExtents(): void;
   /** Opens the external references (xrefs) dialog. */
   onXrefs?(): void;
@@ -88,8 +94,8 @@ const LAYER_TOOLS = ["group", "ungroup", "matchprop"] as const;
 /** The Home tab's Clipboard group: the copies are modify tools, the pastes click tools. */
 const CLIPBOARD_TOOLS = ["copyclip", "copybase", "pasteclip", "pasteblock"] as const;
 
-type Tab = "home" | "measure" | "annotate" | "insert" | "view" | "manage";
-const TABS: Tab[] = ["home", "measure", "annotate", "insert", "view", "manage"];
+type Tab = "home" | "measure" | "annotate" | "insert" | "view" | "manage" | "output";
+const TABS: Tab[] = ["home", "measure", "annotate", "insert", "view", "manage", "output"];
 
 /** The Annotate tab's Leaders group; the rest of `DIM_TOOLS` are the Dimensions group. */
 const NOTE_TOOLS = ["leader", "mleader", "tolerance"] as const;
@@ -149,6 +155,13 @@ export function Ribbon(props: Props) {
         ))}
       </div>
       <div className="ribbon-panel" role="tabpanel">
+        {tab === "output" && [
+          action("plot.button", props.onPlot),
+          action("plot.quickPrint", props.onQuickPrint),
+          action("plot.printAll", props.onPrintAll),
+          <span key="sep" className="sep" />,
+          action("plot.styles", props.onPlotStyles),
+        ]}
         {tab === "home" && [
           props.loadRecents && props.onOpenRecent && props.onClearRecents ? (
             <RecentsMenu
