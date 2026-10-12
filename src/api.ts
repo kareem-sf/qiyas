@@ -1274,6 +1274,25 @@ export type McpStatus = {
 
 export const mcpStatus = () => invoke<McpStatus>("mcp_status");
 
+/** What "Check for updates" found. */
+export type UpdateCheck =
+  | { status: "up_to_date" }
+  | { status: "available"; version: string; notes: string | null };
+
+/** Refusals of `checkUpdate` and `installUpdate` the About box says in its own words; other
+ *  errors are the updater's own text. Not configured: this build's public key or feed address
+ *  is still the placeholder. */
+export const UPDATES_NOT_CONFIGURED = "updates_not_configured";
+export const UNSAVED_DRAWINGS = "unsaved_drawings";
+export const NO_UPDATE = "no_update";
+
+/** Asks the update feed whether a newer Qiyas is out. */
+export const checkUpdate = () => invoke<UpdateCheck>("check_update");
+
+/** Downloads the update the last check found, checks its signature, installs it and restarts
+ *  Qiyas; it only comes back, rejected, when that failed. */
+export const installUpdate = () => invoke<void>("install_update");
+
 /** Sent when an outside AI app changed the take-off through the MCP server. */
 export const TAKEOFF_CHANGED = "takeoff:changed";
 /** Sent (with the tool result's `ui`) after an MCP tool showed another sheet, hid or showed layers,

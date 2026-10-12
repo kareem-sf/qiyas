@@ -1139,6 +1139,19 @@ button.close {
 .about button {
   border-color: var(--rule);
 }
+.about-update {
+  margin-bottom: 16px;
+}
+.about-update p {
+  margin: 0 0 8px;
+}
+.about-notes {
+  max-height: 120px;
+  overflow-y: auto;
+  white-space: pre-line;
+  text-align: start;
+  color: var(--muted);
+}
 
 /* Settings */
 .settings {
