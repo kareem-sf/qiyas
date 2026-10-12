@@ -494,7 +494,43 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
 - RECOVER (Home tab, Recover…): opens a damaged drawing through the failsafe reader (as every open
   does) and `RecoverReportDialog` lists what it read and dropped by kind (`ReadReport`: DWG object
   types by number, else the reader's code). A truncated DWG loses its file header and does not
-  open at all. AUDIT is Phase 4's.
+  open at all. AUDIT: see Audit, purge and options.
+
+## Audit, purge and options
+
+- `Command::Purge { kinds, dry_run }` (`qiyas-core/src/purge.rs`, wire `{"type":"purge",
+  "kinds":["layers","blocks","styles","linetypes","dimstyles","groups"],"dry_run":true}`, no
+  kinds = all): a dry run lists, by kind and sorted, what nothing uses (`Outcome::Purged {
+  report: PurgeReport }`, no step); the real run takes it out as one undo step (tables, block
+  records and their entities, groups) and returns what went; refused while a block is edited in
+  place. It grows the save-time `purge_for_save` by the same rules (orphan `*Dn`/`*Tn` blocks,
+  gone group members) and adds unused layers (never 0, Defpoints, the current layer, an xref's
+  or the take-off's `QIYAS-*` layers every save writes), named blocks no reference uses (nested
+  uses count while the outer block stays; never layouts, xrefs, dynamic definitions or other
+  anonymous blocks), text styles, linetypes and dimension styles nothing names (never
+  Standard, ByLayer, ByBlock, Continuous, the current ones, shape files, a kept style's `$n`
+  child) and empty groups. "Uses" is read wide: besides the plain fields, every `Handle(n)` and
+  quoted name in the objects', header's, dimension styles', linetypes' and complex entities'
+  `Debug` text keeps an entry (`purge::Mentions`; a unit test pins `Handle`'s `Debug` form).
+  A dimension whose block name is `*U0` (the DWG reader's name for a null handle) has none.
+- `Command::Audit { fix }` (`qiyas-core/src/audit.rs`): `Outcome::Audited { report:
+  AuditReport }` with `counts` by `AuditKind` and one `AuditItem` per kind and name (count,
+  first 100 handles, a plain line, `fixed`): entities whose block is gone, references to
+  missing blocks, dimensions and tables whose block is gone, gone group members, entities and
+  attributes on missing layers, texts in missing text styles; listed only: empty blocks and
+  unused layers. `fix` (one undo step, none when nothing changes) moves missing-layer entities
+  to layer 0, missing text styles to Standard and drops gone group members; references to
+  missing blocks are listed, never deleted.
+- Options in `settings.json` (`qiyas-desktop/src/settings.rs`, serde defaults, checked by
+  `validate`): `display_precision` (2 to 4, 3), `snap_aperture_px` (1 to 50, 10),
+  `pick_box_px` (1 to 50, 6), `background_color`, `crosshair_color`, `highlight_color`
+  (`#rrggbb`, null = the theme's), `shortcuts` (command to key, `Ctrl+Shift+C`, `F3`, `D`;
+  two commands on one key refused, `settings::shortcut_key` spells a key one way), `ribbon`
+  (null = `ribbon::default_ribbon`), `aliases` (no two that differ only in case). The ribbon
+  (`qiyas-desktop/src/ribbon.rs`, IPC `get_default_ribbon`) is data: tabs, groups, buttons
+  `{ kind: tool | action | toggle, command, label }` as `Ribbon.tsx` draws them plus Audit and
+  Purge; a saved layout may only use the default's buttons, and one that no longer checks out
+  falls back to the default on load. The dialogs (Options, Customize, Aliases) are the window's.
 
 ## PDF
 
