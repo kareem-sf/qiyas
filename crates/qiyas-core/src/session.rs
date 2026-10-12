@@ -571,6 +571,17 @@ impl Session {
     /// A file already at `path` is first copied to `<path>.bak`. From then on the session's
     /// drawing is the one at `path`; after a failed write it is unchanged.
     pub fn save_as(&mut self, path: &Path) -> Result<(), CoreError> {
+        self.write_as(path, true)
+    }
+
+    /// `save_as` without the app (`qiyas_core::script`, `qiyas-cli`): the autosaves and lock
+    /// files beside the drawings are the app's, holding work this session never saw, and are left
+    /// as they are.
+    pub fn save_as_headless(&mut self, path: &Path) -> Result<(), CoreError> {
+        self.write_as(path, false)
+    }
+
+    fn write_as(&mut self, path: &Path, discard_autosaves: bool) -> Result<(), CoreError> {
         if let Some(name) = self.block_edit_name() {
             return Err(CoreError::InvalidCommand(format!(
                 "Block {name} is being edited in place: save or discard the edit first (REFCLOSE)"
@@ -612,10 +623,12 @@ impl Session {
         self.drawing_changed();
         self.saved_revision = self.document_revision;
         // Saved: the autosaves of the old file and the new one are stale (best effort).
-        let _ = crate::discard_autosave(&self.drawing.path);
-        let _ = crate::discard_autosave(path);
-        if let Some(from) = self.recovered_from.take() {
-            let _ = crate::discard_autosave(&from);
+        if discard_autosaves {
+            let _ = crate::discard_autosave(&self.drawing.path);
+            let _ = crate::discard_autosave(path);
+            if let Some(from) = self.recovered_from.take() {
+                let _ = crate::discard_autosave(&from);
+            }
         }
         self.drawing.path = path.to_path_buf();
         self.save_project().map_err(|e| {

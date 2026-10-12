@@ -419,3 +419,207 @@ fn a_json_line_reaches_the_whole_command_bus() {
     assert_eq!(run.steps[0].text, "added 1 entities");
     assert_eq!(run.steps[1].text, "Distance = 5.000 m");
 }
+
+#[test]
+fn a_bom_at_the_start_is_skipped() {
+    // Notepad's "UTF-8 with BOM": the first line still reads as its word, or as a comment.
+    let dir = tempfile::tempdir().unwrap();
+    let script = parsed("\u{feff}COUNT DOOR\n", dir.path(), None);
+    assert!(matches!(
+        &script.steps[0].action,
+        Action::Command(Command::CountBlock { block_name, .. }) if block_name == "DOOR"
+    ));
+    assert_eq!(script.steps[0].line, 1);
+    let script = parsed("\u{feff}; a comment\nCOUNT DOOR\n", dir.path(), None);
+    assert_eq!(script.steps.len(), 1);
+    assert_eq!(script.steps[0].line, 2);
+}
+
+/// The path a JSON line's command was given after the folder rule.
+fn json_path(action: &Action) -> String {
+    let Action::Command(cmd) = action else {
+        panic!("{action:?}")
+    };
+    let v = serde_json::to_value(cmd).unwrap();
+    v.get("path")
+        .or_else(|| v.get("from_path"))
+        .and_then(|p| p.as_str())
+        .unwrap()
+        .to_string()
+}
+
+#[test]
+fn json_lines_follow_the_folder_rule_for_their_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let scripts = dir.path().join("scripts");
+    std::fs::create_dir_all(&scripts).unwrap();
+    let drawing = write_sample(dir.path(), "dwg");
+    let outside = dir.path().parent().unwrap().join("elsewhere.dwg");
+    let lines = [
+        r#"{"type":"redefine_block","name":"DOOR","from_path":"P"}"#,
+        r#"{"type":"insert_block","name":"DOOR","at":[0,0],"from_path":"P"}"#,
+        r#"{"type":"translate_layers","from_path":"P","mappings":[]}"#,
+        r#"{"type":"attach_image","path":"P","insert_at":[0,0],"width_units":1}"#,
+        r#"{"type":"import_pdf","path":"P","page":1,"insert_at":[0,0],"scale":1}"#,
+        r#"{"type":"attach_pdf_underlay","path":"P","page":1,"insert_at":[0,0],"scale":1}"#,
+        r#"{"type":"write_block","name":"DOOR","path":"P"}"#,
+    ];
+    let real = scripts.canonicalize().unwrap();
+    for line in lines {
+        // Relative paths are taken from the script's folder, never from where it runs.
+        let script = parsed(&line.replace('P', "door.dwg"), &scripts, Some(&drawing));
+        assert_eq!(
+            json_path(&script.steps[0].action),
+            real.join("door.dwg").to_string_lossy(),
+            "{line}"
+        );
+        // The drawing's folder is allowed, as for the words.
+        let script = parsed(&line.replace('P', "../other.dwg"), &scripts, Some(&drawing));
+        assert!(json_path(&script.steps[0].action).ends_with("other.dwg"));
+        // Out of both folders: refused, relative or absolute.
+        for bad in ["../../x.dwg".to_string(), outside.display().to_string()] {
+            let (n, message) = error(&line.replace('P', &bad), &scripts, Some(&drawing));
+            assert_eq!(n, 1, "{line}");
+            assert!(message.contains("outside"), "{line}: {message}");
+        }
+    }
+    // A command without a path is untouched.
+    let script = parsed(
+        r#"{"type":"count_block","block_name":"DOOR","layer":null}"#,
+        &scripts,
+        None,
+    );
+    assert_eq!(script.steps.len(), 1);
+}
+
+#[test]
+fn ext_names_the_drawings_extension_and_a_bare_export_uses_both() {
+    let dir = tempfile::tempdir().unwrap();
+    let drawing = write_sample(dir.path(), "dwg");
+    let real = dir.path().canonicalize().unwrap();
+    for text in ["EXPORT {name}.{ext}.xlsx", "EXPORT"] {
+        let script = parsed(text, dir.path(), Some(&drawing));
+        assert!(
+            matches!(&script.steps[0].action, Action::Export(p) if p == &real.join("sample.dwg.xlsx")),
+            "{text}: {:?}",
+            script.steps[0].action
+        );
+    }
+    let (line, message) = error("EXPORT", dir.path(), None);
+    assert_eq!(line, 1);
+    assert!(message.contains("no drawing"), "{message}");
+}
+
+/// A lock beside `drawing` from a process of this computer that has ended: a crash.
+fn dead_lock(drawing: &Path) {
+    assert!(qiyas_core::take_lock(drawing).unwrap());
+    let mut lock = qiyas_core::read_lock(drawing).unwrap();
+    let mut child = std::process::Command::new("true").spawn().unwrap();
+    lock.pid = child.id();
+    child.wait().unwrap();
+    std::fs::write(
+        qiyas_core::lock_path(drawing),
+        serde_json::to_vec(&lock).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        qiyas_core::read_lock(drawing).unwrap().status(),
+        qiyas_core::LockStatus::Dead
+    );
+}
+
+#[test]
+fn save_and_saveas_leave_the_apps_autosaves_and_locks_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let drawing = write_sample(dir.path(), "dwg");
+    let copy = dir.path().join("copy.dxf");
+    let mut kept = Vec::new();
+    for d in [&drawing, &copy] {
+        let sv = qiyas_core::autosave_path(d);
+        let mut sv_project = sv.clone().into_os_string();
+        sv_project.push(".qiyas");
+        std::fs::write(&sv, b"newer work").unwrap();
+        std::fs::write(&sv_project, b"{}").unwrap();
+        kept.extend([sv, PathBuf::from(sv_project)]);
+    }
+    dead_lock(&drawing);
+    kept.push(qiyas_core::lock_path(&drawing));
+
+    let script = parsed(
+        "COUNT DOOR\nSAVE\nSAVEAS copy.dxf\nSAVE\n",
+        dir.path(),
+        Some(&drawing),
+    );
+    let session = Session::open(&drawing).unwrap();
+    script::run(&script, Some(session), &mut Stub::default()).unwrap_or_else(|e| panic!("{e}"));
+    assert!(dir.path().join("sample.dwg.bak").exists(), "SAVE wrote");
+    assert!(copy.exists(), "SAVEAS wrote");
+    for path in kept {
+        assert!(path.exists(), "{} is the app's: left alone", path.display());
+    }
+}
+
+/// A host that lets SAVE write over a drawing the reader repaired.
+struct Allowing(Stub);
+
+impl Host for Allowing {
+    fn export_takeoff(&mut self, session: &Session, path: &Path) -> Result<(), String> {
+        self.0.export_takeoff(session, path)
+    }
+    fn import_boq(&mut self, path: &Path) -> Result<Boq, String> {
+        self.0.import_boq(path)
+    }
+    fn compare(&mut self, session: &mut Session) -> Result<usize, String> {
+        self.0.compare(session)
+    }
+    fn allow_repaired_save(&self) -> bool {
+        true
+    }
+}
+
+/// The sample, opened as if the failsafe reader had dropped a record of it.
+fn repaired(drawing: &Path) -> Session {
+    let mut session = Session::open(drawing).unwrap();
+    session.drawing.report.dropped.push(qiyas_core::Dropped {
+        kind: "LINE".to_string(),
+        count: 1,
+    });
+    session
+}
+
+#[test]
+fn save_refuses_a_drawing_the_reader_repaired() {
+    let dir = tempfile::tempdir().unwrap();
+    let drawing = write_sample(dir.path(), "dwg");
+    let before = std::fs::read(&drawing).unwrap();
+    let script = parsed("COUNT DOOR\nSAVE\n", dir.path(), Some(&drawing));
+    let e = fails(script::run(
+        &script,
+        Some(repaired(&drawing)),
+        &mut Stub::default(),
+    ));
+    assert_eq!(e.line, 2);
+    assert!(e.message.contains("repaired on open"), "{e}");
+    assert!(e.message.contains("SAVEAS"), "{e}");
+    assert_eq!(
+        std::fs::read(&drawing).unwrap(),
+        before,
+        "the original stays"
+    );
+    assert!(!dir.path().join("sample.dwg.bak").exists());
+
+    // SAVEAS to a new path is fine, and SAVE over that copy too.
+    let script = parsed("SAVEAS copy.dwg\nSAVE\n", dir.path(), Some(&drawing));
+    script::run(&script, Some(repaired(&drawing)), &mut Stub::default())
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(dir.path().join("copy.dwg.bak").exists());
+    // The host may allow it (`--allow-repaired-save`).
+    let script = parsed("SAVE\n", dir.path(), Some(&drawing));
+    script::run(
+        &script,
+        Some(repaired(&drawing)),
+        &mut Allowing(Stub::default()),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    assert!(dir.path().join("sample.dwg.bak").exists());
+}

@@ -11,11 +11,15 @@
 //! The whole script is read and checked before anything runs: words, points, handles and paths.
 //! A relative path is taken from the script's folder (a written one from `Context::out_dir` when
 //! given) and must stay inside the script's folder, the drawing's folder or the out folder, as
-//! the AI tools and WBLOCK refuse files elsewhere. `{name}` in a path is the drawing's file name
-//! without its extension, so one script exports `{name}.xlsx` for every drawing of a folder.
+//! the AI tools and WBLOCK refuse files elsewhere; a JSON line's paths (`path`, `from_path`) go
+//! through the same rule. `{name}` in a path is the drawing's file name without its extension and
+//! `{ext}` its extension, so one script exports `{name}.{ext}.xlsx` (a bare EXPORT) for every
+//! drawing of a folder. A UTF-8 byte order mark at the start is skipped.
 //! Nothing is written except by SAVE and SAVEAS (which save the project file beside the drawing
-//! as the app does; SAVE keeps a `.bak`, SAVEAS to a new path has nothing to keep) and EXPORT.
-//! Headless runs never touch settings, the keychain, MCP or the AI.
+//! as the app does; SAVE keeps a `.bak`, SAVEAS to a new path has nothing to keep), EXPORT and a
+//! JSON `write_block`. SAVE refuses a drawing the failsafe reader repaired on open unless the host
+//! allows it. Headless runs never touch settings, the keychain, MCP, the AI, or the app's
+//! autosaves and lock files (`Session::save_as_headless`).
 
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
@@ -89,6 +93,12 @@ pub trait Host {
     fn import_boq(&mut self, path: &Path) -> Result<Boq, String>;
     /// Compares the session's BOQ and take-off with the drawing and returns how many conflicts.
     fn compare(&mut self, session: &mut Session) -> Result<usize, String>;
+    /// Whether SAVE (or SAVEAS onto the drawing's own file) may write over a drawing the failsafe
+    /// reader repaired when it opened it (`qiyas-cli --allow-repaired-save`). No by default: a
+    /// run never puts what the reader made of a damaged file over the original and its `.bak`.
+    fn allow_repaired_save(&self) -> bool {
+        false
+    }
 }
 
 /// One step run, and what it did in a line.
@@ -98,12 +108,14 @@ pub struct Done {
     pub text: String,
 }
 
-/// What a run did: each step's line, the block counts (COUNT, by block name) and the session as
-/// the script left it (`None` when it never opened a drawing).
+/// What a run did: each step's line, the block counts (COUNT, by block name), the drawings it
+/// worked on that the failsafe reader had to repair (`<path> opened with N problems`) and the
+/// session as the script left it (`None` when it never opened a drawing).
 #[derive(Serialize)]
 pub struct Run {
     pub steps: Vec<Done>,
     pub counts: BTreeMap<String, f64>,
+    pub warnings: Vec<String>,
     #[serde(skip)]
     pub session: Option<Session>,
 }
@@ -122,6 +134,7 @@ pub fn parse(text: &str, cx: &Context) -> Result<Script, ScriptError> {
         last: None,
         steps: Vec::new(),
     };
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let lines: Vec<&str> = text.lines().collect();
     let mut i = 0;
     while i < lines.len() {
@@ -148,8 +161,14 @@ pub fn run(
     let mut run = Run {
         steps: Vec::new(),
         counts: BTreeMap::new(),
+        warnings: Vec::new(),
         session,
     };
+    // The drawing open is one the reader repaired: SAVE would put that over the original.
+    let mut repaired = false;
+    if let Some(session) = &run.session {
+        repaired = warn_if_repaired(session, &mut run.warnings);
+    }
     for step in &script.steps {
         let line = step.line;
         let fail = |message: String| ScriptError { line, message };
@@ -163,11 +182,12 @@ pub fn run(
             }
             Action::Open(path) => {
                 let session = Session::open(path).map_err(|e| fail(e.to_string()))?;
-                let problems = session.drawing.problems.len();
+                repaired = warn_if_repaired(&session, &mut run.warnings);
+                let problems = read_problems(&session);
                 run.session = Some(session);
                 match problems {
                     0 => format!("opened {}", path.display()),
-                    n => format!("opened {} ({n} problems reading it)", path.display()),
+                    n => format!("opened {} ({})", path.display(), problems_reading(n)),
                 }
             }
             Action::Delay(ms) => {
@@ -178,13 +198,25 @@ pub fn run(
             Action::Zoom => "zoom: nothing to do without a window".to_string(),
             Action::SaveAs(path) => {
                 let session = open(&mut run.session, line)?;
-                session.save_as(path).map_err(|e| fail(e.to_string()))?;
+                if repaired && *path == real_or_lexical(&session.drawing.path) {
+                    refuse_repaired(host, line)?;
+                }
+                session
+                    .save_as_headless(path)
+                    .map_err(|e| fail(e.to_string()))?;
+                repaired = false;
                 format!("saved {}", path.display())
             }
             Action::Save => {
                 let session = open(&mut run.session, line)?;
-                session.save().map_err(|e| fail(e.to_string()))?;
-                format!("saved {}", session.drawing.path.display())
+                if repaired {
+                    refuse_repaired(host, line)?;
+                }
+                let path = session.drawing.path.clone();
+                session
+                    .save_as_headless(&path)
+                    .map_err(|e| fail(e.to_string()))?;
+                format!("saved {}", path.display())
             }
             Action::CurrentLayer(name) => {
                 let session = open(&mut run.session, line)?;
@@ -232,6 +264,46 @@ fn open(session: &mut Option<Session>, line: usize) -> Result<&mut Session, Scri
     session.as_mut().ok_or_else(|| ScriptError {
         line,
         message: "no drawing is open: OPEN one first".to_string(),
+    })
+}
+
+/// How many records the failsafe reader dropped or repaired reading the session's drawing (its
+/// diagnostics; the project file's problems are not counted).
+pub fn read_problems(session: &Session) -> usize {
+    session.drawing.report.dropped.iter().map(|d| d.count).sum()
+}
+
+/// "1 problem reading it", "3 problems reading it".
+pub fn problems_reading(n: usize) -> String {
+    match n {
+        1 => "1 problem reading it".to_string(),
+        n => format!("{n} problems reading it"),
+    }
+}
+
+/// Notes in `warnings` that the session's drawing was repaired on open; whether it was.
+fn warn_if_repaired(session: &Session, warnings: &mut Vec<String>) -> bool {
+    let n = read_problems(session);
+    if n > 0 {
+        let s = if n == 1 { "" } else { "s" };
+        warnings.push(format!(
+            "{} opened with {n} problem{s}",
+            session.drawing.path.display()
+        ));
+    }
+    n > 0
+}
+
+/// SAVE over a drawing the reader repaired, unless the host allows it.
+fn refuse_repaired(host: &dyn Host, line: usize) -> Result<(), ScriptError> {
+    if host.allow_repaired_save() {
+        return Ok(());
+    }
+    Err(ScriptError {
+        line,
+        message: "the drawing was repaired on open; use SAVEAS to a new path or pass \
+                  --allow-repaired-save"
+            .to_string(),
     })
 }
 
@@ -305,7 +377,11 @@ impl Parser {
         i: &mut usize,
     ) -> Result<(), ScriptError> {
         if text.starts_with('{') {
-            let cmd: Command = serde_json::from_str(text).map_err(|e| at(line, e.to_string()))?;
+            let mut value: serde_json::Value =
+                serde_json::from_str(text).map_err(|e| at(line, e.to_string()))?;
+            self.json_paths(line, &mut value)?;
+            let cmd: Command =
+                serde_json::from_value(value).map_err(|e| at(line, e.to_string()))?;
             self.push(line, Action::Command(cmd));
             return Ok(());
         }
@@ -436,11 +512,18 @@ impl Parser {
                 );
             }
             "EXPORT" => {
-                let path = self.path(
-                    line,
-                    &one_name(line, rest, "EXPORT takes the workbook's path")?,
-                    true,
-                )?;
+                let text = if rest.is_empty() {
+                    if self.drawing.is_none() {
+                        return Err(at(
+                            line,
+                            "EXPORT without a path is {name}.{ext}.xlsx: no drawing is open yet",
+                        ));
+                    }
+                    "{name}.{ext}.xlsx".to_string()
+                } else {
+                    one_name(line, rest, "EXPORT takes the workbook's path")?
+                };
+                let path = self.path(line, &text, true)?;
                 self.push(line, Action::Export(path));
             }
             "IMPORTBOQ" => {
@@ -466,6 +549,25 @@ impl Parser {
             }
             "ECHO" => self.push(line, Action::Echo(rest.to_string())),
             _ => return Err(at(line, format!("unknown command {first}"))),
+        }
+        Ok(())
+    }
+
+    /// A JSON line's paths (`path`, `from_path`, any `..._path`) through the folder rule, made
+    /// absolute so they never depend on where the script is run from; `write_block`'s is written.
+    fn json_paths(&self, line: usize, value: &mut serde_json::Value) -> Result<(), ScriptError> {
+        let Some(fields) = value.as_object_mut() else {
+            return Ok(());
+        };
+        let written = fields.get("type").and_then(|t| t.as_str()) == Some("write_block");
+        for (key, field) in fields.iter_mut() {
+            if key != "path" && !key.ends_with("_path") {
+                continue;
+            }
+            if let Some(text) = field.as_str() {
+                let path = self.path(line, text, written)?;
+                *field = serde_json::Value::String(path.to_string_lossy().into_owned());
+            }
         }
         Ok(())
     }
@@ -586,16 +688,22 @@ impl Parser {
 
     /// `text` as a real path inside the script's folder, the drawing's folder or the out folder
     /// (relative from the script's folder; a written file from the out folder when there is one),
-    /// with `{name}` replaced by the drawing's file name.
+    /// with `{name}` replaced by the drawing's file name without extension and `{ext}` by its
+    /// extension.
     fn path(&self, line: usize, text: &str, written: bool) -> Result<PathBuf, ScriptError> {
-        let text = if text.contains("{name}") {
-            let stem = self
-                .drawing
-                .as_ref()
-                .and_then(|d| d.file_stem())
-                .map(|s| s.to_string_lossy().into_owned())
-                .ok_or_else(|| at(line, "{name} has no value: no drawing is open yet"))?;
-            text.replace("{name}", &stem)
+        let text = if text.contains("{name}") || text.contains("{ext}") {
+            let drawing = self.drawing.as_deref().ok_or_else(|| {
+                at(
+                    line,
+                    "{name} and {ext} have no value: no drawing is open yet",
+                )
+            })?;
+            let part = |p: Option<&std::ffi::OsStr>| {
+                p.map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            };
+            text.replace("{name}", &part(drawing.file_stem()))
+                .replace("{ext}", &part(drawing.extension()))
         } else {
             text.to_string()
         };
