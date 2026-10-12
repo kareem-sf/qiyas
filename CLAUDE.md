@@ -684,7 +684,7 @@ their measurements are marked `mcp`).
   |---|---|
   | `OPEN <path>` | Opens the drawing (reads its `.qiyas` if beside it). The rest of the line is the path. |
   | `SAVEAS <path> [dwg\|dxf]` | Save As; the format word gives a path without extension its extension (a mismatch is an error). Project file saved beside it. |
-  | `SAVE` | Saves over the drawing, keeping `.bak` as the app does. |
+  | `SAVE` | Saves over the drawing, keeping `.bak` as the app does. Refused on a drawing the failsafe reader repaired on open (SAVEAS to a new path, or `--allow-repaired-save`). |
   | `QUIT` | Ends the run; later lines are checked, never run. |
   | `DELAY <ms>` | Waits (whole milliseconds; it really sleeps). |
   | `LAYOFF <name…>` / `LAYON <name…>` | Hides / shows layers, one step per name. |
@@ -694,41 +694,56 @@ their measurements are marked `mcp`).
   | `DI` / `DIST p1 p2` | `MeasureDistance`; exactly 2 points. |
   | `AA` / `AREA p1 p2 p3…` | `MeasureArea`; 3 points or more; a blank line or the end of the file ends them. |
   | `MEASURE <handle hex>` | `MeasureEntity` of the drawing's own entity. |
-  | `EXPORT <xlsx path>` | The take-off to Excel. |
+  | `EXPORT [xlsx path]` | The take-off to Excel; bare, `{name}.{ext}.xlsx`. |
   | `IMPORTBOQ <xlsx path>` | BOQ from Excel, then `SetBoq`. |
   | `COMPARE` | `compare_session`, default tolerance. |
   | `ZOOM E\|EXTENTS\|IN\|OUT` | Nothing headless (`W` is refused). |
   | `ECHO <text>` | Prints the text in the report. |
-  | `{"type":…}` | Any `Command` in its wire form, e.g. `{"type":"draw","kind":"line","a":[0,0],"b":[0,5]}`. |
+  | `{"type":…}` | Any `Command` in its wire form, e.g. `{"type":"draw","kind":"line","a":[0,0],"b":[0,5]}`; its `path` and `…_path` fields go through the folder rule below and become absolute. |
 
   Not in the grammar on purpose: `ME` (measure along) and UCS (points are world). Paths are
   relative to the script's folder (written ones, SAVEAS and EXPORT, to the batch's `--out`
   folder when given) and must stay inside the script's folder, the drawing's folder or the out
-  folder. `{name}` in a path is the drawing's file name without extension
-  (`EXPORT {name}.xlsx`: one workbook per drawing of a batch). Only SAVE, SAVEAS and EXPORT
-  write; the `.qiyas` beside a drawing is read on open and written only by SAVE and SAVEAS.
+  folder. `{name}` in a path is the drawing's file name without extension and `{ext}` its
+  extension (a bare `EXPORT` is `{name}.{ext}.xlsx`: one workbook per drawing of a batch, even
+  for `plan.dwg` beside `plan.dxf`). A UTF-8 byte order mark at the start is skipped. Only SAVE,
+  SAVEAS, EXPORT and a JSON `write_block` write; the `.qiyas` beside a drawing is read on open
+  and written only by SAVE and SAVEAS. Saves go through `Session::save_as_headless`: the app's
+  `.sv$` autosaves and `.qlock` files are never touched. `Run::warnings` lists the drawings the
+  reader repaired (`<path> opened with N problems`).
   Excel and the comparison come through `script::Host` (`qiyas-cli` gives `qiyas-boq` and
   `qiyas-takeoff`). The ribbon's Manage, Run script is not built yet.
 - `qiyas-cli` (`crates/qiyas-cli`, clap without colour): no window, and never the settings, the
   keychain, MCP or the AI (it depends on qiyas-core, qiyas-boq and qiyas-takeoff only).
   - `convert <in> <out> [--version 2000|2004|2007|2010|2013|2018]`: DWG or DXF by the output's
-    extension, in the input's version unless given. A Save As: `.bak` when the output exists, the
-    project file beside the output.
-  - `run <script.scr> [drawing]`: prints `line N: <what it did>` per step.
+    extension, in the input's version unless given: the drawing as read and nothing else (no
+    project file, no take-off embedded, the source's project never rewritten); `.bak` when the
+    output exists. A full Save As is `run` with SAVEAS.
+  - `run <script.scr> [drawing] [--allow-repaired-save]`: prints `line N: <what it did>` per step.
   - `takeoff <drawing> --count DOOR [--count …] [--export out.xlsx]`: adds the counts to the
     drawing's take-off (read from its `.qiyas`, which is not written) and writes the workbook;
     at least one of the two.
   - `batch <folder|set.qss> --script x.scr [--out <folder>] [--jobs N]`: the folder's own
     `.dwg`/`.dxf` files sorted by name (not subfolders; `.bak` and `.sv$` fall out) or the sheet
-    set's drawings in its order; the script is checked once before any drawing is opened; one
-    line per drawing in that order, `<path> ok COLUMN=6 DOOR=3`, `<path> warning (N problems
-    reading it) …` (the reader repaired or skipped something; the script still ran) or
-    `<path> error <message>`; then `N drawings: A ok, W with warnings, F failed`. Jobs 1 to 64
-    (default 1), each worker with its own session.
-  - `--quiet` prints nothing on stdout; `--json` prints one JSON document (batch:
-    `{files: [{path, status, problems, counts, error}], total, ok, warnings, failed}`).
-  - Any error is one line on stderr, `qiyas-cli: …`, exit 1 (2 for a mistake in the
-    arguments); a batch with a failed drawing exits 1 (`qiyas-cli: F of N drawings failed`).
+    set's drawings in its order; the script is checked once before any drawing is opened, then
+    read for every drawing, and two drawings that would write the same file (EXPORT, SAVEAS,
+    SAVE, `write_block`) are both refused before anything runs (`error output <path> collides
+    with <other>`); one line per drawing in that order, `<path> ok COLUMN=6 DOOR=3`,
+    `<path> warning (N problems reading it) COLUMN=0 …` (the reader repaired the drawing; the
+    script ran: check its counts) or `<path> error <message>`; then `N drawings: A ok, W with
+    warnings, F failed`. Jobs 1 to 64 (default 1), each worker with its own session.
+    `--allow-repaired-save` as for `run`.
+  - `--quiet` prints nothing on stdout but a batch's summary line; `--json` prints one JSON
+    document (batch: `{files: [{path, status, problems, counts, error}], total, ok, warnings,
+    failed}`).
+  - Exit codes:
+
+    | Code | Means | stderr |
+    |---|---|---|
+    | 0 | done | nothing |
+    | 1 | an error: a bad argument, script line or drawing; a batch with a failed drawing | `qiyas-cli: …` (`F of N drawings failed`) |
+    | 2 | done, but a drawing opened with problems the reader repaired (warnings only) | `qiyas-cli: … opened with problems: check …` |
+
     A panic (the reader on a damaged DWG) is caught: `crashed: <message>`, and the batch goes on.
   - Damaged drawings (tested): a DWG cut off in the middle does not open at all ("no usable
     drawing data"); junk bytes in the middle open cleanly, open with problems (a warning), are
