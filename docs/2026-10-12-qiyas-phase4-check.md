@@ -165,9 +165,9 @@ EXPORT {name}.xlsx
 
 | File | Size |
 |---|---|
-| `target/release/bundle/deb/Qiyas_0.1.0_amd64.deb` | 26.08 MiB |
-| `target/release/bundle/rpm/Qiyas-0.1.0-1.x86_64.rpm` | 26.07 MiB |
-| `target/release/bundle/appimage/Qiyas_0.1.0_amd64.AppImage` | 118.78 MiB |
+| `target/release/bundle/deb/Qiyas_0.0.1_amd64.deb` | 26.08 MiB |
+| `target/release/bundle/rpm/Qiyas-0.0.1-1.x86_64.rpm` | 26.07 MiB |
+| `target/release/bundle/appimage/Qiyas_0.0.1_amd64.AppImage` | 118.78 MiB |
 
 What is inside (deb unpacked with `bsdtar`, rpm listed, AppImage with `--appimage-extract`, all in a temp folder):
 
@@ -245,7 +245,7 @@ No agent saw the window. To get the files:
 - The installers are in `target/release/bundle/` (paths above).
 - `cargo run --release -p qiyas-plot --example phase4_check -- "<drawing>" <out folder>` plots a drawing to the PDFs used above, reads the drawing only and writes only into the out folder.
 
-1. **Install and start.** `sudo apt install ./Qiyas_0.1.0_amd64.deb` on a Debian or Ubuntu computer, or on this laptop just run the AppImage (`chmod +x`, then start it). Does Qiyas start, with its icon and its Arabic name in the menu? Does double-clicking a `.dwg` offer Qiyas under "Open with" (deb only)?
+1. **Install and start.** `sudo apt install ./Qiyas_0.0.1_amd64.deb` on a Debian or Ubuntu computer, or on this laptop just run the AppImage (`chmod +x`, then start it). Does Qiyas start, with its icon and its Arabic name in the menu? Does double-clicking a `.dwg` offer Qiyas under "Open with" (deb only)?
 2. **Open your drawings.** ALJ and KMQ: do they look as before? A redraw should take about 0.2 s on KMQ and about 1 s on ALJ.
 3. **Plot a layout or the model to PDF** (Output tab, Plot…). Open it in another viewer (Firefox, Okular, Acrobat) and put it next to an AutoCAD print of the same sheet: line weights, text, hatches, colours, what is missing.
 4. **Copy Arabic from that PDF** into a text editor. Expect wrong letters on ALJ (problem 2).

@@ -73,7 +73,7 @@ The final review found no Critical, 5 Important and 8 Minor items; every Review 
 - The assistant and MCP still get no edit, draw, dimension, plot or parametric tools.
 
 ## Founder checks (need a real window, a printer or AutoCAD)
-- Install the deb (`sudo apt install ./Qiyas_0.1.0_amd64.deb`) or run the AppImage: does Qiyas start with its icon and Arabic name, and does a `.dwg` offer Qiyas under "Open with"?
+- Install the deb (`sudo apt install ./Qiyas_0.0.1_amd64.deb`) or run the AppImage: does Qiyas start with its icon and Arabic name, and does a `.dwg` offer Qiyas under "Open with"?
 - Open the two office drawings, plot one layout to PDF at 1:100 on A1 and measure a known line on the page against AutoCAD's plot; print it; copy Arabic from the PDF.
 - Run a script from the Manage tab; run `qiyas-cli batch` on a folder.
 - Kill Qiyas mid-edit and relaunch: the recovery dialog, Recover, Save As.
