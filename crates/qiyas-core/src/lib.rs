@@ -3,7 +3,8 @@
 //! entities and modifying them, text and find and replace, dimensions, leaders and tolerances,
 //! tables and fields, blocks and attributes, layer properties, layer states and the layer
 //! translator, groups, editing and matching entity properties, the clipboard, paper-space
-//! viewports, the user coordinate system, sheet sets, and autosave and recovery.
+//! viewports, the user coordinate system, sheet sets, autosave and recovery, and parametric
+//! constraints.
 
 pub mod audit;
 mod autosave;
@@ -26,6 +27,7 @@ mod inquiry;
 mod layers;
 mod modify;
 mod modify2;
+mod param;
 mod project;
 mod props;
 pub mod purge;
@@ -68,6 +70,10 @@ pub use inquiry::{Field, POINT_LAYER};
 pub use layers::{drawing_layers, LayerMapping, LayerProp, ViewportInfo};
 pub use modify::ModifySpec;
 pub use modify2::{EditSpec, LengthenBy, PEditOp};
+pub use param::{
+    AutoSettings, ConstraintInfo, ConstraintKind, ParameterInfo, Part as ConstraintPart, Ref,
+    PARAM_APP,
+};
 pub use project::{project_path, Project};
 pub use props::{EntityProp, MatchProp};
 pub use query::{BlockCount, DimRow, EntityFilter, EntityRow, Page, TextRow};

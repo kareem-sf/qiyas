@@ -637,6 +637,57 @@ pub enum Command {
         #[serde(default)]
         fix: bool,
     },
+    /// The geometric constraint `kind` on the parts of `targets` (at the top of the sheet) picked
+    /// at `points`, one point each (see `crate::param`): coincident, fixed and symmetric's first
+    /// two take vertices or centres; horizontal and vertical a line (or two points); parallel,
+    /// perpendicular, collinear and symmetric's third a line or straight segment; concentric
+    /// circles or arcs; tangent, smooth and equal any edge. The first entity picked stays
+    /// where it is when it can; the rest move to hold it. `Outcome::Constrained`.
+    AddConstraint {
+        kind: crate::ConstraintKind,
+        targets: Vec<Target>,
+        #[serde(default)]
+        points: Vec<[f64; 2]>,
+    },
+    /// Removes the constraint `id` (a dimensional one with its Dimension).
+    DeleteConstraint {
+        id: u32,
+    },
+    /// Removes every constraint holding one of `targets` (AutoCAD's DELCONSTRAINT).
+    /// `Outcome::Constrained` with the ids removed.
+    DeleteConstraintsOn {
+        targets: Vec<Target>,
+    },
+    /// The constraints already true of `targets` within `settings`' tolerances (AutoCAD's
+    /// AUTOCONSTRAIN), less those there already. `Outcome::Constrained`.
+    AutoConstrain {
+        targets: Vec<Target>,
+        #[serde(default)]
+        settings: crate::AutoSettings,
+    },
+    /// The dimensional constraint `kind` (linear, aligned, angular, radius, diameter) on the
+    /// parts of `targets` picked at `points`, its Dimension through `line_point`, its value
+    /// `expression` (the value measured now when none). `Outcome::Constrained`.
+    AddDimConstraint {
+        kind: crate::ConstraintKind,
+        targets: Vec<Target>,
+        #[serde(default)]
+        points: Vec<[f64; 2]>,
+        line_point: [f64; 2],
+        #[serde(default)]
+        expression: Option<String>,
+    },
+    /// The parameter `name` (a dimensional constraint's) takes `expression` (a number, or a
+    /// formula of other parameters such as `2*d2 + 1.5`); its constraints and every one using it
+    /// are solved again.
+    SetParameter {
+        name: String,
+        expression: String,
+    },
+    /// The constraints of the sheet on screen. `Outcome::Constraints`; not an undo step.
+    ListConstraints,
+    /// Every parameter of the drawing. `Outcome::Parameters`; not an undo step.
+    ListParameters,
 }
 
 /// `InsertBlock`'s scale when none is given.
@@ -689,7 +740,9 @@ impl Command {
             | Command::DiscardBlockEdits
             | Command::CopyToClipboard { .. }
             | Command::Ucs { .. }
-            | Command::UcsObject { .. } => None,
+            | Command::UcsObject { .. }
+            | Command::ListConstraints
+            | Command::ListParameters => None,
             Command::SetBoq { .. } | Command::SetBoqTolerance { .. } => Some(Part::Boq),
             Command::SetConflicts { .. } | Command::ResolveConflict { .. } => Some(Part::Conflicts),
             // Entities only.
@@ -795,6 +848,16 @@ impl Command {
             Command::DivideAlong { .. } | Command::MeasureAlong { .. } => Some(Part::Document {
                 tables: true,
                 takeoff: true,
+            }),
+            // The constraint mark's application, dimensional constraints' blocks.
+            Command::AddConstraint { .. }
+            | Command::DeleteConstraint { .. }
+            | Command::DeleteConstraintsOn { .. }
+            | Command::AutoConstrain { .. }
+            | Command::AddDimConstraint { .. }
+            | Command::SetParameter { .. } => Some(Part::Document {
+                tables: true,
+                takeoff: false,
             }),
             // Lists only.
             Command::Purge { dry_run: true, .. } | Command::Audit { fix: false } => None,
@@ -905,6 +968,18 @@ pub enum Outcome {
     /// What an audit found, and repaired with `fix`.
     Audited {
         report: crate::audit::AuditReport,
+    },
+    /// The constraints added (or removed), by id.
+    Constrained {
+        ids: Vec<u32>,
+    },
+    /// The constraints of the sheet on screen.
+    Constraints {
+        constraints: Vec<crate::ConstraintInfo>,
+    },
+    /// The drawing's parameters.
+    Parameters {
+        parameters: Vec<crate::ParameterInfo>,
     },
 }
 
@@ -1506,6 +1581,56 @@ impl Session {
                 self.set_property(&target, prop, &value)?;
                 self.follow_fields()?;
                 return Ok(Outcome::Changed);
+            }
+            Command::AddConstraint {
+                kind,
+                targets,
+                points,
+            } => {
+                let id = self.add_constraint(kind, &targets, &points)?;
+                return Ok(Outcome::Constrained { ids: vec![id] });
+            }
+            Command::DeleteConstraint { id } => {
+                self.delete_constraint(id)?;
+                return Ok(Outcome::Constrained { ids: vec![id] });
+            }
+            Command::DeleteConstraintsOn { targets } => {
+                let ids = self.delete_constraints_on(&targets)?;
+                return Ok(Outcome::Constrained { ids });
+            }
+            Command::AutoConstrain { targets, settings } => {
+                let ids = self.auto_constrain(&targets, &settings)?;
+                return Ok(Outcome::Constrained { ids });
+            }
+            Command::AddDimConstraint {
+                kind,
+                targets,
+                points,
+                line_point,
+                expression,
+            } => {
+                let id = self.add_dim_constraint(
+                    kind,
+                    &targets,
+                    &points,
+                    line_point,
+                    expression.as_deref(),
+                )?;
+                return Ok(Outcome::Constrained { ids: vec![id] });
+            }
+            Command::SetParameter { name, expression } => {
+                self.set_parameter(&name, &expression)?;
+                return Ok(Outcome::Changed);
+            }
+            Command::ListConstraints => {
+                return Ok(Outcome::Constraints {
+                    constraints: self.list_constraints(),
+                });
+            }
+            Command::ListParameters => {
+                return Ok(Outcome::Parameters {
+                    parameters: self.list_parameters(),
+                });
             }
         };
         measurement.source = source.name().to_string();

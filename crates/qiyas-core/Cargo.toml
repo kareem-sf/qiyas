@@ -9,6 +9,7 @@ rust-version.workspace = true
 opencadcodec.workspace = true
 opencadkernel.workspace = true
 qiyas-geom = { path = "../qiyas-geom" }
+qiyas-param = { path = "../qiyas-param" }
 qiyas-pdf = { path = "../qiyas-pdf" }
 qiyas-render = { path = "../qiyas-render" }
 # Raster images (MIT OR Apache-2.0): only the formats Qiyas attaches, so no AVIF/EXR encoders or

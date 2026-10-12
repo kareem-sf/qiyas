@@ -3966,6 +3966,7 @@ dependencies = [
  "opencadkernel",
  "qiyas-core",
  "qiyas-geom",
+ "qiyas-param",
  "qiyas-pdf",
  "qiyas-render",
  "serde",

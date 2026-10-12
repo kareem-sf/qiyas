@@ -1203,11 +1203,19 @@ impl Session {
             None => return self.execute(cmd, source),
             Some(Part::Document { tables, takeoff }) => {
                 let (more_tables, more_takeoff) = self.document_extras(&cmd);
+                // Constraints follow the command in the same step (`crate::param`).
+                let (param_tables, param_takeoff) = self.param_extras(&cmd);
+                let follow = !Session::keeps_constraints(&cmd);
                 return self.record_document_change(
                     source,
-                    tables || more_tables,
-                    takeoff || more_takeoff,
-                    |s| s.execute(cmd, source),
+                    tables || more_tables || param_tables,
+                    takeoff || more_takeoff || param_takeoff,
+                    |s| {
+                        let snapshot = if follow { s.param_snapshot() } else { None };
+                        let outcome = s.execute(cmd, source)?;
+                        s.follow_param(snapshot)?;
+                        Ok(outcome)
+                    },
                 );
             }
             Some(Part::Takeoff) => Step::Takeoff(self.takeoff.clone()),
