@@ -1072,3 +1072,4 @@ In this repo, `docs/` (write new specs, plans, checks and reports here, never in
   `docs/2026-10-09-qiyas-phase1b-check.md`, `docs/2026-10-09-qiyas-phase3-check.md`,
   `docs/2026-10-12-qiyas-phase4-check.md`
 - Deferred (Phase 3, left for later): `docs/2026-10-09-qiyas-phase3-deferred.md`
+- Deferred (Phase 4, left for later): `docs/2026-10-12-qiyas-phase4-deferred.md`
