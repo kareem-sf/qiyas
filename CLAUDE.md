@@ -43,7 +43,7 @@ Frontend layout: `src/main.tsx` renders `src/app/App.tsx`, the composition root 
 re-exports it). It calls the hooks in `src/app/` in this order, which keeps their effects in the
 order they always ran: `useShell`, `useOptions`, `useFileTabs`, `useAutosave`, `useDrafting`,
 `useTakeoffState`, `useSheets`, `useLayers`, `useToolChoice`, `useAttach`, `useBlocks`,
-`useAnnotate`, `useCommands`, `useTool`, `useAssistantWiring`, `useDrawings`, `useTakeoff`,
+`useAnnotate`, `useParametric`, `useCommands`, `useTool`, `useAssistantWiring`, `useDrawings`, `useTakeoff`,
 `usePlot`, `useCommandLine`, `useSelection`, `useOverlay`. It hands `apply`, `onCommand` and
 the tool's `cancel` to hooks made before them through refs filled right after they exist, and
 renders `Header`, `Dialogs` and `Panels`. Dialogs and panels themselves are in `src/shell/`, the canvas
@@ -609,7 +609,8 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
   attributes on missing layers, texts in missing text styles; listed only: empty blocks and
   unused layers. `fix` (one undo step, none when nothing changes) moves missing-layer entities
   to layer 0, missing text styles to Standard and drops gone group members; references to
-  missing blocks are listed, never deleted.
+  missing blocks are listed, never deleted. `fix` is refused while a block is edited in place
+  (its working copies are on the sheet); the report alone still runs.
 - Options in `settings.json` (`qiyas-desktop/src/settings.rs`, serde defaults, checked by
   `validate`): `display_precision` (2 to 4, 3), `snap_aperture_px` (1 to 50, 10),
   `pick_box_px` (1 to 50, 6), `background_color`, `crosshair_color`, `highlight_color`
@@ -714,6 +715,11 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
   either). Linetypes plot continuous, as the screen draws them.
 - Text is real PDF text: each font used becomes an embedded TrueType subset (`subsetter`, Type0,
   Identity-H) with a ToUnicode map from the shaped text (`LaidText::text`, `Session::font_bytes`).
+  The map keeps the first characters seen per glyph, and Noto Sans Arabic draws letters that
+  differ only by their dots (ج ح, ب ت ن ي) with one glyph plus a dot mark: a glyph the map gives
+  back as another letter (`FontSet::actual_text`) is shown inside a `/Span <</ActualText …>> BDC
+  … EMC` holding its own characters, one span per glyph (a whole text's span reads backwards in
+  poppler for RTL), so copy and search give the right word (pdftotext checks it in the tests).
   A text with a glyph that doesn't map back to its characters, or a font that can't be embedded
   (CFF outlines, restricted), draws as outlines; so does Arabic stored in visual order that Qiyas
   did not write (`arabic_stored_visually` with "Arabic text is reversed", unless `QIYAS_TEXT`).
@@ -725,7 +731,10 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
 - By command a plot goes only in the drawing's folder (`output` a name inside it or a subfolder;
   none: `<drawing>-<sheet>.pdf` beside it), written beside the target then moved over it.
   `plot_pdf_to` writes anywhere: the Save dialog later, and `plot_and_print`'s spool PDF in
-  `<temp>/qiyas-plot/`. Paths come back without Windows' `\\?\` prefix (`plain_path`).
+  `spool_dir()`: `<temp>/qiyas-plot-<uid>` with mode 0700 on Unix (refused when another user
+  owns it or it is a link), `<temp>/qiyas-plot` on Windows. `print_spooled` removes the PDF once
+  `lp`/`lpr` have handed CUPS a copy (`hands_off_a_copy`); the PDF viewer's and Windows' copies
+  go when a spool PDF is a day old (`SPOOL_KEEP`). Paths come back without Windows' `\\?\` prefix (`plain_path`).
 - Plot styles (`ctb.rs`): `PlotStyle::{load, save, parse, to_bytes, apply, default_ctb}` read
   and write CTB and STB files (48-byte header, adler32 of the body, lengths, zlib text with LF
   lines ending in a NUL the length counts, as AutoCAD writes them; CR LF, plain text and a
@@ -738,7 +747,8 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
   viewer through `xdg-open`), macOS `lpr`, Windows the PDF handler's Print or PrintTo verb
   through a fixed `-EncodedCommand` script that reads the file and printer from
   `QIYAS_PRINT_FILE` and `QIYAS_PRINT_PRINTER` (`ProcessStartInfo`): no name or path is ever
-  inside a command. Printer names starting with `-` or holding a quote are refused. Tests only
+  inside a command. PowerShell runs with `-NoProfile -NonInteractive -WindowStyle Hidden` and
+  `CREATE_NO_WINDOW` (printing and the printer lists), so no console flashes. Printer names starting with `-` or holding a quote are refused. Tests only
   use `print_dry_run` and `print_plan`.
 - IPC (`qiyas-desktop/src/plot.rs`): `paper_catalog`, `plot_pdf`, `plot_pdf_to` (the Plot
   dialog's Save dialog path, anywhere; never from a typed or scripted command), `plot_and_print`,
@@ -875,16 +885,24 @@ their measurements are marked `mcp`).
   for `plan.dwg` beside `plan.dxf`). A UTF-8 byte order mark at the start is skipped. Only SAVE,
   SAVEAS, EXPORT and a JSON `write_block` write; the `.qiyas` beside a drawing is read on open
   and written only by SAVE and SAVEAS. Saves go through `Session::save_as_headless`: the app's
-  `.sv$` autosaves and `.qlock` files are never touched. `Run::warnings` lists the drawings the
+  `.sv$` autosaves and `.qlock` files are never touched, and a drawing open in a running Qiyas
+  (a live lock here, or another computer's: `refuse_if_open_elsewhere`, which reads the lock
+  only) is never written ("… is open in Qiyas (process N on host): save or close it there
+  first"); a dead lock still saves. `Run::warnings` lists the drawings the
   reader repaired (`<path> opened with N problems`).
   Excel and the comparison come through `script::Host` (`qiyas-cli` gives `qiyas-boq` and
   `qiyas-takeoff`); the window runs the same grammar without it (below).
 - Run script (ribbon Manage tab, Run script…, or `SCRIPT` / `SCR`; `qiyas-desktop/src/script.rs`,
   IPC `run_script { path }`): the grammar and folder rule above, run on the drawing on screen
   (none open: the script must OPEN one), each step as the window does it. OPEN opens a tab (or
-  shows the one open already) and goes first in recents; a drawing with an autosave to offer, a
-  crash, or open in another Qiyas (`qiyas_core::recoverable`) is refused ("open it from the ribbon
-  first to decide about its autosave"), since a SAVE after it would delete that autosave; SAVE and
+  shows the one open already) and goes first in recents; a drawing with an autosave (its `.sv$`,
+  newer or older than it: the reason says which), a crash, or open in another Qiyas
+  (`qiyas_core::recoverable`) is refused ("open it from the ribbon first to decide about its
+  autosave"), since a SAVE after it would delete that autosave; older copies alone (crash
+  copies, ended instances' autosaves) don't stop it, as a save keeps them. The run keeps to the
+  tab on screen when it starts, moved only by OPEN: when another tab is on screen before a line
+  (a tab click, a closed tab, a file opened from outside), it stops there ("the drawing on
+  screen changed: stopped before this line"). SAVE and
   SAVEAS save as the app does, but SAVE (or SAVEAS onto its own file) is refused for a drawing the
   failsafe reader repaired on open (`report.dropped`; the window's Save asks first, a script
   can't; after a SAVEAS to a new path it may); each drawing command is one
@@ -906,7 +924,8 @@ their measurements are marked `mcp`).
   - `convert <in> <out> [--version 2000|2004|2007|2010|2013|2018]`: DWG or DXF by the output's
     extension, in the input's version unless given: the drawing as read and nothing else (no
     project file, no take-off embedded, the source's project never rewritten); `.bak` when the
-    output exists. A full Save As is `run` with SAVEAS.
+    output exists; refused when the output is open in a running Qiyas, as SAVE is. A full Save
+    As is `run` with SAVEAS.
   - `run <script.scr> [drawing] [--allow-repaired-save]`: prints `line N: <what it did>` per step.
   - `takeoff <drawing> --count DOOR [--count …] [--export out.xlsx]`: adds the counts to the
     drawing's take-off (read from its `.qiyas`, which is not written) and writes the workbook;
@@ -1009,6 +1028,15 @@ their measurements are marked `mcp`).
   - Unsigned installers make Gatekeeper (macOS: Apple Developer ID and notarisation) and
     SmartScreen (Windows: a code-signing certificate) warn on first open; buying those is the
     founder's decision.
+- Licences: `tauri.bundle.conf.json` ships `LICENSES/` as the resource `licenses/`, with the
+  Noto Sans, Noto Sans Arabic and Instrument Sans OFL texts added to it. `LICENSES/README.md`
+  says what each text covers and where the MPL-2.0 sources are (opencadcodec, opencadkernel at
+  their pinned commits; the crates.io ones). `LICENSES/THIRD-PARTY.md` lists every Rust crate
+  (normal dependencies on Linux, Windows and macOS) and the window's JavaScript packages with
+  version and licence; `scripts/third-party.sh` writes it (offline, from the lock file and
+  `node_modules`): run it after a dependency changes and before a release, and commit it.
+- The Thmanyah font files are built into the app by Vite and so into every installer; whether
+  its licence allows that is the founder's decision before an installer leaves the company.
 
 ## Where the plans live
 
@@ -1019,6 +1047,8 @@ In this repo, `docs/` (write new specs, plans, checks and reports here, never in
 - Plan (Phase 2, AI and BOQ): `docs/superpowers/plans/2026-10-08-qiyas-phase2-ai-boq.md`
 - Plan (Phase 1b, drawing I/O): `docs/superpowers/plans/2026-10-08-qiyas-phase1b-drawing-io.md`
 - Plan (Phase 3, edit and annotate): `docs/superpowers/plans/2026-10-08-qiyas-phase3-edit-annotate.md`
+- Plan (Phase 4, output): `docs/superpowers/plans/2026-10-08-qiyas-phase4-output.md`
 - Checks: `docs/2026-10-08-qiyas-foundation-check.md`, `docs/2026-10-09-qiyas-phase2-check.md`,
-  `docs/2026-10-09-qiyas-phase1b-check.md`, `docs/2026-10-09-qiyas-phase3-check.md`
+  `docs/2026-10-09-qiyas-phase1b-check.md`, `docs/2026-10-09-qiyas-phase3-check.md`,
+  `docs/2026-10-12-qiyas-phase4-check.md`
 - Deferred (Phase 3, left for later): `docs/2026-10-09-qiyas-phase3-deferred.md`
