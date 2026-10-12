@@ -42,9 +42,9 @@ re-exports it). It calls the hooks in `src/app/` in this order, which keeps thei
 order they always ran: `useShell`, `useFileTabs`, `useAutosave`, `useDrafting`,
 `useTakeoffState`, `useSheets`, `useLayers`, `useToolChoice`, `useAttach`, `useBlocks`,
 `useAnnotate`, `useCommands`, `useTool`, `useAssistantWiring`, `useDrawings`, `useTakeoff`,
-`useCommandLine`, `useSelection`, `useOverlay`. It hands `apply`, `onCommand` and the tool's
-`cancel` to hooks made before them through refs filled right after they exist, and renders
-`Header`, `Dialogs` and `Panels`. Dialogs and panels themselves are in `src/shell/`, the canvas
+`usePlot`, `useCommandLine`, `useSelection`, `useOverlay`. It hands `apply`, `onCommand` and
+the tool's `cancel` to hooks made before them through refs filled right after they exist, and
+renders `Header`, `Dialogs` and `Panels`. Dialogs and panels themselves are in `src/shell/`, the canvas
 in `src/viewport/`, the tools in `src/tools/`; `src/app/App.test.tsx` checks the wiring. The
 three late refs are `measureRef` (`useSheets` cancels the tool when the sheet changes), `applyRef`
 (`useBlocks`, `useAnnotate`) and `onCommandRef` (the tool palette in `useBlocks`); they are called
@@ -627,8 +627,16 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
   inside a command. Printer names starting with `-` or holding a quote are refused. Tests only
   use `print_dry_run` and `print_plan`.
 - IPC (`qiyas-desktop/src/plot.rs`): `paper_catalog`, `plot_pdf`, `plot_and_print`,
-  `print_pdf`, `list_printers`, `default_printer`, `load_plot_style`, `save_plot_style`. The
-  Plot dialog, the plot style editor and the Output tab are the frontend half.
+  `print_pdf`, `list_printers`, `default_printer`, `load_plot_style`, `save_plot_style`.
+- Window (`usePlot`, `src/shell/PlotDialog.tsx`, `PlotStyleEditor.tsx`): Output tab Plot… (PLOT,
+  PRINT), Quick print (QUICKPRINT: the view on screen, fitted, default printer), Print all layouts
+  (PUBLISH: one print job per layout, each with its kept setup) and Plot styles… (STYLESMANAGER:
+  edit and save a CTB/STB). The Plot dialog plots the sheet on screen (extents, a window of two
+  clicks in the drawing, or the layout), shows a preview drawn from the batch on screen (lines
+  only, the area's picture cached while the dialog is open), and plots to PDF through the Save
+  dialog (`<drawing>.pdf` offered; only inside the drawing's folder until a Save-dialog IPC exists)
+  or prints. Each sheet's page setup and the drawing's plot style are kept in the window's
+  `localStorage` (`qiyas.plot:<drawing path>`): the project file has no place for them yet.
 
 ## Inquiry
 
