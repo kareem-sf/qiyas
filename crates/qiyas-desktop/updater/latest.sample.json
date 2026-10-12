@@ -11,6 +11,10 @@
       "url": "https://qsmind.app/downloads/qiyas/0.2.0/Qiyas_0.2.0_amd64.deb",
       "signature": "contents of Qiyas_0.2.0_amd64.deb.sig"
     },
+    "linux-x86_64-rpm": {
+      "url": "https://qsmind.app/downloads/qiyas/0.2.0/Qiyas-0.2.0-1.x86_64.rpm",
+      "signature": "contents of Qiyas-0.2.0-1.x86_64.rpm.sig"
+    },
     "windows-x86_64-nsis": {
       "url": "https://qsmind.app/downloads/qiyas/0.2.0/Qiyas_0.2.0_x64-setup.exe",
       "signature": "contents of Qiyas_0.2.0_x64-setup.exe.sig"

@@ -104,6 +104,7 @@ pub fn run() {
             ribbon::get_default_ribbon,
             updater::check_update,
             updater::install_update,
+            updater::cancel_update,
             launch::take_open_requests,
             commands::ai_send,
             commands::ai_cancel,

@@ -6,15 +6,17 @@
 //! is refused. While the public key or the feed address in `tauri.conf.json` is still the
 //! placeholder, every check is refused with `NOT_CONFIGURED`.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use qiyas_ai::prompt::Lang;
 use serde::Serialize;
 use serde_json::Value;
-use tauri::{AppHandle, Manager, Runtime, State};
+use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_updater::{Update, UpdaterExt};
+use tokio_util::sync::CancellationToken;
 
 use crate::settings;
 use crate::state::AppState;
@@ -29,17 +31,47 @@ pub const NOT_CONFIGURED: &str = "updates_not_configured";
 pub const UNSAVED: &str = "unsaved_drawings";
 /// Refusal of an install: no check found an update since Qiyas started.
 pub const NO_UPDATE: &str = "no_update";
+/// Refusal of an install: another one is running (the About box and the launch dialog).
+pub const BUSY: &str = "update_busy";
+/// The download was stopped (the About box closed during it).
+pub const CANCELLED: &str = "update_cancelled";
+/// The update is installed, but a drawing got unsaved changes meanwhile (a deb or rpm install
+/// waits for the password), so Qiyas doesn't restart: it uses the update when next started.
+pub const RESTART_LATER: &str = "installed_restart_later";
+
+/// Sent during the download: `Progress`.
+pub const PROGRESS: &str = "update:progress";
+/// Sent when the download is done and checked, as the install starts: it can't be stopped now.
+pub const INSTALLING: &str = "update:installing";
 
 /// The launch check runs again after this many seconds.
 const DAY: u64 = 24 * 60 * 60;
 /// How long the launch check waits, so it doesn't compete with the window opening.
 const LAUNCH_DELAY: Duration = Duration::from_secs(15);
-/// How long one request to the feed or for the bundle may take.
+/// How long the request to the feed may take, whole.
 const TIMEOUT: Duration = Duration::from_secs(60);
+/// How long the feed or the bundle may send nothing (connecting, or between two reads) before
+/// it fails: a big bundle on a slow line still finishes, a stalled one does not hang.
+const STALL: Duration = Duration::from_secs(30);
+/// Progress is sent after at least this many more bytes.
+const PROGRESS_STEP: u64 = 256 * 1024;
 
-/// The update the last check found, kept for Install.
+/// The update the last check found, kept for Install, and the install running now.
 #[derive(Default)]
-pub struct Pending(Mutex<Option<Update>>);
+pub struct Pending {
+    update: Mutex<Option<Update>>,
+    /// An install is running: another is refused with `BUSY`.
+    busy: AtomicBool,
+    /// Stops the running install's download; gone once the download is done.
+    cancel: Mutex<Option<CancellationToken>>,
+}
+
+/// How much of the bundle has come; `total` when the server says.
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct Progress {
+    pub downloaded: u64,
+    pub total: Option<u64>,
+}
 
 /// What a check found.
 #[derive(Serialize, Debug, PartialEq, Eq)]
@@ -65,9 +97,11 @@ pub fn configured(updater: Option<&Value>) -> bool {
     let real = |s: &str| !s.trim().is_empty() && !s.contains(PLACEHOLDER);
     let key = updater.get("pubkey").and_then(Value::as_str);
     let endpoints = updater.get("endpoints").and_then(Value::as_array);
+    // The plugin refuses plain http in release builds at start-up: refuse it here first.
+    let feed = |s: &str| real(s) && s.starts_with("https://");
     key.is_some_and(real)
         && endpoints.is_some_and(|list| {
-            !list.is_empty() && list.iter().all(|e| e.as_str().is_some_and(real))
+            !list.is_empty() && list.iter().all(|e| e.as_str().is_some_and(feed))
         })
 }
 
@@ -102,6 +136,7 @@ async fn check<R: Runtime>(app: &AppHandle<R>) -> Result<Option<Update>, String>
     let handle = app.clone();
     app.updater_builder()
         .timeout(TIMEOUT)
+        .configure_client(|client| client.connect_timeout(STALL).read_timeout(STALL))
         // Windows: the installer is started and Qiyas exits at once, without the Exit event.
         .on_before_exit(move || crate::files::release_locks(&handle))
         .build()
@@ -120,19 +155,55 @@ fn ensure_saved<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     Ok(())
 }
 
-/// Downloads the update the last check found, checks its signature, installs it and restarts
-/// Qiyas. Unsaved drawing changes stop it, before the download and again before the install.
+/// Downloads the update the last check found (with `PROGRESS`; `cancel_update` stops it),
+/// checks its signature, installs it and restarts Qiyas. One at a time (`BUSY`). Unsaved drawing
+/// changes stop it before the download and again before the install; changes made while it
+/// installs (a deb or rpm install waits for the password) keep Qiyas running (`RESTART_LATER`).
 /// On Windows the installer closes Qiyas (its drawings' lock files go first) and starts it again
 /// itself.
 async fn install<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let pending = app.state::<Pending>();
+    if pending.busy.swap(true, Ordering::SeqCst) {
+        return Err(BUSY.into());
+    }
+    let result = install_once(app, &pending).await;
+    *lock(&pending.cancel) = None;
+    pending.busy.store(false, Ordering::SeqCst);
+    result
+}
+
+async fn install_once<R: Runtime>(app: &AppHandle<R>, pending: &Pending) -> Result<(), String> {
     ensure_saved(app)?;
-    let update = lock(&app.state::<Pending>().0).clone().ok_or(NO_UPDATE)?;
-    let bytes = update
-        .download(|_, _| {}, || {})
-        .await
-        .map_err(|e| e.to_string())?;
+    let update = lock(&pending.update).clone().ok_or(NO_UPDATE)?;
+    let stop = CancellationToken::new();
+    *lock(&pending.cancel) = Some(stop.clone());
+    let sender = app.clone();
+    let (mut downloaded, mut sent) = (0u64, 0u64);
+    let download = update.download(
+        move |chunk, total| {
+            downloaded += chunk as u64;
+            if downloaded - sent >= PROGRESS_STEP || total == Some(downloaded) {
+                sent = downloaded;
+                let _ = sender.emit(PROGRESS, Progress { downloaded, total });
+            }
+        },
+        || {},
+    );
+    let bytes = tokio::select! {
+        bytes = download => bytes.map_err(|e| e.to_string())?,
+        _ = stop.cancelled() => return Err(CANCELLED.into()),
+    };
+    *lock(&pending.cancel) = None;
     ensure_saved(app)?;
+    let _ = app.emit(INSTALLING, ());
     update.install(bytes).map_err(|e| e.to_string())?;
+    restart_unless_unsaved(app)
+}
+
+/// Restarts Qiyas on the installed update, unless a drawing got unsaved changes while it
+/// installed: then `RESTART_LATER`, and the update starts with Qiyas next time.
+fn restart_unless_unsaved<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    ensure_saved(app).map_err(|_| RESTART_LATER.to_string())?;
     app.restart()
 }
 
@@ -150,14 +221,23 @@ pub async fn check_update<R: Runtime>(
             notes: u.body.clone(),
         },
     };
-    *lock(&pending.0) = update;
+    *lock(&pending.update) = update;
     Ok(checked)
 }
 
-/// "Install and restart" in the About box: only returns on failure.
+/// "Install and restart" in the About box: only returns on failure or `RESTART_LATER`.
 #[tauri::command]
 pub async fn install_update<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     install(&app).await
+}
+
+/// Stops the download of the install running now (the About box closed); nothing once the
+/// install itself has started.
+#[tauri::command]
+pub fn cancel_update(pending: State<'_, Pending>) {
+    if let Some(stop) = lock(&pending.cancel).take() {
+        stop.cancel();
+    }
 }
 
 /// The launch check's dialog, in the window's language (the About box's words are in
@@ -168,6 +248,7 @@ struct Words {
     install: &'static str,
     later: &'static str,
     unsaved: &'static str,
+    restart_later: &'static str,
     failed: &'static str,
 }
 
@@ -180,6 +261,8 @@ fn words(lang: Lang) -> Words {
             later: "Later",
             unsaved: "Save your drawings first: the update restarts Qiyas. Then install it from \
                       About, Check for updates.",
+            restart_later: "Installed. Restart Qiyas when you are ready: save your drawings \
+                            first.",
             failed: "The update could not be installed: {error}",
         },
         Lang::Ar => Words {
@@ -189,6 +272,7 @@ fn words(lang: Lang) -> Words {
             later: "لاحقًا",
             unsaved:
                 "احفظ رسوماتك أولًا: التحديث يعيد تشغيل قياس. ثم ثبّته من «حول»، «البحث عن تحديثات».",
+            restart_later: "تم التثبيت. أعد تشغيل قياس عندما تكون جاهزًا، بعد حفظ رسوماتك.",
             failed: "تعذّر تثبيت التحديث: {error}",
         },
     }
@@ -229,7 +313,7 @@ fn offer<R: Runtime>(app: &AppHandle<R>, update: Update) {
         body.push_str(notes);
     }
     let title = fill(w.title);
-    *lock(&app.state::<Pending>().0) = Some(update);
+    *lock(&app.state::<Pending>().update) = Some(update);
     let handle = app.clone();
     app.dialog()
         .message(body)
@@ -245,16 +329,14 @@ fn offer<R: Runtime>(app: &AppHandle<R>, update: Update) {
             }
             tauri::async_runtime::spawn(async move {
                 if let Err(e) = install(&handle).await {
-                    let text = if e == UNSAVED {
-                        w.unsaved.to_string()
-                    } else {
-                        w.failed.replace("{error}", &e)
+                    let (text, kind) = match e.as_str() {
+                        // The About box's install is running, and says how it went.
+                        BUSY => return,
+                        UNSAVED => (w.unsaved.to_string(), MessageDialogKind::Warning),
+                        RESTART_LATER => (w.restart_later.to_string(), MessageDialogKind::Info),
+                        _ => (w.failed.replace("{error}", &e), MessageDialogKind::Error),
                     };
-                    handle
-                        .dialog()
-                        .message(text)
-                        .kind(MessageDialogKind::Error)
-                        .show(|_| {});
+                    handle.dialog().message(text).kind(kind).show(|_| {});
                 }
             });
         });
@@ -287,6 +369,7 @@ mod tests {
                 "darwin-x86_64-app",
                 "linux-x86_64-appimage",
                 "linux-x86_64-deb",
+                "linux-x86_64-rpm",
                 "windows-x86_64-msi",
                 "windows-x86_64-nsis",
             ]
@@ -365,6 +448,13 @@ mod tests {
         ))));
         assert!(!configured(Some(&updater(" ", &[feed]))), "an empty key");
         assert!(!configured(Some(&updater(key, &[]))), "no feed address");
+        assert!(
+            !configured(Some(&updater(
+                key,
+                &["http://qsmind.app/qiyas/latest.json"]
+            ))),
+            "plain http"
+        );
         assert!(!configured(Some(&json!({ "endpoints": [feed] }))));
     }
 
@@ -397,6 +487,7 @@ mod tests {
             assert!(w.body.contains("{version}") && w.body.contains("{current}"));
             assert!(w.failed.contains("{error}"));
             assert!(!w.install.is_empty() && !w.later.is_empty() && !w.unsaved.is_empty());
+            assert!(!w.restart_later.is_empty());
         }
         assert!(words(Lang::Ar).body.contains("قياس"));
     }
@@ -423,6 +514,7 @@ mod tests {
                     .invoke_handler(tauri::generate_handler![
                         check_update,
                         install_update,
+                        cancel_update,
                         crate::commands::get_settings,
                         crate::commands::set_settings
                     ])
@@ -478,6 +570,50 @@ mod tests {
         fn install_without_an_update_found_is_refused() {
             let ipc = Ipc::new();
             assert_eq!(ipc.call("install_update", json!({})), Err(json!(NO_UPDATE)));
+            // Nothing to stop: no harm.
+            assert_eq!(ipc.call("cancel_update", json!({})), Ok(Value::Null));
+            // Not left busy by the refusal.
+            assert_eq!(ipc.call("install_update", json!({})), Err(json!(NO_UPDATE)));
+        }
+
+        #[test]
+        fn a_second_install_while_one_runs_is_refused() {
+            let ipc = Ipc::new();
+            ipc.app
+                .state::<Pending>()
+                .busy
+                .store(true, Ordering::SeqCst);
+            assert_eq!(ipc.call("install_update", json!({})), Err(json!(BUSY)));
+        }
+
+        /// The sample drawing open in a tab, with a line drawn and not saved.
+        fn unsaved_drawing(ipc: &Ipc) {
+            let mut session = qiyas_core::Session::open(&qiyas_core::fixtures::write_sample(
+                ipc._dir.path(),
+                "dxf",
+            ))
+            .unwrap();
+            session
+                .run(qiyas_core::Command::Draw(qiyas_core::DrawSpec::Line {
+                    a: [0.0, 0.0],
+                    b: [1.0, 1.0],
+                }))
+                .unwrap();
+            assert!(session.is_dirty());
+            crate::tabs::add(&ipc.app.state::<AppState>(), session);
+        }
+
+        #[test]
+        fn unsaved_changes_stop_the_install_and_the_restart_after_it() {
+            let ipc = Ipc::new();
+            unsaved_drawing(&ipc);
+            assert_eq!(ipc.call("install_update", json!({})), Err(json!(UNSAVED)));
+            // Changes made while a deb or rpm install waited for the password: installed, no
+            // restart.
+            assert_eq!(
+                restart_unless_unsaved(ipc.app.handle()),
+                Err(RESTART_LATER.to_string())
+            );
         }
 
         #[test]
