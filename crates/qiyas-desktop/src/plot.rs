@@ -18,10 +18,20 @@ pub async fn paper_catalog() -> Vec<Paper> {
 }
 
 /// Plots `job` to a PDF in the drawing's folder (`job.output` a name inside it, or none for
-/// `<drawing>-<sheet>.pdf` beside the drawing); the file and what was left out.
+/// `<drawing>-<sheet>.pdf` beside the drawing); the file and what was left out. The session is
+/// held only while the plot's data is read; the PDF is written on a blocking thread.
 #[tauri::command]
 pub async fn plot_pdf(job: PlotJob, state: State<'_, AppState>) -> Result<PlotOutput, String> {
-    with_session(&state, |s| Ok(qiyas_plot::plot_pdf(s, &job)))?.map_err(|e| e.to_string())
+    let (path, snapshot) = with_session(&state, |s| {
+        Ok(qiyas_plot::output_path(s, &job)
+            .and_then(|path| Ok((path, qiyas_plot::plot_snapshot(s, &job)?))))
+    })?
+    .map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        qiyas_plot::write_pdf(&snapshot, &path).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Plots `job` to a PDF in the temporary folder and prints it on `printer` (the default one
@@ -33,13 +43,14 @@ pub async fn plot_and_print(
     printer: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
-    let out = with_session(&state, |s| {
+    let (path, snapshot) = with_session(&state, |s| {
         Ok(qiyas_plot::spool_path(s, &job.sheet)
-            .and_then(|path| qiyas_plot::plot_pdf_to(s, &job, &path)))
+            .and_then(|path| Ok((path, qiyas_plot::plot_snapshot(s, &job)?))))
     })?
     .map_err(|e| e.to_string())?;
-    // Printing runs without the session locked.
+    // The PDF is written and printed without the session locked.
     tauri::async_runtime::spawn_blocking(move || {
+        let out = qiyas_plot::write_pdf(&snapshot, &path).map_err(|e| e.to_string())?;
         qiyas_plot::print_pdf(&out.path, printer.as_deref()).map_err(|e| e.to_string())
     })
     .await

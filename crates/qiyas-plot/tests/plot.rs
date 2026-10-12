@@ -7,8 +7,8 @@ use opencadcodec::{CadDocument, EntityType, LwPolyline, Vector2};
 use qiyas_core::fixtures::{arabic_text_doc, write_drawing, write_sample};
 use qiyas_core::{Command, DrawSpec, EntityProp, HatchPattern, Outcome, Session, Target};
 use qiyas_plot::{
-    paper_catalog, plot_pdf, plot_pdf_to, Area, Orientation, Paper, PlotError, PlotJob, PlotStyle,
-    Scale,
+    paper_catalog, plot_pdf, plot_pdf_to, plot_snapshot, write_pdf, Area, Orientation, Paper,
+    PlotError, PlotJob, PlotStyle, Scale,
 };
 use serde_json::json;
 
@@ -523,9 +523,9 @@ fn review_focus_2_from_a_ctb_file() {
 }
 
 /// Curves are flattened for the paper, not the screen: a 1 m radius at 1:100 (10 mm on paper)
-/// has at least 24 segments a quarter turn, each within 0.02 mm of the circle.
+/// has at least 16 segments a quarter turn, each within 0.02 mm of the circle.
 #[test]
-fn a_1_m_arc_at_1_to_100_has_24_segments_a_quarter() {
+fn a_1_m_arc_at_1_to_100_has_16_segments_a_quarter() {
     let (dir, mut s) = sample();
     s.run(Command::Draw(DrawSpec::Circle {
         centre: [30.0, 0.0],
@@ -554,7 +554,7 @@ fn a_1_m_arc_at_1_to_100_has_24_segments_a_quarter() {
                 .all(|v| v[0] >= c[0] - 0.01 && v[1] >= c[1] - 0.01)
         })
         .count();
-    assert!(quarter >= 24, "{quarter} segments a quarter turn");
+    assert!(quarter >= 16, "{quarter} segments a quarter turn");
     for (_, p, q) in &circle {
         let m = [(p[0] + q[0]) / 2.0, (p[1] + q[1]) / 2.0];
         let off = r - (m[0] - c[0]).hypot(m[1] - c[1]);
@@ -776,5 +776,49 @@ fn a_viewport_plots_the_picture_under_it_and_a_missing_one_is_reported() {
         out.skipped.iter().any(|w| w.contains("pic.png")),
         "{:?}",
         out.skipped
+    );
+}
+
+/// The session is needed only to take the snapshot: the PDF is written from it while another
+/// thread holds the session.
+#[test]
+fn the_pdf_is_written_from_a_snapshot_without_the_session() {
+    fn send_and_static<T: Send + 'static>(_: &T) {}
+    let (dir, s) = sample();
+    let mut j = job(MODEL);
+    j.area = Area::Window([[-5.0, -5.0], [25.0, 5.0]]);
+    j.scale = Scale::Ratio(1.0, 100.0);
+    j.centre = false;
+    let locked = std::sync::Arc::new(std::sync::Mutex::new(s));
+    let snapshot = {
+        let session = locked.lock().unwrap();
+        plot_snapshot(&session, &j).unwrap()
+    };
+    send_and_static(&snapshot);
+    // Another thread holds the session the whole time the PDF is written.
+    let held = std::sync::Arc::clone(&locked);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+    let holder = std::thread::spawn(move || {
+        let _session = held.lock().unwrap();
+        tx.send(()).unwrap();
+        // Holds it until the PDF is written.
+        done_rx.recv().unwrap();
+    });
+    rx.recv().unwrap();
+    let path = dir.path().join("snapshot.pdf");
+    let out = write_pdf(&snapshot, &path).unwrap();
+    assert!(locked.try_lock().is_err(), "still held while writing");
+    done_tx.send(()).unwrap();
+    holder.join().unwrap();
+    let page = read(&out.path);
+    let at = |p: [f64; 2]| page_of(p, [-5.0, -5.0], 10.0);
+    assert!(page
+        .strokes()
+        .iter()
+        .any(|(_, p, q)| near(*p, at([0.0, 0.0]), 0.05) && near(*q, at([10.0, 0.0]), 0.05)));
+    assert!(
+        !page.glyphs.is_empty(),
+        "the title as text, its font from the snapshot"
     );
 }

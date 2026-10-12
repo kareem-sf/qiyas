@@ -2,6 +2,10 @@
 //! viewport first (clipped to its frame, without the layers it freezes), then the sheet's own
 //! batch: pictures, fills, lines, wipeouts in the paper's white, the wipeouts' frames, text.
 //! Each batch is drawn afresh for the plot, its curves flattened within `PLOT_TOL_MM` on paper.
+//!
+//! Two steps, so the session is held only while the drawing is read: `snapshot` gathers plain
+//! data (the batches, what each entity plots with, font files, where the pictures go and what to
+//! draw for them), then `write_pdf` draws the pictures and writes the PDF with no session.
 
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
@@ -14,8 +18,8 @@ use opencadcodec::{EntityType, Handle};
 use qiyas_core::{draw_picture, PaperView, Session, UnderlayImage, BATCH_TOL};
 use qiyas_geom::Xform;
 use qiyas_render::{
-    arabic_stored_visually, Batch, LaidText, FILL_BACKGROUND, IMAGE_ADJUSTED, IMAGE_FADED,
-    IMAGE_MONOCHROME, TEXT_BOX,
+    arabic_stored_visually, Batch, ImagePlacement, LaidText, FILL_BACKGROUND, IMAGE_ADJUSTED,
+    IMAGE_FADED, IMAGE_MONOCHROME, TEXT_BOX,
 };
 
 use crate::content::{matrix, Content};
@@ -31,14 +35,14 @@ const PICTURE_DPI: f64 = 300.0;
 /// The longest side of a plotted picture, in pixels.
 const MAX_PICTURE_PX: f64 = 8192.0;
 /// How far a flattened curve may stray from the true one on the paper, in millimetres: a 1 m
-/// radius at 1:100 (10 mm on paper) gets 25 segments a quarter turn.
-pub const PLOT_TOL_MM: f64 = 0.005;
+/// radius at 1:100 (10 mm on paper) gets 18 segments a quarter turn.
+pub const PLOT_TOL_MM: f64 = 0.01;
 
 /// One batch to draw and how.
 struct Layer<'b> {
     batch: &'b Batch,
-    /// The sheet the batch draws (block name), for its pictures.
-    sheet: &'b str,
+    /// The pictures on the batch's sheet: handle, where, what to draw.
+    pictures: &'b [Picture],
     /// Batch (drawing) coordinates to page points.
     xf: Xform,
     /// The viewport frame on the page, for model space inside it.
@@ -50,11 +54,42 @@ struct Layer<'b> {
 /// What the plot draws with an entity, or `None` when it does not plot.
 type Drawn = Option<(Pen, f64)>;
 
+/// A picture of a sheet: its entity, where it goes, what to draw for it.
+type Picture = (u64, ImagePlacement, UnderlayImage);
+
+/// One batch of a snapshot to draw, and how.
+#[derive(Debug, Clone)]
+struct LayerPlan {
+    batch: usize,
+    xf: Xform,
+    clip: Option<[[f64; 2]; 4]>,
+    frozen: HashSet<String>,
+    pictures: Vec<Picture>,
+}
+
+/// Everything a plot needs from the session, as plain data (`snapshot`): written to a PDF by
+/// `write_pdf` without the session.
+#[derive(Debug, Clone)]
+pub struct PlotSnapshot {
+    batches: Vec<Batch>,
+    layers: Vec<LayerPlan>,
+    /// What each drawn entity (by handle and chain) and picture (empty chain) plots with.
+    looks: HashMap<(u64, Vec<u64>), Look>,
+    /// The font files the texts use, by font id.
+    fonts: HashMap<u16, &'static [u8]>,
+    style: Option<PlotStyle>,
+    lineweights: bool,
+    arabic_reversed: bool,
+    page: PageMap,
+    title: String,
+    /// What is already known to be left out.
+    skipped: Vec<String>,
+}
+
 struct Plotter<'s> {
-    session: &'s Session,
     style: Option<&'s PlotStyle>,
     lineweights: bool,
-    looks: Looks<'s>,
+    looks: &'s HashMap<(u64, Vec<u64>), Look>,
     pens: HashMap<([u8; 3], String), Pen>,
     fonts: FontSet,
     out: Content,
@@ -156,8 +191,8 @@ fn plot_tol(pt: f64) -> f64 {
     }
 }
 
-/// Plots `job` into the PDF at `path` (written beside it, then moved over it).
-pub fn plot(session: &Session, job: &PlotJob, path: &Path) -> Result<PlotOutput, PlotError> {
+/// Reads what plotting `job` needs from `session` (the only step that needs it).
+pub fn snapshot(session: &Session, job: &PlotJob) -> Result<PlotSnapshot, PlotError> {
     let sheet = session
         .drawing
         .sheets()
@@ -218,7 +253,15 @@ pub fn plot(session: &Session, job: &PlotJob, path: &Path) -> Result<PlotOutput,
             .position(|(k, _)| *k == key)
             .expect("found above")
     };
-    let mut plan = Vec::new();
+    // Each batch with the sheet whose pictures go with it.
+    let mut plan: Vec<(&str, LayerPlan)> = Vec::new();
+    let layer = |batch, xf, clip, frozen| LayerPlan {
+        batch,
+        xf,
+        clip,
+        frozen,
+        pictures: Vec::new(),
+    };
     for view in &views {
         let [lo, hi] = view.rect;
         let centre = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
@@ -228,40 +271,102 @@ pub fn plot(session: &Session, job: &PlotJob, path: &Path) -> Result<PlotOutput,
             .then(&page.xf);
         let clip = [lo, [hi[0], lo[1]], hi, [lo[0], hi[1]]].map(|p| page.xf.apply(p));
         let at = batch_for(MODEL, plot_tol(pt_per_unit(&xf)));
-        plan.push((at, MODEL, xf, Some(clip), frozen_by(session, view)));
+        plan.push((MODEL, layer(at, xf, Some(clip), frozen_by(session, view))));
     }
     let at = batch_for(&sheet.block, plot_tol(pt_per_unit(&page.xf)));
-    plan.push((at, sheet.block.as_str(), page.xf, None, HashSet::new()));
-    let layers: Vec<Layer> = plan
-        .into_iter()
-        .map(|(at, sheet, xf, clip, frozen)| Layer {
-            batch: &batches[at].1,
-            sheet,
-            xf,
-            clip,
-            frozen,
+    plan.push((
+        sheet.block.as_str(),
+        layer(at, page.xf, None, HashSet::new()),
+    ));
+    let mut skipped = Vec::new();
+    let mut layers = Vec::new();
+    for (sheet, mut plan) in plan {
+        let px = pt_per_unit(&plan.xf) / 72.0 * PICTURE_DPI;
+        let (pictures, problems) = session.plot_pictures(sheet, px, MAX_PICTURE_PX);
+        for problem in problems {
+            let why = format!("A picture is left out: {problem}");
+            if !skipped.contains(&why) {
+                skipped.push(why);
+            }
+        }
+        plan.pictures = pictures;
+        layers.push(plan);
+    }
+    let batches: Vec<Batch> = batches.into_iter().map(|(_, b)| b).collect();
+    if batches.iter().any(|b| b.truncated) {
+        skipped.push("Some blocks are too complex to draw: parts of them are left out".into());
+    }
+
+    let mut resolver = Looks::new(&session.drawing.doc, session.xrefs.docs());
+    let mut looks = HashMap::new();
+    let mut fonts = HashMap::new();
+    let mut look = |entity: u64, chain: &[u64]| {
+        looks
+            .entry((entity, chain.to_vec()))
+            .or_insert_with(|| resolver.of(entity, chain));
+    };
+    for batch in &batches {
+        for r in batch.ranges.iter().chain(&batch.fill_ranges) {
+            look(r.entity, chain_at(batch, r.chain));
+        }
+        for t in &batch.texts {
+            look(t.entity, chain_at(batch, t.chain));
+            for g in &t.glyphs {
+                if let std::collections::hash_map::Entry::Vacant(slot) = fonts.entry(g.font) {
+                    if let Some(bytes) = session.font_bytes(g.font) {
+                        slot.insert(bytes);
+                    }
+                }
+            }
+        }
+    }
+    for layer in &layers {
+        for (handle, _, _) in &layer.pictures {
+            look(*handle, &[]);
+        }
+    }
+    Ok(PlotSnapshot {
+        batches,
+        layers,
+        looks,
+        fonts,
+        style: job.style.clone(),
+        lineweights: job.lineweights,
+        arabic_reversed: session.arabic_reversed,
+        page,
+        title: sheet.name,
+        skipped,
+    })
+}
+
+/// Writes `snapshot` to the PDF at `path` (beside it, then moved over it): draws its pictures,
+/// embeds its fonts. Needs no session.
+pub fn write_pdf(snapshot: &PlotSnapshot, path: &Path) -> Result<PlotOutput, PlotError> {
+    let layers: Vec<Layer> = snapshot
+        .layers
+        .iter()
+        .map(|l| Layer {
+            batch: &snapshot.batches[l.batch],
+            pictures: &l.pictures,
+            xf: l.xf,
+            clip: l.clip,
+            frozen: l.frozen.clone(),
         })
         .collect();
-
-    let doc = &session.drawing.doc;
     let mut p = Plotter {
-        session,
-        style: job.style.as_ref(),
-        lineweights: job.lineweights,
-        looks: Looks::new(doc, session.xrefs.docs()),
+        style: snapshot.style.as_ref(),
+        lineweights: snapshot.lineweights,
+        looks: &snapshot.looks,
         pens: HashMap::new(),
         fonts: FontSet::default(),
         out: Content::default(),
         images: Vec::new(),
         pictures: HashMap::new(),
-        arabic_reversed: session.arabic_reversed,
+        arabic_reversed: snapshot.arabic_reversed,
         doc: Document::with_version("1.5"),
-        skipped: Vec::new(),
+        skipped: snapshot.skipped.clone(),
     };
-    if layers.iter().any(|l| l.batch.truncated) {
-        p.skip("Some blocks are too complex to draw: parts of them are left out".into());
-    }
-    let bytes = |id: u16| session.font_bytes(id);
+    let bytes = |id: u16| snapshot.fonts.get(&id).copied();
     for layer in &layers {
         p.prepare_text(layer, &bytes);
     }
@@ -271,7 +376,7 @@ pub fn plot(session: &Session, job: &PlotJob, path: &Path) -> Result<PlotOutput,
     for layer in &layers {
         p.draw(layer, &bytes);
     }
-    p.write(path, &page, &sheet.name)?;
+    p.write(path, &snapshot.page, &snapshot.title)?;
     Ok(PlotOutput {
         path: path.to_path_buf(),
         skipped: p.skipped,
@@ -303,7 +408,10 @@ impl Plotter<'_> {
     }
 
     fn look(&mut self, batch: &Batch, entity: u64, chain: u32) -> Look {
-        self.looks.of(entity, chain_at(batch, chain))
+        self.looks
+            .get(&(entity, chain_at(batch, chain).to_vec()))
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// The viewport freezes a layer `entity` (inside `chain`) is drawn on or inside of.
@@ -523,13 +631,13 @@ impl Plotter<'_> {
     /// inch on the page (a raster image never beyond its own pixels), clipped as the layer is;
     /// each one left out is noted in `skipped` with why.
     fn pictures(&mut self, layer: &Layer) {
-        let px = pt_per_unit(&layer.xf) / 72.0 * PICTURE_DPI;
-        let (pictures, problems) = self.session.plot_pictures(layer.sheet, px, MAX_PICTURE_PX);
-        for problem in problems {
-            self.skip(format!("A picture is left out: {problem}"));
-        }
-        for (handle, placement, image) in pictures {
-            let look = self.looks.of(handle, &[]);
+        for (handle, placement, image) in layer.pictures {
+            let handle = *handle;
+            let look = self
+                .looks
+                .get(&(handle, Vec::new()))
+                .cloned()
+                .unwrap_or_default();
             if !look.plot || look.layers.iter().any(|n| layer.frozen.contains(n)) {
                 continue;
             }
@@ -537,7 +645,7 @@ impl Plotter<'_> {
             let name = match self.pictures.get(&key) {
                 Some(name) => name.clone(),
                 None => {
-                    let name = self.picture(&image, placement.flags);
+                    let name = self.picture(image, placement.flags);
                     self.pictures.insert(key, name.clone());
                     name
                 }

@@ -536,8 +536,8 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
 
 - `crates/qiyas-plot` (`plot_pdf(session, &PlotJob)`, lopdf, MIT) writes one sheet to a one-page
   PDF as the screen draws it, each batch drawn afresh for the paper
-  (`Session::sheet_batch_with_tol`, curves within `PLOT_TOL_MM` = 0.005 mm on paper: a 1 m
-  arc at 1:100 gets 25 segments a quarter): a layout draws model space in each viewport first
+  (`Session::sheet_batch_with_tol`, curves within `PLOT_TOL_MM` = 0.01 mm on paper: a 1 m
+  arc at 1:100 gets 18 segments a quarter): a layout draws model space in each viewport first
   (clipped to its frame, at that viewport's scale, without the layers it freezes, matched by
   name), then its own batch: pictures, fills as filled paths, lines, wipeouts in the paper's
   white, their frames, then text.
@@ -550,6 +550,10 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
   extents; the plot offset is not read. Fit leaves a 5 mm margin; not centred puts the area's
   lower left at the page's.
   `paper_catalog()`: ISO A0 to A4, ANSI A to E, ARCH A to E1, portrait.
+- Two steps, so the window never waits on a plot: `plot_snapshot` reads everything under the
+  session lock as plain data (`PlotSnapshot`: the batches, what each entity plots with, font
+  files, where each picture goes and what to draw for it), then `write_pdf` draws the pictures
+  and writes the PDF without the session; the IPC commands run it on a blocking thread.
 - Lines are paper millimetres: the plot style's lineweight, else the entity's with `lineweights`
   (ByLayer and ByBlock resolved as inside blocks, Default 0.25 mm), else the thinnest line. White
   plots black. Layers set not to plot are left out, and Defpoints never plots (an xref's

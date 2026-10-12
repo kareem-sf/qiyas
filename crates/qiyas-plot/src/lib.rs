@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 pub use ctb::{aci_of, object_pen, Pen, PlotStyle, StyleEntry, StyleKind, DEFAULT_LINEWEIGHTS};
 pub use look::DEFAULT_LINEWEIGHT_MM;
 pub use page::{paper_catalog, Paper, FIT_MARGIN_MM, PT_PER_MM};
+pub use plotter::{write_pdf, PlotSnapshot, PLOT_TOL_MM};
 pub use print::{
     default_printer, list_printers, parse_default_printer, parse_printers, plain_path,
     print_dry_run, print_pdf, print_plan, PrintPlan,
@@ -112,7 +113,13 @@ pub fn plot_pdf(session: &Session, job: &PlotJob) -> Result<PlotOutput, PlotErro
 
 /// Plots `job` to the PDF at `path`, anywhere (a Save dialog's choice, a print spool file).
 pub fn plot_pdf_to(session: &Session, job: &PlotJob, path: &Path) -> Result<PlotOutput, PlotError> {
-    plotter::plot(session, job, path)
+    write_pdf(&plot_snapshot(session, job)?, path)
+}
+
+/// What plotting `job` needs from `session`, as plain data: the only step that needs the
+/// session (hold its lock for this, then write the PDF with `write_pdf` without it).
+pub fn plot_snapshot(session: &Session, job: &PlotJob) -> Result<PlotSnapshot, PlotError> {
+    plotter::snapshot(session, job)
 }
 
 /// `<drawing>-<sheet name>.pdf`, the sheet named as its tab is, with characters file names
