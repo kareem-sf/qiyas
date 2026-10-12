@@ -288,11 +288,14 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
   concentric, tangent on the side it is on now, equal, symmetric; distance along an axis or
   straight, angle, radius). `solve(sketch, pinned)`: Levenberg-Marquardt with minimum-norm steps
   (`dx = -Jᵀ(JJᵀ+λI)⁻¹r`, nalgebra Cholesky, Jacobian by central differences per constraint),
-  split into groups joined by shared unknowns; what no constraint holds stays put; a conflict
-  fails with the sketch untouched. `cargo test -p qiyas-param --release --test solver_speed`
+  split into groups joined by shared unknowns, on a copy moved to its middle and scaled to one
+  unit across (site grids); what no constraint holds stays put, exactly; a conflict fails with
+  the sketch untouched. `cargo test -p qiyas-param --release --test solver_speed`
   (in `scripts/check.sh`): 200 connected constraints in about 4 ms, guard 50 ms. `expr.rs`: own
   parser for `d1 = 2*d2 + 1.5` (numbers with Arabic digits, `+ - * /`, brackets, names, `pi`,
-  sin/cos/tan in degrees, sqrt, abs); `evaluate_all` refuses unknown names and circles.
+  sin/cos/tan in degrees, sqrt, abs); `evaluate_all` refuses unknown names and circles,
+  `evaluate_each` works each out on its own (a broken one spoils only its users), `normalize`
+  stores expressions in ASCII (older DWG code pages have no Arabic digits).
 - `qiyas-core/src/param.rs`: constraints hold parts (`Ref { handle, part: point | centre |
   edge }`) of lines, lightweight polylines (straight segments only), arcs and circles on the
   sheet, flat in plan; others and chains refused. Stored as JSON strings after an `Integer16(1)`
@@ -302,7 +305,9 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
   each, `Outcome::Constrained { ids }`): `AddConstraint { kind, targets, points }` (each pick's
   point picks the nearest vertex or edge; the first entity picked stays when it can),
   `AutoConstrain { targets, settings }` (kernel `constraint_inference`, Equal off by default:
-  the sample rectangle gives 4 coincident + 2 horizontal + 2 vertical), `AddDimConstraint {
+  the sample rectangle gives 4 coincident + 2 horizontal + 2 vertical; pair relations looked for
+  among off-axis lines only, as the kernel's own filter is quadratic; more than 2,000 constraints
+  refused, counted before the kernel runs), `AddDimConstraint {
   kind: linear|aligned|angular|radius|diameter, targets, points, line_point, expression }` (a
   real Dimension through `add_dimensions`, text `[d1=<>]`, `[fx: d1=<>]` for a formula: the
   brackets are the lock mark; names d/ang/rad/dia + n; lengths in drawing units, angles in
@@ -312,11 +317,16 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
   `DrawingInfo::has_constraints`.
 - Every drawing command keeps them (`Session::run_as`: `param_snapshot` before,
   `follow_param` after, in the same step; `param_extras` adds the tables and take-off to the
-  step when needed): an entity erased, reshaped (vertex or edge count, kind, sheet) loses its
-  constraints, a dimensional one its Dimension, and parameters that used it keep their values
-  as numbers; an entity moved is held where it went while its constraints are solved again (a
-  locked entity that would move, or a conflict such as a fixed point moved, refuses the
-  command). The take-off and fields follow what the solver moved.
+  step when needed): an entity erased, reshaped (vertex or edge count, kind, sheet), changed by
+  any `Edit` (trim, break, reverse, extend... keep the handle while its vertices become other
+  points) or a mirrored arc loses its constraints (`Outcome::Edited::constraints_removed`), a
+  dimensional one its Dimension, and parameters that used it keep their values as numbers; an
+  entity placed (move, rotate, scale, stretch, align, a mirrored line) is held where it went
+  while its constraints are solved again (a locked entity that would move, or a conflict such as
+  a fixed point moved, refuses the command). The take-off and fields follow what the solver
+  moved. A parameter whose expression can't be worked out (a name gone, text another program
+  garbled) is left out of solves and listed with its `error`; the manager shows it and sets or
+  deletes it.
 - Window: Parametric tab (Geometric: Coincident…Equal, Auto constrain; Dimensional: Linear,
   Aligned, Angular, Radius, Diameter; Manage: Parameters manager…, Delete constraints, Show
   constraints), `src/tools/constraintTools.ts` through `useTool` (its `param` slot), command line
