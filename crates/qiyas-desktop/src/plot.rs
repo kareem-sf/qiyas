@@ -1,9 +1,9 @@
-//! IPC for plotting: a sheet to a PDF in the drawing's folder, printing a PDF through the
-//! operating system, the paper sizes and printers, and plot style (CTB/STB) files. Output
-//! paths chosen in a Save dialog come later; by command a plot stays inside the drawing's
-//! folder.
+//! IPC for plotting: a sheet to a PDF in the drawing's folder or where the Save dialog says,
+//! printing a PDF through the operating system, the paper sizes and printers, and plot style
+//! (CTB/STB) files. By command a plot stays inside the drawing's folder; only the Plot dialog's
+//! Save dialog gives `plot_pdf_to` a path elsewhere.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use qiyas_plot::{Paper, PlotJob, PlotOutput, PlotStyle, StyleKind};
 use tauri::State;
@@ -32,6 +32,40 @@ pub async fn plot_pdf(job: PlotJob, state: State<'_, AppState>) -> Result<PlotOu
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Plots `job` to `path`, the `.pdf` the user chose in the Plot dialog's Save dialog: anywhere
+/// (the dialog asked before replacing a file, which is written beside it then moved over it).
+/// Only the dialog calls this; scripts, the AI and typed commands go through `plot_pdf`.
+#[tauri::command]
+pub async fn plot_pdf_to(
+    job: PlotJob,
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<PlotOutput, String> {
+    let path = save_dialog_pdf(&path)?;
+    let snapshot = with_session(&state, |s| Ok(qiyas_plot::plot_snapshot(s, &job)))?
+        .map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        qiyas_plot::write_pdf(&snapshot, &path).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// A Save dialog's answer as a PDF to write: an absolute path ending in `.pdf`.
+fn save_dialog_pdf(path: &str) -> Result<PathBuf, String> {
+    let path = PathBuf::from(path);
+    if !path.is_absolute() {
+        return Err("Choose where the PDF goes in the Save dialog".into());
+    }
+    if !path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
+    {
+        return Err("A plot is a .pdf file".into());
+    }
+    Ok(path)
 }
 
 /// Plots `job` to a PDF in the temporary folder and prints it on `printer` (the default one
@@ -104,4 +138,26 @@ pub async fn save_plot_style(path: String, style: PlotStyle) -> Result<(), Strin
         return Err(format!("Save this plot style as a .{want} file"));
     }
     style.save(path).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::save_dialog_pdf;
+
+    #[test]
+    fn a_save_dialog_pdf_is_absolute_and_ends_in_pdf() {
+        let anywhere = std::env::temp_dir().join("issue").join("plan.PDF");
+        assert_eq!(
+            save_dialog_pdf(anywhere.to_str().unwrap()),
+            Ok(anywhere.clone())
+        );
+        assert_eq!(
+            save_dialog_pdf("plan.pdf"),
+            Err("Choose where the PDF goes in the Save dialog".into())
+        );
+        assert_eq!(
+            save_dialog_pdf(anywhere.with_extension("dwg").to_str().unwrap()),
+            Err("A plot is a .pdf file".into())
+        );
+    }
 }

@@ -3,20 +3,22 @@
  *  plot window's two clicks in the drawing, plot to PDF, print, quick print, print all layouts,
  *  and the plot style editor. */
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { useEffect, useState, type RefObject } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import {
   defaultPrinter,
   listPrinters,
   loadPlotStyle,
   paperCatalog,
   plotAndPrint,
-  plotPdf,
+  plotPdfTo,
   type DrawingInfo,
+  type Paper,
   type PlotJob,
   type PlotStyle,
   type Sheet,
 } from "../api";
 import { defaultSetup, jobFor, normalized, type PageSetup } from "../shell/PlotDialog";
+import { isStale } from "../shell/switcher";
 import type { Point } from "../viewport/camera";
 import type { ViewportHandle } from "../viewport/Viewport";
 import type { Measure, T } from "./shared";
@@ -24,6 +26,8 @@ import type { Shell } from "./useShell";
 
 type Deps = Pick<Shell, "run" | "setError" | "setNotice" | "focusDrawing"> & {
   t: T;
+  /** Bumped when another drawing comes on screen: a print under way stops before its next plot. */
+  switchGen: RefObject<number>;
   info: DrawingInfo | null;
   /** The sheet on screen, by its block. */
   sheet: string;
@@ -33,7 +37,8 @@ type Deps = Pick<Shell, "run" | "setError" | "setNotice" | "focusDrawing"> & {
   measure: Pick<Measure, "cancel">;
 };
 
-/** What a drawing keeps for plotting: its plot style file, and each sheet's page setup by block. */
+/** What a drawing keeps for plotting: its plot style file, and each sheet's page setup by the
+ *  sheet's name as its tab shows it (AutoCAD renumbers the layouts' `*Paper_Space` blocks). */
 type Kept = { style: string | null; sheets: Record<string, PageSetup> };
 
 const KEPT_KEY = "qiyas.plot:";
@@ -60,6 +65,33 @@ function writeKept(drawing: string, kept: Kept) {
 const withExtension = (path: string, ext: string) =>
   path.toLowerCase().endsWith(`.${ext}`) ? path : `${path}.${ext}`;
 
+/** A kept setup the catalog can still plot; null when its paper is gone (the setup is then not
+ *  used: it may be another drawing's that was saved over this one). */
+function checked(setup: PageSetup | undefined, papers: Paper[]): PageSetup | null {
+  return setup && papers.some((p) => p.name === setup.paper) ? setup : null;
+}
+
+/** A path inside a sentence, kept whole in either direction (first strong isolate). */
+const isolate = (path: string) => `\u2068${path}\u2069`;
+
+/** The core's plot errors the window says in its own words; others as the core said them. */
+const ERRORS: [string, string][] = [
+  ["Nothing to plot: the area is empty", "plot.err.nothing"],
+  ["The area does not fit the paper", "plot.err.noFit"],
+  ["A plot is a .pdf file", "plot.err.notPdf"],
+  ["Choose where the PDF goes in the Save dialog", "plot.err.noPath"],
+  ["Can't write the PDF: ", "plot.err.write"],
+];
+
+export function plotError(t: T, e: unknown): string {
+  const said = String(e);
+  for (const [text, key] of ERRORS) {
+    if (said === text) return t(key);
+    if (text.endsWith(": ") && said.startsWith(text)) return t(key, { why: said.slice(text.length) });
+  }
+  return said;
+}
+
 /** The core's print messages the window says in its own words; others as the core said them. */
 const SAID: Record<string, string> = {
   "Sent to the default printer": "plot.sentDefault",
@@ -71,7 +103,7 @@ function printedNotice(t: T, said: string, printer: string | null): string {
   return SAID[said] ? t(SAID[said]) : said;
 }
 
-export function usePlot({ t, info, sheet, viewport, run, setError, setNotice, focusDrawing, measure }: Deps) {
+export function usePlot({ t, switchGen, info, sheet, viewport, run, setError, setNotice, focusDrawing, measure }: Deps) {
   /** The Plot dialog's sheet and where it starts; null while it is closed. */
   const [plotAsk, setPlotAsk] = useState<{ sheet: Sheet; setup: PageSetup; stylePath: string | null } | null>(null);
   /** The plot style editor and the file it opens first; null while it is closed. */
@@ -80,13 +112,15 @@ export function usePlot({ t, info, sheet, viewport, run, setError, setNotice, fo
   const [windowPick, setWindowPick] = useState<{ first: Point | null } | null>(null);
   /** The last plot window clicked, for the dialog. */
   const [pickedWindow, setPickedWindow] = useState<[Point, Point] | null>(null);
+  /** A quick print or print all is under way: another waits for it to end. */
+  const printingNow = useRef(false);
 
-  // Another drawing: the dialog and a window being clicked were for the one before.
+  // Another drawing or sheet: the dialog and a window being clicked were for the one before.
   useEffect(() => {
     setPlotAsk(null);
     setWindowPick(null);
     setPickedWindow(null);
-  }, [info?.path]);
+  }, [info?.path, sheet]);
 
   /** The sheet on screen (model space before one is shown). */
   const sheetShown = (drawing: DrawingInfo) =>
@@ -102,7 +136,7 @@ export function usePlot({ t, info, sheet, viewport, run, setError, setNotice, fo
     const shown = sheetShown(info);
     const kept = readKept(info.path);
     setPickedWindow(null);
-    setPlotAsk({ sheet: shown, setup: kept.sheets[shown.block] ?? defaultSetup(shown.is_model), stylePath: kept.style });
+    setPlotAsk({ sheet: shown, setup: kept.sheets[shown.name] ?? defaultSetup(shown.is_model), stylePath: kept.style });
   }
 
   function closePlot() {
@@ -115,7 +149,7 @@ export function usePlot({ t, info, sheet, viewport, run, setError, setNotice, fo
   function keep(setup: PageSetup, stylePath: string | null) {
     if (!info || !plotAsk) return;
     const kept = readKept(info.path);
-    kept.sheets[plotAsk.sheet.block] = setup;
+    kept.sheets[plotAsk.sheet.name] = setup;
     kept.style = stylePath;
     writeKept(info.path, kept);
   }
@@ -141,18 +175,19 @@ export function usePlot({ t, info, sheet, viewport, run, setError, setNotice, fo
   /** Escape while the window is clicked: back to the dialog without one. */
   const cancelPick = () => setWindowPick(null);
 
-  async function plotToPdf(job: PlotJob) {
-    const out = await plotPdf(job);
+  /** Plots to `path`, the Save dialog's choice; errors in the window's words for the dialog. */
+  async function plotToPdf(job: PlotJob, path: string) {
+    const out = await plotPdfTo(job, path).catch((e) => Promise.reject(plotError(t, e)));
     setError(null);
     setNotice(
       out.skipped.length > 0
-        ? t("plot.doneSkipped", { path: out.path, n: out.skipped.length })
-        : t("plot.done", { path: out.path }),
+        ? t("plot.doneSkipped", { path: isolate(out.path), n: out.skipped.length })
+        : t("plot.done", { path: isolate(out.path) }),
     );
   }
 
   async function print(job: PlotJob, printer: string | null) {
-    const said = await plotAndPrint(job, printer);
+    const said = await plotAndPrint(job, printer).catch((e) => Promise.reject(plotError(t, e)));
     setError(null);
     setNotice(printedNotice(t, said, printer));
   }
@@ -172,6 +207,31 @@ export function usePlot({ t, info, sheet, viewport, run, setError, setNotice, fo
     ]);
   }
 
+  /** Runs a quick print or print all: one at a time (a second press waits for nothing and does
+   *  nothing), stopped before its next plot when another drawing comes on screen, and with the
+   *  "Plotting…" notice gone when it fails. */
+  async function printingRun(work: (stillHere: () => void) => Promise<void>) {
+    if (printingNow.current) return;
+    printingNow.current = true;
+    const gen = switchGen.current;
+    const stillHere = () => {
+      if (isStale(gen, switchGen.current)) throw t("plot.stoppedSwitch");
+    };
+    try {
+      await run(async () => {
+        try {
+          setNotice(t("plot.plotting"));
+          await work(stillHere);
+        } catch (e) {
+          setNotice(null);
+          throw plotError(t, e);
+        }
+      });
+    } finally {
+      printingNow.current = false;
+    }
+  }
+
   /** QUICKPRINT: the view on screen, fitted to the sheet's paper (turned to suit the view), on
    *  the default printer, with the sheet's kept setup otherwise. */
   async function quickPrint() {
@@ -182,9 +242,11 @@ export function usePlot({ t, info, sheet, viewport, run, setError, setNotice, fo
     const drawing = info;
     const shown = sheetShown(drawing);
     const view = viewport.current?.visible() ?? null;
-    await run(async () => {
+    await printingRun(async (stillHere) => {
       const kept = readKept(drawing.path);
-      const base = kept.sheets[shown.block] ?? defaultSetup(shown.is_model);
+      const [papers, printer, style] = await printing(kept);
+      stillHere();
+      const base = checked(kept.sheets[shown.name], papers) ?? defaultSetup(shown.is_model);
       const window = view ? normalized(view) : null;
       const tall = window !== null && window[1][1] - window[0][1] > window[1][0] - window[0][0];
       const setup: PageSetup = {
@@ -194,15 +256,15 @@ export function usePlot({ t, info, sheet, viewport, run, setError, setNotice, fo
         scale: "fit",
         orientation: tall ? "portrait" : "landscape",
       };
-      setNotice(t("plot.plotting"));
-      const [papers, printer, style] = await printing(kept);
       const said = await plotAndPrint(jobFor(shown.block, setup, papers, style, null), printer);
       setNotice(printedNotice(t, said, printer));
     });
   }
 
   /** PUBLISH: every layout (not model space), one print job each on the default printer, each
-   *  with its kept setup; a layout that fails doesn't stop the others. */
+   *  with its kept setup when the catalog still has its paper (a kept window plots the layout:
+   *  it can't be checked against this revision); a layout that fails doesn't stop the others,
+   *  another drawing on screen does. */
   async function printAll() {
     if (!info) {
       setError(t("cmd.noDrawing"));
@@ -214,18 +276,19 @@ export function usePlot({ t, info, sheet, viewport, run, setError, setNotice, fo
       setError(t("plot.noLayouts"));
       return;
     }
-    await run(async () => {
+    await printingRun(async (stillHere) => {
       const kept = readKept(drawing.path);
-      setNotice(t("plot.plotting"));
       const [papers, printer, style] = await printing(kept);
       const failed: string[] = [];
       let said = "";
       for (const s of layouts) {
-        const setup = kept.sheets[s.block] ?? defaultSetup(false);
+        stillHere();
+        const own = checked(kept.sheets[s.name], papers);
+        const setup = !own ? defaultSetup(false) : own.area === "window" ? { ...own, area: "layout" as const } : own;
         try {
           said = await plotAndPrint(jobFor(s.block, setup, papers, style, null), printer);
         } catch (e) {
-          failed.push(`${s.name}: ${String(e)}`);
+          failed.push(`${s.name}: ${plotError(t, e)}`);
         }
       }
       if (failed.length > 0) {

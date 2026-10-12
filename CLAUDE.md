@@ -626,7 +626,8 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
   `QIYAS_PRINT_FILE` and `QIYAS_PRINT_PRINTER` (`ProcessStartInfo`): no name or path is ever
   inside a command. Printer names starting with `-` or holding a quote are refused. Tests only
   use `print_dry_run` and `print_plan`.
-- IPC (`qiyas-desktop/src/plot.rs`): `paper_catalog`, `plot_pdf`, `plot_and_print`,
+- IPC (`qiyas-desktop/src/plot.rs`): `paper_catalog`, `plot_pdf`, `plot_pdf_to` (the Plot
+  dialog's Save dialog path, anywhere; never from a typed or scripted command), `plot_and_print`,
   `print_pdf`, `list_printers`, `default_printer`, `load_plot_style`, `save_plot_style`.
 - Window (`usePlot`, `src/shell/PlotDialog.tsx`, `PlotStyleEditor.tsx`): Output tab Plot… (PLOT,
   PRINT), Quick print (QUICKPRINT: the view on screen, fitted, default printer), Print all layouts
@@ -634,9 +635,12 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
   edit and save a CTB/STB). The Plot dialog plots the sheet on screen (extents, a window of two
   clicks in the drawing, or the layout), shows a preview drawn from the batch on screen (lines
   only, the area's picture cached while the dialog is open), and plots to PDF through the Save
-  dialog (`<drawing>.pdf` offered; only inside the drawing's folder until a Save-dialog IPC exists)
-  or prints. Each sheet's page setup and the drawing's plot style are kept in the window's
-  `localStorage` (`qiyas.plot:<drawing path>`): the project file has no place for them yet.
+  dialog (`<drawing>.pdf` offered, `plot_pdf_to`) or prints. Each sheet's page setup, by the
+  layout's name (AutoCAD renumbers the `*Paper_Space` blocks), and the drawing's plot style are
+  kept in the window's `localStorage` (`qiyas.plot:<drawing path>`): the project file has no place
+  for them yet. A kept setup whose paper the catalog lacks is not used; Print all plots a kept
+  window as the layout. Quick print and Print all run one at a time and stop before the next plot
+  when another drawing comes on screen (`switchGen`).
 
 ## Inquiry
 

@@ -1336,8 +1336,8 @@ export type PlotOutput = { path: string; skipped: string[] };
 
 /** The built-in paper sizes, portrait: ISO A0 to A4, ANSI A to E, ARCH A to E1. */
 export const paperCatalog = () => invoke<Paper[]>("paper_catalog");
-/** Plots `job` to its PDF; only inside the drawing's folder for now (see `PlotJob`). */
-export const plotPdf = (job: PlotJob) => invoke<PlotOutput>("plot_pdf", { job });
+/** Plots `job` to `path`, the PDF the user chose in the Save dialog (anywhere). */
+export const plotPdfTo = (job: PlotJob, path: string) => invoke<PlotOutput>("plot_pdf_to", { job, path });
 /** Plots `job` to a PDF in the temporary folder and prints it on `printer` (null: on Linux the
  *  PDF viewer opens, elsewhere the default printer); what happened, in English. */
 export const plotAndPrint = (job: PlotJob, printer: string | null) =>

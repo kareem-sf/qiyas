@@ -135,6 +135,7 @@ pub fn run() {
             blocks::set_tool_palette,
             plot::paper_catalog,
             plot::plot_pdf,
+            plot::plot_pdf_to,
             plot::plot_and_print,
             plot::print_pdf,
             plot::list_printers,

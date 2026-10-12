@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { DrawingInfo, Paper, PlotStyle } from "../api";
 import { defaultSetup, type PageSetup } from "../shell/PlotDialog";
 import type { Bounds } from "../viewport/camera";
-import { usePlot } from "./usePlot";
+import { plotError, usePlot } from "./usePlot";
 
 const PAPERS: Paper[] = [
   { name: "ISO A3", w_mm: 297, h_mm: 420 },
@@ -62,6 +62,7 @@ const t = (key: string, vars?: Record<string, string | number>) => (vars ? `${ke
 function setup(over: { info?: DrawingInfo | null; sheet?: string; visible?: Bounds | null } = {}) {
   const deps = {
     t,
+    switchGen: { current: 1 },
     info: over.info === undefined ? info() : over.info,
     sheet: over.sheet ?? "*Model_Space",
     viewport: { current: over.visible === null ? null : { visible: () => over.visible ?? [[0, 0], [40, 20]] } } as never,
@@ -177,8 +178,8 @@ test("the plot window is two clicks in the drawing; Escape goes back without one
   expect(result.current.pickedWindow).toEqual([[1, 2], [5, 6]]);
 });
 
-test("Plot to PDF says where the PDF went and how many pictures were left out", async () => {
-  core.answers.plot_pdf = { path: "/d/plan.pdf", skipped: ["Image a.png not found", "Image b.png not found"] };
+test("Plot to PDF goes where the Save dialog said, and says where and how many pictures were left out", async () => {
+  core.answers.plot_pdf_to = { path: "/elsewhere/plan.pdf", skipped: ["Image a.png not found", "Image b.png not found"] };
   const { result, deps } = setup();
   const job = {
     sheet: "*Model_Space",
@@ -189,15 +190,26 @@ test("Plot to PDF says where the PDF went and how many pictures were left out", 
     centre: true,
     style: null,
     lineweights: true,
-    output: "/d/plan.pdf",
+    output: null,
   };
-  await act(() => result.current.plotToPdf(job));
-  expect(core.calls).toEqual([`plot_pdf ${JSON.stringify({ job })}`]);
-  expect(deps.setNotice).toHaveBeenLastCalledWith('plot.doneSkipped {"path":"/d/plan.pdf","n":2}');
+  await act(() => result.current.plotToPdf(job, "/elsewhere/plan.pdf"));
+  expect(core.calls).toEqual([`plot_pdf_to ${JSON.stringify({ job, path: "/elsewhere/plan.pdf" })}`]);
+  // The path is isolated, so it reads whole inside an Arabic sentence.
+  expect(deps.setNotice).toHaveBeenLastCalledWith('plot.doneSkipped {"path":"\u2068/elsewhere/plan.pdf\u2069","n":2}');
 
-  core.answers.plot_pdf = { path: "/d/plan.pdf", skipped: [] };
-  await act(() => result.current.plotToPdf(job));
-  expect(deps.setNotice).toHaveBeenLastCalledWith('plot.done {"path":"/d/plan.pdf"}');
+  core.answers.plot_pdf_to = { path: "/d/plan.pdf", skipped: [] };
+  await act(() => result.current.plotToPdf(job, "/d/plan.pdf"));
+  expect(deps.setNotice).toHaveBeenLastCalledWith('plot.done {"path":"\u2068/d/plan.pdf\u2069"}');
+
+  // The core's known errors in the window's words, for the dialog.
+  core.answers.plot_pdf_to = () => Promise.reject("Nothing to plot: the area is empty");
+  await expect(result.current.plotToPdf(job, "/d/plan.pdf")).rejects.toBe("plot.err.nothing");
+});
+
+test("the core's plot errors in the window's words; others as the core said them", () => {
+  expect(plotError(t, "The area does not fit the paper")).toBe("plot.err.noFit");
+  expect(plotError(t, "Can't write the PDF: Permission denied")).toBe('plot.err.write {"why":"Permission denied"}');
+  expect(plotError(t, "lp: printer is stopped")).toBe("lp: printer is stopped");
 });
 
 test("Print says where the job went in the window's own words", async () => {
@@ -275,6 +287,8 @@ test("Print all: one print job per layout, each with its kept setup, on the defa
   const { result, deps, hook } = setup({ sheet: "*Paper_Space0" });
   act(() => result.current.openPlot());
   act(() => result.current.keep({ ...KEPT, area: "window", window: [[1, 1], [9, 9]] }, null));
+  // Kept by the layout's name: Layout2's.
+  expect(JSON.parse(localStorage.getItem(`qiyas.plot:${PLAN}`)!).sheets).toHaveProperty("Layout2");
   hook.rerender({ ...deps, sheet: "*Model_Space" });
   core.calls.length = 0;
 
@@ -282,7 +296,8 @@ test("Print all: one print job per layout, each with its kept setup, on the defa
   const printed = core.calls.filter((c) => c.startsWith("plot_and_print")).map((c) => JSON.parse(c.slice(15)));
   expect(printed.map((p) => [p.job.sheet, p.job.area, p.job.paper.name, p.printer])).toEqual([
     ["*Paper_Space", "layout", "ISO A4", "Office"],
-    ["*Paper_Space0", { window: [[1, 1], [9, 9]] }, "ISO A3", "Office"],
+    // A kept window can't be checked against this revision of the layout: the layout plots.
+    ["*Paper_Space0", "layout", "ISO A3", "Office"],
   ]);
   expect(deps.setNotice).toHaveBeenLastCalledWith(
     'plot.printedAll {"n":2,"said":"plot.sentTo {\\"printer\\":\\"Office\\"}"}',
@@ -296,8 +311,67 @@ test("Print all goes on past a layout that fails, then says which", async () => 
   await act(() => result.current.printAll());
   expect(core.calls.filter((c) => c.startsWith("plot_and_print"))).toHaveLength(2);
   expect(deps.setError).toHaveBeenLastCalledWith(
-    'plot.printAllFailed {"n":1,"total":2,"errors":"Layout1: Nothing to plot: the area is empty"}',
+    'plot.printAllFailed {"n":1,"total":2,"errors":"Layout1: plot.err.nothing"}',
   );
+  // "Plotting…" goes with the failure.
+  expect(deps.setNotice).toHaveBeenLastCalledWith(null);
+});
+
+test("Print all stops before its next layout when another drawing comes on screen", async () => {
+  const { result, deps } = setup();
+  core.answers.plot_and_print = () => {
+    // The user switches file tab while the first layout prints.
+    deps.switchGen.current++;
+    return "Sent to Office";
+  };
+  await act(() => result.current.printAll());
+  expect(core.calls.filter((c) => c.startsWith("plot_and_print"))).toHaveLength(1);
+  expect(deps.setError).toHaveBeenLastCalledWith("plot.stoppedSwitch");
+  expect(deps.setNotice).toHaveBeenLastCalledWith(null);
+});
+
+test("Quick print stops when another drawing comes on screen before it plots", async () => {
+  const { result, deps } = setup();
+  core.answers.default_printer = () => {
+    deps.switchGen.current++;
+    return "Office";
+  };
+  await act(() => result.current.quickPrint());
+  expect(core.calls.some((c) => c.startsWith("plot_and_print"))).toBe(false);
+  expect(deps.setError).toHaveBeenLastCalledWith("plot.stoppedSwitch");
+});
+
+test("a second press while printing starts nothing", async () => {
+  const { result } = setup();
+  await act(async () => {
+    await Promise.all([result.current.printAll(), result.current.printAll(), result.current.quickPrint()]);
+  });
+  expect(core.calls.filter((c) => c.startsWith("plot_and_print"))).toHaveLength(2);
+  // Once it has ended, another runs.
+  await act(() => result.current.quickPrint());
+  expect(core.calls.filter((c) => c.startsWith("plot_and_print"))).toHaveLength(3);
+});
+
+test("a kept setup whose paper the catalog no longer has is not used", async () => {
+  const { result } = setup({ sheet: "*Paper_Space" });
+  act(() => result.current.openPlot());
+  act(() => result.current.keep({ ...KEPT, paper: "ISO B9", area: "layout" }, null));
+  core.calls.length = 0;
+  await act(() => result.current.printAll());
+  const printed = core.calls.filter((c) => c.startsWith("plot_and_print")).map((c) => JSON.parse(c.slice(15)));
+  expect(printed[0].job).toMatchObject({ sheet: "*Paper_Space", paper: PAPERS[1], scale: "fit", centre: true });
+});
+
+test("another sheet drops a plot window being clicked, and the dialog", () => {
+  const { result, deps, hook } = setup();
+  act(() => result.current.openPlot());
+  act(() => result.current.startWindowPick());
+  act(() => {
+    result.current.pickPoint([1, 2]);
+  });
+  hook.rerender({ ...deps, sheet: "*Paper_Space" });
+  expect(result.current.windowPick).toBeNull();
+  expect(result.current.plotAsk).toBeNull();
 });
 
 test("Print all without layouts says so", async () => {

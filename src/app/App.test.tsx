@@ -90,8 +90,8 @@ vi.mock("@tauri-apps/api/core", () => ({
         return ["Office"];
       case "default_printer":
         return "Office";
-      case "plot_pdf":
-        return { path: (args!.job as { output: string }).output, skipped: ["Image a.png", "Image b.png"] };
+      case "plot_pdf_to":
+        return { path: args!.path, skipped: ["Image a.png", "Image b.png"] };
       case "plot_and_print":
         return `Sent to ${args!.printer}`;
       case "run_command":
@@ -329,10 +329,10 @@ test("PLOT: a window clicked in the drawing (usePlot through the command line) i
     centre: true,
     style: null,
     lineweights: true,
-    output: "/d/plan.pdf",
+    output: null,
   };
-  expect(core.calls).toEqual([`plot_pdf ${JSON.stringify({ job })}`]);
-  expect(status()).toBe("Plotted to /d/plan.pdf — 2 pictures were not plotted");
+  expect(core.calls).toEqual([`plot_pdf_to ${JSON.stringify({ job, path: "/d/plan.pdf" })}`]);
+  expect(status()).toBe("Plotted to \u2068/d/plan.pdf\u2069 — pictures not plotted: 2");
 });
 
 test("QUICKPRINT and the Output tab: quick print, print all layouts and the plot style editor", async () => {
@@ -370,7 +370,7 @@ test("QUICKPRINT and the Output tab: quick print, print all layouts and the plot
   fireEvent.click(screen.getByRole("button", { name: en["plot.printAll"] }));
   await settle();
   expect(printed().map((p) => [p.job.sheet, p.job.area, p.printer])).toEqual([["*Paper_Space", "layout", "Office"]]);
-  expect(status()).toBe("1 layouts, one print job each: Sent to Office");
+  expect(status()).toBe("Layouts sent: 1, one print job each: Sent to Office");
 
   fireEvent.click(screen.getByRole("button", { name: en["plot.styles"] }));
   expect(screen.getByRole("heading", { name: en["plotStyle.title"] })).toBeTruthy();

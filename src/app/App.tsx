@@ -234,7 +234,7 @@ export default function App() {
     apply,
   });
   const { selected, boqLinked, conflictLinked } = takeoff;
-  const plot = usePlot({ t, info, sheet, viewport, run, setError, setNotice, focusDrawing, measure });
+  const plot = usePlot({ t, switchGen, info, sheet, viewport, run, setError, setNotice, focusDrawing, measure });
   const { commandLineOn, commandInput, onCommand, clickDrawing, commandState, prompt, message } = useCommandLine({
     t,
     info,

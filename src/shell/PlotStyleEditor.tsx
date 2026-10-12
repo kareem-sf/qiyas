@@ -203,7 +203,7 @@ export function PlotStyleEditor(props: Props) {
         ) : (
           <p className="status">{t("plotStyle.empty")}</p>
         )}
-        {saved && <p className="status">{t("plotStyle.saved", { path: saved })}</p>}
+        {saved && <p className="status">{t("plotStyle.saved", { path: `\u2068${saved}\u2069` })}</p>}
         {error && (
           <p className="error" role="alert">
             {error}

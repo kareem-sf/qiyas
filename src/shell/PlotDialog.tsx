@@ -258,8 +258,9 @@ type Props = {
   onPickWindow(): void;
   /** Keeps the setup for the sheet and the plot style for the drawing (on every plot or print). */
   onKeep(setup: PageSetup, stylePath: string | null): void;
-  /** Plots to the PDF at `job.output`; a rejection is shown in the dialog, which stays open. */
-  onPlotPdf(job: PlotJob): Promise<void>;
+  /** Plots to the PDF at `path` (the Save dialog's); a rejection is shown in the dialog, which
+   *  stays open. */
+  onPlotPdf(job: PlotJob, path: string): Promise<void>;
   /** Plots and prints on `printer` (the default one when null); a rejection is shown here. */
   onPrint(job: PlotJob, printer: string | null): Promise<void>;
   onClose(): void;
@@ -303,7 +304,15 @@ export function PlotDialog(props: Props) {
     let live = true;
     props
       .papers()
-      .then((list) => live && setPapers(list))
+      .then((list) => {
+        if (!live) return;
+        setPapers(list);
+        // A kept setup whose paper the catalog no longer has is not used at all.
+        if (!list.some((p) => p.name === props.setup.paper)) {
+          setSetup(defaultSetup(props.sheet.is_model));
+          setScaleChoice("fit");
+        }
+      })
       .catch((e) => live && setError(String(e)));
     props
       .printers()
@@ -356,10 +365,6 @@ export function PlotDialog(props: Props) {
   const chosen: PageSetup | null = scale ? { ...setup, scale } : null;
 
   const paper = papers?.find((p) => p.name === setup.paper) ?? papers?.find((p) => p.name === DEFAULT_PAPER) ?? papers?.[0];
-  // A paper the catalog doesn't have (any more) shows as the one plotted instead.
-  useEffect(() => {
-    if (paper && paper.name !== setup.paper) setSetup((s) => ({ ...s, paper: paper.name }));
-  }, [paper?.name]);
 
   const mmPerUnit = sheet.is_model ? metresPerUnit(props.units) * 1000 : 1;
   const previewArea: [Point, Point] | null =
@@ -390,20 +395,21 @@ export function PlotDialog(props: Props) {
     }
   }
 
-  /** Plots to a PDF, or prints with `printTo` (a printer name, "" for the default one). */
+  /** Plots to a PDF, or prints with `printTo` (a printer name, "" for the default one). Busy
+   *  from the first click, so a second one starts nothing. */
   async function plot(printTo: string | null) {
     if (!ready || !chosen || !papers) return;
     setError(null);
-    let output: string | null = null;
-    if (printTo === null) {
-      output = await props.choosePdf(pdfBeside(props.drawingPath));
-      if (!output) return;
-    }
     setBusy(true);
     try {
-      const job = jobFor(sheet.block, chosen, papers, stylePath ? style : null, output);
-      if (printTo === null) await props.onPlotPdf(job);
-      else await props.onPrint(job, printTo || null);
+      const job = jobFor(sheet.block, chosen, papers, stylePath ? style : null, null);
+      if (printTo === null) {
+        const path = await props.choosePdf(pdfBeside(props.drawingPath));
+        if (!path) return;
+        await props.onPlotPdf(job, path);
+      } else {
+        await props.onPrint(job, printTo || null);
+      }
       props.onKeep(chosen, stylePath);
       dialog.current?.close();
     } catch (e) {
@@ -431,6 +437,10 @@ export function PlotDialog(props: Props) {
         props.onClose();
       }}
       onKeyDown={(e) => e.stopPropagation()}
+      // Escape while plotting would lose what the plot says when it ends.
+      onCancel={(e) => {
+        if (busy) e.preventDefault();
+      }}
     >
       <form
         method="dialog"
@@ -568,7 +578,12 @@ export function PlotDialog(props: Props) {
         <div className="field">
           <span>{t("plot.preview")}</span>
           <PlotPreview batch={props.batch} area={previewArea} layout={layout} cache={pictures.current} />
-          {layout && !layout.fits && <span className="status">{t("plot.offPaper")}</span>}
+          {setup.area === "layout" ? (
+            // The layout plots its own paper, which the window doesn't know: the preview is its drawing.
+            <span className="status">{t("plot.previewExtents")}</span>
+          ) : (
+            layout && !layout.fits && <span className="status">{t("plot.offPaper")}</span>
+          )}
         </div>
         <div className="field">
           <label htmlFor="plot-printer">{t("plot.printer")}</label>
@@ -588,7 +603,7 @@ export function PlotDialog(props: Props) {
         </div>
         {busy && <p className="status">{t("plot.plotting")}</p>}
         {error && (
-          <p className="error" role="alert">
+          <p className="error" role="alert" dir="auto">
             {error}
           </p>
         )}

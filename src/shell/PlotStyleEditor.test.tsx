@@ -124,7 +124,7 @@ test("pens are edited and saved over the file, keeping what Qiyas doesn't edit",
   fireEvent.click(input("Plot: Colour 3"));
   fireEvent.click(button("Save"));
 
-  await screen.findByText("Saved /styles/mono.ctb");
+  await screen.findByText("Saved \u2068/styles/mono.ctb\u2069");
   expect(props.save).toHaveBeenCalledWith("/styles/mono.ctb", {
     ...CTB,
     styles: [
@@ -143,7 +143,7 @@ test("Save as writes another file, of the table's kind, and Save goes there afte
   // Screening is 0 to 100.
   expect(input("Screening %: Colour 1").value).toBe("100");
   fireEvent.click(button("Save as…"));
-  await screen.findByText("Saved /styles/copy.ctb");
+  await screen.findByText("Saved \u2068/styles/copy.ctb\u2069");
   expect(props.chooseSave).toHaveBeenCalledWith("ctb", "/styles/mono.ctb");
   expect(props.save).toHaveBeenLastCalledWith("/styles/copy.ctb", CTB);
   fireEvent.click(button("Save"));

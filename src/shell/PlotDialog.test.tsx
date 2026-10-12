@@ -152,17 +152,20 @@ test("Plot to PDF offers <drawing>.pdf beside the drawing, plots there, keeps th
   fireEvent.click(plotButton());
   await waitFor(() => expect(props.onClose).toHaveBeenCalled());
   expect(props.choosePdf).toHaveBeenCalledWith("/jobs/plan.pdf");
-  expect(props.onPlotPdf).toHaveBeenCalledWith({
-    sheet: "*Model_Space",
-    area: "extents",
-    paper: PAPERS[0],
-    orientation: "landscape",
-    scale: { ratio: [1, 100] },
-    centre: true,
-    style: null,
-    lineweights: true,
-    output: "/jobs/out/plan.pdf",
-  });
+  expect(props.onPlotPdf).toHaveBeenCalledWith(
+    {
+      sheet: "*Model_Space",
+      area: "extents",
+      paper: PAPERS[0],
+      orientation: "landscape",
+      scale: { ratio: [1, 100] },
+      centre: true,
+      style: null,
+      lineweights: true,
+      output: null,
+    },
+    "/jobs/out/plan.pdf",
+  );
   expect(props.onKeep).toHaveBeenCalledWith(SETUP, null);
 });
 
@@ -210,6 +213,7 @@ test("scale: fit, the presets, and a custom pair (which must be two numbers abov
       centre: false,
       lineweights: false,
     }),
+    "/jobs/out/plan.pdf",
   );
   expect(props.onKeep).toHaveBeenCalledWith(
     { ...SETUP, paper: "ISO A4", orientation: "portrait", scale: [2, 75], centre: false, lineweights: false },
@@ -222,7 +226,7 @@ test("fit plots as large as the paper takes", async () => {
   await loaded();
   fireEvent.change(combo("Scale"), { target: { value: "fit" } });
   fireEvent.click(plotButton());
-  await waitFor(() => expect(props.onPlotPdf).toHaveBeenCalledWith(expect.objectContaining({ scale: "fit" })));
+  await waitFor(() => expect(props.onPlotPdf).toHaveBeenCalledWith(expect.objectContaining({ scale: "fit" }), "/jobs/out/plan.pdf"));
 });
 
 test("a window: the dialog steps aside for two clicks in the drawing, then plots that window", async () => {
@@ -244,6 +248,7 @@ test("a window: the dialog steps aside for two clicks in the drawing, then plots
   await waitFor(() => expect(props.onPlotPdf).toHaveBeenCalled());
   expect(props.onPlotPdf).toHaveBeenCalledWith(
     expect.objectContaining({ area: { window: [[10.25, 5], [30, 40]] } }),
+    "/jobs/out/plan.pdf",
   );
   expect(props.onKeep).toHaveBeenCalledWith(
     { ...SETUP, area: "window", window: [[10.25, 5], [30, 40]] },
@@ -257,7 +262,7 @@ test("a saved window comes back with the setup", async () => {
   expect(screen.getByText("0, 0 – 8, 6")).toBeTruthy();
   fireEvent.click(plotButton());
   await waitFor(() =>
-    expect(props.onPlotPdf).toHaveBeenCalledWith(expect.objectContaining({ area: { window: [[0, 0], [8, 6]] } })),
+    expect(props.onPlotPdf).toHaveBeenCalledWith(expect.objectContaining({ area: { window: [[0, 0], [8, 6]] } }), "/jobs/out/plan.pdf"),
   );
 });
 
@@ -271,7 +276,7 @@ test("a plot style file is chosen, read and plotted with; None plots the colours
 
   fireEvent.click(plotButton());
   await waitFor(() => expect(props.onPlotPdf).toHaveBeenCalledTimes(1));
-  expect(props.onPlotPdf).toHaveBeenLastCalledWith(expect.objectContaining({ style: STYLE }));
+  expect(props.onPlotPdf).toHaveBeenLastCalledWith(expect.objectContaining({ style: STYLE }), "/jobs/out/plan.pdf");
   expect(props.onKeep).toHaveBeenLastCalledWith(SETUP, "/styles/mono.ctb");
 });
 
@@ -282,7 +287,7 @@ test("choosing None drops the style", async () => {
   expect(combo("Plot style").value).toBe("/styles/mono.ctb");
   fireEvent.change(combo("Plot style"), { target: { value: "" } });
   fireEvent.click(plotButton());
-  await waitFor(() => expect(props.onPlotPdf).toHaveBeenCalledWith(expect.objectContaining({ style: null })));
+  await waitFor(() => expect(props.onPlotPdf).toHaveBeenCalledWith(expect.objectContaining({ style: null }), "/jobs/out/plan.pdf"));
   expect(props.onKeep).toHaveBeenLastCalledWith(SETUP, null);
 });
 
@@ -299,7 +304,7 @@ test("a remembered plot style that can't be read says why, and plots without it"
   );
   expect(combo("Plot style").value).toBe("");
   fireEvent.click(plotButton());
-  await waitFor(() => expect(props.onPlotPdf).toHaveBeenCalledWith(expect.objectContaining({ style: null })));
+  await waitFor(() => expect(props.onPlotPdf).toHaveBeenCalledWith(expect.objectContaining({ style: null }), "/jobs/out/plan.pdf"));
 });
 
 test("Print sends the job to the printer chosen", async () => {
@@ -429,4 +434,44 @@ test("a job from a setup: an unknown paper falls back to A4, a window without co
   const job = jobFor("*Model_Space", { ...SETUP, paper: "Gone", area: "window", window: null }, PAPERS, null, null);
   expect(job.paper).toEqual(PAPERS[1]);
   expect(job.area).toBe("extents");
+});
+
+test("a kept setup whose paper the catalog no longer has starts from the defaults", async () => {
+  const { props } = setup({ setup: { ...SETUP, paper: "ISO B9", scale: [1, 50], centre: false } });
+  await loaded();
+  expect(combo("Paper").value).toBe("ISO A4");
+  expect(combo("Scale").value).toBe("fit");
+  expect((screen.getByLabelText("Centre on the paper") as HTMLInputElement).checked).toBe(true);
+  fireEvent.click(plotButton());
+  await waitFor(() =>
+    expect(props.onPlotPdf).toHaveBeenCalledWith(
+      expect.objectContaining({ paper: PAPERS[1], scale: "fit", centre: true }),
+      "/jobs/out/plan.pdf",
+    ),
+  );
+});
+
+test("while plotting, a second click starts nothing and Escape doesn't close the dialog", async () => {
+  let finish = () => {};
+  const { props } = setup({
+    onPlotPdf: vi.fn(() => new Promise<void>((done) => (finish = done))),
+  });
+  await loaded();
+  fireEvent.click(plotButton());
+  fireEvent.click(plotButton());
+  await screen.findByText("Plotting…");
+  expect(props.choosePdf).toHaveBeenCalledTimes(1);
+  const dialog = document.querySelector("dialog")!;
+  const cancel = new Event("cancel", { cancelable: true });
+  dialog.dispatchEvent(cancel);
+  expect(cancel.defaultPrevented).toBe(true);
+  finish();
+  await waitFor(() => expect(props.onClose).toHaveBeenCalled());
+  expect(props.onPlotPdf).toHaveBeenCalledTimes(1);
+});
+
+test("the layout area's preview says the layout plots on its own paper", async () => {
+  setup({ sheet: LAYOUT, setup: defaultSetup(false) });
+  await loaded();
+  expect(screen.getByText("The preview shows what is drawn; the layout plots on its own paper")).toBeTruthy();
 });
