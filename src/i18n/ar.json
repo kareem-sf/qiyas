@@ -1155,5 +1155,6 @@
   "audit.kind.missing_layer": "عناصر على طبقة غير موجودة",
   "audit.kind.missing_text_style": "نصوص بنمط غير موجود",
   "audit.kind.empty_block": "كتلة فارغة",
-  "audit.kind.unused_layer": "طبقة غير مستخدمة"
+  "audit.kind.unused_layer": "طبقة غير مستخدمة",
+  "manage.blockEdit": "احفظ تحرير البلوك في المكان أو تجاهله أولًا (REFCLOSE)، ثم نظّف الرسم أو دقّقه"
 }

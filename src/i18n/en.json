@@ -1155,5 +1155,6 @@
   "audit.kind.missing_layer": "Entities on a missing layer",
   "audit.kind.missing_text_style": "Texts in a missing style",
   "audit.kind.empty_block": "Empty block",
-  "audit.kind.unused_layer": "Unused layer"
+  "audit.kind.unused_layer": "Unused layer",
+  "manage.blockEdit": "Save or discard the block edit in place first (REFCLOSE), then purge or audit"
 }

@@ -63,7 +63,7 @@ test("a drawing with unread data says why only layers were looked at", async () 
   expect(await screen.findByText(reason)).toBeTruthy();
 });
 
-test("nothing to purge says so; a refusal (a block edited in place) is shown", async () => {
+test("nothing to purge says so; a core error is shown", async () => {
   const empty = report({ layers: [], blocks: [], linetypes: [], total: 0 });
   const { unmount } = render(<PurgeDialog look={async () => purged(empty)} apply={vi.fn()} onClose={() => {}} />);
   expect(await screen.findByText("Nothing to purge: everything in the drawing is used")).toBeTruthy();
@@ -71,10 +71,10 @@ test("nothing to purge says so; a refusal (a block edited in place) is shown", a
   unmount();
 
   const apply = vi.fn(async () => {
-    throw "Close the block being edited in place first";
+    throw "No drawing is open";
   });
   render(<PurgeDialog look={async () => purged(report())} apply={apply} onClose={() => {}} />);
   await screen.findByRole("group", { name: "Blocks (2)" });
   fireEvent.click(screen.getByRole("button", { name: "Purge" }));
-  expect((await screen.findByRole("alert")).textContent).toBe("Close the block being edited in place first");
+  expect((await screen.findByRole("alert")).textContent).toBe("No drawing is open");
 });

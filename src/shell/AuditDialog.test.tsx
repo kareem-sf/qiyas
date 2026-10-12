@@ -47,7 +47,7 @@ test("Audit… lists the counts and items; Fix repairs and says how many", async
   expect(screen.queryByRole("button", { name: "Fix" })).toBeNull();
 });
 
-test("a clean drawing says so and offers no fix; a refusal is shown", async () => {
+test("a clean drawing says so and offers no fix; a core error is shown", async () => {
   const { unmount } = render(
     <AuditDialog look={async () => audited({ fix: false, counts: {}, repaired: 0, items: [] })} apply={vi.fn()} onClose={() => {}} />,
   );
@@ -59,13 +59,13 @@ test("a clean drawing says so and offers no fix; a refusal is shown", async () =
     <AuditDialog
       look={async () => audited(found)}
       apply={async () => {
-        throw "Close the block being edited in place first";
+        throw "No drawing is open";
       }}
       onClose={() => {}}
     />,
   );
   fireEvent.click(await screen.findByRole("button", { name: "Fix" }));
-  expect((await screen.findByRole("alert")).textContent).toBe("Close the block being edited in place first");
+  expect((await screen.findByRole("alert")).textContent).toBe("No drawing is open");
 });
 
 test("only listed problems (an empty block): nothing to fix", async () => {

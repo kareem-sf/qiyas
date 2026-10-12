@@ -2,12 +2,16 @@
  *  options they keep in `settings.json`: decimals with no drawing open, the snap aperture and pick
  *  box, the keyboard shortcuts and the ribbon layout. Read at start and after a dialog saves. */
 import { useEffect, useMemo, useState } from "react";
-import { getSettings, type RibbonLayout, type Settings } from "../api";
+import { getSettings, type DrawingInfo, type RibbonLayout, type Settings } from "../api";
 import { SHORTCUT_COMMANDS } from "../shell/OptionsDialog";
+import type { T } from "./shared";
+import type { Shell } from "./useShell";
 
 const KNOWN = new Set(SHORTCUT_COMMANDS.map(([c]) => c));
 
-export function useOptions() {
+type Deps = Pick<Shell, "setError"> & { t: T; info: DrawingInfo | null };
+
+export function useOptions({ t, info, setError }: Deps) {
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [customizeOpen, setCustomizeOpen] = useState(false);
   const [aliasesOpen, setAliasesOpen] = useState(false);
@@ -34,6 +38,18 @@ export function useOptions() {
     setRibbon(s.ribbon ?? null);
   }
 
+  /** Purge and Audit wait while a block is edited in place (the core would purge or repair the
+   *  edit's working copies): the window says so instead of opening them. */
+  function openForDrawing(open: (on: boolean) => void) {
+    if (info?.block_edit) {
+      setError(t("manage.blockEdit"));
+      return;
+    }
+    open(true);
+  }
+  const openPurge = () => openForDrawing(setPurgeOpen);
+  const openAudit = () => openForDrawing(setAuditOpen);
+
   useEffect(() => {
     getSettings()
       .then(takeSettings)
@@ -50,8 +66,10 @@ export function useOptions() {
     setAliasesOpen,
     purgeOpen,
     setPurgeOpen,
+    openPurge,
     auditOpen,
     setAuditOpen,
+    openAudit,
     displayPrecision,
     px,
     shortcuts,

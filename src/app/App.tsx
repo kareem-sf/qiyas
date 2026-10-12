@@ -37,7 +37,7 @@ export default function App() {
   const { lang } = useLanguage();
   const [info, setInfo] = useState<DrawingInfo | null>(null);
   const shell = useShell();
-  const options = useOptions();
+  const options = useOptions({ t, info, setError: shell.setError });
   const { theme, settingsOpen, setSettingsOpen, commandAliases, setError, setNotice, setSideTab, viewport, run, focusDrawing } =
     shell;
   const { fileTabs, setFileTabs, activeTab, setActiveTab, refreshTabs } = useFileTabs();

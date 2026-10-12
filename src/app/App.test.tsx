@@ -26,6 +26,8 @@ const core = vi.hoisted(() => ({
   scriptHold: null as Promise<void> | null,
   /** More of settings.json than the autosave minutes and the tool palette. */
   settings: {} as Record<string, unknown>,
+  /** The block edited in place, as drawing_info says. */
+  blockEdit: null as string | null,
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -170,7 +172,7 @@ function info(path: string) {
     dim_style: "Standard",
     annotation_scale: "1:1",
     annotation_factor: 1,
-    block_edit: null,
+    block_edit: core.blockEdit,
   };
 }
 
@@ -198,6 +200,7 @@ beforeEach(() => {
   core.scriptOpens = false;
   core.scriptHold = null;
   core.settings = {};
+  core.blockEdit = null;
 });
 
 afterEach(cleanup);
@@ -580,4 +583,20 @@ test("the options reach the window: the pick box, the ribbon layout and a shortc
   expect(document.querySelector<HTMLInputElement>("input[aria-autocomplete]")!.labels![0].textContent).toBe(
     en["draw.prompt.circleCentre"],
   );
+});
+
+test("PURGE and AUDIT wait while a block is edited in place: the window says so, no dialog, no command", async () => {
+  core.blockEdit = "DOOR";
+  await mount();
+  await clickOpen();
+  core.calls.length = 0;
+  await typeLine("PURGE");
+  expect(screen.getByText(en["manage.blockEdit"])).toBeTruthy();
+  expect(screen.queryByRole("heading", { name: en["purge.title"] })).toBeNull();
+  fireEvent.click(screen.getByRole("tab", { name: en.manage }));
+  fireEvent.click(screen.getByRole("button", { name: en["audit.button"] }));
+  await settle();
+  expect(screen.queryByRole("heading", { name: en["audit.title"] })).toBeNull();
+  expect(screen.getByText(en["manage.blockEdit"])).toBeTruthy();
+  expect(core.calls.filter((c) => c.startsWith("run_command"))).toEqual([]);
 });

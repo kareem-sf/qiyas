@@ -31,7 +31,7 @@ type Props = {
   drawings: Drawings;
   takeoff: Takeoff;
   plot: Plot;
-  options: Pick<Options, "ribbon" | "setOptionsOpen" | "setCustomizeOpen" | "setAliasesOpen" | "setPurgeOpen" | "setAuditOpen">;
+  options: Pick<Options, "ribbon" | "setOptionsOpen" | "setCustomizeOpen" | "setAliasesOpen" | "openPurge" | "openAudit">;
 };
 
 export function Header({
@@ -147,8 +147,8 @@ export function Header({
         onSheetSet={() => setSheetSetShown(true)}
         onRecover={recoverFile}
         onRunScript={runScriptFile}
-        onAudit={info ? () => options.setAuditOpen(true) : undefined}
-        onPurge={info ? () => options.setPurgeOpen(true) : undefined}
+        onAudit={info ? options.openAudit : undefined}
+        onPurge={info ? options.openPurge : undefined}
         onOptions={() => options.setOptionsOpen(true)}
         onCustomize={() => options.setCustomizeOpen(true)}
         onAliases={() => options.setAliasesOpen(true)}

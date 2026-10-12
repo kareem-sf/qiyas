@@ -1,6 +1,7 @@
 /** AUDIT: what in the drawing points at something it does not have (and, listed only, empty
  *  blocks and unused layers), by kind and name; Fix makes the safe repairs as one undo step and
- *  says how many. The core refuses while a block is edited in place; its message is shown. */
+ *  says how many. The window opens neither while a block is edited in place (`useOptions`); an
+ *  error from the core is shown. */
 import { useEffect, useRef, useState } from "react";
 import type { AuditKind, AuditReport, Command, Outcome } from "../api";
 import { useT } from "../i18n";

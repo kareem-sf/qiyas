@@ -1,6 +1,6 @@
 /** PURGE: a dry run lists, by kind, what nothing in the drawing uses; the kinds ticked are then
- *  taken out as one undo step, and the dialog says what went. The core refuses while a block is
- *  edited in place; its message is shown. */
+ *  taken out as one undo step, and the dialog says what went. The window does not open it while a
+ *  block is edited in place (`useOptions`); an error from the core is shown. */
 import { useEffect, useRef, useState } from "react";
 import { PURGE_KINDS, type Command, type Outcome, type PurgeKind, type PurgeReport } from "../api";
 import { useT } from "../i18n";

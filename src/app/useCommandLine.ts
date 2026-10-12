@@ -61,7 +61,7 @@ type Deps = {
   plot: Pick<Plot, "windowPick" | "pickPoint" | "cancelPick" | "openPlot" | "quickPrint" | "printAll" | "openStyles">;
   options: Pick<
     Options,
-    "shortcuts" | "setOptionsOpen" | "setCustomizeOpen" | "setAliasesOpen" | "setPurgeOpen" | "setAuditOpen"
+    "shortcuts" | "setOptionsOpen" | "setCustomizeOpen" | "setAliasesOpen" | "openPurge" | "openAudit"
   >;
 };
 
@@ -342,9 +342,9 @@ export function useCommandLine({
       case "plot":
         return openPlot();
       case "purge":
-        return options.setPurgeOpen(true);
+        return options.openPurge();
       case "audit":
-        return options.setAuditOpen(true);
+        return options.openAudit();
       case "quickPrint":
         return quickPrint();
       case "printAll":
