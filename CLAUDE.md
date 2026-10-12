@@ -630,7 +630,12 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
   drop-down in it, Views, is placed on the window so the scroll never clips it). Open (with its
   recents arrow), Save, Save as, Undo and Redo are not in the data: they are the quick-access bar
   on the tabs' row after the app name (`QUICK_ACCESS` in `ribbonLayout.ts`; logical sides, so
-  Arabic mirrors it), always shown. The dialogs (Options, Customize, Aliases) are the window's.
+  Arabic mirrors it), always shown, buttons `nowrap`, a `role="toolbar"` with one tab stop and
+  arrow/Home/End movement (`useToolbarRoving`). The tabs' row scrolls sideways and keeps
+  `--prefs-width` free at its end for the preferences overlay (`theme.css`; the same variable
+  sizes the overlay); the prefs drop their words under 1420 px and take their own row under
+  1020 px (move both with the quick-access bar's width). The Open recents menu is placed on the
+  window like Views. The dialogs (Options, Customize, Aliases) are the window's.
 - The window's half (`src/app/useOptions.ts`, read at start and after a dialog saves; Manage tab,
   Drawing group Audit…, Purge… and Recover…, Setup group Options…, Customize…, Aliases…): PURGE (`PU`)
   opens `PurgeDialog` on a dry run of every kind, listed by kind with a tick each (kinds with
@@ -823,8 +828,9 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
   5 MB). Each conversation's provider, model and address, then every user message, request,
   answer (text, calls, tokens, time), tool run (input, result) and error with the service's
   whole answer, and for a 4xx the request sent (`provider::request_for_log`: compact JSON,
-  pictures as `<image>`, tools as their names, the system prompt as its length); texts clipped
-  at 4,000 characters, never the key. The panel's Log button shows
+  pictures as `<image>`, tools as their names, the system prompt as its length, scrubbed of the
+  key first, then its LAST 4,000 characters after a `…` when longer); other texts clipped at
+  4,000 characters, never the key. The panel's Log button shows
   its newest 256 KB (`ai_log`); an error offers "Show log".
 - OpenAI-compatible streams: Gemini (also behind Runware) sends parallel calls whole, all at
   index 0 or with none, so a new id, or a second name, starts a new call (`openai.rs`, `slot`).
