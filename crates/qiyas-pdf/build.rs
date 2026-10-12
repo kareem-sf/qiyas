@@ -7,7 +7,10 @@ use std::path::Path;
 fn main() {
     println!("cargo::rustc-check-cfg=cfg(pdfium)");
     println!("cargo::rerun-if-env-changed=QIYAS_PDFIUM");
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../qiyas-desktop/resources/pdfium");
+    // At run time, not `env!`: a build script compiled for a copy of the repo sharing this
+    // target folder would otherwise look in that copy's folder.
+    let manifest = std::env::var("CARGO_MANIFEST_DIR").expect("set by cargo");
+    let dir = Path::new(&manifest).join("../qiyas-desktop/resources/pdfium");
     println!("cargo::rerun-if-changed={}", dir.display());
     let name = format!(
         "{}pdfium{}",
