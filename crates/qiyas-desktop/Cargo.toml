@@ -36,6 +36,9 @@ tokio-util = "0.7"
 # The system clipboard for COPYCLIP and PASTECLIP (MIT OR Apache-2.0): text only, on Wayland
 # through its data-control protocol, else X11.
 arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
+# Updates from a signed static feed (MIT OR Apache-2.0): the About box, and a launch check once
+# a day (`updater`).
+tauri-plugin-updater = "2.13"
 
 [dev-dependencies]
 tempfile = { workspace = true }

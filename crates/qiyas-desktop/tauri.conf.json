@@ -33,5 +33,11 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "REPLACE-ME: the public key printed by `pnpm tauri signer generate` (CLAUDE.md, Updates and installers)",
+      "endpoints": ["https://REPLACE-ME.invalid/qiyas/latest.json"]
+    }
   }
 }

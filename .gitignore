@@ -11,3 +11,13 @@ crates/qiyas-desktop/resources/
 
 # SDD plan workspaces (ledgers, briefs, review packages)
 .superpowers/
+
+# Signing keys and certificates: the updater's (`pnpm tauri signer generate`), code signing.
+# Never committed.
+*.key
+*.key.pub
+*.pem
+*.p12
+*.pfx
+*.p8
+.tauri/

@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "tauri": "tauri",
-    "bundle": "scripts/build-sidecar.sh && tauri build --config crates/qiyas-desktop/tauri.bundle.conf.json"
+    "bundle": "scripts/build-sidecar.sh && tauri build --config crates/qiyas-desktop/tauri.bundle.conf.json",
+    "bundle:signed": "scripts/build-sidecar.sh && tauri build --config crates/qiyas-desktop/tauri.bundle.conf.json --config crates/qiyas-desktop/tauri.updater.conf.json"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.1",

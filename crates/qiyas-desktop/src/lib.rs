@@ -11,12 +11,15 @@ pub mod secrets;
 pub mod settings;
 mod state;
 mod tabs;
+mod updater;
 
 use tauri::Manager;
 
 pub fn run() {
     tauri::Builder::default()
+        .manage(updater::Pending::default())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             // A machine without a keychain still runs; saving a key then explains why it can't.
             if let Err(e) = secrets::use_native_store() {
@@ -29,6 +32,7 @@ pub fn run() {
             files::start_watch(app.handle().clone());
             pdf::use_bundled_pdfium(app.handle());
             mcp::restart(app.handle());
+            updater::check_at_launch(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -90,6 +94,8 @@ pub fn run() {
             commands::delete_api_key,
             commands::app_dir,
             commands::mcp_status,
+            updater::check_update,
+            updater::install_update,
             commands::ai_send,
             commands::ai_cancel,
             commands::ai_clear,

@@ -96,6 +96,9 @@ pub struct Settings {
     /// Minutes between autosaves of drawings with unsaved changes (`<name>.sv$`); 0 turns
     /// autosave off. At most `MAX_AUTOSAVE_MINUTES`.
     pub autosave_minutes: u32,
+    /// When updates were last checked, in seconds since 1970 (0: never). The launch check waits
+    /// a day after it (`updater`). Kept by the app: the Settings dialog never changes it.
+    pub last_update_check: u64,
 }
 
 impl Settings {
@@ -125,6 +128,7 @@ impl Default for Settings {
             recents: Vec::new(),
             tool_palette: Vec::new(),
             autosave_minutes: 5,
+            last_update_check: 0,
         }
     }
 }

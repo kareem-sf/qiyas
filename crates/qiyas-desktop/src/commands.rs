@@ -495,8 +495,8 @@ pub async fn aliases(state: State<'_, AppState>) -> Result<BTreeMap<String, Stri
 
 /// Checks and keeps new settings: written to disk first, then cached. Another provider, address
 /// or model starts a new assistant conversation; MCP turned on or off, or another port or token,
-/// restarts the MCP server. The recent list and the tool palette stay as the app has them: the
-/// dialog's copy may be older.
+/// restarts the MCP server. The recent list, the tool palette and the time of the last update
+/// check stay as the app has them: the dialog's copy may be older.
 #[tauri::command]
 pub async fn set_settings<R: Runtime>(
     mut settings: Settings,
@@ -511,6 +511,7 @@ pub async fn set_settings<R: Runtime>(
             .unwrap_or_else(PoisonError::into_inner);
         settings.recents = cached.recents.clone();
         settings.tool_palette = cached.tool_palette.clone();
+        settings.last_update_check = cached.last_update_check;
         settings::save(&state.config_dir, &settings)
             .map_err(|e| format!("The settings could not be saved: {e}"))?;
         let changed = ai::answerer_changed(&cached, &settings);

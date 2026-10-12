@@ -1,0 +1,31 @@
+{
+  "version": "0.2.0",
+  "notes": "Plotting to PDF and printers.\nFaster opening of large drawings.",
+  "pub_date": "2026-11-02T09:00:00Z",
+  "platforms": {
+    "linux-x86_64-appimage": {
+      "url": "https://qsmind.app/downloads/qiyas/0.2.0/Qiyas_0.2.0_amd64.AppImage",
+      "signature": "contents of Qiyas_0.2.0_amd64.AppImage.sig"
+    },
+    "linux-x86_64-deb": {
+      "url": "https://qsmind.app/downloads/qiyas/0.2.0/Qiyas_0.2.0_amd64.deb",
+      "signature": "contents of Qiyas_0.2.0_amd64.deb.sig"
+    },
+    "windows-x86_64-nsis": {
+      "url": "https://qsmind.app/downloads/qiyas/0.2.0/Qiyas_0.2.0_x64-setup.exe",
+      "signature": "contents of Qiyas_0.2.0_x64-setup.exe.sig"
+    },
+    "windows-x86_64-msi": {
+      "url": "https://qsmind.app/downloads/qiyas/0.2.0/Qiyas_0.2.0_x64_en-US.msi",
+      "signature": "contents of Qiyas_0.2.0_x64_en-US.msi.sig"
+    },
+    "darwin-aarch64-app": {
+      "url": "https://qsmind.app/downloads/qiyas/0.2.0/Qiyas_aarch64.app.tar.gz",
+      "signature": "contents of Qiyas_aarch64.app.tar.gz.sig"
+    },
+    "darwin-x86_64-app": {
+      "url": "https://qsmind.app/downloads/qiyas/0.2.0/Qiyas_x64.app.tar.gz",
+      "signature": "contents of Qiyas_x64.app.tar.gz.sig"
+    }
+  }
+}
