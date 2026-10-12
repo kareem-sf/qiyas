@@ -283,7 +283,8 @@ fn opened_with(path: &Path, problems: usize, check: &str) -> Option<String> {
 
 /// Writes the drawing as the reader read it, in the output's format and the chosen version:
 /// no project file, no take-off embedded, no autosave touched. An output already there is kept
-/// as `<output>.bak`; the new file goes in through a temp file.
+/// as `<output>.bak`; the new file goes in through a temp file. Refused while a running Qiyas
+/// has the output open.
 fn convert(out: &Out, input: &Path, output: &Path, version: Option<DxfVersion>) -> Done {
     let mut drawing = Drawing::open(input).map_err(|e| format!("{}: {e}", input.display()))?;
     if let Some(version) = version {
@@ -300,6 +301,7 @@ fn convert(out: &Out, input: &Path, output: &Path, version: Option<DxfVersion>) 
         _ => return Err(format!("{}: save as .dwg or .dxf", output.display())),
     }
     .map_err(|e| format!("{}: {e}", output.display()))?;
+    qiyas_core::refuse_if_open_elsewhere(output).map_err(|e| e.to_string())?;
     write_with_backup(output, &bytes).map_err(|e| format!("{}: {e}", output.display()))?;
     let problems = drawing.problems.len();
     out.text(format!(

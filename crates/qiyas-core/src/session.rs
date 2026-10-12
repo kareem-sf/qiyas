@@ -579,8 +579,9 @@ impl Session {
 
     /// `save_as` without the app (`qiyas_core::script`, `qiyas-cli`): the autosaves and lock
     /// files beside the drawings are the app's, holding work this session never saw, and are left
-    /// as they are.
+    /// as they are. Refused while a running Qiyas has `path` open (`refuse_if_open_elsewhere`).
     pub fn save_as_headless(&mut self, path: &Path) -> Result<(), CoreError> {
+        crate::autosave::refuse_if_open_elsewhere(path)?;
         self.write_as(path, false)
     }
 

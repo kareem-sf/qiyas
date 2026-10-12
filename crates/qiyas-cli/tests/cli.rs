@@ -760,6 +760,67 @@ fn the_apps_autosaves_and_locks_survive_every_headless_save() {
     }
 }
 
+/// A drawing open in a running Qiyas (its lock alive: here this test process's own, with its pid
+/// and start time; or another computer's) is never written by SAVE, SAVEAS or convert: the
+/// app's next Save would write its copy back over it. The lock is read, never written.
+#[test]
+fn a_drawing_open_in_a_running_qiyas_is_never_written() {
+    let dir = tempfile::tempdir().unwrap();
+    let dwg = write_plan(dir.path(), "plan.dwg");
+    let other = write_plan(dir.path(), "other.dwg");
+    assert!(qiyas_core::take_lock(&dwg).unwrap());
+    let lock = std::fs::read(qiyas_core::lock_path(&dwg)).unwrap();
+    assert_eq!(
+        qiyas_core::read_lock(&dwg).unwrap().status(),
+        qiyas_core::LockStatus::Mine,
+        "the test process's own: alive for the command line"
+    );
+    let bytes = std::fs::read(&dwg).unwrap();
+    let script = dir.path().join("save.scr");
+    let refused = |out: Output| {
+        let line = failed(out);
+        assert!(line.contains("is open in Qiyas"), "{line}");
+        assert!(line.contains(&std::process::id().to_string()), "{line}");
+    };
+
+    std::fs::write(&script, "COUNT DOOR\nSAVE\n").unwrap();
+    refused(cli(&["run", s(&script), s(&dwg)]));
+    std::fs::write(&script, "COUNT DOOR\nSAVEAS plan.dwg\n").unwrap();
+    refused(cli(&["run", s(&script), s(&other)]));
+    refused(cli(&["convert", s(&other), s(&dwg)]));
+    std::fs::write(&script, "COUNT DOOR\nSAVE\n").unwrap();
+    let run = cli(&["batch", s(dir.path()), "--script", s(&script)]);
+    let text = stdout(&run);
+    assert_eq!(failed(run), "qiyas-cli: 1 of 2 drawings failed");
+    assert!(
+        text.contains("plan.dwg error ") && text.contains("is open in Qiyas"),
+        "{text}"
+    );
+    assert!(text.contains("other.dwg ok "), "{text}");
+
+    // Another computer's lock counts as open there.
+    std::fs::write(
+        qiyas_core::lock_path(&dwg),
+        r#"{"pid": 7, "host": "elsewhere", "started_at": 1}"#,
+    )
+    .unwrap();
+    let line = failed(cli(&["convert", s(&other), s(&dwg)]));
+    assert!(
+        line.contains("open in Qiyas (process 7 on elsewhere)"),
+        "{line}"
+    );
+
+    assert_eq!(std::fs::read(&dwg).unwrap(), bytes, "the drawing as it was");
+    assert!(!dir.path().join("plan.dwg.bak").exists());
+    assert!(!dir.path().join("plan.qiyas").exists());
+    std::fs::write(qiyas_core::lock_path(&dwg), &lock).unwrap();
+    assert_eq!(
+        std::fs::read(qiyas_core::lock_path(&dwg)).unwrap(),
+        lock,
+        "the lock is read, never written"
+    );
+}
+
 #[test]
 fn batch_refuses_outputs_that_collide_before_running_them() {
     let dir = tempfile::tempdir().unwrap();

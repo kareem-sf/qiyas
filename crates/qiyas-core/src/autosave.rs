@@ -240,6 +240,25 @@ pub fn read_lock(drawing: &Path) -> Option<DrawingLock> {
     serde_json::from_slice(&std::fs::read(lock_path(drawing)).ok()?).ok()
 }
 
+/// Refuses to write over `path` while a running Qiyas has it open: a live lock on this computer,
+/// or another computer's. The command line and scripts without a window call it before every
+/// write over a drawing, so they never save under the app (whose next Save would write its copy
+/// back over theirs). A dead lock, this process's own, or none, is fine. Reads the lock only.
+pub fn refuse_if_open_elsewhere(path: &Path) -> Result<(), CoreError> {
+    let Some(lock) = read_lock(path) else {
+        return Ok(());
+    };
+    match lock.status() {
+        LockStatus::Alive | LockStatus::OtherHost => Err(CoreError::InvalidCommand(format!(
+            "{} is open in Qiyas (process {} on {}): save or close it there first; nothing was written",
+            path.display(),
+            lock.pid,
+            lock.host
+        ))),
+        LockStatus::Mine | LockStatus::Dead => Ok(()),
+    }
+}
+
 /// Locks `drawing` for this process (the desktop app, once it is open): writes the lock file,
 /// whole, unless a running process or another computer has one there (left as it is: false). A
 /// dead or unreadable lock is replaced: stale locks are cleaned up when the drawing is opened
