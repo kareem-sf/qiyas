@@ -6,11 +6,12 @@
 
 use std::time::Instant;
 
+use opencadcodec::xdata::XDataValue;
 use opencadcodec::{CadDocument, EntityType, Handle, Line};
 use qiyas_core::fixtures::{sample_doc, write_drawing};
 use qiyas_core::{
-    AutoSettings, Command, ConstraintInfo, ConstraintKind, ModifySpec, Outcome, ParameterInfo,
-    Session, Target, PARAM_APP,
+    AutoSettings, Command, ConstraintInfo, ConstraintKind, EditSpec, ModifySpec, Outcome,
+    ParameterInfo, Session, Target, PARAM_APP,
 };
 
 const TOL: f64 = 1e-6;
@@ -179,7 +180,9 @@ fn review_focus_4_the_rectangle_stays_a_rectangle_when_its_width_changes() {
         &vertices(&s, rect),
         [[0.0, 0.0], [6.0, 0.0], [6.0, 3.0], [0.0, 3.0]],
     );
-    assert!(took.as_millis() < 50, "the width change took {took:?}");
+    // The solver's own 50 ms guard is the release test `solver_speed`; through the command bus
+    // in a debug build, under parallel tests, a looser bound.
+    assert!(took.as_millis() < 250, "the width change took {took:?}");
     // The Dimension follows, shows its parameter in brackets (the lock mark), and reads 6.
     let dim = params[0].dimension;
     match s.drawing.doc.get_entity(Handle::new(dim)) {
@@ -502,4 +505,306 @@ fn what_constraints_refuse() {
     assert_eq!((p[0].id, p[0].name.as_str()), (id, "rad1"));
     assert!((p[0].value.unwrap() - 2.5).abs() < TOL);
     assert!(constraints(&mut s).iter().all(|c| c.at[0].is_finite()));
+}
+
+/// Four separate lines round (0, 0) to (4, 3), bottom, right, top, left, and a short cutter
+/// across the bottom at x = 3; their handles in that order.
+fn four_lines() -> (tempfile::TempDir, Session, [u64; 5]) {
+    let mut doc = CadDocument::new();
+    doc.header.insertion_units = 6;
+    for (a, b) in [
+        ([0.0, 0.0], [4.0, 0.0]),
+        ([4.0, 0.0], [4.0, 3.0]),
+        ([4.0, 3.0], [0.0, 3.0]),
+        ([0.0, 3.0], [0.0, 0.0]),
+        ([3.0, -1.0], [3.0, 1.0]),
+    ] {
+        doc.add_entity(EntityType::Line(Line::from_coords(
+            a[0], a[1], 0.0, b[0], b[1], 0.0,
+        )))
+        .unwrap();
+    }
+    let (dir, s) = open(&doc, "lines.dxf");
+    let mut h: Vec<u64> = s
+        .drawing
+        .doc
+        .entities()
+        .filter(|e| matches!(e, EntityType::Line(_)))
+        .map(|e| e.common().handle.value())
+        .collect();
+    h.sort_unstable();
+    (dir, s, [h[0], h[1], h[2], h[3], h[4]])
+}
+
+fn constraints_removed(outcome: Outcome) -> usize {
+    match outcome {
+        Outcome::Edited {
+            constraints_removed,
+            ..
+        } => constraints_removed,
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn an_edit_that_reshapes_a_constrained_line_drops_its_constraints_and_leaves_the_rest() {
+    let (_dir, mut s, [bottom, right, top, left, cutter]) = four_lines();
+    let added = ids(s
+        .run(Command::AutoConstrain {
+            targets: vec![t(bottom), t(right), t(top), t(left)],
+            settings: AutoSettings::default(),
+        })
+        .unwrap());
+    let list = constraints(&mut s);
+    assert_eq!(added.len(), 8, "{list:?}");
+    let on_bottom = list.iter().filter(|c| c.handles.contains(&bottom)).count();
+    assert_eq!(on_bottom, 3, "two corners and its horizontal");
+
+    // Trim the bottom back to the cutter: the other three lines stay where they are.
+    let outcome = s
+        .run(Command::Edit(EditSpec::Trim {
+            cutters: vec![t(cutter)],
+            target: t(bottom),
+            at_point: [3.5, 0.0],
+        }))
+        .unwrap();
+    assert_eq!(constraints_removed(outcome), on_bottom);
+    assert_eq!(line_ends(&s, bottom), [[0.0, 0.0], [3.0, 0.0]]);
+    assert_eq!(line_ends(&s, right), [[4.0, 0.0], [4.0, 3.0]]);
+    assert_eq!(line_ends(&s, top), [[4.0, 3.0], [0.0, 3.0]]);
+    assert_eq!(line_ends(&s, left), [[0.0, 3.0], [0.0, 0.0]]);
+    let list = constraints(&mut s);
+    assert!(
+        list.iter().all(|c| !c.handles.contains(&bottom)),
+        "{list:?}"
+    );
+    assert_eq!(list.len(), 8 - on_bottom);
+
+    // Reversing the right side drops its constraints too; its neighbours stay.
+    let outcome = s
+        .run(Command::Edit(EditSpec::Reverse {
+            targets: vec![t(right)],
+        }))
+        .unwrap();
+    assert_eq!(
+        constraints_removed(outcome),
+        2,
+        "its top corner and its vertical"
+    );
+    assert_eq!(line_ends(&s, top), [[4.0, 3.0], [0.0, 3.0]]);
+    assert!(constraints(&mut s)
+        .iter()
+        .all(|c| !c.handles.contains(&right)));
+    // One undo puts the right side's constraints back.
+    assert!(s.undo());
+    assert!(constraints(&mut s)
+        .iter()
+        .any(|c| c.handles.contains(&right)));
+}
+
+/// Writes `expression` over parameter `name`'s stored one, as another program might.
+fn damage(s: &mut Session, dimension: u64, name: &str, expression: &str) {
+    let e = s
+        .drawing
+        .doc
+        .get_entity_mut(Handle::new(dimension))
+        .unwrap();
+    let mut record = e
+        .common()
+        .extended_data
+        .get_record(PARAM_APP)
+        .unwrap()
+        .clone();
+    let mut json = String::new();
+    for v in &record.values {
+        if let XDataValue::String(text) = v {
+            json.push_str(text);
+        }
+    }
+    let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(value["dim"]["name"], name);
+    value["dim"]["expression"] = expression.into();
+    record.values = vec![
+        XDataValue::Integer16(1),
+        XDataValue::String(value.to_string()),
+    ];
+    e.common_mut().extended_data.upsert_record(record);
+}
+
+#[test]
+fn a_broken_expression_is_marked_and_skipped_and_can_be_repaired() {
+    let (_dir, mut s) = open(&sample_doc(), "plan.dxf");
+    let (rect, line) = (rectangle(&s), wall_line(&s));
+    auto(&mut s, rect);
+    width(&mut s, rect, None);
+    s.run(Command::AddConstraint {
+        kind: ConstraintKind::Horizontal,
+        targets: vec![t(line)],
+        points: vec![[5.0, 0.0]],
+    })
+    .unwrap();
+    let d1 = parameters(&mut s)[0].clone();
+    damage(&mut s, d1.dimension, "d1", "foo(1) + d9");
+
+    let p = parameters(&mut s);
+    assert_eq!(p[0].value, None);
+    assert!(
+        p[0].error.as_deref().is_some_and(|e| !e.is_empty()),
+        "{p:?}"
+    );
+    // The rest still solves: the line moves, and so does the rectangle (its width is skipped).
+    s.run(Command::Modify(ModifySpec::Move {
+        targets: vec![t(line)],
+        delta: [0.0, 1.0],
+    }))
+    .unwrap();
+    s.run(Command::Modify(ModifySpec::Move {
+        targets: vec![t(rect)],
+        delta: [1.0, 0.0],
+    }))
+    .unwrap();
+    assert_rect(
+        &vertices(&s, rect),
+        [[1.0, 0.0], [5.0, 0.0], [5.0, 3.0], [1.0, 3.0]],
+    );
+    // A new dimensional constraint can still be added, and the broken one repaired.
+    height(&mut s, rect);
+    s.run(Command::SetParameter {
+        name: "d1".into(),
+        expression: "5".into(),
+    })
+    .unwrap();
+    let p = parameters(&mut s);
+    assert_eq!((p[0].name.as_str(), p[0].error.as_deref()), ("d1", None));
+    assert_rect(
+        &vertices(&s, rect),
+        [[1.0, 0.0], [6.0, 0.0], [6.0, 3.0], [1.0, 3.0]],
+    );
+}
+
+#[test]
+fn arabic_digits_are_stored_as_ascii_and_survive_a_dwg_round_trip() {
+    let (dir, mut s) = open(&sample_doc(), "plan.dwg");
+    let rect = rectangle(&s);
+    auto(&mut s, rect);
+    width(&mut s, rect, Some("٥"));
+    assert_eq!(parameters(&mut s)[0].expression, "5");
+    s.run(Command::SetParameter {
+        name: "d1".into(),
+        expression: "٦٫٥ * ١".into(),
+    })
+    .unwrap();
+    assert_eq!(parameters(&mut s)[0].expression, "6.5 * 1");
+    let path = dir.path().join("again.dwg");
+    s.save_as(&path).unwrap();
+    let mut again = Session::open(&path).unwrap();
+    let p = parameters(&mut again);
+    assert_eq!(p[0].expression, "6.5 * 1");
+    assert!((p[0].value.unwrap() - 6.5).abs() < TOL);
+}
+
+/// `n` separate lines: squares of four lines each, along a diagonal so no two share a row or
+/// column, or (with `rows`) short lines all at 30 degrees side by side, every pair parallel.
+fn many_lines(n: usize, rows: bool) -> CadDocument {
+    let mut doc = CadDocument::new();
+    doc.header.insertion_units = 6;
+    for i in 0..n {
+        let (a, b) = if rows {
+            // All parallel at 30 degrees, side by side.
+            let x = i as f64 * 2.0;
+            ([x, 0.0], [x + 0.866_025_403_784_438_6, 0.5])
+        } else {
+            let (sq, side) = ((i / 4) as f64 * 3.0, i % 4);
+            let c = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+            let (p, q) = (c[side], c[(side + 1) % 4]);
+            ([p[0] + sq, p[1] + sq], [q[0] + sq, q[1] + sq])
+        };
+        doc.add_entity(EntityType::Line(Line::from_coords(
+            a[0], a[1], 0.0, b[0], b[1], 0.0,
+        )))
+        .unwrap();
+    }
+    doc
+}
+
+fn all_lines(s: &Session) -> Vec<Target> {
+    s.drawing
+        .doc
+        .entities()
+        .filter(|e| matches!(e, EntityType::Line(_)))
+        .map(|e| t(e.common().handle.value()))
+        .collect()
+}
+
+#[test]
+fn auto_constrain_takes_a_500_line_plan_and_refuses_more_than_2000_constraints() {
+    let (_dir, mut s) = open(&many_lines(500, false), "squares.dxf");
+    let targets = all_lines(&s);
+    assert_eq!(targets.len(), 500);
+    let added = ids(s
+        .run(Command::AutoConstrain {
+            targets,
+            settings: AutoSettings::default(),
+        })
+        .unwrap());
+    // 125 squares: 4 corners, 2 horizontal and 2 vertical each.
+    assert_eq!(added.len(), 1000);
+    let list = constraints(&mut s);
+    assert_eq!(list.len(), 1000);
+    let mut unique: Vec<u32> = list.iter().map(|c| c.id).collect();
+    unique.dedup();
+    assert_eq!(unique.len(), 1000, "ids are distinct");
+
+    let (_dir, mut s) = open(&many_lines(500, true), "rows.dxf");
+    let targets = all_lines(&s);
+    let err = s
+        .run(Command::AutoConstrain {
+            targets,
+            settings: AutoSettings::default(),
+        })
+        .unwrap_err();
+    assert!(err.to_string().contains("2,000"), "{err}");
+    assert!(constraints(&mut s).is_empty());
+}
+
+#[test]
+fn a_one_metre_rectangle_far_from_the_origin_solves_as_one_at_the_origin() {
+    let mut doc = sample_doc();
+    for e in doc.entities_mut() {
+        if let EntityType::LwPolyline(p) = e {
+            for (v, [x, y]) in
+                p.vertices
+                    .iter_mut()
+                    .zip([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
+            {
+                v.location.x = 5_000_000.0 + x;
+                v.location.y = 3_000_000.0 + y;
+            }
+        }
+    }
+    let (_dir, mut s) = open(&doc, "site.dxf");
+    let rect = rectangle(&s);
+    assert_eq!(auto(&mut s, rect).len(), 8);
+    s.run(Command::AddDimConstraint {
+        kind: ConstraintKind::Linear,
+        targets: vec![t(rect)],
+        points: vec![[5_000_000.5, 3_000_000.0]],
+        line_point: [5_000_000.5, 2_999_999.0],
+        expression: Some("1.5".into()),
+    })
+    .unwrap();
+    let (x, y) = (5_000_000.0, 3_000_000.0);
+    assert_rect(
+        &vertices(&s, rect),
+        [[x, y], [x + 1.5, y], [x + 1.5, y + 1.0], [x, y + 1.0]],
+    );
+    s.run(Command::SetParameter {
+        name: "d1".into(),
+        expression: "0.25".into(),
+    })
+    .unwrap();
+    assert_rect(
+        &vertices(&s, rect),
+        [[x, y], [x + 0.25, y], [x + 0.25, y + 1.0], [x, y + 1.0]],
+    );
 }

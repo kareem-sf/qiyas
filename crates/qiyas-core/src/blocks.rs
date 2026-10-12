@@ -688,6 +688,7 @@ impl Session {
             left_alone: 0,
             unlinked,
             joined_rows: 0,
+            constraints_removed: 0,
         })
     }
 

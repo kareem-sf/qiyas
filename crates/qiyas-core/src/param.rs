@@ -27,7 +27,8 @@ use opencadkernel::geom2d::constraint_inference::{
     InferredConstraint, ParametricPrimitive,
 };
 use opencadkernel::geom2d::{Arc as KArc, Circle as KCircle, Line as KLine};
-use qiyas_param::{evaluate_all, Constraint, Curve, Expr, PointId, Sketch, SolveError};
+use qiyas_param::expr::normalize;
+use qiyas_param::{evaluate_each, Constraint, Curve, Expr, ExprError, PointId, Sketch, SolveError};
 use serde::{Deserialize, Serialize};
 
 use crate::session::variant_name;
@@ -37,8 +38,16 @@ use crate::{CoreError, DimSpec, Session, Target};
 pub const PARAM_APP: &str = "QIYAS-PARAM";
 /// Longest xdata string written (DXF allows 255 bytes).
 const CHUNK: usize = 250;
-/// Moves smaller than this (drawing units) are no moves.
+/// Most constraints one AUTOCONSTRAIN adds: more is a whole plan in one solve.
+const MAX_AUTO: usize = 2000;
+/// Moves smaller than this, relative to how far the point is from the origin (float noise on a
+/// site grid), are no moves.
 const SAME: f64 = 1e-12;
+
+/// `a` and `b` are one point, within float noise at their distance from the origin.
+fn same_point(a: [f64; 2], b: [f64; 2]) -> bool {
+    dist(a, b) <= SAME * (1.0 + a[0].abs().max(a[1].abs()))
+}
 
 fn invalid(why: impl Into<String>) -> CoreError {
     CoreError::InvalidCommand(why.into())
@@ -197,6 +206,9 @@ pub struct ParameterInfo {
     /// Drawing units, or degrees for an angle; none when the expression can't be worked out.
     pub value: Option<f64>,
     pub dimension: u64,
+    /// Why the expression can't be worked out (its constraint is left out of every solve until
+    /// it is set again or deleted).
+    pub error: Option<String>,
 }
 
 /// A constraint as stored in the drawing.
@@ -698,6 +710,27 @@ fn crossing(a: [f64; 2], u: [f64; 2], b: [f64; 2], v: [f64; 2]) -> Option<[f64; 
     Some([a[0] + u[0] * t, a[1] + u[1] * t])
 }
 
+/// What a command's change of an entity's shape means for its constraints (`follow_param`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Reshape {
+    /// Moved, turned, scaled, stretched, aligned: its vertices are the same points.
+    Placed,
+    /// Trimmed, broken, reversed, extended...: its vertices may be other points.
+    Edited,
+    /// Mirrored: an arc's start and end change places.
+    Mirrored,
+}
+
+impl Reshape {
+    pub(crate) fn of(cmd: &crate::Command) -> Reshape {
+        match cmd {
+            crate::Command::Edit(_) => Reshape::Edited,
+            crate::Command::Modify(crate::ModifySpec::Mirror { .. }) => Reshape::Mirrored,
+            _ => Reshape::Placed,
+        }
+    }
+}
+
 /// A snapshot of the constrained entities before a command, to see what it did to them.
 pub(crate) struct ParamSnapshot {
     shapes: HashMap<u64, (Handle, Geo)>,
@@ -778,14 +811,25 @@ impl Session {
         id
     }
 
-    /// Every parameter's value, by name (degrees for angles).
-    fn values(all: &[Stored]) -> Result<BTreeMap<String, f64>, CoreError> {
+    /// Every parameter's value (degrees for angles) or why it has none, each on its own: one
+    /// broken expression (a name gone, a garbled string from another program) spoils only the
+    /// parameters using it.
+    fn evaluated(all: &[Stored]) -> BTreeMap<String, Result<f64, ExprError>> {
         let exprs: BTreeMap<String, String> = all
             .iter()
             .filter_map(|s| s.dim.as_ref())
             .map(|d| (d.name.clone(), d.expression.clone()))
             .collect();
-        evaluate_all(&exprs).map_err(|e| invalid(e.to_string()))
+        evaluate_each(&exprs)
+    }
+
+    /// The parameters that have a value, by name. A dimensional constraint without one is left
+    /// out of every solve (`to_solver`) until it is set again or deleted.
+    fn values(all: &[Stored]) -> BTreeMap<String, f64> {
+        Self::evaluated(all)
+            .into_iter()
+            .filter_map(|(name, v)| v.ok().map(|v| (name, v)))
+            .collect()
     }
 
     /// The constraints joined to the entities `seeds` through the entities they hold.
@@ -833,6 +877,13 @@ impl Session {
                 Err(lost())
             }
         };
+        // A parameter whose expression can't be worked out holds nothing for now.
+        if s.dim
+            .as_ref()
+            .is_some_and(|d| !values.contains_key(&d.name))
+        {
+            return Ok(Vec::new());
+        }
         let value = || {
             let d = s.dim.as_ref().ok_or_else(lost)?;
             values
@@ -969,7 +1020,7 @@ impl Session {
         if members.is_empty() {
             return Ok(Vec::new());
         }
-        let values = Self::values(&all)?;
+        let values = Self::values(&all);
         let mut built = Built::default();
         let mut before: HashMap<u64, Geo> = HashMap::new();
         for &h in &handles {
@@ -1052,7 +1103,7 @@ impl Session {
         let ids = &built.ents[&h];
         let s = &built.sketch;
         let p = |i: PointId| s.points[i];
-        let near = |a: [f64; 2], b: [f64; 2]| dist(a, b) <= SAME;
+        let near = same_point;
         let entity = self
             .drawing
             .doc
@@ -1087,7 +1138,7 @@ impl Session {
                     p(ids.centre.expect("a centre")),
                     s.radii[ids.radius.expect("a radius")],
                 );
-                if near(nc, *centre) && (nr - r).abs() <= SAME {
+                if near(nc, *centre) && (nr - r).abs() <= SAME * (1.0 + r.abs()) {
                     false
                 } else {
                     c.center = Vector3::new(nc[0], nc[1], c.center.z);
@@ -1509,10 +1560,10 @@ impl Session {
             }
             _ => measured,
         };
-        let given = expression.map(str::trim).filter(|e| !e.is_empty());
+        let given = expression.map(normalize).filter(|e| !e.is_empty());
         let data = DimData {
             name: name.clone(),
-            expression: given.map_or_else(|| number(measured), str::to_string),
+            expression: given.unwrap_or_else(|| number(measured)),
             rotation,
             sides,
         };
@@ -1526,8 +1577,10 @@ impl Session {
         };
         let mut with = all.clone();
         with.push(stored.clone());
-        let values = Self::values(&with)?;
-        Self::check_value(kind, values[&name])?;
+        match &Self::evaluated(&with)[&name] {
+            Ok(v) => Self::check_value(kind, *v)?,
+            Err(e) => return Err(invalid(format!("{name}: {e}"))),
+        }
         stored.holder = dim_handle;
         let id = self.keep(stored, &all);
         let seeds: Vec<u64> = refs.iter().map(|r| r.handle).collect();
@@ -1595,7 +1648,9 @@ impl Session {
     /// `Command::SetParameter`: the parameter `name` takes `expression`; every constraint whose
     /// value changes with it is solved again.
     pub(crate) fn set_parameter(&mut self, name: &str, expression: &str) -> Result<(), CoreError> {
-        let expression = expression.trim();
+        // Stored in ASCII: an older DWG's code page has no Arabic digits.
+        let expression = normalize(expression);
+        let expression = expression.as_str();
         if expression.is_empty() {
             return Err(invalid("Give the parameter a value or an expression"));
         }
@@ -1611,20 +1666,31 @@ impl Session {
         else {
             return Err(invalid(format!("There is no parameter named {name}")));
         };
-        let before = Self::values(&all)?;
+        // A broken parameter (this one or another) never stops the user mending it.
+        let before = Self::evaluated(&all);
         let mut with = all.clone();
         for s in &mut with {
             if s.id == target.id {
                 s.dim.as_mut().expect("a parameter").expression = expression.to_string();
             }
         }
-        let after = Self::values(&with)?;
+        let after = Self::evaluated(&with);
+        let target_name = &target.dim.as_ref().expect("a parameter").name;
+        if let Err(e) = &after[target_name] {
+            return Err(invalid(format!("{target_name}: {e}")));
+        }
         for s in &with {
-            if let Some(d) = &s.dim {
-                Self::check_value(s.kind, after[&d.name])
-                    .map_err(|e| invalid(format!("{}: {e}", d.name)))?;
+            let Some(d) = &s.dim else { continue };
+            match (&before[&d.name], &after[&d.name]) {
+                (Ok(_), Err(e)) => return Err(invalid(format!("{}: {e}", d.name))),
+                (_, Ok(v)) => Self::check_value(s.kind, *v)
+                    .map_err(|e| invalid(format!("{}: {e}", d.name)))?,
+                (Err(_), Err(_)) => {}
             }
         }
+        let value = |m: &BTreeMap<String, Result<f64, ExprError>>, n: &str| {
+            m.get(n).and_then(|v| v.as_ref().ok().copied())
+        };
         let new_expression = expression.to_string();
         self.edit_holder(target.holder, |list| {
             for s in list.iter_mut() {
@@ -1638,8 +1704,11 @@ impl Session {
             .iter()
             .filter(|s| {
                 s.dim.as_ref().is_some_and(|d| {
-                    (before.get(&d.name).copied().unwrap_or(f64::NAN) - after[&d.name]).abs()
-                        > 1e-12
+                    match (value(&before, &d.name), value(&after, &d.name)) {
+                        (Some(a), Some(b)) => (a - b).abs() > 1e-12,
+                        (None, Some(_)) => true,
+                        _ => false,
+                    }
                 }) || s.id == target.id
             })
             .collect();
@@ -1669,7 +1738,7 @@ impl Session {
             return Ok(());
         }
         let all = self.stored();
-        let values = Self::values(&all).unwrap_or_default();
+        let values = Self::values(&all);
         let gone: Vec<&Stored> = all.iter().filter(|s| ids.contains(&s.id)).collect();
         let names: HashSet<String> = gone
             .iter()
@@ -1811,7 +1880,7 @@ impl Session {
             .iter()
             .filter_map(|k| k.inference())
             .collect();
-        let found = infer_constraints_with_settings(
+        let found = infer(
             &prims,
             &InferenceSettings {
                 priority,
@@ -1819,7 +1888,7 @@ impl Session {
                 angle_tolerance_radians: settings.angle_tolerance.to_radians(),
                 ..InferenceSettings::default()
             },
-        );
+        )?;
         let edge = |i: usize| Ref {
             handle: owners[i].0,
             part: Part::Edge { index: owners[i].1 },
@@ -1874,26 +1943,57 @@ impl Session {
             };
             wanted.push((kind, refs));
         }
-        let mut all = self.stored();
-        let mut ids = Vec::new();
+        // The drawing is read once; the new constraints are written holder by holder.
+        let all = self.stored();
+        let mut known: HashSet<(ConstraintKind, Vec<Ref>)> =
+            all.iter().map(|s| (s.kind, s.refs.clone())).collect();
+        let fresh: Vec<(ConstraintKind, Vec<Ref>)> = wanted
+            .into_iter()
+            .filter(|(kind, refs)| known.insert((*kind, refs.clone())))
+            .collect();
+        if fresh.len() > MAX_AUTO {
+            return Err(invalid(format!(
+                "AUTOCONSTRAIN found {} constraints, more than 2,000 at once: pick fewer \
+                 entities, or fewer kinds in its settings",
+                fresh.len()
+            )));
+        }
+        if fresh.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.register_param_app();
+        let mut next = all.iter().map(|c| c.id).max().unwrap_or(0) + 1;
+        let mut load: HashMap<u64, usize> = HashMap::new();
+        for c in &all {
+            *load.entry(c.holder).or_default() += 1;
+        }
+        let mut by_holder: BTreeMap<u64, Vec<Stored>> = BTreeMap::new();
+        let mut ids = Vec::with_capacity(fresh.len());
         let mut seeds = Vec::new();
-        for (kind, refs) in wanted {
-            if all.iter().any(|s| s.kind == kind && s.refs == refs) {
-                continue;
-            }
+        for (kind, refs) in fresh {
             seeds.extend(refs.iter().map(|r| r.handle));
-            let s = Stored {
-                id: 0,
-                holder: 0,
+            let holder = refs
+                .iter()
+                .map(|r| r.handle)
+                .min_by_key(|h| load.get(h).copied().unwrap_or(0))
+                .expect("a constraint holds something");
+            *load.entry(holder).or_default() += 1;
+            ids.push(next);
+            by_holder.entry(holder).or_default().push(Stored {
+                id: next,
+                holder,
                 kind,
                 refs,
                 at: None,
                 dim: None,
-            };
-            let id = self.keep(s, &all);
-            all = self.stored();
-            ids.push(id);
+            });
+            next += 1;
         }
+        for (holder, list) in by_holder {
+            self.edit_holder(holder, |kept| kept.extend(list));
+        }
+        seeds.sort_unstable();
+        seeds.dedup();
         let moved = self.solve_around(&seeds, &[], &[])?;
         self.follow_moved(&moved)?;
         Ok(ids)
@@ -1903,7 +2003,7 @@ impl Session {
     pub fn list_constraints(&self) -> Vec<ConstraintInfo> {
         let sheet = self.sheet_owner();
         let all = self.stored();
-        let values = Self::values(&all).ok();
+        let values = Self::values(&all);
         let mut out: Vec<ConstraintInfo> = all
             .iter()
             .filter(|s| {
@@ -1929,10 +2029,7 @@ impl Session {
                     at,
                     name: s.dim.as_ref().map(|d| d.name.clone()),
                     expression: s.dim.as_ref().map(|d| d.expression.clone()),
-                    value: s
-                        .dim
-                        .as_ref()
-                        .and_then(|d| values.as_ref()?.get(&d.name).copied()),
+                    value: s.dim.as_ref().and_then(|d| values.get(&d.name).copied()),
                     dimension: s.dim.as_ref().map(|_| s.holder),
                 }
             })
@@ -1944,7 +2041,7 @@ impl Session {
     /// `Command::ListParameters`: every dimensional constraint's parameter, by name.
     pub fn list_parameters(&self) -> Vec<ParameterInfo> {
         let all = self.stored();
-        let values = Self::values(&all).ok();
+        let evaluated = Self::evaluated(&all);
         let mut out: Vec<ParameterInfo> = all
             .iter()
             .filter_map(|s| {
@@ -1954,8 +2051,13 @@ impl Session {
                     name: d.name.clone(),
                     kind: s.kind,
                     expression: d.expression.clone(),
-                    value: values.as_ref().and_then(|v| v.get(&d.name).copied()),
+                    value: evaluated
+                        .get(&d.name)
+                        .and_then(|v| v.as_ref().ok().copied()),
                     dimension: s.holder,
+                    error: evaluated
+                        .get(&d.name)
+                        .and_then(|v| v.as_ref().err().map(|e| e.to_string())),
                 })
             })
             .collect();
@@ -2027,9 +2129,20 @@ impl Session {
 
     /// After a drawing command: constraints on entities it erased or reshaped go; those on
     /// entities it moved are solved again with them held where they went.
-    pub(crate) fn follow_param(&mut self, snap: Option<ParamSnapshot>) -> Result<(), CoreError> {
+    ///
+    /// `reshape` says what a change of shape means. A placement (move, rotate, scale, stretch,
+    /// align) keeps every vertex what it was, so the entity is held and the rest solved again.
+    /// An edit (trim, break, reverse, extend, fillet...) may keep the handle and the vertex count
+    /// while its vertices become other points (a trimmed end, a reversed line), so every entity
+    /// it changed loses its constraints; a mirror turns an arc's start and end round, so a
+    /// mirrored arc loses its own. How many constraints went.
+    pub(crate) fn follow_param(
+        &mut self,
+        snap: Option<ParamSnapshot>,
+        reshape: Reshape,
+    ) -> Result<usize, CoreError> {
         let Some(snap) = snap else {
-            return Ok(());
+            return Ok(0);
         };
         // Dimensions the command erased took their constraints along: whoever used their
         // parameters keeps the values.
@@ -2040,7 +2153,7 @@ impl Session {
             .filter(|s| !now.contains(&s.id))
             .filter_map(|s| s.dim.as_ref().map(|d| d.name.clone()))
             .collect();
-        let old_values = Self::values(&snap.stored).unwrap_or_default();
+        let old_values = Self::values(&snap.stored);
         self.freeze_users(&vanished, &old_values)?;
         let mut broken: HashSet<u64> = HashSet::new();
         let mut moved: Vec<u64> = Vec::new();
@@ -2049,7 +2162,16 @@ impl Session {
             match now.map(|e| (e.common().owner_handle, geo_of(e))) {
                 Some((o, Ok(geo))) if o == *owner && geo.shape_key() == before.shape_key() => {
                     if geo != *before {
-                        moved.push(h);
+                        let reshaped = match reshape {
+                            Reshape::Placed => false,
+                            Reshape::Edited => true,
+                            Reshape::Mirrored => matches!(geo, Geo::Arc(..)),
+                        };
+                        if reshaped {
+                            broken.insert(h);
+                        } else {
+                            moved.push(h);
+                        }
                     }
                 }
                 _ => {
@@ -2068,14 +2190,156 @@ impl Session {
             .map(|s| s.id)
             .collect();
         self.remove_constraints(&dropped)?;
+        let left: HashSet<u32> = self.stored().iter().map(|s| s.id).collect();
+        let removed = snap.stored.iter().filter(|s| !left.contains(&s.id)).count();
         moved.retain(|h| !broken.contains(h));
         if moved.is_empty() {
-            return Ok(());
+            return Ok(removed);
         }
         moved.sort_unstable();
         let solved = self.solve_around(&moved, &moved, &[])?;
-        self.follow_moved(&solved)
+        self.follow_moved(&solved)?;
+        Ok(removed)
     }
+}
+
+/// The kernel's `infer_constraints_with_settings`, kept from its quadratic filter. The kernel
+/// checks every pair relation (parallel, collinear, perpendicular, equal...) against every other
+/// candidate to drop those an axis relation already implies, which on a plan of 500 lines takes
+/// seconds. Pair relations among lines can only hold between lines that are neither horizontal
+/// nor vertical (two horizontal lines' parallel is dropped, a line parallel or perpendicular to an
+/// axis line is itself an axis line), so they are looked for among those lines alone; the rest
+/// in a pass without them. Plans that would give more than `MAX_AUTO` pair relations are refused
+/// before the kernel runs (counted from directions and lengths).
+fn infer(
+    prims: &[ParametricPrimitive],
+    settings: &InferenceSettings,
+) -> Result<Vec<InferredConstraint>, CoreError> {
+    let wants = |k: InferenceKind| settings.priority.contains(&k);
+    let sin_angle = settings.angle_tolerance_radians.sin().abs();
+    let direction = |p: &ParametricPrimitive| match p {
+        ParametricPrimitive::Line(l) => unit(sub(l.end, l.start)),
+        _ => None,
+    };
+    let axis = |u: [f64; 2]| {
+        (wants(InferenceKind::Horizontal) && u[1].abs() <= sin_angle)
+            || (wants(InferenceKind::Vertical) && u[0].abs() <= sin_angle)
+    };
+    let too_many = |n: usize| {
+        invalid(format!(
+            "AUTOCONSTRAIN would find more than 2,000 constraints ({n} or more) at once: pick \
+             fewer entities, or fewer kinds in its settings"
+        ))
+    };
+    // Parallel pairs among the lines off the axes, by direction (mod 180 degrees).
+    if wants(InferenceKind::Parallel) || wants(InferenceKind::Collinear) {
+        let mut angles: Vec<f64> = prims
+            .iter()
+            .filter_map(direction)
+            .filter(|u| !axis(*u))
+            .map(|u| u[1].atan2(u[0]).rem_euclid(std::f64::consts::PI))
+            .collect();
+        let n = pairs_within(&mut angles, settings.angle_tolerance_radians);
+        if n > MAX_AUTO {
+            return Err(too_many(n));
+        }
+    }
+    // Equal lengths, and equal radii.
+    if wants(InferenceKind::Equal) {
+        let (mut lengths, mut radii): (Vec<f64>, Vec<f64>) = (Vec::new(), Vec::new());
+        for p in prims {
+            match p {
+                ParametricPrimitive::Line(l) => lengths.push(dist(l.start, l.end)),
+                ParametricPrimitive::Circle(c) => radii.push(c.radius),
+                ParametricPrimitive::Arc(a) => radii.push(a.radius),
+            }
+        }
+        let tol = |v: &[f64]| 1e-9 * v.iter().fold(1.0f64, |m, x| m.max(x.abs()));
+        let (tl, tr) = (tol(&lengths), tol(&radii));
+        let n = pairs_within(&mut lengths, tl) + pairs_within(&mut radii, tr);
+        if n > MAX_AUTO {
+            return Err(too_many(n));
+        }
+    }
+    let pair_kinds = [
+        InferenceKind::Collinear,
+        InferenceKind::Parallel,
+        InferenceKind::Perpendicular,
+    ];
+    if !(wants(InferenceKind::Horizontal) && wants(InferenceKind::Vertical)) {
+        return Ok(infer_constraints_with_settings(prims, settings));
+    }
+    let rest = InferenceSettings {
+        priority: settings
+            .priority
+            .iter()
+            .copied()
+            .filter(|k| !pair_kinds.contains(k))
+            .collect(),
+        ..settings.clone()
+    };
+    let mut found = infer_constraints_with_settings(prims, &rest);
+    let off_axis: Vec<usize> = (0..prims.len())
+        .filter(|&i| direction(&prims[i]).is_some_and(|u| !axis(u)))
+        .collect();
+    let lines = InferenceSettings {
+        priority: settings
+            .priority
+            .iter()
+            .copied()
+            .filter(|k| pair_kinds.contains(k))
+            .collect(),
+        ..settings.clone()
+    };
+    if !lines.priority.is_empty() && off_axis.len() > 1 {
+        let subset: Vec<ParametricPrimitive> = off_axis.iter().map(|&i| prims[i]).collect();
+        for c in infer_constraints_with_settings(&subset, &lines) {
+            found.push(match c {
+                InferredConstraint::Collinear { first, second } => InferredConstraint::Collinear {
+                    first: off_axis[first],
+                    second: off_axis[second],
+                },
+                InferredConstraint::Parallel { first, second } => InferredConstraint::Parallel {
+                    first: off_axis[first],
+                    second: off_axis[second],
+                },
+                InferredConstraint::Perpendicular { first, second } => {
+                    InferredConstraint::Perpendicular {
+                        first: off_axis[first],
+                        second: off_axis[second],
+                    }
+                }
+                other => other,
+            });
+        }
+    }
+    // In the settings' order of kinds, as the kernel gives them.
+    let rank = |c: &InferredConstraint| {
+        settings
+            .priority
+            .iter()
+            .position(|k| *k == c.kind())
+            .unwrap_or(usize::MAX)
+    };
+    found.sort_by_key(rank);
+    Ok(found)
+}
+
+/// How many pairs of `values` lie within `tol` of each other (sorted in place); counting stops
+/// just past `MAX_AUTO`.
+fn pairs_within(values: &mut [f64], tol: f64) -> usize {
+    values.sort_by(f64::total_cmp);
+    let (mut n, mut from) = (0usize, 0usize);
+    for i in 0..values.len() {
+        while values[i] - values[from] > tol {
+            from += 1;
+        }
+        n += i - from;
+        if n > MAX_AUTO {
+            break;
+        }
+    }
+    n
 }
 
 #[cfg(test)]
@@ -2130,6 +2394,42 @@ mod tests {
         assert_eq!(read_record(&common), list);
         write_record(&mut common, &[]);
         assert!(common.extended_data.get_record(PARAM_APP).is_none());
+    }
+
+    #[test]
+    fn inference_finds_pair_relations_among_the_lines_off_the_axes_only() {
+        let line = |a: [f64; 2], b: [f64; 2]| ParametricPrimitive::Line(KLine { start: a, end: b });
+        let prims = [
+            line([0.0, 0.0], [1.0, 1.0]),
+            line([5.0, 0.0], [6.0, 1.0]),
+            line([0.0, 10.0], [4.0, 10.0]),
+            line([0.0, 20.0], [4.0, 20.0]),
+            line([20.0, 0.0], [21.0, -1.0]),
+        ];
+        let found = infer(&prims, &InferenceSettings::default()).unwrap();
+        assert!(
+            found.contains(&InferredConstraint::Parallel {
+                first: 0,
+                second: 1
+            }),
+            "{found:?}"
+        );
+        assert!(found.contains(&InferredConstraint::Horizontal { entity: 2 }));
+        // Two horizontal lines: their parallel is implied, not kept (as the kernel does).
+        assert!(!found.contains(&InferredConstraint::Parallel {
+            first: 2,
+            second: 3
+        }));
+        // In the settings' order: coincident, collinear, parallel... horizontal last but one.
+        let rank = |c: &InferredConstraint| {
+            InferenceSettings::default()
+                .priority
+                .iter()
+                .position(|k| *k == c.kind())
+                .unwrap()
+        };
+        assert!(found.windows(2).all(|w| rank(&w[0]) <= rank(&w[1])));
+        assert_eq!(pairs_within(&mut [3.0, 1.0, 2.0, 1.0], 0.5), 1);
     }
 
     #[test]

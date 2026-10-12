@@ -1093,6 +1093,7 @@ impl Session {
             left_alone: handles.len() - joined,
             unlinked,
             joined_rows: self.rows_measuring(h),
+            constraints_removed: 0,
         })
     }
 
@@ -1738,6 +1739,7 @@ fn edited(added: Vec<u64>, removed: Vec<u64>, left_alone: usize, unlinked: usize
         left_alone,
         unlinked,
         joined_rows: 0,
+        constraints_removed: 0,
     }
 }
 

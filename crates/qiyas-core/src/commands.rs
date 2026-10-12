@@ -919,6 +919,9 @@ pub enum Outcome {
         left_alone: usize,
         unlinked: usize,
         joined_rows: usize,
+        /// Parametric constraints dropped because the edit reshaped (or took away) an entity
+        /// they held.
+        constraints_removed: usize,
     },
     /// A find and replace: how many replacements, the entities changed (a block reference's,
     /// for an attribute), and how many entities with matches were left as they were because
