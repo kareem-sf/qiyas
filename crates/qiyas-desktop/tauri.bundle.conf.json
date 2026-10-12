@@ -1,6 +1,12 @@
 {
   "bundle": {
     "externalBin": ["binaries/qiyas-mcp"],
-    "resources": { "resources/pdfium/": "resources/pdfium/" }
+    "resources": {
+      "resources/pdfium/": "resources/pdfium/",
+      "../../LICENSES/": "licenses/",
+      "../qiyas-render/fonts/NotoSans-OFL.txt": "licenses/NotoSans-OFL.txt",
+      "../qiyas-render/fonts/NotoSansArabic-OFL.txt": "licenses/NotoSansArabic-OFL.txt",
+      "../../src/fonts/instrument-sans/OFL.txt": "licenses/InstrumentSans-OFL.txt"
+    }
   }
 }
