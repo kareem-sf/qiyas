@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The .qiyas project's MIME type, installed with the deb and rpm packages. DWG and DXF are
+     shared-mime-info's own image/vnd.dwg and image/vnd.dxf. -->
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-qiyas">
+    <comment>Qiyas project</comment>
+    <comment xml:lang="ar">مشروع قياس</comment>
+    <sub-class-of type="application/json"/>
+    <glob pattern="*.qiyas"/>
+  </mime-type>
+</mime-info>

@@ -37,6 +37,7 @@ import {
   type TabInfo,
 } from "../api";
 import { cycleTab } from "../shell/FileTabs";
+import { useOpenRequests } from "../shell/openRequests";
 import { drop, enqueue, localTime, type RecoveryAsk } from "../shell/recoveryQueue";
 import type { SheetSetApi } from "../shell/SheetSetManager";
 import { isStale, serial } from "../shell/switcher";
@@ -332,6 +333,9 @@ export function useDrawings({
     );
     setOpening(false);
   }
+
+  // Drawings the OS asks to open (a double click on one, a second launch) come the same way.
+  useOpenRequests(openPath);
 
   async function openFile() {
     const path = await open({ filters: [{ name: "Drawings", extensions: ["dwg", "dxf"] }] });

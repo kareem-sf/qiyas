@@ -32,7 +32,47 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "fileAssociations": [
+      {
+        "ext": ["dwg"],
+        "name": "DWG drawing",
+        "description": "DWG drawing",
+        "mimeType": "image/vnd.dwg"
+      },
+      {
+        "ext": ["dxf"],
+        "name": "DXF drawing",
+        "description": "DXF drawing",
+        "mimeType": "image/vnd.dxf"
+      },
+      {
+        "ext": ["qiyas"],
+        "name": "Qiyas project",
+        "description": "Qiyas project",
+        "mimeType": "application/x-qiyas",
+        "rank": "Owner",
+        "contentTypes": ["com.qsmind.qiyas.project"],
+        "exportedType": {
+          "identifier": "com.qsmind.qiyas.project",
+          "conformsTo": ["public.json"]
+        }
+      }
+    ],
+    "linux": {
+      "deb": {
+        "desktopTemplate": "linux/qiyas.desktop",
+        "files": {
+          "/usr/share/mime/packages/com.qsmind.qiyas.xml": "linux/com.qsmind.qiyas.xml"
+        }
+      },
+      "rpm": {
+        "desktopTemplate": "linux/qiyas.desktop",
+        "files": {
+          "/usr/share/mime/packages/com.qsmind.qiyas.xml": "linux/com.qsmind.qiyas.xml"
+        }
+      }
+    }
   },
   "plugins": {
     "updater": {

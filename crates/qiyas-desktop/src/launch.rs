@@ -1,0 +1,234 @@
+//! Drawings the OS asks Qiyas to open. A double click on a `.dwg`, `.dxf` or `.qiyas` file (the
+//! bundle's file associations) starts Qiyas with its path; when Qiyas is running already, the
+//! new Qiyas hands its arguments to this one through `tauri-plugin-single-instance` and quits,
+//! and this window comes to the front. macOS sends the files as an `Opened` event instead. The
+//! paths wait in `OpenRequests` until the window takes them (`take_open_requests`, after
+//! `OPEN_REQUESTED`) and opens each as File, Open does, so a newer autosave is offered first.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
+
+use serde::Deserialize;
+use tauri::plugin::TauriPlugin;
+use tauri::{AppHandle, Emitter, Manager, Runtime, State, Url};
+
+/// Tells the window that paths wait in `OpenRequests`.
+pub const OPEN_REQUESTED: &str = "open:requested";
+
+/// The drawings Qiyas opens itself.
+const DRAWINGS: [&str; 2] = ["dwg", "dxf"];
+
+/// Paths the OS asked to open, oldest first, until the window takes them.
+#[derive(Default)]
+pub struct OpenRequests(Mutex<Vec<String>>);
+
+/// The drawings `args` (a launch's arguments after the program) name: existing `.dwg` and
+/// `.dxf` files, relative ones under `cwd`, `file://` addresses as their files; a `.qiyas`
+/// project gives the drawing it belongs to. Options (`-x`, `--x`), folders, other files and
+/// missing ones are left out.
+pub fn drawing_paths(args: &[String], cwd: &Path) -> Vec<PathBuf> {
+    args.iter()
+        .filter(|a| !a.is_empty() && !a.starts_with('-'))
+        .filter_map(|a| {
+            // Only `file:` is read as an address: `C:\plan.dwg` parses as one too.
+            if a.get(..5).is_some_and(|s| s.eq_ignore_ascii_case("file:")) {
+                Url::parse(a).ok()?.to_file_path().ok()
+            } else {
+                Some(cwd.join(a))
+            }
+        })
+        .filter_map(|path| {
+            if has_extension(&path, &["qiyas"]) {
+                drawing_of_project(&path)
+            } else {
+                (has_extension(&path, &DRAWINGS) && path.is_file()).then_some(path)
+            }
+        })
+        .collect()
+}
+
+fn has_extension(path: &Path, extensions: &[&str]) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| extensions.iter().any(|x| e.eq_ignore_ascii_case(x)))
+}
+
+/// The `drawing` field of a `.qiyas` project; the rest is not read.
+#[derive(Deserialize)]
+struct ProjectDrawing {
+    drawing: String,
+}
+
+/// The drawing whose project file is `project`: the one the project names, else the same name
+/// with `.dwg` or `.dxf`. A drawing's project is always `<stem>.qiyas` beside it
+/// (`qiyas_core::project_path`), so a name pointing elsewhere is not it.
+fn drawing_of_project(project: &Path) -> Option<PathBuf> {
+    let named = fs::read_to_string(project)
+        .ok()
+        .and_then(|text| serde_json::from_str::<ProjectDrawing>(&text).ok())
+        .map(|p| project.with_file_name(p.drawing));
+    named
+        .into_iter()
+        .chain(["dwg", "dxf", "DWG", "DXF"].map(|e| project.with_extension(e)))
+        .find(|d| {
+            qiyas_core::project_path(d) == project && has_extension(d, &DRAWINGS) && d.is_file()
+        })
+}
+
+/// Queues `paths` for the window and tells it.
+fn request<R: Runtime>(app: &AppHandle<R>, paths: Vec<PathBuf>) {
+    let paths: Vec<String> = paths
+        .into_iter()
+        .filter_map(|p| p.into_os_string().into_string().ok())
+        .collect();
+    if paths.is_empty() {
+        return;
+    }
+    let requests = app.state::<OpenRequests>();
+    requests
+        .0
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .extend(paths);
+    let _ = app.emit(OPEN_REQUESTED, ());
+}
+
+/// This launch's own files (a double click on a drawing while Qiyas was closed).
+pub fn request_launch_files<R: Runtime>(app: &AppHandle<R>) {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let cwd = std::env::current_dir().unwrap_or_default();
+    request(app, drawing_paths(&args, &cwd));
+}
+
+/// The single-instance plugin, first of all: a second Qiyas hands its files to this one, which
+/// comes to the front. A debug build listens under its own name on Linux, so `pnpm tauri dev`
+/// still starts while an installed Qiyas runs.
+pub fn single_instance<R: Runtime>() -> TauriPlugin<R> {
+    let builder = tauri_plugin_single_instance::Builder::new().callback(|app, argv, cwd| {
+        let args = argv.get(1..).unwrap_or_default();
+        request(app, drawing_paths(args, Path::new(&cwd)));
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.unminimize();
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+    });
+    #[cfg(debug_assertions)]
+    let builder = builder.dbus_id("com.qsmind.qiyas.dev");
+    builder.build()
+}
+
+/// On macOS, files opened from Finder come as an `Opened` event, not as arguments.
+pub fn os_opened<R: Runtime>() -> TauriPlugin<R> {
+    tauri::plugin::Builder::new("qiyas-open-files")
+        .on_event(|_app, _event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Opened { urls } = _event {
+                let args: Vec<String> = urls.iter().map(Url::to_string).collect();
+                request(_app, drawing_paths(&args, Path::new("/")));
+            }
+        })
+        .build()
+}
+
+/// The paths waiting to open, oldest first; the queue is empty after.
+#[tauri::command]
+pub fn take_open_requests(requests: State<'_, OpenRequests>) -> Vec<String> {
+    std::mem::take(&mut *requests.0.lock().unwrap_or_else(PoisonError::into_inner))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// A folder with `plan.dwg`, `site.DXF`, `notes.txt` and a `sub/` folder named `sub.dwg`.
+    fn folder() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["plan.dwg", "site.DXF", "notes.txt"] {
+            fs::write(dir.path().join(name), b"x").unwrap();
+        }
+        fs::create_dir(dir.path().join("sub.dwg")).unwrap();
+        dir
+    }
+
+    #[test]
+    fn existing_drawings_are_kept_relative_ones_under_the_launch_folder() {
+        let dir = folder();
+        let d = dir.path();
+        let absolute = d.join("plan.dwg").display().to_string();
+        assert_eq!(
+            drawing_paths(&args(&[&absolute, "site.DXF"]), d),
+            [d.join("plan.dwg"), d.join("site.DXF")]
+        );
+    }
+
+    #[test]
+    fn options_folders_other_files_and_missing_ones_are_left_out() {
+        let dir = folder();
+        let d = dir.path();
+        let found = drawing_paths(
+            &args(&[
+                "--flag",
+                "-psn_0_12345",
+                "sub.dwg",
+                "notes.txt",
+                "gone.dwg",
+                "",
+                "plan",
+                "https://qsmind.app/plan.dwg",
+                "file:///nowhere/plan.dwg",
+                "plan.dwg",
+            ]),
+            d,
+        );
+        assert_eq!(found, [d.join("plan.dwg")]);
+    }
+
+    #[test]
+    fn file_addresses_are_read_as_their_files() {
+        let dir = folder();
+        let url = Url::from_file_path(dir.path().join("plan.dwg")).unwrap();
+        assert_eq!(
+            drawing_paths(&args(&[url.as_str()]), Path::new("/")),
+            [dir.path().join("plan.dwg")]
+        );
+    }
+
+    #[test]
+    fn a_project_opens_the_drawing_it_belongs_to() {
+        let dir = folder();
+        let d = dir.path();
+        // Named in the project.
+        fs::write(
+            d.join("plan.qiyas"),
+            r#"{"version":2,"drawing":"plan.dwg"}"#,
+        )
+        .unwrap();
+        // Unreadable as a project: the drawing of the same name.
+        fs::write(d.join("survey.dxf"), b"x").unwrap();
+        fs::write(d.join("survey.qiyas"), b"{").unwrap();
+        // Its drawing is gone.
+        fs::write(d.join("old.qiyas"), r#"{"drawing":"old.dwg"}"#).unwrap();
+        // A name pointing out of the folder, or at a drawing whose project this is not.
+        fs::write(d.join("other.qiyas"), r#"{"drawing":"../plan.dwg"}"#).unwrap();
+        fs::write(d.join("x.qiyas"), r#"{"drawing":"plan.dwg"}"#).unwrap();
+        assert_eq!(
+            drawing_paths(
+                &args(&[
+                    "plan.qiyas",
+                    "survey.qiyas",
+                    "old.qiyas",
+                    "other.qiyas",
+                    "x.qiyas"
+                ]),
+                d
+            ),
+            [d.join("plan.dwg"), d.join("survey.dxf")]
+        );
+    }
+}

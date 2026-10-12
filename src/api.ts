@@ -1293,6 +1293,13 @@ export const checkUpdate = () => invoke<UpdateCheck>("check_update");
  *  Qiyas; it only comes back, rejected, when that failed. */
 export const installUpdate = () => invoke<void>("install_update");
 
+/** Sent when the OS asked Qiyas to open files (a double click on a drawing, or a second launch
+ *  with one); `takeOpenRequests` gives them. */
+export const OPEN_REQUESTED = "open:requested";
+
+/** The drawings the OS asked to open, oldest first; the queue is empty after. */
+export const takeOpenRequests = () => invoke<string[]>("take_open_requests");
+
 /** Sent when an outside AI app changed the take-off through the MCP server. */
 export const TAKEOFF_CHANGED = "takeoff:changed";
 /** Sent (with the tool result's `ui`) after an MCP tool showed another sheet, hid or showed layers,

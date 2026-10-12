@@ -2,6 +2,7 @@ mod ai;
 mod blocks;
 mod commands;
 mod files;
+mod launch;
 mod mcp;
 #[cfg(debug_assertions)]
 mod mock;
@@ -17,9 +18,13 @@ use tauri::Manager;
 
 pub fn run() {
     tauri::Builder::default()
+        .manage(launch::OpenRequests::default())
         .manage(updater::Pending::default())
+        // First of the plugins: a second Qiyas hands its files to this one and quits.
+        .plugin(launch::single_instance())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(launch::os_opened())
         .setup(|app| {
             // A machine without a keychain still runs; saving a key then explains why it can't.
             if let Err(e) = secrets::use_native_store() {
@@ -32,6 +37,7 @@ pub fn run() {
             files::start_watch(app.handle().clone());
             pdf::use_bundled_pdfium(app.handle());
             mcp::restart(app.handle());
+            launch::request_launch_files(app.handle());
             updater::check_at_launch(app.handle());
             Ok(())
         })
@@ -96,6 +102,7 @@ pub fn run() {
             commands::mcp_status,
             updater::check_update,
             updater::install_update,
+            launch::take_open_requests,
             commands::ai_send,
             commands::ai_cancel,
             commands::ai_clear,

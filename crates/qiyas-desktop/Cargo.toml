@@ -39,6 +39,9 @@ arboard = { version = "3", default-features = false, features = ["wayland-data-c
 # Updates from a signed static feed (MIT OR Apache-2.0): the About box, and a launch check once
 # a day (`updater`).
 tauri-plugin-updater = "2.13"
+# A second launch hands its files to the running Qiyas and quits (MIT OR Apache-2.0; D-Bus
+# through zbus, MIT, on Linux).
+tauri-plugin-single-instance = "2.5"
 
 [dev-dependencies]
 tempfile = { workspace = true }
