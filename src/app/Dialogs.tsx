@@ -604,9 +604,9 @@ export function FileDialogs({ drawings }: { drawings: Drawings }) {
         <RecoveryDialog
           key={recovery.id}
           items={recovery.items}
-          onRecover={recoverFrom}
-          onDiscard={discardFrom}
-          onOpen={openAnyway}
+          onRecover={(drawing, copy) => recoverFrom(recovery, drawing, copy)}
+          onDiscard={(drawing, copy) => discardFrom(recovery, drawing, copy)}
+          onOpen={(drawing) => openAnyway(recovery, drawing)}
           onClose={() => {
             const then = laterOpens(recovery);
             setRecoveries((q) => q.filter((r) => r.id !== recovery.id));

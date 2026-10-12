@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import type { ReadReport, Recoverable } from "../api";
 import { LanguageProvider, useLanguage } from "../i18n";
@@ -31,6 +31,7 @@ const newer = (drawing: string, saved_at: number, more: Partial<Recoverable> = {
   drawing_at: saved_at - 600,
   crashed: false,
   locked_elsewhere: null,
+  older_copies: [],
   ...more,
 });
 
@@ -51,8 +52,8 @@ test("not crashed: a newer autosave exists, with the autosave's and the drawing'
   expect(screen.getByRole("heading").textContent).toBe(en["recovery.title"]);
   expect(en["recovery.title"]).toBe("A newer autosave exists");
   const row = screen.getByRole("listitem").textContent ?? "";
-  expect(row).toContain(localTime(1_760_000_000));
-  expect(row).toContain(localTime(1_760_000_000 - 600));
+  expect(row).toContain(localTime(1_760_000_000, "en"));
+  expect(row).toContain(localTime(1_760_000_000 - 600, "en"));
   expect(row).not.toContain(en["recovery.older"]);
   expect(screen.queryByRole("note")).toBeNull();
   expect(screen.getByRole("button", { name: "Later" })).toBeTruthy();
@@ -70,8 +71,8 @@ test("crashed: Qiyas closed unexpectedly last time, Recover, Discard and Later a
   );
   expect(screen.getByRole("heading").textContent).toBe("Qiyas closed unexpectedly last time");
   const row = screen.getByRole("listitem").textContent ?? "";
-  expect(row).toContain(localTime(1_760_000_000));
-  expect(row).toContain(localTime(1_760_000_900));
+  expect(row).toContain(localTime(1_760_000_000, "en"));
+  expect(row).toContain(localTime(1_760_000_900, "en"));
   expect(row).toContain(en["recovery.older"]);
   // One drawing, or all crashed: the heading says it, the row doesn't repeat it.
   expect(row).not.toContain(en["recovery.crashedItem"]);
@@ -143,7 +144,7 @@ test("open elsewhere, nothing to recover: the warning, Open anyway and Later, no
   expect(screen.getByRole("dialog").textContent).not.toContain(en["recovery.intro"]);
   const row = screen.getByRole("listitem");
   expect(row.textContent).not.toContain("Autosaved");
-  expect(row.textContent).toContain(localTime(1_760_000_000));
+  expect(row.textContent).toContain(localTime(1_760_000_000, "en"));
   expect(screen.getByRole("note").textContent).toContain("PID 4242 on site-office-pc");
   expect(within(row).getAllByRole("button").map((b) => b.textContent)).toEqual(["Open anyway"]);
   expect(screen.getByRole("button", { name: "Later" })).toBeTruthy();
@@ -151,12 +152,61 @@ test("open elsewhere, nothing to recover: the warning, Open anyway and Later, no
   await waitFor(() => expect(onOpen).toHaveBeenCalledWith("/jobs/villa.dwg"));
 });
 
-test("crashed with nothing autosaved: says so, and offers Discard (it clears the crash) but no Recover", () => {
-  show([newer("/jobs/villa.dwg", 0, { autosave: null, saved_at: null, crashed: true })]);
-  expect(screen.getByRole("heading").textContent).toBe(en["recovery.crashedTitle"]);
-  const row = screen.getByRole("listitem");
-  expect(row.textContent).toContain(en["recovery.nothingSaved"]);
-  expect(within(row).getAllByRole("button").map((b) => b.textContent)).toEqual(["Discard"]);
+test("older copies from a crash are listed under the row, each with its own Recover and Discard", async () => {
+  const onRecover = vi.fn(async () => {});
+  const onDiscard = vi.fn(async () => {});
+  const copies = [
+    { path: "/jobs/villa.dwg.sv$.crash-20261011-090000", saved_at: 1_760_170_000 },
+    { path: "/jobs/villa.dwg.sv$.crash-20261010-090000", saved_at: 1_760_080_000 },
+  ];
+  render(
+    <LanguageProvider>
+      <RecoveryDialog
+        items={[newer("/jobs/villa.dwg", 0, { autosave: null, saved_at: null, older_copies: copies })]}
+        onRecover={onRecover}
+        onDiscard={onDiscard}
+        onOpen={noop}
+        onClose={() => {}}
+      />
+    </LanguageProvider>,
+  );
+  expect(screen.getByRole("heading").textContent).toBe(en["recovery.copiesTitle"]);
+  const list = screen.getByRole("list", { name: en["recovery.olderCopies"] });
+  const rows = within(list).getAllByRole("listitem");
+  expect(rows.map((r) => r.textContent)).toEqual(copies.map((c) => expect.stringContaining(localTime(c.saved_at, "en"))));
+  // Nothing autosaved beside the copies: no Recover or Discard of the drawing itself.
+  const [drawingRow] = screen.getAllByRole("listitem");
+  expect([...drawingRow.querySelectorAll(":scope > .actions button")]).toHaveLength(0);
+
+  fireEvent.click(within(rows[1]).getByRole("button", { name: "Recover" }));
+  await waitFor(() => expect(onRecover).toHaveBeenCalledWith("/jobs/villa.dwg", copies[1].path));
+  fireEvent.click(within(rows[0]).getByRole("button", { name: "Discard" }));
+  await waitFor(() => expect(onDiscard).toHaveBeenCalledWith("/jobs/villa.dwg", copies[0].path));
+});
+
+test("Later waits while Recover or Discard is working (a click or Escape)", async () => {
+  let finish = () => {};
+  const onClose = vi.fn();
+  render(
+    <LanguageProvider>
+      <RecoveryDialog
+        items={items.slice(0, 1)}
+        onRecover={() => new Promise<void>((done) => (finish = done))}
+        onDiscard={noop}
+        onOpen={noop}
+        onClose={onClose}
+      />
+    </LanguageProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Recover" }));
+  const later = screen.getByRole("button", { name: "Later" }) as HTMLButtonElement;
+  await waitFor(() => expect(later.disabled).toBe(true));
+  const escape = new Event("cancel", { cancelable: true });
+  screen.getByRole("dialog").dispatchEvent(escape);
+  expect(escape.defaultPrevented).toBe(true);
+  act(() => finish());
+  await waitFor(() => expect(later.disabled).toBe(false));
+  expect(onClose).not.toHaveBeenCalled();
 });
 
 test("in Arabic the times, the PID and the computer are isolated, so they read in their own order", () => {
@@ -193,7 +243,7 @@ test("in Arabic the times, the PID and the computer are isolated, so they read i
   const note = screen.getByRole("note");
   expect([...note.querySelectorAll("bdi")].map((b) => b.textContent)).toEqual(["77", "qs-laptop"]);
   const row = screen.getByRole("listitem");
-  expect([...row.querySelectorAll("bdi")].map((b) => b.textContent)).toContain(localTime(1_760_000_000));
+  expect([...row.querySelectorAll("bdi")].map((b) => b.textContent)).toContain(localTime(1_760_000_000, "ar"));
   // The drawing is gone: no drawing time, it says so.
   expect(row.textContent).toContain(ar["recovery.drawingGone"]);
 });
@@ -245,7 +295,7 @@ test("a refused Discard (the drawing was opened elsewhere meanwhile) says why an
         items={items.slice(0, 1)}
         onRecover={noop}
         onDiscard={async () => {
-          throw "villa.dwg is open in another Qiyas (PID 4242 on site-office-pc): its autosave is kept";
+          throw "/jobs/villa.dwg is open in another Qiyas (process 4242 on site-office-pc): its autosave stays";
         }}
         onOpen={noop}
         onClose={() => {}}
@@ -253,7 +303,12 @@ test("a refused Discard (the drawing was opened elsewhere meanwhile) says why an
     </LanguageProvider>,
   );
   fireEvent.click(screen.getByRole("button", { name: "Discard" }));
-  await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("PID 4242"));
+  // Rust's English is said in the window's own words.
+  await waitFor(() =>
+    expect(screen.getByRole("alert").textContent).toBe(
+      "This drawing is open in another Qiyas window (PID 4242 on site-office-pc): its autosave stays",
+    ),
+  );
   expect(screen.getAllByRole("listitem")).toHaveLength(1);
   expect((screen.getByRole("button", { name: "Discard" }) as HTMLButtonElement).disabled).toBe(false);
 });

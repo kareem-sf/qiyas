@@ -454,8 +454,11 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
   with unsaved changes (not during an edit in place) to `<file>.sv$` (a whole DWG) and
   `<file>.sv$.qiyas`, each to a temp file renamed over. On launch (the recent drawings) and before an open, `RecoveryDialog`
   offers what `offered` (`recoveryQueue.ts`) keeps of `recoverable`'s answers: an autosave newer
-  than its drawing (or the drawing gone), any autosave a crash left, and before an open (never at
-  launch, `atLaunch`) a drawing open in another Qiyas. Recover opens it in a new tab as
+  than its drawing (the same second too) or whose drawing is gone, a crash's autosave at any age,
+  and before an open only (never at launch, `atLaunch`) a drawing open in another Qiyas and older
+  crash copies. An older autosave alone is not asked about (something else moved the drawing on
+  after it: rare), nor a crash that left nothing autosaved (Rust replaces its lock on the next
+  open). Recover opens it in a new tab as
   `<name> (recovered).<ext>` with its take-off, unsaved, then Save As (its first save deletes the
   autosave it came from, `Session::recovered_from`); Discard deletes it; Later opens the drawing
   itself (not one open in another Qiyas, `laterOpens`). Questions wait their turn (`recoveryQueue.ts`, e.g. a sheet set's Open all). A save, or
@@ -492,15 +495,20 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
   deletes that copy; a drawing open here (Don't Save) its own autosave; else (the dialog's
   Discard) the autosave offered, never a crash copy.
   `RecoveryDialog` heads a question with "Qiyas closed unexpectedly last time" when any of its
-  drawings crashed (those come first, `enqueue`; rows say so only beside newer ones), else "A
-  newer autosave exists"; each row gives the autosave's and the drawing's time in the user's
-  locale (`localTime`, in `<bdi>`), says when the autosave is older than the drawing, and warns
-  "This drawing is open in another Qiyas window (PID … on …)" for `locked_elsewhere`, whose row
-  offers Open anyway and Later only (no Discard: it would delete that Qiyas's autosave; nor
-  Recover), headed "Open in another Qiyas window" when nothing is autosaved. A crash with nothing
-  autosaved says so and offers Discard only (it clears the crash). A refused Discard shows its
-  error in the dialog. After a Recover the status bar says "Recovered from autosave of <time>",
-  and its Save As offers the recovered drawing's name.
+  drawings crashed with an autosave (those come first, `enqueue`; rows say so only beside newer
+  ones), else "A newer autosave exists", "Open in another Qiyas window" or "Autosaves kept from a
+  crash"; each row gives the autosave's and the drawing's time in the app's language
+  (`localTime(secs, lang)`, in `<bdi>`), says when the autosave is older than the drawing, lists
+  "Older copies from a crash" under it, each with its own Recover and Discard (by the copy's
+  path), and warns "This drawing is open in another Qiyas window (PID … on …)" for
+  `locked_elsewhere`: a drawing open elsewhere offers Open anyway and Later only (no Discard: it
+  would delete that Qiyas's autosave; nor Recover). Recover, Discard and Open anyway act on the
+  question they were clicked in (`drop` by its id; a drawing dealt with is no longer what Later
+  opens); Later and Escape wait while one works. A Discard Rust refuses (another Qiyas took the
+  drawing) is said in the window's language (`refusedBy`). After a Recover its Save As offers the
+  recovered drawing's name, and one status bar notice says "Recovered from autosave of <time>",
+  with "; saved to <path>" when it was saved. A drawing double-clicked while the launch question
+  is up with nothing to ask about opens at once, behind it.
 - Panic hook (`files::install_panic_hook`): after the usual report, autosaves every drawing with
   unsaved changes on its own thread, at most 5 s, best effort: `try_lock`, so the drawing whose
   command panicked (its lock held) is skipped; a panic during it starts no other.

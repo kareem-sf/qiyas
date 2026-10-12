@@ -41,6 +41,7 @@ import {
   type ScriptResult,
   type TabInfo,
 } from "../api";
+import { useLanguage } from "../i18n";
 import { cycleTab } from "../shell/FileTabs";
 import { useOpenRequests } from "../shell/openRequests";
 import { atLaunch, drop, enqueue, localTime, offered, type RecoveryAsk } from "../shell/recoveryQueue";
@@ -148,6 +149,8 @@ export function useDrawings({
 }: Deps) {
   /** Autosaves to offer back (on launch, or before opening `then`), one question at a time. */
   const [recoveries, setRecoveries] = useState<RecoveryAsk[]>([]);
+  /** The app's language: the recovery notice writes its time in it. */
+  const { lang } = useLanguage();
   const recovery = recoveries[0] ?? null;
   /** What RECOVER read and dropped from a damaged drawing. */
   const [recoverReport, setRecoverReport] = useState<{ path: string; report: ReadReport } | null>(null);
@@ -355,39 +358,39 @@ export function useDrawings({
 
   /** Recover: the autosave of `drawing` opens in a new tab as a new drawing beside it, and Save As
    *  asks where it goes; then the status bar says which autosave it came from. */
-  async function recoverFrom(drawing: string) {
-    const savedAt = recovery?.items.find((i) => i.drawing === drawing)?.saved_at;
+  async function recoverFrom(ask: RecoveryAsk, drawing: string, copy?: string) {
+    const item = ask.items.find((i) => i.drawing === drawing);
+    const savedAt = copy ? item?.older_copies.find((c) => c.path === copy)?.saved_at : item?.saved_at;
     const recovered = await drawingChange(async () => {
-      const next = await recoverAutosave(drawing);
+      const next = await recoverAutosave(copy ?? drawing);
       await showDrawing(next, beginShow());
       await refreshTabs();
       return next;
     });
-    dropRecovery(drawing);
+    setRecoveries((q) => drop(q, ask.id, drawing, copy));
     // The recovered drawing itself: this render's `info` is the one before it (none at launch).
-    await saveAs(recovered);
-    // The time isolated (FSI … PDI): it keeps its own order inside Arabic.
-    if (savedAt != null) setNotice(t("recovery.done", { time: `\u2068${localTime(savedAt)}\u2069` }));
+    const savedTo = await saveAs(recovered);
+    // Times and paths isolated (FSI … PDI): they keep their own order inside Arabic. One notice,
+    // so where it came from never hides where it went.
+    const iso = (text: string) => `\u2068${text}\u2069`;
+    if (savedAt == null) return;
+    const time = iso(localTime(savedAt, lang));
+    setNotice(savedTo ? t("recovery.doneSaved", { time, path: iso(savedTo) }) : t("recovery.done", { time }));
   }
 
-  /** Discard: the autosave of `drawing` is deleted; the drawing about to open opens. */
-  async function discardFrom(drawing: string) {
-    await discardAutosave(drawing);
-    const then = recovery?.then;
-    dropRecovery(drawing);
-    if (then === drawing) await openPath(drawing, false);
+  /** Discard: the autosave of `drawing` (or its older `copy`) is deleted; the drawing about to
+   *  open opens once its own autosave is dealt with. */
+  async function discardFrom(ask: RecoveryAsk, drawing: string, copy?: string) {
+    await discardAutosave(copy ?? drawing);
+    setRecoveries((q) => drop(q, ask.id, drawing, copy));
+    if (!copy && ask.then === drawing) await openPath(drawing, false);
   }
 
   /** Open anyway: a drawing open in another Qiyas opens here (once, even when it is the drawing
    *  about to open); its autosave is that Qiyas's and stays. */
-  async function openAnyway(drawing: string) {
-    dropRecovery(drawing);
+  async function openAnyway(ask: RecoveryAsk, drawing: string) {
+    setRecoveries((q) => drop(q, ask.id, drawing));
     await openPath(drawing, false);
-  }
-
-  /** `drawing` is dealt with: the question goes when nothing is left in it. */
-  function dropRecovery(drawing: string) {
-    setRecoveries((q) => drop(q, drawing));
   }
 
   /** RECOVER: a damaged drawing opens in a new tab through the failsafe reader, and the dialog
@@ -527,8 +530,9 @@ export function useDrawings({
     });
 
   /** Writes the drawing with `write`, then shows its new layers and entities. */
-  async function saveWith(write: () => Promise<void>) {
+  async function saveWith(write: () => Promise<void>): Promise<boolean> {
     const gen = switchGen.current;
+    let saved = false;
     await run(async () => {
       let next: DrawingInfo | null = null;
       try {
@@ -544,7 +548,9 @@ export function useDrawings({
       autosaveOff.current = false;
       await redraw();
       setNotice(t("save.done", { path: next?.path ?? "" }));
+      saved = true;
     });
+    return saved;
   }
 
   /** A drawing that opened with problems is rewritten with only what Qiyas could read, so a save
@@ -585,7 +591,7 @@ export function useDrawings({
   }
 
   /** Save As for `of`, the drawing on screen (given, as one just recovered is not in `info` yet). */
-  async function saveAs(of: DrawingInfo) {
+  async function saveAs(of: DrawingInfo): Promise<string | null> {
     const path = await save({
       defaultPath: of.path,
       filters: [
@@ -593,8 +599,8 @@ export function useDrawings({
         { name: "DXF", extensions: ["dxf"] },
       ],
     });
-    if (!path) return;
-    await saveWith(() => saveDrawingAs(path));
+    if (!path) return null;
+    return (await saveWith(() => saveDrawingAs(path))) ? path : null;
   }
 
   /** Asks where to save the Excel take-off, next to the drawing by default, and writes it. */

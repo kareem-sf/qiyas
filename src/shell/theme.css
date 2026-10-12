@@ -2245,6 +2245,26 @@ button.close {
 .recovery-list .warn {
   color: var(--warn);
 }
+/* Older copies a crash left: a list of their own under the row. */
+.recovery-copies {
+  flex-basis: 100%;
+  padding-inline-start: 16px;
+}
+.recovery-copies ul {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+.recovery-copies li {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.recovery-copies .actions {
+  margin-inline-start: auto;
+}
 /* A drawing open in another Qiyas: a line of its own under the row. */
 .recovery-warning {
   flex-basis: 100%;

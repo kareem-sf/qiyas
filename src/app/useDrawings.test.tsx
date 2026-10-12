@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
 /** `useDrawings`' recovery flows with the core (`invoke`) and the file dialogs faked: what reaches
  *  the core, what Save As is asked with, and the status bar notice. */
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, renderHook, screen } from "@testing-library/react";
 import { useRef, useState, type SetStateAction } from "react";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import type { DrawingInfo, Recoverable } from "../api";
 import { LanguageProvider, useT } from "../i18n";
 import { enqueue, localTime } from "../shell/recoveryQueue";
-import { useDrawings } from "./useDrawings";
+import { FileDialogs } from "./Dialogs";
+import { useDrawings, type Drawings } from "./useDrawings";
 
 const VILLA = "/jobs/villa.dwg";
 const RECOVERED = "/jobs/villa (recovered).dwg";
@@ -47,13 +48,23 @@ vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ onCloseRequested: async () => () => {} }),
 }));
 const recoverable = vi.hoisted(() => ({ recents: [] as string[], found: [] as unknown[] }));
-const dialogs = vi.hoisted(() => ({ save: vi.fn(async (_options: { defaultPath?: string }) => null) }));
+const dialogs = vi.hoisted(() => ({ save: vi.fn(async (_options: { defaultPath?: string }): Promise<string | null> => null) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn(async () => null),
   save: dialogs.save,
   ask: vi.fn(async () => true),
   message: vi.fn(async () => "No"),
 }));
+
+beforeAll(() => {
+  HTMLDialogElement.prototype.showModal ??= function (this: HTMLDialogElement) {
+    this.open = true;
+  };
+  HTMLDialogElement.prototype.close ??= function (this: HTMLDialogElement) {
+    this.open = false;
+    this.dispatchEvent(new Event("close"));
+  };
+});
 
 afterEach(() => {
   cleanup();
@@ -84,6 +95,7 @@ const item = (more: Partial<Recoverable> = {}): Recoverable => ({
   drawing_at: 1_759_999_000,
   crashed: true,
   locked_elsewhere: null,
+  older_copies: [],
   ...more,
 });
 
@@ -135,17 +147,58 @@ async function launch(notices: string[] = []) {
   return view;
 }
 
-test("Recover at launch, nothing open: Save As is offered with the recovered drawing's name, then the notice", async () => {
+test("Recover at launch, nothing open: Save As is offered with the recovered drawing's name; cancelled, the notice says where it came from", async () => {
   const notices: string[] = [];
   const { result } = await launch(notices);
   act(() => result.current.setRecoveries((q) => enqueue(q, [item()], null, true)));
 
-  await act(() => result.current.recoverFrom(VILLA));
+  await act(() => result.current.recoverFrom(result.current.recovery!, VILLA));
 
   expect(core.calls).toContain(`recover_autosave {"path":"${VILLA}"}`);
   expect(dialogs.save).toHaveBeenCalledTimes(1);
   expect(dialogs.save.mock.calls[0][0].defaultPath).toBe(RECOVERED);
-  expect(notices.at(-1)).toBe(`Recovered from autosave of ⁨${localTime(1_760_000_000)}⁩`);
+  expect(notices.at(-1)).toBe(`Recovered from autosave of ⁨${localTime(1_760_000_000, "en")}⁩`);
+  expect(result.current.recovery).toBeNull();
+});
+
+test("Recover then a real Save As: the notice says both where it came from and where it went", async () => {
+  const notices: string[] = [];
+  const { result } = await launch(notices);
+  act(() => result.current.setRecoveries((q) => enqueue(q, [item()], null, true)));
+  dialogs.save.mockResolvedValueOnce("/jobs/villa-fixed.dwg");
+
+  await act(() => result.current.recoverFrom(result.current.recovery!, VILLA));
+
+  expect(core.calls).toContain(`save_drawing_as {"path":"/jobs/villa-fixed.dwg"}`);
+  expect(notices.at(-1)).toBe(
+    `Recovered from autosave of ⁨${localTime(1_760_000_000, "en")}⁩; saved to ⁨/jobs/villa-fixed.dwg⁩`,
+  );
+});
+
+test("an older copy is recovered by its own path, and only it leaves the row", async () => {
+  const notices: string[] = [];
+  const { result } = await launch(notices);
+  const older = { path: `${VILLA}.sv$.crash-20261010-090000`, saved_at: 1_760_080_000 };
+  act(() => result.current.setRecoveries((q) => enqueue(q, [item({ crashed: false, older_copies: [older] })], VILLA)));
+
+  await act(() => result.current.recoverFrom(result.current.recovery!, VILLA, older.path));
+
+  expect(core.calls).toContain(`recover_autosave {"path":"${older.path}"}`);
+  expect(notices.at(-1)).toContain(localTime(1_760_080_000, "en"));
+  expect(result.current.recovery?.items.map((i) => [i.drawing, i.older_copies.length])).toEqual([[VILLA, 0]]);
+});
+
+test("Recover acts on the question it was clicked in, even when the launch question came in ahead", async () => {
+  const { result } = await launch();
+  act(() => result.current.setRecoveries((q) => enqueue(q, [item()], VILLA)));
+  const asked = result.current.recovery!;
+  // The launch question arrives while the click is on its way.
+  act(() => result.current.setRecoveries((q) => enqueue(q, [item({ drawing: "/jobs/tower.dwg" })], null, true)));
+
+  await act(() => result.current.recoverFrom(asked, VILLA));
+
+  expect(result.current.recovery?.items.map((i) => i.drawing)).toEqual(["/jobs/tower.dwg"]);
+  act(() => result.current.setRecoveries((q) => q.slice(1)));
   expect(result.current.recovery).toBeNull();
 });
 
@@ -154,7 +207,7 @@ test("Recover with another drawing open: Save As suggests the recovered drawing,
   await act(() => result.current.openPath("/jobs/tower.dwg", false));
   act(() => result.current.setRecoveries((q) => enqueue(q, [item({ crashed: false })], null, true)));
 
-  await act(() => result.current.recoverFrom(VILLA));
+  await act(() => result.current.recoverFrom(result.current.recovery!, VILLA));
 
   expect(dialogs.save.mock.calls[0][0].defaultPath).toBe(RECOVERED);
 });
@@ -165,7 +218,7 @@ test("Open anyway: a drawing open in another Qiyas opens here once, its autosave
   act(() => result.current.setRecoveries((q) => enqueue(q, [locked], VILLA)));
   core.calls.length = 0;
 
-  await act(() => result.current.openAnyway(VILLA));
+  await act(() => result.current.openAnyway(result.current.recovery!, VILLA));
 
   expect(core.calls.filter((c) => c.startsWith("open_drawing"))).toEqual([`open_drawing {"path":"${VILLA}"}`]);
   expect(core.calls.some((c) => c.startsWith("discard_autosave"))).toBe(false);
@@ -175,21 +228,59 @@ test("Open anyway: a drawing open in another Qiyas opens here once, its autosave
 test("a refused Discard reaches the dialog as its error: the question stays and nothing opens", async () => {
   const { result } = await launch();
   act(() => result.current.setRecoveries((q) => enqueue(q, [item({ crashed: false })], VILLA)));
-  core.refuseDiscard = "villa.dwg is open in another Qiyas: its autosave is kept";
+  core.refuseDiscard = "/jobs/villa.dwg is open in another Qiyas (process 4242 on x): its autosave stays";
   core.calls.length = 0;
 
-  await act(() => expect(result.current.discardFrom(VILLA)).rejects.toBe(core.refuseDiscard));
+  await act(() => expect(result.current.discardFrom(result.current.recovery!, VILLA)).rejects.toBe(core.refuseDiscard));
 
   expect(core.calls).toEqual([`discard_autosave {"path":"${VILLA}"}`]);
   expect(result.current.recovery?.items.map((i) => i.drawing)).toEqual([VILLA]);
 });
 
-test("at launch a recent drawing open in another Qiyas is not asked about; one that crashed is", async () => {
+test("at launch a recent drawing open in another Qiyas, or one that crashed clean, is not asked about; a crash autosave is", async () => {
   recoverable.found = [
     item({ drawing: "/jobs/a.dwg" }),
+    item({ drawing: "/jobs/clean.dwg", autosave: null, saved_at: null }),
     item({ drawing: "/jobs/b.dwg", autosave: null, saved_at: null, crashed: false, locked_elsewhere: { pid: 7, host: "x", started_at: 1 } }),
   ];
-  recoverable.recents = ["/jobs/a.dwg", "/jobs/b.dwg"];
+  recoverable.recents = ["/jobs/a.dwg", "/jobs/clean.dwg", "/jobs/b.dwg"];
   const { result } = await launch();
   expect(result.current.recovery?.items.map((i) => i.drawing)).toEqual(["/jobs/a.dwg"]);
+});
+
+/** The window's file dialogs over the hook, as `App` renders them; `grab` gets the hook's latest. */
+function Window({ grab }: { grab(drawings: Drawings): void }) {
+  const drawings = useWindow([]);
+  grab(drawings);
+  return <FileDialogs drawings={drawings} />;
+}
+
+async function openWithLater(found: Recoverable[]) {
+  let latest: Drawings | null = null;
+  render(
+    <LanguageProvider>
+      <Window grab={(d) => (latest = d)} />
+    </LanguageProvider>,
+  );
+  await act(async () => {});
+  recoverable.found = found;
+  await act(() => latest!.openPath(VILLA));
+  core.calls.length = 0;
+  fireEvent.click(screen.getByRole("button", { name: "Later" }));
+  await act(async () => {});
+}
+
+test("Later on an open's question opens the drawing itself and discards nothing", async () => {
+  await openWithLater([item()]);
+  expect(core.calls.filter((c) => /^(open_drawing|discard_autosave)/.test(c))).toEqual([
+    `open_drawing {"path":"${VILLA}"}`,
+  ]);
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+test("Later on a drawing open in another Qiyas opens nothing", async () => {
+  await openWithLater([
+    item({ crashed: false, autosave: null, saved_at: null, locked_elsewhere: { pid: 7, host: "x", started_at: 1 } }),
+  ]);
+  expect(core.calls.filter((c) => /^(open_drawing|discard_autosave)/.test(c))).toEqual([]);
 });
