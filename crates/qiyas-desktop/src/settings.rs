@@ -10,6 +10,8 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::ribbon::RibbonLayout;
+
 const FILE: &str = "settings.json";
 
 /// Drawings kept in the Open menu's recent list.
@@ -22,6 +24,32 @@ pub const MAX_PALETTE: usize = 100;
 
 /// The longest time between autosaves, in minutes.
 pub const MAX_AUTOSAVE_MINUTES: u32 = 120;
+
+/// The snap aperture and the pick box, in screen pixels: at least and at most.
+pub const MIN_PX: u32 = 1;
+pub const MAX_PX: u32 = 50;
+
+/// Aliases and shortcuts kept at most, each.
+pub const MAX_ALIASES: usize = 500;
+
+/// The keys a shortcut may end in besides letters, digits and F1 to F24.
+const NAMED_KEYS: [&str; 15] = [
+    "Escape",
+    "Enter",
+    "Tab",
+    "Space",
+    "Backspace",
+    "Delete",
+    "Insert",
+    "Home",
+    "End",
+    "PageUp",
+    "PageDown",
+    "ArrowUp",
+    "ArrowDown",
+    "ArrowLeft",
+    "ArrowRight",
+];
 
 /// What a tool palette button does: insert a block of the drawing, or run a command line.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -84,6 +112,30 @@ pub struct Settings {
     pub language: String,
     /// "system", "light" or "dark".
     pub theme: String,
+    /// Decimals lengths, areas and volumes are shown with: 2, 3 or 4 (as the drafting
+    /// settings' precision).
+    pub display_precision: u8,
+    /// How far object snaps reach around the cursor, in screen pixels (AutoCAD's APERTURE):
+    /// `MIN_PX` to `MAX_PX`.
+    pub snap_aperture_px: u32,
+    /// How far picking reaches around the cursor, in screen pixels (PICKBOX): `MIN_PX` to
+    /// `MAX_PX`.
+    pub pick_box_px: u32,
+    /// The drawing area's background as "#rrggbb"; null is the theme's (Paper in light, Ink in
+    /// dark).
+    pub background_color: Option<String>,
+    /// The crosshair's colour as "#rrggbb"; null is the theme's.
+    pub crosshair_color: Option<String>,
+    /// The colour picked and highlighted entities are drawn in, as "#rrggbb"; null is the
+    /// theme's.
+    pub highlight_color: Option<String>,
+    /// The user's keyboard shortcuts, command to key ("Ctrl+Shift+C", "F3", "D"), over the
+    /// built-in ones (`src/tools/shortcuts.ts`). Commands are the ribbon's (`ribbon`) and the
+    /// shortcut actions (undo, redo, save, osnap...).
+    pub shortcuts: BTreeMap<String, String>,
+    /// The user's ribbon layout (tabs, groups, buttons; see `ribbon`); null is the default
+    /// (`ribbon::default_ribbon`).
+    pub ribbon: Option<RibbonLayout>,
     /// The user's command line aliases, alias to command (e.g. "L" to "LAYOFF"), over the
     /// built-in ones.
     pub aliases: BTreeMap<String, String>,
@@ -124,6 +176,14 @@ impl Default for Settings {
             mcp_token: new_token(),
             language: "en".into(),
             theme: "system".into(),
+            display_precision: 3,
+            snap_aperture_px: 10,
+            pick_box_px: 6,
+            background_color: None,
+            crosshair_color: None,
+            highlight_color: None,
+            shortcuts: BTreeMap::new(),
+            ribbon: None,
             aliases: BTreeMap::new(),
             recents: Vec::new(),
             tool_palette: Vec::new(),
@@ -193,7 +253,111 @@ pub fn validate(s: &Settings) -> Result<(), String> {
             ));
         }
     }
+    validate_options(s)
+}
+
+/// The Options, Customize and Aliases dialogs' part of `validate`.
+fn validate_options(s: &Settings) -> Result<(), String> {
+    if !(2..=4).contains(&s.display_precision) {
+        return Err("The display precision must be 2, 3 or 4 decimals".into());
+    }
+    for (what, px) in [
+        ("snap aperture", s.snap_aperture_px),
+        ("pick box", s.pick_box_px),
+    ] {
+        if !(MIN_PX..=MAX_PX).contains(&px) {
+            return Err(format!(
+                "The {what} must be {MIN_PX} to {MAX_PX} pixels, not {px}"
+            ));
+        }
+    }
+    for (what, color) in [
+        ("background", &s.background_color),
+        ("crosshair", &s.crosshair_color),
+        ("highlight", &s.highlight_color),
+    ] {
+        if let Some(c) = color.as_deref().filter(|c| !valid_color(c)) {
+            return Err(format!("The {what} colour \"{c}\" must be written #rrggbb"));
+        }
+    }
+    if s.aliases.len() > MAX_ALIASES {
+        return Err(format!("At most {MAX_ALIASES} aliases"));
+    }
+    let mut aliases = std::collections::HashSet::new();
+    if let Some(alias) = s.aliases.keys().find(|a| !aliases.insert(a.to_uppercase())) {
+        return Err(format!(
+            "The alias \"{alias}\" is there twice (aliases ignore case)"
+        ));
+    }
+    if s.shortcuts.len() > MAX_ALIASES {
+        return Err(format!("At most {MAX_ALIASES} shortcuts"));
+    }
+    let mut keys = BTreeMap::new();
+    for (command, key) in &s.shortcuts {
+        if command.is_empty() || command.contains(char::is_whitespace) {
+            return Err(format!(
+                "The shortcut for \"{command}\" needs a command of one word"
+            ));
+        }
+        let Some(chord) = shortcut_key(key) else {
+            return Err(format!(
+                "The shortcut \"{key}\" for {command} is not a key such as Ctrl+Shift+C, F3 or D"
+            ));
+        };
+        if let Some(other) = keys.insert(chord, command) {
+            return Err(format!(
+                "{key} is the shortcut for both {other} and {command}"
+            ));
+        }
+    }
+    if let Some(layout) = &s.ribbon {
+        crate::ribbon::validate(layout)?;
+    }
     Ok(())
+}
+
+/// "#rrggbb".
+fn valid_color(c: &str) -> bool {
+    c.len() == 7 && c.starts_with('#') && c[1..].bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// A shortcut such as "Ctrl+Shift+C" in one spelling (modifiers in the order Ctrl, Alt, Shift,
+/// Meta; the key as `NAMED_KEYS` or upper case), so two spellings of one key compare equal;
+/// `None` when it is not a key. Modifiers: Ctrl, Alt, Shift, Meta, each once; then a letter, a
+/// digit, F1 to F24 or one of `NAMED_KEYS`, in any case.
+pub fn shortcut_key(text: &str) -> Option<String> {
+    let parts: Vec<&str> = text.split('+').map(str::trim).collect();
+    let (key, modifiers) = parts.split_last()?;
+    let mut held = [false; 4];
+    for m in modifiers {
+        let i = ["ctrl", "alt", "shift", "meta"]
+            .iter()
+            .position(|n| m.eq_ignore_ascii_case(n))?;
+        if std::mem::replace(&mut held[i], true) {
+            return None;
+        }
+    }
+    let upper = key.to_ascii_uppercase();
+    let function = upper
+        .strip_prefix('F')
+        .and_then(|n| n.parse::<u8>().ok())
+        .is_some_and(|n| (1..=24).contains(&n) && !upper[1..].starts_with('0'));
+    let key = if (key.len() == 1 && key.bytes().all(|b| b.is_ascii_alphanumeric())) || function {
+        upper
+    } else {
+        NAMED_KEYS
+            .iter()
+            .find(|n| n.eq_ignore_ascii_case(key))?
+            .to_string()
+    };
+    let mut chord: Vec<&str> = ["Ctrl", "Alt", "Shift", "Meta"]
+        .iter()
+        .zip(held)
+        .filter(|(_, on)| *on)
+        .map(|(n, _)| *n)
+        .collect();
+    chord.push(&key);
+    Some(chord.join("+"))
 }
 
 /// Checks a tool palette before it is kept: at most `MAX_PALETTE` buttons, each with a label
@@ -237,6 +401,12 @@ pub fn load(dir: &Path) -> Settings {
     };
     if !valid_token(&settings.mcp_token) {
         settings.mcp_token = new_token();
+        write = true;
+    }
+    // A ribbon this version can't draw (a button gone since) gives way to the default.
+    if let Some(Err(e)) = settings.ribbon.as_ref().map(crate::ribbon::validate) {
+        eprintln!("The saved ribbon layout is not used ({e}); using the default");
+        settings.ribbon = None;
         write = true;
     }
     if write {

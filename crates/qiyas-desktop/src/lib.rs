@@ -8,6 +8,7 @@ mod mcp;
 mod mock;
 mod pdf;
 mod plot;
+pub mod ribbon;
 pub mod secrets;
 pub mod settings;
 mod state;
@@ -100,6 +101,7 @@ pub fn run() {
             commands::delete_api_key,
             commands::app_dir,
             commands::mcp_status,
+            ribbon::get_default_ribbon,
             updater::check_update,
             updater::install_update,
             launch::take_open_requests,
