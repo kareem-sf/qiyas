@@ -13,6 +13,8 @@ qiyas/
                     length, closed regions, intersections
     qiyas-render    turns the document into GPU buffers: lines, fills, text glyphs,
                     hatches, images; spatial index; dirty tracking per handle
+    qiyas-param     parametric constraints: points, radii, curves and their constraints, the
+                    damped Gauss-Newton solver (nalgebra), the expression parser
     qiyas-takeoff   the comparison engine: take-off and drawings against the BOQ
                     (conflicts); the BOQ, schedule and conflict types live in qiyas-core
     qiyas-boq       Excel in and out (calamine to read, rust_xlsxwriter to write)
@@ -32,8 +34,8 @@ All the crates above exist; `qiyas-pdf` reads PDFs (import, underlays), `qiyas-p
 Pinned libraries (git revs in the workspace `Cargo.toml`): opencadcodec `a35f43e` (DWG/DXF) and
 opencadkernel `99b6b48` (`geom2d` for snaps and edits, `offset` for polyline offsets: it brings
 cavalier_contours, MIT OR Apache-2.0). Both MPL-2.0. Licence texts of code we ship
-live in `LICENSES/` (opencadcodec, opencadkernel, pdfium, foldhash's Zlib, clipboard-win's and
-error-code's BSL-1.0); add one there for every new non-MIT library. Font licences sit beside the fonts in `crates/qiyas-render/fonts/`.
+live in `LICENSES/` (opencadcodec, opencadkernel, pdfium, nalgebra's Apache-2.0, foldhash's Zlib,
+clipboard-win's and error-code's BSL-1.0); add one there for every new non-MIT library. Font licences sit beside the fonts in `crates/qiyas-render/fonts/`.
 
 Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example write_test_plan`) and `samples/test-boq.xlsx` (written by `cargo run -p qiyas-boq --example write_test_boq`); the exact quantities and the two conflicts the BOQ must give are in `samples/test-plan.md`. `cargo run -p qiyas-ai --example phase2_walkthrough` measures, imports, links and compares them through the AI tools, no model needed.
 
@@ -277,6 +279,55 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
 - Annotate tab (Dimensions, Leaders, Dimension style…); command line DLI, DAL, DAN, DRA, DDI, DAR,
   DOR, DBA, DCO, QDIM, DED (T text, F flip, M move), DIMBREAK, DIMSPACE, DIMJOGLINE, LE, MLD, TOL,
   D (DIMSTYLE). Not AI tools yet.
+
+## Parametric
+
+- `crates/qiyas-param` knows no drawing: a `Sketch` of points (x, y unknowns), circle radii,
+  curves (line, circle, arc: centre, start, end kept on one circle) and constraints (coincident,
+  fixed, horizontal/vertical of a line or two points, parallel, perpendicular, collinear,
+  concentric, tangent on the side it is on now, equal, symmetric; distance along an axis or
+  straight, angle, radius). `solve(sketch, pinned)`: Levenberg-Marquardt with minimum-norm steps
+  (`dx = -Jᵀ(JJᵀ+λI)⁻¹r`, nalgebra Cholesky, Jacobian by central differences per constraint),
+  split into groups joined by shared unknowns; what no constraint holds stays put; a conflict
+  fails with the sketch untouched. `cargo test -p qiyas-param --release --test solver_speed`
+  (in `scripts/check.sh`): 200 connected constraints in about 4 ms, guard 50 ms. `expr.rs`: own
+  parser for `d1 = 2*d2 + 1.5` (numbers with Arabic digits, `+ - * /`, brackets, names, `pi`,
+  sin/cos/tan in degrees, sqrt, abs); `evaluate_all` refuses unknown names and circles.
+- `qiyas-core/src/param.rs`: constraints hold parts (`Ref { handle, part: point | centre |
+  edge }`) of lines, lightweight polylines (straight segments only), arcs and circles on the
+  sheet, flat in plan; others and chains refused. Stored as JSON strings after an `Integer16(1)`
+  in `QIYAS-PARAM` xdata (registered like `QIYAS_TEXT`; through DWG and DXF), a geometric one
+  on the held entity that holds the fewest, a dimensional one on its own Dimension; a stored
+  constraint names its holder, so a copy's stale xdata is never read. Commands (one undo step
+  each, `Outcome::Constrained { ids }`): `AddConstraint { kind, targets, points }` (each pick's
+  point picks the nearest vertex or edge; the first entity picked stays when it can),
+  `AutoConstrain { targets, settings }` (kernel `constraint_inference`, Equal off by default:
+  the sample rectangle gives 4 coincident + 2 horizontal + 2 vertical), `AddDimConstraint {
+  kind: linear|aligned|angular|radius|diameter, targets, points, line_point, expression }` (a
+  real Dimension through `add_dimensions`, text `[d1=<>]`, `[fx: d1=<>]` for a formula: the
+  brackets are the lock mark; names d/ang/rad/dia + n; lengths in drawing units, angles in
+  degrees), `SetParameter { name, expression }` (changed values re-solve, each keeping its
+  anchor: a distance's first point, an angle's first line, a centre), `DeleteConstraint { id }`,
+  `DeleteConstraintsOn { targets }`; `ListConstraints`, `ListParameters` read.
+  `DrawingInfo::has_constraints`.
+- Every drawing command keeps them (`Session::run_as`: `param_snapshot` before,
+  `follow_param` after, in the same step; `param_extras` adds the tables and take-off to the
+  step when needed): an entity erased, reshaped (vertex or edge count, kind, sheet) loses its
+  constraints, a dimensional one its Dimension, and parameters that used it keep their values
+  as numbers; an entity moved is held where it went while its constraints are solved again (a
+  locked entity that would move, or a conflict such as a fixed point moved, refuses the
+  command). The take-off and fields follow what the solver moved.
+- Window: Parametric tab (Geometric: Coincident…Equal, Auto constrain; Dimensional: Linear,
+  Aligned, Angular, Radius, Diameter; Manage: Parameters manager…, Delete constraints, Show
+  constraints), `src/tools/constraintTools.ts` through `useTool` (its `param` slot), command line
+  GEOMCONSTRAINT/GC <C|COL|CON|F|PAR|P|H|V|T|SM|S|E>, DIMCONSTRAINT/DC <L|AL|AN|R|D>,
+  AUTOCONSTRAIN, DELCONSTRAINT, PARAMETERS/PAR. `src/app/useParametric.ts` (after
+  `useAnnotate`) reads the lists after every redraw, only for a drawing with constraints or once
+  a parametric tool or the manager was used. `ConstraintBar` is docked over the drawing's start
+  corner (a glyph per constraint grouped by entity; pointing highlights its entities through the
+  AI highlight, a click deletes it, × hides the bar until Show constraints); it does not sit
+  beside each entity. `ParametersManager`: name, expression, value; Enter or leaving a changed
+  expression sets it; refusals show in the dialog. Not AI tools yet.
 
 ## Tables and fields
 
