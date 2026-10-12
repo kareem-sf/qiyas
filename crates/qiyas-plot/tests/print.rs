@@ -60,14 +60,20 @@ fn windows_passes_the_file_and_printer_outside_the_script() {
         let plan = print_plan("windows", Path::new(hostile), printer);
         assert_eq!(plan.program, "powershell");
         assert_eq!(
-            plan.args[..3],
-            ["-NoProfile", "-NonInteractive", "-EncodedCommand"]
+            plan.args[..5],
+            [
+                "-NoProfile",
+                "-NonInteractive",
+                "-WindowStyle",
+                "Hidden",
+                "-EncodedCommand"
+            ]
         );
-        assert_eq!(plan.args.len(), 4);
+        assert_eq!(plan.args.len(), 6);
         for arg in &plan.args {
             assert!(!arg.contains("calc") && !arg.contains("plan-x"), "{arg}");
         }
-        let utf16: Vec<u16> = unbase64(&plan.args[3])
+        let utf16: Vec<u16> = unbase64(&plan.args[5])
             .chunks(2)
             .map(|b| u16::from_le_bytes([b[0], b[1]]))
             .collect();

@@ -95,6 +95,8 @@ pub fn print_plan(os: &str, pdf: &Path, printer: Option<&str>) -> PrintPlan {
                 args: vec![
                     "-NoProfile".into(),
                     "-NonInteractive".into(),
+                    "-WindowStyle".into(),
+                    "Hidden".into(),
                     "-EncodedCommand".into(),
                     base64(&utf16),
                 ],
@@ -171,6 +173,7 @@ pub fn print_dry_run(pdf: &Path, printer: Option<&str>) -> Result<PrintPlan, Plo
 pub fn print_pdf(pdf: &Path, printer: Option<&str>) -> Result<String, PlotError> {
     let plan = print_dry_run(pdf, printer)?;
     let mut command = Command::new(&plan.program);
+    no_window(&mut command);
     command.args(&plan.args);
     command.envs(plan.env.iter().map(|(k, v)| (k, v)));
     let failed = |e: std::io::Error| PlotError::Print(format!("Can't run {}: {e}", plan.program));
@@ -208,8 +211,23 @@ pub fn parse_default_printer(lpstat: &str) -> Option<String> {
     })
 }
 
+/// Windows: the command runs without a console window (the app has none, so each one would
+/// flash a new console); elsewhere nothing.
+fn no_window(command: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    let _ = command;
+}
+
 fn run(program: &str, args: &[&str]) -> Option<String> {
-    let out = Command::new(program).args(args).output().ok()?;
+    let mut command = Command::new(program);
+    no_window(&mut command);
+    let out = command.args(args).output().ok()?;
     out.status
         .success()
         .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
@@ -223,6 +241,8 @@ pub fn list_printers() -> Vec<String> {
             &[
                 "-NoProfile",
                 "-NonInteractive",
+                "-WindowStyle",
+                "Hidden",
                 "-Command",
                 "Get-Printer | Select-Object -ExpandProperty Name",
             ],
@@ -250,6 +270,8 @@ pub fn default_printer() -> Option<String> {
             &[
                 "-NoProfile",
                 "-NonInteractive",
+                "-WindowStyle",
+                "Hidden",
                 "-Command",
                 "(Get-CimInstance Win32_Printer -Filter 'Default=true').Name",
             ],
