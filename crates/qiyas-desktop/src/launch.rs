@@ -5,8 +5,9 @@
 //! paths wait in `OpenRequests` until the window takes them (`take_open_requests`, after
 //! `OPEN_REQUESTED`) and opens each as File, Open does, so a newer autosave is offered first.
 
+use std::ffi::OsString;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
 use serde::Deserialize;
@@ -26,7 +27,7 @@ pub struct OpenRequests(Mutex<Vec<String>>);
 /// The drawings `args` (a launch's arguments after the program) name: existing `.dwg` and
 /// `.dxf` files, relative ones under `cwd`, `file://` addresses as their files; a `.qiyas`
 /// project gives the drawing it belongs to. Options (`-x`, `--x`), folders, other files and
-/// missing ones are left out.
+/// missing ones are left out. Paths come tidied (`tidy`), so a drawing open already is found.
 pub fn drawing_paths(args: &[String], cwd: &Path) -> Vec<PathBuf> {
     args.iter()
         .filter(|a| !a.is_empty() && !a.starts_with('-'))
@@ -38,12 +39,41 @@ pub fn drawing_paths(args: &[String], cwd: &Path) -> Vec<PathBuf> {
                 Some(cwd.join(a))
             }
         })
+        .map(|path| tidy(&path))
         .filter_map(|path| {
             if has_extension(&path, &["qiyas"]) {
                 drawing_of_project(&path)
             } else {
                 (has_extension(&path, &DRAWINGS) && path.is_file()).then_some(path)
             }
+        })
+        .collect()
+}
+
+/// `path` with `.` dropped and each `..` taking off the folder before it, without reading the
+/// disk: no links followed, and no `\\?\` on Windows as `fs::canonicalize` gives.
+fn tidy(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::CurDir => {}
+            Component::ParentDir if out.file_name().is_some() => {
+                out.pop();
+            }
+            _ => out.push(part),
+        }
+    }
+    out
+}
+
+/// The arguments that are text; one that isn't (a file name in an old code page) is left out
+/// and logged, never a panic as `std::env::args` would.
+fn text_args(args: impl IntoIterator<Item = OsString>) -> Vec<String> {
+    args.into_iter()
+        .filter_map(|a| {
+            a.into_string()
+                .map_err(|a| eprintln!("Not opened, its name is not text: {}", a.to_string_lossy()))
+                .ok()
         })
         .collect()
 }
@@ -96,7 +126,7 @@ fn request<R: Runtime>(app: &AppHandle<R>, paths: Vec<PathBuf>) {
 
 /// This launch's own files (a double click on a drawing while Qiyas was closed).
 pub fn request_launch_files<R: Runtime>(app: &AppHandle<R>) {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let args = text_args(std::env::args_os().skip(1));
     let cwd = std::env::current_dir().unwrap_or_default();
     request(app, drawing_paths(&args, &cwd));
 }
@@ -187,6 +217,59 @@ mod tests {
             d,
         );
         assert_eq!(found, [d.join("plan.dwg")]);
+    }
+
+    #[test]
+    fn paths_are_tidied_so_an_open_drawing_is_found() {
+        let dir = folder();
+        let d = dir.path();
+        assert_eq!(
+            drawing_paths(&args(&["./plan.dwg", "sub.dwg/../plan.dwg"]), d),
+            [d.join("plan.dwg"), d.join("plan.dwg")]
+        );
+        assert_eq!(tidy(Path::new("/a/./b/../../c.dwg")), Path::new("/c.dwg"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_argument_that_is_not_text_is_left_out() {
+        use std::os::unix::ffi::OsStringExt;
+        let args = vec![
+            OsString::from_vec(b"caf\xe9.dwg".to_vec()),
+            OsString::from("plan.dwg"),
+        ];
+        assert_eq!(text_args(args), ["plan.dwg"]);
+    }
+
+    #[test]
+    fn windows_leaves_dwg_and_dxf_to_autocad_and_the_others_only_offer_qiyas() {
+        let names = |text: &str| -> Vec<(String, String)> {
+            let conf: serde_json::Value = serde_json::from_str(text).unwrap();
+            conf["bundle"]["fileAssociations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|a| {
+                    let rank = a["rank"].as_str().unwrap_or("Default");
+                    (a["name"].as_str().unwrap().to_string(), rank.to_string())
+                })
+                .collect()
+        };
+        let pair = |n: &str, r: &str| (n.to_string(), r.to_string());
+        assert_eq!(
+            names(include_str!("../tauri.conf.json")),
+            [
+                pair("Qiyas drawing (DWG)", "Alternate"),
+                pair("Qiyas drawing (DXF)", "Alternate"),
+                pair("Qiyas project", "Owner"),
+            ]
+        );
+        // The Windows file replaces the list (a JSON merge patch replaces arrays): the NSIS and
+        // MSI installers make every association they get the default.
+        assert_eq!(
+            names(include_str!("../tauri.windows.conf.json")),
+            [pair("Qiyas project", "Default")]
+        );
     }
 
     #[test]

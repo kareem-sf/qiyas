@@ -1,0 +1,11 @@
+{
+  "bundle": {
+    "fileAssociations": [
+      {
+        "ext": ["qiyas"],
+        "name": "Qiyas project",
+        "description": "Qiyas project"
+      }
+    ]
+  }
+}

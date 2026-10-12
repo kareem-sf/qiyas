@@ -36,15 +36,17 @@
     "fileAssociations": [
       {
         "ext": ["dwg"],
-        "name": "DWG drawing",
-        "description": "DWG drawing",
-        "mimeType": "image/vnd.dwg"
+        "name": "Qiyas drawing (DWG)",
+        "description": "Qiyas drawing (DWG)",
+        "mimeType": "image/vnd.dwg",
+        "rank": "Alternate"
       },
       {
         "ext": ["dxf"],
-        "name": "DXF drawing",
-        "description": "DXF drawing",
-        "mimeType": "image/vnd.dxf"
+        "name": "Qiyas drawing (DXF)",
+        "description": "Qiyas drawing (DXF)",
+        "mimeType": "image/vnd.dxf",
+        "rank": "Alternate"
       },
       {
         "ext": ["qiyas"],
