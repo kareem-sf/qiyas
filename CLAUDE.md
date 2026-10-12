@@ -987,8 +987,9 @@ their measurements are marked `mcp`).
   version, notes, pub_date, a `url` and `signature` per platform key `linux-x86_64-appimage`,
   `linux-x86_64-deb`, `linux-x86_64-rpm`, `windows-x86_64-nsis`, `windows-x86_64-msi`,
   `darwin-aarch64-app`, `darwin-x86_64-app`). Its address is `plugins.updater.endpoints` in `tauri.conf.json` and the
-  signing public key `plugins.updater.pubkey`. Both are `REPLACE-ME` placeholders until the
-  founder sets them; while either is (or the feed is not `https://`), every check is refused (`updates_not_configured`, and the
+  signing public key `plugins.updater.pubkey`. Both are set (the feed at `https://qsmind.app/qiyas/latest.json`, which the site does
+  not serve yet: a check reports the feed's error until the first `latest.json` is uploaded); a
+  `REPLACE-ME` placeholder in either (or a feed that is not `https://`) makes every check refused (`updates_not_configured`, and the
   About box says "Updates are not set up in this build yet"), never a silent failure.
 - About box: Check for updates, then Install and restart (download with its progress, signature
   check, install, restart; refused while a drawing has unsaved changes, before the download and
@@ -1002,15 +1003,20 @@ their measurements are marked `mcp`).
   check sets it, and the Settings dialog never changes it. An update found then is offered in a
   native dialog in the window's language (Install and restart, Later). Nothing installs without
   a click.
-- Keys: the founder runs `pnpm tauri signer generate -w ~/.tauri/qiyas.key` once, keeps the
-  private key and its password outside the repo (`.gitignore` covers `*.key`, `*.key.pub`,
-  `*.pem`, `*.p12`, `*.pfx`, `*.p8`, `.tauri/`) and pastes the printed public key into `pubkey`.
-  A lost private key means installed copies can never update again: keep a backup.
-- Release with updates: `read -s TAURI_SIGNING_PRIVATE_KEY_PASSWORD && export
-  TAURI_SIGNING_PRIVATE_KEY_PASSWORD TAURI_SIGNING_PRIVATE_KEY=~/.tauri/qiyas.key && pnpm
-  bundle:signed` (the password never in shell history) adds `tauri.updater.conf.json`
-  (`createUpdaterArtifacts`), so each bundle gets a `.sig` beside it. Upload the bundles, put
-  each `.sig`'s text in `latest.json` with the new version, upload `latest.json` last. Plain
+- Keys: the signing key pair was generated on 2026-10-12 on the founder's authority and lives
+  outside the repo: `~/.tauri/qiyas.key` (private, mode 0600), its password in
+  `~/.tauri/qiyas.key.password` (0600), the public key in `~/.tauri/qiyas.key.pub` and in
+  `pubkey`. `.gitignore` covers `*.key`, `*.key.pub`, `*.pem`, `*.p12`, `*.pfx`, `*.p8`,
+  `.tauri/`. A lost private key means installed copies can never update again: keep a backup
+  of the two files off this laptop. To make a new pair: `pnpm tauri signer generate -w
+  ~/.tauri/qiyas.key` (never paste the password into a chat).
+- Release with updates: `export TAURI_SIGNING_PRIVATE_KEY=~/.tauri/qiyas.key
+  TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$(cat ~/.tauri/qiyas.key.password)" && pnpm
+  bundle:signed` (the password never typed or in shell history) adds `tauri.updater.conf.json`
+  (`createUpdaterArtifacts`), so each bundle gets a `.sig` beside it. Then `scripts/release-feed.sh
+  ["notes"]` writes `target/release/bundle/latest.json` from the `.sig` files (download address
+  `https://qsmind.app/downloads/qiyas/<version>/`). Upload the bundles, then `latest.json` to
+  `https://qsmind.app/qiyas/latest.json` last. Plain
   `pnpm bundle` needs no key and makes unsigned bundles. The Tauri CLI (`@tauri-apps/cli`
   2.12.1) doesn't write the version into the signature yet, so `requireSignedVersion`
   (downgrade protection: whoever controls the feed host could offer an older signed build as
