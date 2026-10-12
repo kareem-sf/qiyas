@@ -623,6 +623,20 @@ pub enum Command {
     UcsObject {
         target: Target,
     },
+    /// AutoCAD's PURGE: what nothing uses, of `kinds` (every kind when empty; see
+    /// `crate::purge`). A dry run only lists it (no step); otherwise it goes as one undo step.
+    /// `Outcome::Purged`.
+    Purge {
+        #[serde(default)]
+        kinds: Vec<crate::purge::PurgeKind>,
+        dry_run: bool,
+    },
+    /// AutoCAD's AUDIT: what points at something the drawing does not have (see
+    /// `crate::audit`); with `fix` the safe repairs, as one undo step. `Outcome::Audited`.
+    Audit {
+        #[serde(default)]
+        fix: bool,
+    },
 }
 
 /// `InsertBlock`'s scale when none is given.
@@ -782,6 +796,14 @@ impl Command {
                 tables: true,
                 takeoff: true,
             }),
+            // Lists only.
+            Command::Purge { dry_run: true, .. } | Command::Audit { fix: false } => None,
+            // Table entries, block records with their entities, groups (objects); entities'
+            // layers and styles.
+            Command::Purge { .. } | Command::Audit { .. } => Some(Part::Document {
+                tables: true,
+                takeoff: false,
+            }),
             _ => Some(Part::Takeoff),
         }
     }
@@ -875,6 +897,14 @@ pub enum Outcome {
         saved: bool,
         unlinked: usize,
         dropped: usize,
+    },
+    /// What a purge took out, or a dry run would.
+    Purged {
+        report: crate::purge::PurgeReport,
+    },
+    /// What an audit found, and repaired with `fix`.
+    Audited {
+        report: crate::audit::AuditReport,
     },
 }
 
@@ -1442,6 +1472,14 @@ impl Session {
             Command::UcsObject { target } => {
                 self.ucs = self.ucs_of_entity(&target)?;
                 return Ok(Outcome::Changed);
+            }
+            Command::Purge { kinds, dry_run } => {
+                let report = self.purge(&kinds, dry_run)?;
+                return Ok(Outcome::Purged { report });
+            }
+            Command::Audit { fix } => {
+                let report = self.audit(fix)?;
+                return Ok(Outcome::Audited { report });
             }
             Command::MView { corner1, corner2 } => {
                 let h = self.mview(corner1, corner2)?;

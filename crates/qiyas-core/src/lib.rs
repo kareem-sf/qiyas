@@ -5,6 +5,7 @@
 //! translator, groups, editing and matching entity properties, the clipboard, paper-space
 //! viewports, the user coordinate system, sheet sets, and autosave and recovery.
 
+pub mod audit;
 mod autosave;
 mod blocks;
 mod boq;
@@ -27,6 +28,7 @@ mod modify;
 mod modify2;
 mod project;
 mod props;
+pub mod purge;
 mod query;
 pub mod script;
 mod session;
