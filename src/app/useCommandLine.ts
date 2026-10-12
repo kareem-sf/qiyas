@@ -17,6 +17,7 @@ import type { DraftingState } from "./useDrafting";
 import type { Drawings } from "./useDrawings";
 import type { Layers } from "./useLayers";
 import type { Options } from "./useOptions";
+import type { Parametric } from "./useParametric";
 import type { Plot } from "./usePlot";
 import type { Shell } from "./useShell";
 import type { Sheets } from "./useSheets";
@@ -63,6 +64,7 @@ type Deps = {
     Options,
     "shortcuts" | "setOptionsOpen" | "setCustomizeOpen" | "setAliasesOpen" | "openPurge" | "openAudit"
   >;
+  parametric: Pick<Parametric, "openParameters">;
 };
 
 export function useCommandLine({
@@ -84,6 +86,7 @@ export function useCommandLine({
   takeoff,
   plot,
   options,
+  parametric,
 }: Deps) {
   const { run, setError, notice, setNotice, setSideTab, viewport, commandAliases } = shell;
   const { toggleDrafting } = drafting;
@@ -355,6 +358,9 @@ export function useCommandLine({
         return openDimStyle();
       case "updateFields":
         return updateFields();
+      case "parameters":
+        if (info) parametric.openParameters();
+        return;
       case "insertBlock":
       case "writeBlock":
         return setBlockPaletteOpen(true);

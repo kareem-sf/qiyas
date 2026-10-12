@@ -138,6 +138,8 @@ export type DrawingInfo = {
   viewports?: ViewportInfo[];
   /** The user coordinate system (world when left out). */
   ucs?: Ucs;
+  /** The drawing has (or had) parametric constraints (left out: none). */
+  has_constraints?: boolean;
 };
 
 /** A user coordinate system: an origin and a unit x axis in the plan (`qiyas_core::Ucs`). */
@@ -1023,7 +1025,74 @@ export type Command =
   | { type: "purge"; kinds: PurgeKind[]; dry_run: boolean }
   /** AUDIT: what points at something the drawing does not have; `fix` repairs what is safe to,
    *  as one undo step. */
-  | { type: "audit"; fix: boolean };
+  | { type: "audit"; fix: boolean }
+  /** A geometric constraint on the parts of `targets` picked at `points` (one each); the first
+   *  entity picked stays where it is when it can. */
+  | { type: "add_constraint"; kind: ConstraintKind; targets: EntityTarget[]; points: P[] }
+  | { type: "delete_constraint"; id: number }
+  /** DELCONSTRAINT: every constraint holding one of `targets`. */
+  | { type: "delete_constraints_on"; targets: EntityTarget[] }
+  /** AUTOCONSTRAIN: what is already true of `targets`, within the settings' tolerances. */
+  | { type: "auto_constrain"; targets: EntityTarget[]; settings?: AutoSettings }
+  /** A dimensional constraint (linear, aligned, angular, radius, diameter), its Dimension
+   *  through `line_point`, its value `expression` (the measured value when null). */
+  | {
+      type: "add_dim_constraint";
+      kind: ConstraintKind;
+      targets: EntityTarget[];
+      points: P[];
+      line_point: P;
+      expression?: string | null;
+    }
+  /** A parameter takes a number or a formula of others (`2*d2 + 1.5`); circles are refused. */
+  | { type: "set_parameter"; name: string; expression: string }
+  | { type: "list_constraints" }
+  | { type: "list_parameters" };
+
+/** What a constraint keeps (`qiyas_core::ConstraintKind`): the geometric kinds, then the
+ *  dimensional ones. */
+export const GEOMETRIC_KINDS = [
+  "coincident",
+  "collinear",
+  "concentric",
+  "fixed",
+  "parallel",
+  "perpendicular",
+  "horizontal",
+  "vertical",
+  "tangent",
+  "smooth",
+  "symmetric",
+  "equal",
+] as const;
+export const DIMENSIONAL_KINDS = ["linear", "aligned", "angular", "radius", "diameter"] as const;
+export type ConstraintKind = (typeof GEOMETRIC_KINDS)[number] | (typeof DIMENSIONAL_KINDS)[number];
+
+/** AUTOCONSTRAIN's kinds and tolerances (drawing units, degrees); the core's defaults when left out. */
+export type AutoSettings = { kinds?: ConstraintKind[]; distance_tolerance?: number; angle_tolerance?: number };
+
+/** A constraint on the sheet on screen: the entities it holds, where its first part is, and a
+ *  dimensional one's parameter, expression, value (drawing units or degrees) and Dimension. */
+export type ConstraintInfo = {
+  id: number;
+  kind: ConstraintKind;
+  handles: number[];
+  at: P;
+  name: string | null;
+  expression: string | null;
+  value: number | null;
+  dimension: number | null;
+};
+
+/** A dimensional constraint's parameter; `value` null when its expression can't be worked out. */
+export type ParameterInfo = {
+  id: number;
+  name: string;
+  kind: ConstraintKind;
+  expression: string;
+  value: number | null;
+  dimension: number;
+};
 
 /** What a purge looks at (`qiyas_core::purge::PurgeKind`); `styles` are text styles. */
 export const PURGE_KINDS = ["layers", "blocks", "styles", "linetypes", "dimstyles", "groups"] as const;
@@ -1100,9 +1169,25 @@ export type Outcome =
   /** A copy went onto the system clipboard: how many entities. */
   | { type: "clipboard"; text: string; count: number }
   | { type: "purged"; report: PurgeReport }
-  | { type: "audited"; report: AuditReport };
+  | { type: "audited"; report: AuditReport }
+  /** Constraints added (or removed), by id. */
+  | { type: "constrained"; ids: number[] }
+  | { type: "constraints"; constraints: ConstraintInfo[] }
+  | { type: "parameters"; parameters: ParameterInfo[] };
 
 export const runCommand = (cmd: Command) => invoke<Outcome>("run_command", { cmd });
+
+/** The constraints of the sheet on screen. */
+export async function listConstraints(): Promise<ConstraintInfo[]> {
+  const o = await runCommand({ type: "list_constraints" });
+  return o.type === "constraints" ? o.constraints : [];
+}
+
+/** Every parameter of the drawing, by name. */
+export async function listParameters(): Promise<ParameterInfo[]> {
+  const o = await runCommand({ type: "list_parameters" });
+  return o.type === "parameters" ? o.parameters : [];
+}
 
 /** False when there was nothing to undo. */
 export const undo = () => invoke<boolean>("undo");

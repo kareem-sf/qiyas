@@ -743,3 +743,37 @@ test("UCS takes an origin and a point on its x axis; UCS OB an entity", () => {
   expect(ob.pendingCommand).toEqual({ type: "ucs_object", target: { handle: 9, chain: [] } });
   expect(run("ucsObject", [click([1, 1], 0)]).pendingCommand).toBeNull();
 });
+
+test("a parametric tool picks parts where they are clicked, places a dimension, and takes the selection", () => {
+  // The rectangle's bottom edge picked near (2, 0.1): the core takes the nearest part.
+  const horizontal = run("gcHorizontal", [click([2, 0.1], 0, 7)]);
+  expect(horizontal.pendingCommand).toEqual({
+    type: "add_constraint",
+    kind: "horizontal",
+    targets: [{ handle: 7, chain: [] }],
+    points: [[2, 0.1]],
+  });
+  // A click on nothing picks nothing.
+  expect(run("gcParallel", [click([2, 2], 0, null)]).param?.picks).toEqual([]);
+
+  const linear = run("dcLinear", [click([2, 0], 0, 7), click([2, -1], 1000, null)]);
+  expect(linear.pendingCommand).toMatchObject({ type: "add_dim_constraint", kind: "linear", line_point: [2, -1] });
+
+  // AUTOCONSTRAIN runs at once on what was selected; DELCONSTRAINT boxes until Enter.
+  expect(initialToolState("autoConstrain", [3]).pendingCommand).toEqual({
+    type: "auto_constrain",
+    targets: [{ handle: 3, chain: [] }],
+  });
+  const del = toolReducer(initialToolState("delConstraint"), { type: "selected", handles: [4, 5], add: false });
+  expect(del.param?.handles).toEqual([4, 5]);
+  expect(toolReducer(del, { type: "finish" }).pendingCommand).toEqual({
+    type: "delete_constraints_on",
+    targets: [
+      { handle: 4, chain: [] },
+      { handle: 5, chain: [] },
+    ],
+  });
+  // An undo that took an entity away drops it from the picks.
+  const pruned = toolReducer(run("gcEqual", [click([0, 0], 0, 6)]), { type: "prune", present: (h) => h !== 6 });
+  expect(pruned.param?.picks).toEqual([]);
+});

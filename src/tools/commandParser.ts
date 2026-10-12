@@ -78,7 +78,9 @@ export type Run =
   | "customize"
   | "aliasEdit"
   | "purge"
-  | "audit";
+  | "audit"
+  /** PARAMETERS: the parameters manager. */
+  | "parameters";
 
 export type Action =
   /** An empty line where a command is expected: run the last command again. */
@@ -149,6 +151,7 @@ const RUNS: Partial<Record<CommandName, Run>> = {
   ALIASEDIT: "aliasEdit",
   PURGE: "purge",
   AUDIT: "audit",
+  PARAMETERS: "parameters",
 };
 
 const TOOLS: Partial<Record<CommandName, Tool>> = {
@@ -226,6 +229,50 @@ const TOOLS: Partial<Record<CommandName, Tool>> = {
   PASTECLIP: "pasteclip",
   PASTEBLOCK: "pasteblock",
   MVIEW: "mview",
+  AUTOCONSTRAIN: "autoConstrain",
+  DELCONSTRAINT: "delConstraint",
+};
+
+/** GEOMCONSTRAINT's and DIMCONSTRAINT's option words (AutoCAD's), each to its tool. */
+const GEOM_OPTIONS: Record<string, Tool> = {
+  C: "gcCoincident",
+  COINCIDENT: "gcCoincident",
+  COL: "gcCollinear",
+  COLLINEAR: "gcCollinear",
+  CON: "gcConcentric",
+  CONCENTRIC: "gcConcentric",
+  F: "gcFixed",
+  FIX: "gcFixed",
+  FIXED: "gcFixed",
+  PAR: "gcParallel",
+  PARALLEL: "gcParallel",
+  P: "gcPerpendicular",
+  PERPENDICULAR: "gcPerpendicular",
+  H: "gcHorizontal",
+  HORIZONTAL: "gcHorizontal",
+  V: "gcVertical",
+  VERTICAL: "gcVertical",
+  T: "gcTangent",
+  TANGENT: "gcTangent",
+  SM: "gcSmooth",
+  SMOOTH: "gcSmooth",
+  S: "gcSymmetric",
+  SYMMETRIC: "gcSymmetric",
+  E: "gcEqual",
+  EQUAL: "gcEqual",
+};
+
+const DIM_OPTIONS: Record<string, Tool> = {
+  L: "dcLinear",
+  LINEAR: "dcLinear",
+  AL: "dcAligned",
+  ALIGNED: "dcAligned",
+  AN: "dcAngular",
+  ANGULAR: "dcAngular",
+  R: "dcRadius",
+  RADIUS: "dcRadius",
+  D: "dcDiameter",
+  DIAMETER: "dcDiameter",
 };
 
 /** The draws typed whole on one line. */
@@ -458,6 +505,13 @@ function command(
       if (how === "") return { type: "run", what: "vports" };
       if (how === "1" || how === "2") return { type: "run", what: how === "1" ? "vports1" : "vports2" };
       return { type: "error", key: "cmd.vportsOption" };
+    }
+    case "GEOMCONSTRAINT":
+    case "DIMCONSTRAINT": {
+      const options = cmd === "GEOMCONSTRAINT" ? GEOM_OPTIONS : DIM_OPTIONS;
+      const tool = options[rest.trim().toUpperCase()];
+      if (tool) return { type: "tool", tool };
+      return { type: "error", key: cmd === "GEOMCONSTRAINT" ? "cmd.gcOption" : "cmd.dcOption" };
     }
     case "UCS": {
       const how = rest.trim().toUpperCase();

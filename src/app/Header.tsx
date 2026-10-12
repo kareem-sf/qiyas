@@ -10,6 +10,7 @@ import type { Commands, ToolChoice } from "./useCommands";
 import type { Drawings } from "./useDrawings";
 import type { Layers } from "./useLayers";
 import type { Options } from "./useOptions";
+import type { Parametric } from "./useParametric";
 import type { Plot } from "./usePlot";
 import type { Shell } from "./useShell";
 import type { Sheets } from "./useSheets";
@@ -32,6 +33,7 @@ type Props = {
   takeoff: Takeoff;
   plot: Plot;
   options: Pick<Options, "ribbon" | "setOptionsOpen" | "setCustomizeOpen" | "setAliasesOpen" | "openPurge" | "openAudit">;
+  parametric: Pick<Parametric, "openParameters" | "setBarHidden">;
 };
 
 export function Header({
@@ -50,6 +52,7 @@ export function Header({
   takeoff,
   plot,
   options,
+  parametric,
 }: Props) {
   const t = useT();
   const { lang, setLang } = useLanguage();
@@ -132,6 +135,8 @@ export function Header({
         onFind={info ? () => setFindOpen(true) : undefined}
         onDimStyle={info ? openDimStyle : undefined}
         onUpdateFields={info ? updateFields : undefined}
+        onParameters={info ? parametric.openParameters : undefined}
+        onConstraintBar={info ? () => parametric.setBarHidden(false) : undefined}
         onInsertBlock={info ? () => setBlockPaletteOpen(true) : undefined}
         onWriteBlock={info ? () => setBlockPaletteOpen(true) : undefined}
         onAttributeManager={info ? openAttributeManager : undefined}

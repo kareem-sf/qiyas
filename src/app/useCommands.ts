@@ -143,6 +143,12 @@ export function useCommands({
         "edit_block_in_place",
         "paste_from_clipboard",
         "mview",
+        "add_constraint",
+        "delete_constraint",
+        "delete_constraints_on",
+        "auto_constrain",
+        "add_dim_constraint",
+        "set_parameter",
       ];
       if (drawingChanged.includes(cmd.type)) {
         await redraw();
@@ -158,6 +164,13 @@ export function useCommands({
         chooseTool("select");
       }
       if (outcome.type === "measured") setSelectedId(outcome.measurement.id);
+      // AUTOCONSTRAIN and DELCONSTRAINT say how many.
+      if (outcome.type === "constrained" && cmd.type === "auto_constrain") {
+        setNotice(t("param.added", { n: outcome.ids.length }));
+      }
+      if (outcome.type === "constrained" && cmd.type === "delete_constraints_on") {
+        setNotice(t("param.removed", { n: outcome.ids.length }));
+      }
       if (outcome.type === "exploded" || outcome.type === "takeoff_followed") {
         const notes: string[] = [];
         if (outcome.type === "exploded" && outcome.left_alone > 0) {

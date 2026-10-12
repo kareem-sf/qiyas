@@ -95,7 +95,8 @@ fn tab(id: &str, groups: Vec<RibbonGroup>) -> RibbonTab {
     }
 }
 
-/// The ribbon Qiyas ships: Home, Measure, Annotate, Insert, View, Manage (Run script; Audit and
+/// The ribbon Qiyas ships: Home, Measure, Annotate, Parametric (geometric and dimensional
+/// constraints, Parameters manager, Delete constraints, the constraint bar), Insert, View, Manage (Run script; Audit and
 /// Purge; Options, Customize and Aliases) and Output (Plot, Quick print, Print all layouts, Plot
 /// styles), as `Ribbon.tsx` draws them. Labels are i18n keys.
 pub fn default_ribbon() -> RibbonLayout {
@@ -344,8 +345,60 @@ pub fn default_ribbon() -> RibbonLayout {
             ),
         ],
     );
+    let parametric = tab(
+        "parametric",
+        vec![
+            group(
+                "geometric",
+                "param.geometric",
+                tools(
+                    "param",
+                    &[
+                        "gcCoincident",
+                        "gcCollinear",
+                        "gcConcentric",
+                        "gcFixed",
+                        "gcParallel",
+                        "gcPerpendicular",
+                        "gcHorizontal",
+                        "gcVertical",
+                        "gcTangent",
+                        "gcSmooth",
+                        "gcSymmetric",
+                        "gcEqual",
+                        "autoConstrain",
+                    ],
+                ),
+            ),
+            group(
+                "dimensional",
+                "param.dimensional",
+                tools(
+                    "param",
+                    &[
+                        "dcLinear",
+                        "dcAligned",
+                        "dcAngular",
+                        "dcRadius",
+                        "dcDiameter",
+                    ],
+                ),
+            ),
+            group(
+                "constraints",
+                "param.manage",
+                vec![
+                    action("parameters", "param.parameters"),
+                    tool("delConstraint", "param.delConstraint"),
+                    action("constraintBar", "param.showBar"),
+                ],
+            ),
+        ],
+    );
     RibbonLayout {
-        tabs: vec![home, measure, annotate, insert, view, manage, output],
+        tabs: vec![
+            home, measure, annotate, parametric, insert, view, manage, output,
+        ],
     }
 }
 

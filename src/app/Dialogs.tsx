@@ -36,6 +36,7 @@ import { DimStylePanel } from "../shell/DimStylePanel";
 import { DraftingSettings } from "../shell/DraftingSettings";
 import { ExtractDialog } from "../shell/ExtractDialog";
 import { FieldDialog } from "../shell/FieldDialog";
+import { ParametersManager } from "../shell/ParametersManager";
 import { FindReplaceDialog } from "../shell/FindReplaceDialog";
 import { GroupNameDialog, LayerStatesDialog } from "../shell/LayerDialogs";
 import { LayerTranslator } from "../shell/LayerTranslator";
@@ -61,6 +62,7 @@ import type { DraftingState } from "./useDrafting";
 import type { Drawings } from "./useDrawings";
 import type { Layers } from "./useLayers";
 import type { Options } from "./useOptions";
+import type { Parametric } from "./useParametric";
 import type { Plot } from "./usePlot";
 import type { Shell } from "./useShell";
 import type { Sheets } from "./useSheets";
@@ -78,6 +80,7 @@ type Props = {
   drawings: Drawings;
   plot: Plot;
   options: Options;
+  parametric: Pick<Parametric, "parametersOpen" | "parameters" | "setParameter" | "closeParameters">;
 };
 
 /** The dialogs over the drawing (between the top bar and the panels). */
@@ -94,6 +97,7 @@ export function Dialogs({
   drawings,
   plot,
   options,
+  parametric,
 }: Props) {
   const t = useT();
   const { theme, aboutOpen, setAboutOpen, settingsOpen, setSettingsOpen, loadAliases, run, setNotice, focusDrawing } =
@@ -549,6 +553,17 @@ export function Dialogs({
           }}
           onClose={() => {
             setTableEditing(null);
+            focusDrawing();
+          }}
+        />
+      )}
+      {parametric.parametersOpen && (
+        <ParametersManager
+          parameters={parametric.parameters}
+          precision={draftingState.drafting?.precision ?? 3}
+          onSet={parametric.setParameter}
+          onClose={() => {
+            parametric.closeParameters();
             focusDrawing();
           }}
         />

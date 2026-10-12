@@ -26,6 +26,7 @@ import { useAutosave, useDrawings, useFileTabs } from "./useDrawings";
 import { useLayers } from "./useLayers";
 import { useOptions } from "./useOptions";
 import { useOverlay } from "./useOverlay";
+import { useParametric } from "./useParametric";
 import { usePlot } from "./usePlot";
 import { useSelection } from "./useSelection";
 import { useSheets } from "./useSheets";
@@ -126,6 +127,17 @@ export default function App() {
     apply: applyRef,
   });
   const { setDimText, currentTextHeight, placeText, openTextEdit } = annotate;
+  const parametric = useParametric({
+    info,
+    batch,
+    tool,
+    run,
+    redraw,
+    refreshTakeoffAndBoq,
+    setAiHighlight,
+    autosave,
+    apply: applyRef,
+  });
   const commands = useCommands({
     t,
     setInfo,
@@ -257,6 +269,7 @@ export default function App() {
     takeoff,
     plot,
     options,
+    parametric,
   });
   onCommandRef.current = onCommand;
   const selection = useSelection({ info, tool, measure, batch, redraw, runLayerCommand });
@@ -288,6 +301,7 @@ export default function App() {
         takeoff={takeoff}
         plot={plot}
         options={options}
+        parametric={parametric}
       />
       <Dialogs
         info={info}
@@ -302,6 +316,7 @@ export default function App() {
         drawings={drawings}
         plot={plot}
         options={options}
+        parametric={parametric}
       />
       <div className="middle">
         <LeftPanels
@@ -331,6 +346,7 @@ export default function App() {
           drawings={drawings}
           selection={selection}
           colours={options.colours}
+          parametric={parametric}
         />
         <SidePanel info={info} drafting={drafting} shell={shell} takeoffState={takeoffState} takeoff={takeoff} ai={ai} />
       </div>

@@ -29,8 +29,19 @@ const CORE: RibbonLayout = {
   ],
 };
 
-test("the window's default has the seven tabs, and Manage has Audit, Purge, Options, Customize and Aliases", () => {
-  expect(DEFAULT_RIBBON.tabs.map((t) => t.id)).toEqual(["home", "measure", "annotate", "insert", "view", "manage", "output"]);
+test("the window's default has the eight tabs, and Manage has Audit, Purge, Options, Customize and Aliases", () => {
+  expect(DEFAULT_RIBBON.tabs.map((t) => t.id)).toEqual([
+    "home",
+    "measure",
+    "annotate",
+    "parametric",
+    "insert",
+    "view",
+    "manage",
+    "output",
+  ]);
+  const parametric = DEFAULT_RIBBON.tabs.find((t) => t.id === "parametric")!;
+  expect(parametric.groups.map((g) => g.buttons.length)).toEqual([13, 5, 3]);
   const manage = DEFAULT_RIBBON.tabs.find((t) => t.id === "manage")!;
   expect(manage.groups.flatMap((g) => g.buttons.map((b) => b.command))).toEqual([
     "runScript",

@@ -68,6 +68,16 @@ import {
   type DimRequest,
   type DimState,
 } from "./dimTools";
+import {
+  constraintBoxes,
+  constraintHighlight,
+  constraintPicks,
+  constraintReducer,
+  initialConstraintState,
+  isConstraintTool,
+  type ConstraintInput,
+  type ConstraintState,
+} from "./constraintTools";
 import { constrain, gridRound, NO_TRACK, type Track } from "./tracking";
 
 /** Two clicks this close in time and on screen are a double click. */
@@ -110,6 +120,8 @@ export type ToolState = {
   text: TextState | null;
   /** An annotate tool's own state (dimensions, leaders, tolerances); null for the others. */
   dim: DimState | null;
+  /** A parametric tool's own state (constraints); null for the others. */
+  param: ConstraintState | null;
   /** Set by the click that asks to edit a text or a table (the text and table edit tools', or the
    *  select tool's double click on one): the top-level handle; the hook hands it to the app. */
   pendingEdit: number | null;
@@ -206,7 +218,9 @@ const promptOf = (tool: Tool): string =>
           ? initialTextState(tool).hint
           : isDimTool(tool)
             ? initialDimState(tool).hint
-            : (PROMPT[tool] ?? "");
+            : isConstraintTool(tool)
+              ? initialConstraintState(tool).hint
+              : (PROMPT[tool] ?? "");
 
 /** The draw tools that take points until Enter, which a double click also ends. */
 const MANY_POINTS = new Set(["polyline", "spline", "revcloud", "wipeout"]);
@@ -221,12 +235,13 @@ export const initialToolState = (
   const modify = isModifyTool(tool) ? initialModifyState(tool, selection, kinds) : null;
   const edit = isEditTool(tool) ? initialEditState(tool, selection) : null;
   const dim = isDimTool(tool) ? initialDimState(tool, selection) : null;
-  const own = modify ?? edit ?? dim;
+  const param = isConstraintTool(tool) ? initialConstraintState(tool, selection) : null;
+  const own = modify ?? edit ?? dim ?? param;
   const text = isTextTool(tool) ? initialTextState(tool) : null;
   return {
     tool,
     points: [],
-    pendingCommand: modify?.command ?? edit?.command ?? null,
+    pendingCommand: modify?.command ?? edit?.command ?? param?.command ?? null,
     hint: own ? own.hint : tool === "select" ? "" : promptOf(tool),
     hintArgs: own ? own.hintArgs : (text?.hintArgs ?? null),
     selected: null,
@@ -239,6 +254,7 @@ export const initialToolState = (
     edit,
     text,
     dim,
+    param,
     pendingEdit: null,
     editAt: null,
     selection: own ? [] : selection,
@@ -279,6 +295,13 @@ function dimStep(s: ToolState, input: DimInput): ToolState {
   if (!s.dim) return s;
   const dim = dimReducer(s.dim, input);
   return { ...s, dim, hint: dim.hint, hintArgs: dim.hintArgs, pendingCommand: dim.command };
+}
+
+/** Hands `input` to the parametric tool; a constraint it finishes becomes the pending command. */
+function paramStep(s: ToolState, input: ConstraintInput): ToolState {
+  if (!s.param) return s;
+  const param = constraintReducer(s.param, input);
+  return { ...s, param, hint: param.hint, hintArgs: param.hintArgs, pendingCommand: param.command };
 }
 
 /** Hands `input` to the text tool. */
@@ -342,6 +365,7 @@ function finish(s: ToolState): ToolState {
   if (s.modify) return modifyStep(s, { type: "finish" });
   if (s.edit) return editStep(s, { type: "finish" });
   if (s.dim) return dimStep(s, { type: "finish" });
+  if (s.param) return paramStep(s, { type: "finish" });
   if (s.text) return textStep(s, { type: "finish" });
   if (s.tool === "select") return measureSelected(s);
   if (s.draw) return { ...drawStep(s, { type: "finish" }), lastClick: null };
@@ -360,7 +384,7 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
       // The selection set goes along; with none, the entity the select tool picked (whole).
       const carried = s.selection.length > 0 ? s.selection : s.selected ? [s.selected.picked.top] : [];
       const next = initialToolState(event.tool, carried, s.kinds);
-      return next.modify || next.edit || next.dim ? next : { ...next, hint: promptOf(event.tool) };
+      return next.modify || next.edit || next.dim || next.param ? next : { ...next, hint: promptOf(event.tool) };
     }
     case "draw":
       if (s.modify && event.input.type !== "ring") return modifyStep(s, event.input);
@@ -374,6 +398,7 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
       if (s.modify) return modifyStep(s, { type: "picked", handles: event.handles, kinds: event.kinds });
       if (s.edit) return editStep(s, { type: "picked", handles: event.handles });
       if (s.dim) return dimStep(s, { type: "picked", handles: event.handles });
+      if (s.param) return paramStep(s, { type: "picked", handles: event.handles });
       if (s.tool !== "select") return s;
       const kinds = withKinds(event.add ? s.kinds : {}, event.handles, event.kinds);
       return { ...s, selection: event.add ? union(s.selection, event.handles) : event.handles, kinds };
@@ -391,7 +416,12 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
         handles: s.dim.handles.filter(event.present),
         first: s.dim.first !== null && event.present(s.dim.first) ? s.dim.first : null,
       };
-      return { ...s, selection, modify, edit, dim };
+      const param = s.param && {
+        ...s.param,
+        handles: s.param.handles.filter(event.present),
+        picks: s.param.picks.filter((p) => event.present(p.handle)),
+      };
+      return { ...s, selection, modify, edit, dim, param };
     }
     case "cancel":
       return initialToolState(s.tool);
@@ -444,6 +474,14 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
         }
         const point = event.snapped ? event.world : constrain(lastDimPoint(s.dim), event.world, event.track ?? NO_TRACK);
         return dimStep(clicked, { type: "point", p: point });
+      }
+      if (s.param) {
+        if (constraintPicks(s.param)) {
+          const picked = event.picked;
+          if (!picked) return clicked;
+          return paramStep(clicked, { type: "pick", handle: picked.top, at: event.world });
+        }
+        return paramStep(clicked, { type: "point", p: event.world });
       }
       if (s.modify) {
         if (s.modify.phase === "select") {
@@ -686,7 +724,13 @@ export function useTool(
     ),
   );
   const modifyPhase = state.modify?.phase ?? null;
-  const editPicking = state.edit ? editPicks(state.edit) : state.dim ? dimPicks(state.dim) : null;
+  const editPicking = state.edit
+    ? editPicks(state.edit)
+    : state.dim
+      ? dimPicks(state.dim)
+      : state.param
+        ? constraintPicks(state.param)
+        : null;
   /** Clicks place snapped points, pick an entity, or neither (corners). */
   const snapsNow = snaps(tool) || modifyPhase === "points" || editPicking === false;
   const picksNow = picksEntity(tool) || modifyPhase === "select" || editPicking === true;
@@ -851,7 +895,13 @@ export function useTool(
       dispatch({ type: "modify", input: { type: "box", bounds } });
       return;
     }
-    const editBox = state.edit ? editBoxes(state.edit) : state.dim ? dimBoxes(state.dim) : false;
+    const editBox = state.edit
+      ? editBoxes(state.edit)
+      : state.dim
+        ? dimBoxes(state.dim)
+        : state.param
+          ? constraintBoxes(state.param)
+          : false;
     if (tool !== "select" && modifyPhase !== "select" && !editBox) return;
     try {
       const picked = await api.pickWindow(bounds, crossing);
@@ -878,6 +928,7 @@ export function useTool(
   const edit = state.edit;
   const text = state.text;
   const dim = state.dim;
+  const param = state.param;
   return {
     points: state.points,
     /** A draw tool's state (null for the others), the option words and whether a typed distance
@@ -941,7 +992,9 @@ export function useTool(
         ? editHighlight(edit)
         : dim
           ? dimHighlight(dim)
-          : state.selection.filter((h) => !state.selected || h !== state.selected.picked.top),
+          : param
+            ? constraintHighlight(param)
+            : state.selection.filter((h) => !state.selected || h !== state.selected.picked.top),
     /** Dimensions and tables the modify tool just left out: say how many. */
     skipped,
     /** The drawing changed: keep only the selected handles `present`. */
@@ -952,7 +1005,8 @@ export function useTool(
       modifyPhase === "select" ||
       modifyPhase === "window" ||
       (edit !== null && editBoxes(edit)) ||
-      (dim !== null && dimBoxes(dim)),
+      (dim !== null && dimBoxes(dim)) ||
+      (param !== null && constraintBoxes(param)),
     onBox,
     /** Hands a typed option or distance to the draw or modify tool. */
     drawInput: (input: DrawInput) => dispatch({ type: "draw", input }),

@@ -21,6 +21,7 @@ import {
   type Point,
 } from "./camera";
 import { isClick } from "./click";
+import type { ConstraintTool } from "../tools/constraintTools";
 import type { DimKind } from "../tools/dimTools";
 import type { DrawKind } from "../tools/drawTools";
 import type { EditKind } from "../tools/editTools";
@@ -42,6 +43,8 @@ export type Tool =
   | TextKind
   /** The annotate tools (`DIM_TOOLS`): dimensions, their edits, leaders and tolerances. */
   | DimKind
+  /** The parametric tools (`CONSTRAINT_TOOLS`): constraints, AUTOCONSTRAIN, DELCONSTRAINT. */
+  | ConstraintTool
   /** Click a text to edit it. */
   | "textEdit"
   /** Click a table to edit its cells. */

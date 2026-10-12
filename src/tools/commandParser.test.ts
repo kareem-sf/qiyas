@@ -451,3 +451,16 @@ test("the Manage commands: OPTIONS (OP), CUI, ALIASEDIT, PURGE (PU) and AUDIT", 
   expect(parse("PU", cmd)).toEqual({ type: "run", what: "purge" });
   expect(parse("Audit", cmd)).toEqual({ type: "run", what: "audit" });
 });
+
+test("the parametric commands: GC and DC take an option word, AUTOCONSTRAIN, DELCONSTRAINT and PAR", () => {
+  expect(parse("GC H", cmd)).toEqual({ type: "tool", tool: "gcHorizontal" });
+  expect(parse("geomconstraint perpendicular", cmd)).toEqual({ type: "tool", tool: "gcPerpendicular" });
+  expect(parse("GC", cmd)).toEqual({ type: "error", key: "cmd.gcOption" });
+  expect(parse("DC L", cmd)).toEqual({ type: "tool", tool: "dcLinear" });
+  expect(parse("dimconstraint d", cmd)).toEqual({ type: "tool", tool: "dcDiameter" });
+  expect(parse("DC X", cmd)).toEqual({ type: "error", key: "cmd.dcOption" });
+  expect(parse("AUTOCONSTRAIN", cmd)).toEqual({ type: "tool", tool: "autoConstrain" });
+  expect(parse("delconstraint", cmd)).toEqual({ type: "tool", tool: "delConstraint" });
+  expect(parse("PAR", cmd)).toEqual({ type: "run", what: "parameters" });
+  expect(parse("PARAMETERS", cmd)).toEqual({ type: "run", what: "parameters" });
+});

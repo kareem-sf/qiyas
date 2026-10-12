@@ -125,6 +125,19 @@ vi.mock("@tauri-apps/api/core", () => ({
             },
           };
         if (cmd.type === "audit") return { type: "audited", report: { fix: cmd.fix, counts: {}, repaired: 0, items: [] } };
+        if (cmd.type === "list_parameters")
+          return {
+            type: "parameters",
+            parameters: [{ id: 3, name: "d1", kind: "linear", expression: "4", value: 4, dimension: 30 }],
+          };
+        if (cmd.type === "list_constraints")
+          return {
+            type: "constraints",
+            constraints: [
+              { id: 1, kind: "horizontal", handles: [7], at: [2, 0], name: null, expression: null, value: null, dimension: null },
+            ],
+          };
+        if (cmd.type === "set_parameter") return { type: "changed" };
         return { type: "added", handles: [7, 8, 9, 10] };
       }
       default:
@@ -607,4 +620,33 @@ test("PURGE and AUDIT wait while a block is edited in place: the window says so,
   expect(screen.queryByRole("heading", { name: en["audit.title"] })).toBeNull();
   expect(screen.getByText(en["manage.blockEdit"])).toBeTruthy();
   expect(core.calls.filter((c) => c.startsWith("run_command"))).toEqual([]);
+});
+
+test("PARAMETERS (PAR) opens the manager; an edit is set, redrawn and saved; the bar lists the sheet's constraints", async () => {
+  await mount();
+  await clickOpen();
+  core.calls.length = 0;
+  await typeLine("PAR");
+  await settle();
+  expect(core.calls).toContain(`run_command {"cmd":{"type":"list_parameters"}}`);
+  expect(screen.getByRole("heading", { name: en["param.manager"] })).toBeTruthy();
+  // The bar shows once the manager (or a parametric tool) is used.
+  expect(screen.getByRole("toolbar", { name: en["param.bar"] })).toBeTruthy();
+
+  core.calls.length = 0;
+  const input = screen.getByRole("textbox", { name: en["param.expressionOf"].replace("{name}", "d1") });
+  fireEvent.change(input, { target: { value: "6" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  await settle();
+  expect(core.calls[0]).toBe(`run_command {"cmd":{"type":"set_parameter","name":"d1","expression":"6"}}`);
+  expect(core.calls).toContain("render_batch {}");
+  expect(core.calls).toContain("save_project null");
+
+  // The Parametric tab holds the tools; a glyph's click deletes its constraint.
+  fireEvent.click(screen.getByRole("tab", { name: en.parametric }));
+  expect(screen.getByRole("button", { name: en["param.gcHorizontal"] })).toBeTruthy();
+  core.calls.length = 0;
+  fireEvent.click(screen.getByRole("button", { name: en["param.glyph"].replace("{kind}", en["param.kind.horizontal"]) }));
+  await settle();
+  expect(core.calls[0]).toBe(`run_command {"cmd":{"type":"delete_constraint","id":1}}`);
 });

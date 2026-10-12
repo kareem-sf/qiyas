@@ -47,6 +47,9 @@ type Props = {
   onDimStyle?(): void;
   /** Works every field out again (UPDATEFIELD). */
   onUpdateFields?(): void;
+  /** The Parametric tab: the parameters manager (PARAMETERS) and showing the constraint bar. */
+  onParameters?(): void;
+  onConstraintBar?(): void;
   /** The Insert tab: the block palette to insert from (INSERT) or write a block (WBLOCK), the
    *  attribute manager (BATTMAN), the Design Center and the tool palette. */
   onInsertBlock?(): void;
@@ -118,6 +121,8 @@ function actions(props: Props): Record<string, (() => void) | undefined> {
     extract: props.onExtract,
     dimStyle: props.onDimStyle,
     updateFields: props.onUpdateFields,
+    parameters: props.onParameters,
+    constraintBar: props.onConstraintBar,
     blockPalette: props.onInsertBlock,
     writeBlock: props.onWriteBlock,
     attributeManager: props.onAttributeManager,

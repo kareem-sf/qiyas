@@ -9,6 +9,7 @@ import { openCount } from "../boq/conflictsMath";
 import { useT } from "../i18n";
 import { ImageDisplayPanel } from "../shell/AttachImageDialog";
 import { BlockEditBar } from "../shell/BlockDialogs";
+import { ConstraintBar } from "../shell/ConstraintBar";
 import { FileTabs } from "../shell/FileTabs";
 import { AlongPrompt, InfoCard } from "../shell/InfoCard";
 import { LayersPanel } from "../shell/LayersPanel";
@@ -30,6 +31,7 @@ import type { Attach } from "./useAttach";
 import type { Blocks } from "./useBlocks";
 import type { Drawings } from "./useDrawings";
 import type { Layers } from "./useLayers";
+import type { Parametric } from "./useParametric";
 import type { Selection } from "./useSelection";
 import type { Shell } from "./useShell";
 import type { Sheets } from "./useSheets";
@@ -125,6 +127,7 @@ type WorkProps = {
   selection: Selection;
   /** The Options dialog's background and highlight colours (null: the theme's). */
   colours: CanvasColours;
+  parametric: Pick<Parametric, "constraints" | "deleteConstraint" | "hoverConstraint" | "barHidden" | "setBarHidden">;
 };
 
 /** The drawing: the edit in place's bar, the file tabs, the canvas (with the along prompt, the
@@ -148,6 +151,7 @@ export function WorkArea({
   drawings,
   selection,
   colours,
+  parametric,
 }: WorkProps) {
   const { theme, error, setError, run, focusDrawing, viewport, viewportBox } = shell;
   const {
@@ -210,6 +214,17 @@ export function WorkArea({
             onMove={measure.onMove}
             onWindowZoomed={measure.cancel}
           />
+          {info && !parametric.barHidden && (
+            <ConstraintBar
+              constraints={parametric.constraints}
+              onDelete={parametric.deleteConstraint}
+              onHover={parametric.hoverConstraint}
+              onHide={() => {
+                parametric.hoverConstraint(null);
+                parametric.setBarHidden(true);
+              }}
+            />
+          )}
           {measure.asking && info && (
             <AlongPrompt
               key={measure.asking}

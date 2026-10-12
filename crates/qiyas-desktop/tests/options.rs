@@ -170,7 +170,16 @@ fn the_default_ribbon_is_valid_and_holds_every_tab() {
     let tabs: Vec<&str> = layout.tabs.iter().map(|t| t.id.as_str()).collect();
     assert_eq!(
         tabs,
-        ["home", "measure", "annotate", "insert", "view", "manage", "output"]
+        [
+            "home",
+            "measure",
+            "annotate",
+            "parametric",
+            "insert",
+            "view",
+            "manage",
+            "output"
+        ]
     );
     let buttons: Vec<_> = layout
         .tabs

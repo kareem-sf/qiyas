@@ -2339,3 +2339,55 @@ button.close {
   background: var(--panel);
   border-top: 1px solid var(--rule);
 }
+
+/* The constraint bar: glyphs per constrained entity over the drawing's lower corner (logical
+   sides, so it sits on the start side in Arabic too). Click a glyph to delete its constraint. */
+.viewport {
+  position: relative;
+}
+.constraint-bar {
+  position: absolute;
+  inset-block-end: 8px;
+  inset-inline-start: 8px;
+  max-inline-size: calc(100% - 16px);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 4px 6px;
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  font-size: 13px;
+  z-index: 2;
+}
+.constraint-group {
+  display: inline-flex;
+  gap: 2px;
+  padding-inline-end: 6px;
+  border-inline-end: 1px solid var(--rule);
+}
+.constraint-glyph {
+  min-inline-size: 24px;
+  padding: 1px 4px;
+  line-height: 1.3;
+}
+.constraint-glyph:hover {
+  text-decoration: line-through;
+}
+.constraint-name {
+  margin-inline-start: 2px;
+  font-size: 11px;
+}
+.parameters table {
+  border-collapse: collapse;
+  inline-size: 100%;
+}
+.parameters th,
+.parameters td {
+  padding: 4px 8px;
+  text-align: start;
+}
+.parameters input {
+  inline-size: 100%;
+}

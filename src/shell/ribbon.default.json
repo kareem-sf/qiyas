@@ -536,6 +536,135 @@
       ]
     },
     {
+      "id": "parametric",
+      "label": "parametric",
+      "groups": [
+        {
+          "id": "geometric",
+          "label": "param.geometric",
+          "buttons": [
+            {
+              "kind": "tool",
+              "command": "gcCoincident",
+              "label": "param.gcCoincident"
+            },
+            {
+              "kind": "tool",
+              "command": "gcCollinear",
+              "label": "param.gcCollinear"
+            },
+            {
+              "kind": "tool",
+              "command": "gcConcentric",
+              "label": "param.gcConcentric"
+            },
+            {
+              "kind": "tool",
+              "command": "gcFixed",
+              "label": "param.gcFixed"
+            },
+            {
+              "kind": "tool",
+              "command": "gcParallel",
+              "label": "param.gcParallel"
+            },
+            {
+              "kind": "tool",
+              "command": "gcPerpendicular",
+              "label": "param.gcPerpendicular"
+            },
+            {
+              "kind": "tool",
+              "command": "gcHorizontal",
+              "label": "param.gcHorizontal"
+            },
+            {
+              "kind": "tool",
+              "command": "gcVertical",
+              "label": "param.gcVertical"
+            },
+            {
+              "kind": "tool",
+              "command": "gcTangent",
+              "label": "param.gcTangent"
+            },
+            {
+              "kind": "tool",
+              "command": "gcSmooth",
+              "label": "param.gcSmooth"
+            },
+            {
+              "kind": "tool",
+              "command": "gcSymmetric",
+              "label": "param.gcSymmetric"
+            },
+            {
+              "kind": "tool",
+              "command": "gcEqual",
+              "label": "param.gcEqual"
+            },
+            {
+              "kind": "tool",
+              "command": "autoConstrain",
+              "label": "param.autoConstrain"
+            }
+          ]
+        },
+        {
+          "id": "dimensional",
+          "label": "param.dimensional",
+          "buttons": [
+            {
+              "kind": "tool",
+              "command": "dcLinear",
+              "label": "param.dcLinear"
+            },
+            {
+              "kind": "tool",
+              "command": "dcAligned",
+              "label": "param.dcAligned"
+            },
+            {
+              "kind": "tool",
+              "command": "dcAngular",
+              "label": "param.dcAngular"
+            },
+            {
+              "kind": "tool",
+              "command": "dcRadius",
+              "label": "param.dcRadius"
+            },
+            {
+              "kind": "tool",
+              "command": "dcDiameter",
+              "label": "param.dcDiameter"
+            }
+          ]
+        },
+        {
+          "id": "constraints",
+          "label": "param.manage",
+          "buttons": [
+            {
+              "kind": "action",
+              "command": "parameters",
+              "label": "param.parameters"
+            },
+            {
+              "kind": "tool",
+              "command": "delConstraint",
+              "label": "param.delConstraint"
+            },
+            {
+              "kind": "action",
+              "command": "constraintBar",
+              "label": "param.showBar"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "insert",
       "label": "insert",
       "groups": [

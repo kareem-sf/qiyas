@@ -96,6 +96,33 @@ export const DEFAULT_RIBBON: RibbonLayout = {
         action("updateFields", "table.updateFields"),
       ]),
     ]),
+    tab("parametric", [
+      group(
+        "geometric",
+        "param.geometric",
+        tools("param", [
+          "gcCoincident",
+          "gcCollinear",
+          "gcConcentric",
+          "gcFixed",
+          "gcParallel",
+          "gcPerpendicular",
+          "gcHorizontal",
+          "gcVertical",
+          "gcTangent",
+          "gcSmooth",
+          "gcSymmetric",
+          "gcEqual",
+          "autoConstrain",
+        ]),
+      ),
+      group("dimensional", "param.dimensional", tools("param", ["dcLinear", "dcAligned", "dcAngular", "dcRadius", "dcDiameter"])),
+      group("constraints", "param.manage", [
+        action("parameters", "param.parameters"),
+        tool("delConstraint", "param.delConstraint"),
+        action("constraintBar", "param.showBar"),
+      ]),
+    ]),
     tab("insert", [
       group("block", "block.group", [
         tool("block", "block.createTool"),
