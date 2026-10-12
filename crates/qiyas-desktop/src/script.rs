@@ -342,21 +342,31 @@ fn open<R: Runtime>(app: &AppHandle<R>, state: &AppState, path: &Path) -> Result
         return Ok(format!("showed {shown}, open already"));
     }
     // The window asks about these before opening; a script can't, and a SAVE after it would
-    // delete the autosave or write over the other Qiyas's drawing.
+    // delete the autosave or write over the other Qiyas's drawing. Older copies alone (crash
+    // copies, ended instances' autosaves) are kept by a save: the script may open the drawing.
     if let Some(found) = qiyas_core::recoverable(path) {
         let why = if let Some(lock) = &found.locked_elsewhere {
-            format!(
+            Some(format!(
                 "it is open in another Qiyas (PID {} on {})",
                 lock.pid, lock.host
-            )
+            ))
         } else if found.crashed {
-            "Qiyas closed unexpectedly with it open".to_string()
+            Some("Qiyas closed unexpectedly with it open".to_string())
+        } else if found.autosave.is_some() {
+            Some(match (found.saved_at, found.drawing_at) {
+                (Some(saved), Some(drawn)) if saved < drawn => {
+                    "it has an autosave, older than the drawing".to_string()
+                }
+                _ => "it has an autosave newer than it".to_string(),
+            })
         } else {
-            "it has an autosave newer than it".to_string()
+            None
         };
-        return Err(format!(
-            "{shown}: {why}; open it from the ribbon first to decide about its autosave"
-        ));
+        if let Some(why) = why {
+            return Err(format!(
+                "{shown}: {why}; open it from the ribbon first to decide about its autosave"
+            ));
+        }
     }
     let session = Session::open(path).map_err(|e| e.to_string())?;
     let problems = read_problems(&session);
@@ -439,6 +449,7 @@ mod tests {
                     crate::commands::pick,
                     crate::tabs::tabs,
                     crate::tabs::activate_tab,
+                    crate::tabs::close_tab,
                     super::run_script,
                     super::stop_script
                 ])
@@ -831,6 +842,49 @@ mod tests {
         // The next run starts afresh.
         let result = ipc.run("again.scr", "COUNT DOOR\n").unwrap();
         assert_eq!(result["lines"][0]["ok"], json!(true));
+    }
+
+    #[test]
+    fn open_takes_a_drawing_with_only_older_copies_and_names_an_older_autosave() {
+        let ipc = Ipc::open();
+        let dir = ipc.dir.path().to_path_buf();
+        std::fs::create_dir(dir.join("sub")).unwrap();
+        let other = qiyas_core::fixtures::write_sample(&dir.join("sub"), "dwg");
+        // A crash copy, offered once already: a save keeps it, so the script may open it.
+        let mut copy = other.clone().into_os_string();
+        copy.push(".sv$.crash-20261001-101010");
+        std::fs::write(&copy, b"crash copy").unwrap();
+        assert!(qiyas_core::recoverable(&other).is_some());
+        let result = ipc.run("open.scr", "OPEN sub/sample.dwg\n").unwrap();
+        assert_eq!(result["lines"][0]["ok"], json!(true), "{result}");
+        assert!(Path::new(&copy).exists());
+
+        // An autosave older than the drawing: refused, and said so.
+        let tabs = ipc.call("tabs", json!({})).unwrap();
+        let first = tabs["tabs"][0]["id"].clone();
+        let second = tabs["tabs"][1]["id"].clone();
+        ipc.call("activate_tab", json!({ "id": first })).unwrap();
+        ipc.call("close_tab", json!({ "id": second })).unwrap();
+        let autosave = qiyas_core::autosave_path(&other);
+        std::fs::write(&autosave, b"autosave").unwrap();
+        let earlier = std::fs::metadata(&other).unwrap().modified().unwrap()
+            - std::time::Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(&autosave)
+            .unwrap()
+            .set_modified(earlier)
+            .unwrap();
+        let result = ipc.run("open.scr", "OPEN sub/sample.dwg\n").unwrap();
+        let got = lines(&result);
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert!(!got[0].2);
+        assert!(
+            got[0]
+                .3
+                .contains("it has an autosave, older than the drawing"),
+            "{got:?}"
+        );
     }
 
     #[test]
