@@ -798,14 +798,19 @@ their measurements are marked `mcp`).
 - Updates: `tauri-plugin-updater` (`crates/qiyas-desktop/src/updater.rs`). The feed is a static
   `latest.json` on the company site (shape: `crates/qiyas-desktop/updater/latest.sample.json`:
   version, notes, pub_date, a `url` and `signature` per platform key `linux-x86_64-appimage`,
-  `linux-x86_64-deb`, `windows-x86_64-nsis`, `windows-x86_64-msi`, `darwin-aarch64-app`,
-  `darwin-x86_64-app`). Its address is `plugins.updater.endpoints` in `tauri.conf.json` and the
+  `linux-x86_64-deb`, `linux-x86_64-rpm`, `windows-x86_64-nsis`, `windows-x86_64-msi`,
+  `darwin-aarch64-app`, `darwin-x86_64-app`). Its address is `plugins.updater.endpoints` in `tauri.conf.json` and the
   signing public key `plugins.updater.pubkey`. Both are `REPLACE-ME` placeholders until the
-  founder sets them; while either is, every check is refused (`updates_not_configured`, and the
+  founder sets them; while either is (or the feed is not `https://`), every check is refused (`updates_not_configured`, and the
   About box says "Updates are not set up in this build yet"), never a silent failure.
-- About box: Check for updates, then Install and restart (download, signature check, install,
-  restart; refused while a drawing has unsaved changes, before the download and again before the
-  install; the box can't be closed meanwhile). Release builds also check 15 s after launch when
+- About box: Check for updates, then Install and restart (download with its progress, signature
+  check, install, restart; refused while a drawing has unsaved changes, before the download and
+  again before the install). Closing the box (or Escape) during the download stops it
+  (`cancel_update`); during the install the box can't be closed. The feed and the bundle fail
+  after 30 s without data (connect or read), the feed request after 60 s whole. One install at a
+  time (`update_busy`). A deb or rpm install waits for the password while the window stays
+  usable: a drawing changed meanwhile keeps Qiyas running (`installed_restart_later`, "Installed.
+  Restart Qiyas when you are ready"), and the update starts with it next time. Release builds also check 15 s after launch when
   `last_update_check` in `settings.json` is a day old or more (or the clock went back); every
   check sets it, and the Settings dialog never changes it. An update found then is offered in a
   native dialog in the window's language (Install and restart, Later). Nothing installs without
@@ -814,26 +819,36 @@ their measurements are marked `mcp`).
   private key and its password outside the repo (`.gitignore` covers `*.key`, `*.key.pub`,
   `*.pem`, `*.p12`, `*.pfx`, `*.p8`, `.tauri/`) and pastes the printed public key into `pubkey`.
   A lost private key means installed copies can never update again: keep a backup.
-- Release with updates: `TAURI_SIGNING_PRIVATE_KEY=~/.tauri/qiyas.key
-  TAURI_SIGNING_PRIVATE_KEY_PASSWORD=... pnpm bundle:signed` adds `tauri.updater.conf.json`
+- Release with updates: `read -s TAURI_SIGNING_PRIVATE_KEY_PASSWORD && export
+  TAURI_SIGNING_PRIVATE_KEY_PASSWORD TAURI_SIGNING_PRIVATE_KEY=~/.tauri/qiyas.key && pnpm
+  bundle:signed` (the password never in shell history) adds `tauri.updater.conf.json`
   (`createUpdaterArtifacts`), so each bundle gets a `.sig` beside it. Upload the bundles, put
   each `.sig`'s text in `latest.json` with the new version, upload `latest.json` last. Plain
-  `pnpm bundle` needs no key and makes unsigned bundles. The Tauri CLI (2.12) doesn't write the
-  version into the signature yet, so `requireSignedVersion` (downgrade protection) stays off;
-  turn it on once it does.
+  `pnpm bundle` needs no key and makes unsigned bundles. The Tauri CLI (`@tauri-apps/cli`
+  2.12.1) doesn't write the version into the signature yet, so `requireSignedVersion`
+  (downgrade protection: whoever controls the feed host could offer an older signed build as
+  newer) stays off; turn it on with the first CLI that writes `version:` into the trusted
+  comment.
 - Single instance: `tauri-plugin-single-instance`, the first plugin (`launch.rs`). A second
   Qiyas hands its arguments to the running one and quits; existing `.dwg`/`.dxf` paths (relative
   to its folder, or `file://` addresses) are kept, a `.qiyas` gives its drawing (the one it
   names, else the same name with `.dwg`/`.dxf`), anything else is ignored. The window takes them
   (`take_open_requests` after `open:requested`, `src/shell/openRequests.ts`) and opens each
   through `openPath`, so a newer autosave is asked about first, and comes to the front. Files of
-  the first launch go the same way. A debug build uses its own D-Bus name on Linux, so
-  `pnpm tauri dev` starts beside an installed Qiyas. Tested by hand only.
-- File associations (`bundle.fileAssociations`): `.dwg` (`image/vnd.dwg`), `.dxf`
-  (`image/vnd.dxf`), `.qiyas` (`application/x-qiyas`, owned; macOS exports
-  `com.qsmind.qiyas.project`). Linux deb and rpm use `linux/qiyas.desktop` (`Exec` with `%F`,
+  the first launch go the same way; paths are tidied (`.` and `..`, no links followed), and an
+  argument that is not text is left out. A debug build uses its own D-Bus name on Linux, so
+  `pnpm tauri dev` starts beside an installed Qiyas; on Windows and macOS it hands its arguments
+  to an installed Qiyas that runs and quits. On Wayland (Hyprland) the focus request may only
+  flash the window. Tested by hand only.
+- File associations (`bundle.fileAssociations`): "Qiyas drawing (DWG)" `.dwg` (`image/vnd.dwg`),
+  "Qiyas drawing (DXF)" `.dxf` (`image/vnd.dxf`), "Qiyas project" `.qiyas`
+  (`application/x-qiyas`, owned; macOS exports `com.qsmind.qiyas.project`). Ruling: Qiyas never
+  takes `.dwg`/`.dxf` away from AutoCAD. macOS ranks them `Alternate` and Linux adds Qiyas to
+  "Open with"; Windows' NSIS and MSI make every association the default, so
+  `tauri.windows.conf.json` (merged on Windows, replacing the list) keeps `.qiyas` only. Linux deb and rpm use `linux/qiyas.desktop` (`Exec` with `%F`,
   which Tauri's own template lacks, so a double click passes the file; the AppImage is built
-  from the deb's files) and install `linux/com.qsmind.qiyas.xml` (the `.qiyas` MIME type).
+  from the deb's files; it registers nothing unless appimaged or AppImageLauncher integrates
+  it) and install `linux/com.qsmind.qiyas.xml` (the `.qiyas` MIME type).
   macOS sends files as an `Opened` event (`launch::os_opened`). No DWG thumbnails.
 - Installers: `pnpm bundle` on each OS builds that OS's own (no cross builds), into
   `target/release/bundle/`. Run `scripts/pdfium.sh` first on each machine.
