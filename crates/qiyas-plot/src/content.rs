@@ -28,6 +28,16 @@ pub fn matrix(xf: &Xform) -> [f64; 6] {
     [m[0][0], m[1][0], m[0][1], m[1][1], m[0][2], m[1][2]]
 }
 
+/// `s` as a PDF text string in hex: UTF-16BE after its byte order mark, `<FEFF…>`.
+pub fn utf16_hex(s: &str) -> String {
+    let mut hex = String::from("<FEFF");
+    for unit in s.encode_utf16() {
+        let _ = write!(hex, "{unit:04X}");
+    }
+    hex.push('>');
+    hex
+}
+
 #[derive(Clone, Copy, Default, PartialEq)]
 struct State {
     stroke: Option<[u8; 3]>,

@@ -162,6 +162,26 @@ impl FontSet {
         }) && glyph_chars(text, |f, g| self.advance(f, g)).is_some()
     }
 
+    /// Per glyph of `text` (one `as_text` accepts), the characters the ToUnicode map gives
+    /// wrong for it, else `None`. The map keeps the first characters seen per glyph, and
+    /// Arabic fonts draw letters that differ only by their dots (ج ح, ب ت ن ي) with one glyph
+    /// plus a dot mark, so a later letter on that glyph reads back as the first.
+    pub fn actual_text(&self, text: &LaidText) -> Vec<Option<String>> {
+        let chars = glyph_chars(text, |f, g| self.advance(f, g)).unwrap_or_default();
+        text.glyphs
+            .iter()
+            .zip(chars)
+            .map(|(g, c)| {
+                let c = c?;
+                let mapped = self
+                    .fonts
+                    .get(&g.font)
+                    .and_then(|f| f.unicode.get(&g.glyph));
+                (mapped != Some(&c)).then_some(c)
+            })
+            .collect()
+    }
+
     /// The glyph's id in its font's subset.
     pub fn subset_gid(&self, font: u16, glyph: u16) -> u16 {
         self.fonts

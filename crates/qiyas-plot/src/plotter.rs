@@ -22,7 +22,7 @@ use qiyas_render::{
     IMAGE_FADED, IMAGE_MONOCHROME, TEXT_BOX,
 };
 
-use crate::content::{matrix, Content};
+use crate::content::{matrix, utf16_hex, Content};
 use crate::ctb::{object_pen, Pen};
 use crate::font::{em_to_text, flate_stream, real, FontBytes, FontSet};
 use crate::look::{Look, Looks};
@@ -582,18 +582,23 @@ impl Plotter<'_> {
     }
 
     /// A text: real PDF text in its embedded font when it maps back to its characters, else
-    /// its glyphs' outlines filled.
+    /// its glyphs' outlines filled. A glyph the ToUnicode map gives back as another letter
+    /// (`FontSet::actual_text`) is shown inside a marked-content span whose `ActualText` holds
+    /// its own characters, which copy and search use. One span per glyph, not per text: a
+    /// viewer then orders its characters by where the glyph is, as any other (poppler reads a
+    /// whole RTL text's `ActualText` as left to right and turns its words round).
     fn text(&mut self, layer: &Layer, text: &LaidText, bytes: &FontBytes) {
         let Some(pen) = self.text_pen(layer, text) else {
             return;
         };
         let to_page = text.xf.then(&layer.xf);
         if !self.visual(layer, text) && self.fonts.as_text(text) {
+            let actual = self.fonts.actual_text(text);
             self.out.op("BT");
             self.out.fill(pen.rgb);
             let mut font = None;
             let em = 1.0 / f64::from(qiyas_render::CAP_EM);
-            for g in &text.glyphs {
+            for (i, g) in text.glyphs.iter().enumerate() {
                 if font != Some(g.font) {
                     self.out.op(&format!("/F{} 1 Tf", g.font));
                     font = Some(g.font);
@@ -603,7 +608,13 @@ impl Plotter<'_> {
                     .then(&to_page);
                 self.out.matrix(matrix(&tm), "Tm");
                 let gid = self.fonts.subset_gid(g.font, g.glyph);
-                self.out.op(&format!("<{gid:04X}> Tj"));
+                match actual.get(i).and_then(Option::as_ref) {
+                    Some(chars) => self.out.op(&format!(
+                        "/Span <</ActualText {}>> BDC <{gid:04X}> Tj EMC",
+                        utf16_hex(chars)
+                    )),
+                    None => self.out.op(&format!("<{gid:04X}> Tj")),
+                }
             }
             self.out.op("ET");
         } else {

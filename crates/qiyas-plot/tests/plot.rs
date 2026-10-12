@@ -419,6 +419,68 @@ fn arabic_text_is_real_text_with_an_embedded_subset_and_a_to_unicode_map() {
     }
 }
 
+/// Noto Sans Arabic draws جميل and حميل with the same glyphs bar a dot mark, so the ToUnicode
+/// map alone gives both back as one word. The glyph whose map entry is another letter's is
+/// shown inside a span whose `ActualText` is its own letter; pdftotext (when the computer has
+/// it) gives every word back.
+#[test]
+fn arabic_words_whose_glyphs_collide_copy_back_as_themselves() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_drawing(&arabic_text_doc(), &dir.path().join("arabic.dxf"));
+    let mut s = Session::open(&path).unwrap();
+    let words = ["جميل", "حميل", "بنت", "نبت", "الهندسي", "سلام"];
+    for (i, word) in words.iter().enumerate() {
+        s.run(Command::Text {
+            at: [1.0, 6.0 + 2.0 * i as f64],
+            height: 0.5,
+            rotation: 0.0,
+            value: word.to_string(),
+            style: None,
+        })
+        .unwrap();
+    }
+    let out = plot_pdf(&s, &job(MODEL)).unwrap();
+    let doc = lopdf::Document::load(&out.path).unwrap();
+    let page = *doc.get_pages().values().next().unwrap();
+    let content = lopdf::content::Content::decode(&doc.get_page_content(page)).unwrap();
+    let mut spans = Vec::new();
+    let mut open = 0;
+    for op in &content.operations {
+        match op.operator.as_str() {
+            "BDC" => {
+                open += 1;
+                let props = op.operands[1].as_dict().unwrap();
+                let bytes = props.get(b"ActualText").unwrap().as_str().unwrap();
+                assert_eq!(&bytes[..2], &[0xFE, 0xFF], "UTF-16BE with its mark");
+                let units: Vec<u16> = bytes[2..]
+                    .chunks(2)
+                    .map(|c| u16::from_be_bytes([c[0], c[1]]))
+                    .collect();
+                spans.push(String::from_utf16(&units).unwrap());
+            }
+            "EMC" => open -= 1,
+            "Tj" => assert!(open <= 1),
+            _ => {}
+        }
+    }
+    assert_eq!(open, 0);
+    // جميل is drawn first and so owns the shared hah body in the map; حميل's needs its span.
+    assert!(spans.iter().any(|t| t == "ح"), "ح in {spans:?}");
+    match std::process::Command::new("pdftotext")
+        .arg(&out.path)
+        .arg("-")
+        .output()
+    {
+        Ok(o) if o.status.success() => {
+            let text = String::from_utf8_lossy(&o.stdout);
+            for word in words {
+                assert!(text.contains(word), "{word} in pdftotext's {text}");
+            }
+        }
+        _ => eprintln!("pdftotext is not on this computer: the extraction check is skipped"),
+    }
+}
+
 /// The output goes beside the drawing by default, and only inside the drawing's folder by
 /// command; a missing sheet or an empty area is an error.
 #[test]
