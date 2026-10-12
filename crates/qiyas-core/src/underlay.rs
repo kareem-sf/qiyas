@@ -393,6 +393,50 @@ impl Session {
         })
     }
 
+    /// The pictures (PDF underlays and raster images) drawn on the sheet `sheet`, on screen or
+    /// not, for a plot: each one's handle, placement (`id` 0) and what to draw for it at
+    /// `px_per_unit` pixels per drawing unit, its long side at most `max_px` (a raster image
+    /// never beyond its own pixels); and why others can't be drawn (file not found, ...).
+    pub fn plot_pictures(
+        &self,
+        sheet: &str,
+        px_per_unit: f64,
+        max_px: f64,
+    ) -> (Vec<(u64, ImagePlacement, UnderlayImage)>, Vec<String>) {
+        let mut problems = Vec::new();
+        let placed = self.placed_on(sheet, &mut problems);
+        let pictures = placed
+            .iter()
+            .map(|u| {
+                let long_px =
+                    (u.long_units() * px_per_unit).clamp(MIN_IMAGE_PX, max_px.max(MIN_IMAGE_PX));
+                let source = match &u.picture {
+                    Picture::Pdf { page, size: (w, h) } => PictureSource::Pdf {
+                        page: *page,
+                        dpi: long_px / (w.max(*h) / 72.0),
+                    },
+                    Picture::Raster { crop } => PictureSource::Raster {
+                        crop: *crop,
+                        long_px: long_px.round() as u32,
+                    },
+                };
+                let placement = ImagePlacement {
+                    id: 0,
+                    version: u.version(),
+                    corners: u.corners,
+                    flags: u.flags,
+                };
+                let image = UnderlayImage {
+                    path: u.file.clone(),
+                    version: u.version(),
+                    source,
+                };
+                (u.handle, placement, image)
+            })
+            .collect();
+        (pictures, problems)
+    }
+
     /// Where the pictures (PDF underlays and raster images) on the sheet on screen are drawn, by
     /// image id, and the raster images' outlines to pick them by; notes their problems.
     pub(crate) fn underlay_placements(&self) -> (Vec<ImagePlacement>, Vec<Outline>) {
@@ -428,20 +472,28 @@ impl Session {
     /// a shown layer, with their file (and page) found. The others are listed in
     /// `Underlays::problems`.
     pub(crate) fn placed_pictures(&self) -> Vec<Placed> {
+        let mut problems = Vec::new();
+        let out = self.placed_on(&self.sheet, &mut problems);
+        self.underlays.borrow_mut().problems = problems;
+        out
+    }
+
+    /// The pictures drawn on the sheet `sheet` (on screen or not), and in `problems` why the
+    /// others are not.
+    fn placed_on(&self, sheet: &str, problems: &mut Vec<String>) -> Vec<Placed> {
         let doc = &self.drawing.doc;
         let per_point = units_per_point(self.drawing.units);
         let mut underlays = self.underlays.borrow_mut();
-        underlays.problems.clear();
         let mut out = Vec::new();
-        for entity in doc.entities_in_block(&self.sheet) {
+        for entity in doc.entities_in_block(sheet) {
             if let EntityType::RasterImage(image) = entity {
                 match crate::image::placed_raster(doc, &self.drawing.path, &self.visibility, image)
                 {
                     Ok(Some(placed)) => out.push(placed),
                     Ok(None) => {}
                     Err(problem) => {
-                        if !underlays.problems.contains(&problem) {
-                            underlays.problems.push(problem);
+                        if !problems.contains(&problem) {
+                            problems.push(problem);
                         }
                     }
                 }
@@ -464,9 +516,7 @@ impl Session {
                 continue;
             }
             let Some(file) = resolve_link(&self.drawing.path, &def.file_path) else {
-                underlays
-                    .problems
-                    .push(format!("PDF underlay file not found: {}", def.file_path));
+                problems.push(format!("PDF underlay file not found: {}", def.file_path));
                 continue;
             };
             let page = def.page_name.trim().parse::<u32>().unwrap_or(1).max(1);
@@ -485,8 +535,8 @@ impl Session {
                 Ok(size) => size,
                 Err(e) => {
                     let problem = format!("PDF underlay {} page {page}: {e}", def.file_path);
-                    if !underlays.problems.contains(&problem) {
-                        underlays.problems.push(problem);
+                    if !problems.contains(&problem) {
+                        problems.push(problem);
                     }
                     continue;
                 }

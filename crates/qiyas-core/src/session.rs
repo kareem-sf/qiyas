@@ -752,6 +752,24 @@ impl Session {
         self.text.borrow().font_bytes(id)
     }
 
+    /// The sheet `sheet` (block name) drawn afresh with curves flattened within `tol` drawing
+    /// units, for the PDF plot (no pictures, nothing kept).
+    pub fn sheet_batch_with_tol(&self, sheet: &str, tol: f64) -> Batch {
+        let options = TextOptions {
+            arabic_reversed: self.arabic_reversed,
+            px_per_unit: None,
+        };
+        build_batch_with_xrefs(
+            &self.drawing.doc,
+            &self.xref_docs(),
+            sheet,
+            &self.visibility,
+            tol,
+            &mut self.text.borrow_mut(),
+            options,
+        )
+    }
+
     /// Names what `batch` would give: it changes when the sheet, the hidden layers, the Arabic
     /// setting, the drawing itself (every drawing command, its undo and its redo) or its xrefs
     /// change, and not for take-off, BOQ or conflict changes or their undo or redo. Not for the zoom the glyphs are drawn for either: the window asks
