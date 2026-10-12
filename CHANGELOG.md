@@ -16,6 +16,11 @@ section below, so add the section before pushing the tag.
   `latest.json`.
 - Contributing guide, code of conduct, security policy, issue and pull request templates.
 
+### Fixed
+
+- The crates and the package declare their licence, Apache-2.0; 0.0.1's installers said
+  "UNLICENSED" in their package metadata.
+
 ## [0.0.1] - 2026-10-12
 
 First public release.
