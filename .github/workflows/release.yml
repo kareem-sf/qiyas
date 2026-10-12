@@ -1,0 +1,273 @@
+# Builds the installers and a draft GitHub release from a pushed tag `v<version>`.
+#
+#   1. Set the version in crates/qiyas-desktop/tauri.conf.json, package.json and Cargo.toml, move
+#      CHANGELOG.md's notes into a `## [<version>]` section, commit to main, then
+#      `git tag v<version> && git push origin v<version>` (pushing main and v* tags is the
+#      founder's act; a tag ruleset lets only the admin create v* tags).
+#   2. This workflow checks the tag (all three versions match it, it is on main, its release is not
+#      published), builds Linux (AppImage, deb, rpm), Windows (NSIS, MSI) and macOS (Apple silicon
+#      and Intel), signs them for the in-app updater and uploads them, their .sig files and
+#      latest.json to a DRAFT release.
+#   3. A human reviews the draft on GitHub and clicks Publish. Only then does
+#      https://github.com/kareem-sf/qiyas/releases/latest/download/latest.json (the app's update
+#      feed) point at it.
+#
+# Signing uses the secrets TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD of the
+# environment `release`, which only v* tags can use. In kareem-sf/qiyas a tag without them fails;
+# in a fork it builds unsigned bundles (no .sig, no latest.json) into a draft marked prerelease.
+#
+# Build a tag again (its release still a draft): run the workflow from the tag itself,
+#   gh workflow run release.yml --ref v<version> -f tag=v<version>
+# Dry run (no release, nothing signed, the bundles kept as workflow artifacts): run it with an
+# empty tag, or open a pull request that changes this file, the Tauri configs or scripts/*.sh.
+# Actions are pinned to commit SHAs (the comment names the release); Dependabot bumps them.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build again, e.g. v0.0.2 (choose that tag in "Use workflow from"; its release must still be a draft). Empty: dry run.'
+        required: false
+        default: ''
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - crates/qiyas-desktop/tauri*.conf.json
+      - scripts/*.sh
+
+# One group per tag, shared by the tag push and a manual re-run of that tag.
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    # Tag runs only: the environment holds the signing secrets and admits v* tags alone.
+    environment: ${{ (github.event_name == 'push' || inputs.tag != '') && 'release' || '' }}
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+      ref: ${{ steps.plan.outputs.ref }}
+      version: ${{ steps.plan.outputs.version }}
+      signed: ${{ steps.plan.outputs.signed }}
+      notes: ${{ steps.plan.outputs.notes }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # main's history, for the "tag is on main" check
+          persist-credentials: false
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HAS_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+          HAS_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD != '' }}
+          EVENT: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          version=$(jq -r .version crates/qiyas-desktop/tauri.conf.json)
+          pkg=$(jq -r .version package.json)
+          cargo=$(python3 -c 'import tomllib;print(tomllib.load(open("Cargo.toml","rb"))["workspace"]["package"]["version"])')
+          if [[ "$pkg" != "$version" || "$cargo" != "$version" ]]; then
+            echo "::error::Versions differ: tauri.conf.json $version, package.json $pkg, Cargo.toml $cargo."
+            exit 1
+          fi
+          case "$EVENT" in
+            push) tag="$REF_NAME" ;;
+            workflow_dispatch) tag="$INPUT_TAG" ;;
+            *) tag="" ;;
+          esac
+          if [[ -n "$tag" ]]; then
+            if [[ "$GITHUB_REF" != "refs/tags/$tag" ]]; then
+              echo "::error::Run the workflow from the tag itself: gh workflow run release.yml --ref $tag -f tag=$tag"
+              exit 1
+            fi
+            if [[ "$tag" != "v$version" ]]; then
+              echo "::error::Tag $tag does not match the version $version (expected v$version)."
+              exit 1
+            fi
+            if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+              echo "::error::The commit of $tag is not on main: release only what main has."
+              exit 1
+            fi
+            # Never add to a published release (v0.0.1 and every one after it stay as published).
+            if draft=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null) \
+              && [[ "$draft" != "true" ]]; then
+              echo "::error::Release $tag is already published; this workflow only builds into a draft."
+              exit 1
+            fi
+            # The release notes are the CHANGELOG.md section of this version.
+            notes=$(awk -v v="$version" '
+              /^## \[/ { if (on) exit; if (index($0, "## [" v "]") == 1) { on = 1; next } }
+              on && !/^\[[^]]*\]: http/ { print }' CHANGELOG.md | sed -e '/./,$!d')
+            if [[ -z "$notes" ]]; then
+              echo "::error::CHANGELOG.md has no section '## [$version]': add the release notes first."
+              exit 1
+            fi
+            ref="refs/tags/$tag"
+          else
+            echo "::notice::Dry run: unsigned bundles as workflow artifacts, no release."
+            notes=""
+            ref="$GITHUB_SHA"
+          fi
+          signed=false
+          if [[ -n "$tag" && "$HAS_KEY" == "true" && "$HAS_PASSWORD" == "true" ]]; then
+            signed=true
+          elif [[ -n "$tag" && "$GITHUB_REPOSITORY" == "kareem-sf/qiyas" ]]; then
+            # An unsigned release, once published, would be "latest" without a latest.json and
+            # break every installed copy's update check.
+            echo "::error::The signing secrets are missing from the environment 'release': add TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD (CLAUDE.md, Updates and installers), then build the tag again."
+            exit 1
+          elif [[ -n "$tag" ]]; then
+            echo "::warning::No signing secrets (a fork): building UNSIGNED bundles without .sig files or latest.json, into a draft marked prerelease."
+          fi
+          {
+            echo "tag=$tag"
+            echo "ref=$ref"
+            echo "version=$version"
+            echo "signed=$signed"
+            echo "notes<<QIYAS_NOTES_EOF"
+            echo "$notes"
+            echo "QIYAS_NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "tag=${tag:-none (dry run)} version=$version signed=$signed"
+
+  build:
+    needs: prepare
+    name: build (${{ matrix.name }})
+    environment: ${{ needs.prepare.outputs.tag != '' && 'release' || '' }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-22.04
+            target: ''
+          - name: windows-x86_64
+            os: windows-latest
+            target: ''
+          - name: macos-aarch64
+            os: macos-latest
+            target: aarch64-apple-darwin
+          # GitHub retired macos-13; macos-15-intel is its Intel image.
+          - name: macos-x86_64
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
+          persist-credentials: false
+      - name: Tauri Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
+            patchelf libgtk-3-dev libssl-dev build-essential curl wget file libxdo-dev \
+            libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+      # Release runs read main's cache at most and never write one.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: ${{ matrix.target }}
+          save-if: false
+      - run: pnpm install --frozen-lockfile
+      - run: scripts/pdfium.sh
+      - run: scripts/build-sidecar.sh ${{ matrix.target }}
+      - id: args
+        env:
+          SIGNED: ${{ needs.prepare.outputs.signed }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          args="--config crates/qiyas-desktop/tauri.bundle.conf.json"
+          if [[ "$SIGNED" == "true" ]]; then
+            args="$args --config crates/qiyas-desktop/tauri.updater.conf.json"
+          else
+            echo "::notice::Unsigned build: no updater config, no .sig files, no latest.json."
+          fi
+          if [[ -n "$TARGET" ]]; then args="$args --target $TARGET"; fi
+          echo "args=$args" >> "$GITHUB_OUTPUT"
+      - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ needs.prepare.outputs.signed == 'true' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ needs.prepare.outputs.signed == 'true' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
+        with:
+          tauriScript: pnpm tauri
+          args: ${{ steps.args.outputs.args }}
+          # An empty tag (dry run) builds without touching any release.
+          tagName: ${{ needs.prepare.outputs.tag }}
+          releaseName: Qiyas ${{ needs.prepare.outputs.version }}
+          releaseBody: ${{ needs.prepare.outputs.notes }}
+          releaseDraft: true
+          # An unsigned draft (forks only) can never become "latest".
+          prerelease: ${{ needs.prepare.outputs.signed != 'true' }}
+          uploadUpdaterJson: ${{ needs.prepare.outputs.signed == 'true' }}
+          updaterJsonPreferNsis: true
+          uploadWorkflowArtifacts: ${{ needs.prepare.outputs.tag == '' }}
+
+  # The four builds each merge their platforms into the release's latest.json; check that none
+  # was lost, every entry is signed, and every url is an asset of this draft. tauri-action v1
+  # writes the API asset url (https://api.github.com/repos/<repo>/releases/assets/<id>), which
+  # the updater downloads with `Accept: application/octet-stream` (GitHub answers with a
+  # redirect to the file); the browser form .../releases/download/<tag>/<name> is accepted too.
+  feed:
+    needs: [prepare, build]
+    if: needs.prepare.outputs.signed == 'true'
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write # drafts are visible to writers only
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern latest.json --output latest.json
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets > assets.json
+          python3 - "$VERSION" "$TAG" "$GITHUB_REPOSITORY" <<'PY'
+          import json, sys
+          version, tag, repo = sys.argv[1:]
+          feed = json.load(open("latest.json"))
+          assets = json.load(open("assets.json"))["assets"]
+          ok_urls = {a["apiUrl"] for a in assets}
+          ok_urls |= {f"https://github.com/{repo}/releases/download/{tag}/{a['name']}" for a in assets}
+          want = ["linux-x86_64-appimage", "linux-x86_64-deb", "linux-x86_64-rpm",
+                  "windows-x86_64-nsis", "windows-x86_64-msi",
+                  "darwin-aarch64-app", "darwin-x86_64-app"]
+          platforms = feed["platforms"]
+          missing = [k for k in want if k not in platforms]
+          wrong = [k for k, v in platforms.items() if v.get("url") not in ok_urls]
+          unsigned = [k for k, v in platforms.items() if not v.get("signature", "").strip()]
+          print(json.dumps(feed, indent=2)[:4000])
+          if feed["version"] != version or missing or wrong or unsigned:
+              sys.exit(f"latest.json: version {feed['version']} (want {version}), missing {missing}, "
+                       f"url not an asset of this draft {wrong}, empty signature {unsigned}. "
+                       "Re-run the build job of each platform at fault.")
+          PY
+          echo "::notice::Draft $TAG is ready: review it on GitHub and click Publish."

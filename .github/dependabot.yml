@@ -1,0 +1,27 @@
+# Weekly dependency updates; minor and patch bumps come grouped in one pull request per ecosystem.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      cargo-minor-patch:
+        update-types: [minor, patch]
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
+  # The actions in .github/workflows, pinned to major tags: actions/checkout, actions/setup-node,
+  # actions/dependency-review-action, pnpm/action-setup, dtolnay/rust-toolchain,
+  # Swatinem/rust-cache, tauri-apps/tauri-action.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions-minor-patch:
+        update-types: [minor, patch]

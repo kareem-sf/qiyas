@@ -54,9 +54,19 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
 
 ## Global constraints
 
-- Desktop only. No web build, no CI workflows yet. Local check is `scripts/check.sh`.
+- Desktop only, no web build. Local check is `scripts/check.sh`. CI on GitHub
+  (`.github/workflows/ci.yml`, on every pull request and push to `main`): `check` runs
+  `scripts/pdfium.sh` and `scripts/check.sh` on Ubuntu (required to merge into `main`;
+  branch protection, admins may push directly); `build-smoke` compiles the app in release with
+  the sidecar (`pnpm tauri build --no-bundle`) on Ubuntu, Windows and macOS; `dependency-review`
+  is advisory on pull requests. Branch protection requires the status `check`: keep that job
+  id. Pull requests cancel their older runs; runs on `main` always finish. Only `main` saves the
+  Rust cache (pull requests read it; release runs never save). Every action is pinned to a
+  commit SHA with its release in a comment, every checkout has `persist-credentials: false`, and
+  Dependabot (`.github/dependabot.yml`) bumps cargo, npm and the actions weekly. Releases:
+  `.github/workflows/release.yml` (see Updates and installers).
 - Window title and product name: `Qiyas`. Arabic name: `قياس`. Bundle identifier: `com.qsmind.qiyas`.
-- This repo is its own git repo. Commit inside it. Never push or release without the founder's yes.
+- This repo is its own git repo. Commit inside it. Pushing `main` and pushing a `v*` tag are the founder's acts or his explicit ask; CI builds the draft release, and only a human clicks Publish.
 - Only MPL-2.0, Apache-2.0, MIT, BSD, ISC, OFL, Zlib or BSL-1.0 dependencies (ISC: `ring`,
   `rustls-webpki`, `untrusted`; Zlib: `foldhash`; BSL-1.0: `clipboard-win`, `error-code` on
   Windows, through `arboard`, the system clipboard, MIT OR Apache-2.0, with its Wayland
@@ -75,7 +85,7 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
   4 times slower. `cargo test -p qiyas-render --release pick_index_one_million` guards it.
 - Bound-xref layer names (`XREF$0$A-WALL`) are shown as `A-WALL` (`short_layer_name`); the
   full name stays in `layer`.
-- Never push or release without the founder's yes.
+- Pushing `main` and pushing a `v*` tag are the founder's acts or his explicit ask; CI builds the draft release, and only a human clicks Publish.
 - Run the app: `pnpm tauri dev --config crates/qiyas-desktop/tauri.conf.json`.
 - The `.qiyas` project file is saved next to the drawing after every command.
 - Save keeps a `.bak` of the original drawing (e.g. `villa.dwg.bak`) before writing over it. The
@@ -983,7 +993,7 @@ their measurements are marked `mcp`).
 ## Updates and installers
 
 - Updates: `tauri-plugin-updater` (`crates/qiyas-desktop/src/updater.rs`). The feed is a static
-  `latest.json` on the company site (shape: `crates/qiyas-desktop/updater/latest.sample.json`:
+  `latest.json`, an asset of the newest GitHub release (shape: `crates/qiyas-desktop/updater/latest.sample.json`:
   version, notes, pub_date, a `url` and `signature` per platform key `linux-x86_64-appimage`,
   `linux-x86_64-deb`, `linux-x86_64-rpm`, `windows-x86_64-nsis`, `windows-x86_64-msi`,
   `darwin-aarch64-app`, `darwin-x86_64-app`). Its address is `plugins.updater.endpoints` in `tauri.conf.json` and the
@@ -1010,7 +1020,33 @@ their measurements are marked `mcp`).
   `.tauri/`. A lost private key means installed copies can never update again: keep a backup
   of the two files off this laptop. To make a new pair: `pnpm tauri signer generate -w
   ~/.tauri/qiyas.key` (never paste the password into a chat).
-- Release with updates: `export TAURI_SIGNING_PRIVATE_KEY=~/.tauri/qiyas.key
+- Release (GitHub Actions, `.github/workflows/release.yml`): bump the version in
+  `crates/qiyas-desktop/tauri.conf.json`, `package.json` and `Cargo.toml`, move `CHANGELOG.md`'s
+  Unreleased notes into a `## [<version>] - <date>` section (it becomes the release notes),
+  commit to `main`, then `git tag v<version> && git push origin v<version>` (the founder's act; a
+  tag ruleset lets only the repository admin create, move or delete `v*` tags). `prepare`
+  refuses: versions that differ between the three files or from the tag, a tag whose commit is
+  not on `origin/main`, a tag whose release is already published, a missing CHANGELOG section,
+  and (in `kareem-sf/qiyas`) missing signing secrets. Then it builds Linux (ubuntu-22.04:
+  AppImage, deb, rpm), Windows (NSIS, MSI) and macOS (macos-latest: aarch64; macos-15-intel:
+  x86_64, the Intel image after macos-13 was retired) with `tauri-apps/tauri-action`, signs them
+  for the updater and uploads the bundles, their `.sig` files and `latest.json` (NSIS preferred
+  for Windows) to a DRAFT release `Qiyas <version>`. The `feed` job checks `latest.json` has all
+  seven platform keys, each signed, each url an asset of that draft: tauri-action v1 writes API
+  asset urls (`https://api.github.com/repos/kareem-sf/qiyas/releases/assets/<id>`), which the
+  updater downloads with `Accept: application/octet-stream` (GitHub redirects to the file;
+  unauthenticated, 60 requests an hour per IP address). Then a human reviews the draft on
+  GitHub and clicks Publish: only a published release is what `releases/latest/download/latest.json`
+  serves. Signing uses two secrets of the GitHub environment `release` (deployment policy: tags
+  `v*` only, so no branch or pull request can read them), which the founder sets himself (never
+  an agent): `gh secret set --env release TAURI_SIGNING_PRIVATE_KEY < ~/.tauri/qiyas.key` and
+  `gh secret set --env release TAURI_SIGNING_PRIVATE_KEY_PASSWORD < ~/.tauri/qiyas.key.password`.
+  In a fork without them a tag builds unsigned (no `.sig`, no `latest.json`) into a draft marked
+  prerelease, which never becomes "latest". To build a tag's draft again run the workflow from
+  the tag itself (`gh workflow run release.yml --ref v<version> -f tag=v<version>`); with no tag
+  (or on a pull request that changes `release.yml`, `tauri*.conf.json` or `scripts/*.sh`) it is
+  a dry run: unsigned bundles as workflow artifacts, no release.
+- Release by hand (fallback): `export TAURI_SIGNING_PRIVATE_KEY=~/.tauri/qiyas.key
   TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$(cat ~/.tauri/qiyas.key.password)" && pnpm
   bundle:signed` (the password never typed or in shell history) adds `tauri.updater.conf.json`
   (`createUpdaterArtifacts`), so each bundle gets a `.sig` beside it. Then `scripts/release-feed.sh
@@ -1063,8 +1099,10 @@ their measurements are marked `mcp`).
   (normal dependencies on Linux, Windows and macOS) and the window's JavaScript packages with
   version and licence; `scripts/third-party.sh` writes it (offline, from the lock file and
   `node_modules`): run it after a dependency changes and before a release, and commit it.
-- The Thmanyah font files are built into the app by Vite and so into every installer; whether
-  its licence allows that is the founder's decision before an installer leaves the company.
+- The Thmanyah font files are built into the app by Vite when they are in `src/fonts/thmanyah/`:
+  installers built locally embed Thmanyah, while installers built on GitHub use the system's
+  Arabic font, because the Thmanyah files are not on the runners. Which to ship (and whether
+  the Thmanyah licence allows embedding it) is the founder's decision.
 
 ## Where the plans live
 
