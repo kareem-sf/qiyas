@@ -20,5 +20,7 @@ fi
 cargo test -p qiyas-render --release pick_index_one_million
 # Release-only speed guard for fills inside blocks (triangulated once per fill entity).
 cargo test -p qiyas-render --release --test fills fill_in_a_block_inserted_500_times
+# Release-only speed guard for the constraint solver: 200 constraints in under 50 ms.
+cargo test -p qiyas-param --release --test solver_speed
 pnpm typecheck
 pnpm test
