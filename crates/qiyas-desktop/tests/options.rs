@@ -168,7 +168,10 @@ fn the_default_ribbon_is_valid_and_holds_every_tab() {
     let layout = ribbon::default_ribbon();
     assert_eq!(ribbon::validate(&layout), Ok(()));
     let tabs: Vec<&str> = layout.tabs.iter().map(|t| t.id.as_str()).collect();
-    assert_eq!(tabs, ["home", "measure", "annotate", "insert", "view"]);
+    assert_eq!(
+        tabs,
+        ["home", "measure", "annotate", "insert", "view", "manage", "output"]
+    );
     let buttons: Vec<_> = layout
         .tabs
         .iter()
@@ -181,6 +184,11 @@ fn the_default_ribbon_is_valid_and_holds_every_tab() {
         (ButtonKind::Tool, "dimLinear"),
         (ButtonKind::Action, "audit"),
         (ButtonKind::Action, "purge"),
+        (ButtonKind::Action, "runScript"),
+        (ButtonKind::Action, "plot"),
+        (ButtonKind::Action, "quickPrint"),
+        (ButtonKind::Action, "printAll"),
+        (ButtonKind::Action, "plotStyles"),
         (ButtonKind::Toggle, "arabicReversed"),
     ] {
         assert!(

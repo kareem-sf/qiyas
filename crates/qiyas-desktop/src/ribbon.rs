@@ -95,8 +95,9 @@ fn tab(id: &str, groups: Vec<RibbonGroup>) -> RibbonTab {
     }
 }
 
-/// The ribbon Qiyas ships: Home, Measure, Annotate, Insert and View, as `Ribbon.tsx` draws them,
-/// with Audit and Purge beside Recover. Group labels are i18n keys; `ribbon.*` ones are new.
+/// The ribbon Qiyas ships: Home, Measure, Annotate, Insert, View, Manage (Run script) and
+/// Output (Plot, Quick print, Print all layouts, Plot styles), as `Ribbon.tsx` draws them, with
+/// Audit and Purge beside Recover. Group labels are i18n keys; `ribbon.*` ones are new.
 pub fn default_ribbon() -> RibbonLayout {
     use ButtonKind::Toggle;
     let home = tab(
@@ -299,8 +300,35 @@ pub fn default_ribbon() -> RibbonLayout {
             ),
         ],
     );
+    let manage = tab(
+        "manage",
+        vec![group(
+            "scripts",
+            "ribbon.scripts",
+            vec![action("runScript", "script.run")],
+        )],
+    );
+    let output = tab(
+        "output",
+        vec![
+            group(
+                "plot",
+                "ribbon.plot",
+                vec![
+                    action("plot", "plot.button"),
+                    action("quickPrint", "plot.quickPrint"),
+                    action("printAll", "plot.printAll"),
+                ],
+            ),
+            group(
+                "plotStyles",
+                "ribbon.plotStyles",
+                vec![action("plotStyles", "plot.styles")],
+            ),
+        ],
+    );
     RibbonLayout {
-        tabs: vec![home, measure, annotate, insert, view],
+        tabs: vec![home, measure, annotate, insert, view, manage, output],
     }
 }
 
