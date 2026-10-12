@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { paperViews, sheetBatch, sheetBatchVersion, type PaperView, type Sheet, type Ucs } from "../api";
 import { useT } from "../i18n";
 import { parseBatch, type AtlasPage, type Batch } from "./batch";
+import type { CanvasColours } from "./colours";
 import type { Theme } from "./gl";
 import { refreshSheet, type HeldSheet } from "./inset";
 import { Viewport, type ViewportHandle } from "./Viewport";
@@ -19,6 +20,8 @@ type Props = {
   mainInset: { batch: Batch; views: PaperView[] } | null;
   atlas: AtlasPage[];
   theme: Theme;
+  /** The user's background and highlight colours (as the main view's). */
+  colours?: CanvasColours | null;
   ucs?: Ucs | null;
   /** Fetches the glyph atlas pages `b` needs that the window doesn't hold yet. */
   syncAtlas(b: Batch): Promise<void>;
@@ -36,6 +39,7 @@ export function SplitPane({
   mainInset,
   atlas,
   theme,
+  colours = null,
   ucs = null,
   syncAtlas,
   onError,
@@ -139,6 +143,7 @@ export function SplitPane({
           highlight={NO_TARGETS}
           tool="select"
           theme={theme}
+          colours={colours}
           ucs={ucs}
           inset={inset}
           onClick={() => {}}

@@ -330,6 +330,7 @@ export default function App() {
           annotate={annotate}
           drawings={drawings}
           selection={selection}
+          colours={options.colours}
         />
         <SidePanel info={info} drafting={drafting} shell={shell} takeoffState={takeoffState} takeoff={takeoff} ai={ai} />
       </div>

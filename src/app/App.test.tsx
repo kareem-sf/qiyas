@@ -565,6 +565,9 @@ test("PURGE (PU) and AUDIT: a dry run first, then one change that the window cat
 test("the options reach the window: the pick box, the ribbon layout and a shortcut", async () => {
   core.settings = {
     pick_box_px: 9,
+    background_color: "#102030",
+    highlight_color: "#ff8800",
+    crosshair_color: "#00ff00",
     shortcuts: { circle: "Ctrl+Shift+O" },
     ribbon: {
       tabs: [{ id: "home", label: "home", groups: [{ id: "file", label: "ribbon.file", buttons: [{ kind: "action", command: "open", label: "open" }] }] }],
@@ -578,6 +581,8 @@ test("the options reach the window: the pick box, the ribbon layout and a shortc
   canvas.props!.onClick([10, 10], [100, 100], 1, false);
   await settle();
   expect(core.calls).toContain(`pick {"x":10,"y":10,"tol":9}`);
+  // The canvas draws with the background and highlight colours (the crosshair's waits).
+  expect((canvas.props as unknown as { colours: unknown }).colours).toEqual({ background: "#102030", highlight: "#ff8800" });
   fireEvent.keyDown(window, { code: "KeyO", key: "O", ctrlKey: true, shiftKey: true });
   await settle();
   expect(document.querySelector<HTMLInputElement>("input[aria-autocomplete]")!.labels![0].textContent).toBe(

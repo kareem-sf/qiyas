@@ -19,6 +19,7 @@ import { TakeoffPanel } from "../shell/TakeoffPanel";
 import { InPlaceText } from "../shell/TextEditor";
 import type { Target } from "../viewport/batch";
 import type { Point } from "../viewport/camera";
+import type { CanvasColours } from "../viewport/colours";
 import type { Theme } from "../viewport/gl";
 import { SplitPane } from "../viewport/SplitPane";
 import { Viewport } from "../viewport/Viewport";
@@ -122,6 +123,8 @@ type WorkProps = {
   annotate: Annotate;
   drawings: Pick<Drawings, "switchTab" | "closeFileTab" | "switching">;
   selection: Selection;
+  /** The Options dialog's background and highlight colours (null: the theme's). */
+  colours: CanvasColours;
 };
 
 /** The drawing: the edit in place's bar, the file tabs, the canvas (with the along prompt, the
@@ -144,6 +147,7 @@ export function WorkArea({
   annotate,
   drawings,
   selection,
+  colours,
 }: WorkProps) {
   const { theme, error, setError, run, focusDrawing, viewport, viewportBox } = shell;
   const {
@@ -194,6 +198,7 @@ export function WorkArea({
             overlay={overlay}
             tool={tool}
             theme={theme}
+            colours={colours}
             onClick={clickDrawing}
             boxes={measure.boxes && !pending}
             onBox={(bounds, crossing, shift) => {
@@ -250,6 +255,7 @@ export function WorkArea({
             mainInset={inset}
             atlas={atlas}
             theme={theme}
+            colours={colours}
             ucs={info.ucs}
             syncAtlas={syncAtlas}
             onError={(e) => setError(String(e))}

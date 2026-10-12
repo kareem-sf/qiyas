@@ -1156,5 +1156,6 @@
   "audit.kind.missing_text_style": "نصوص بنمط غير موجود",
   "audit.kind.empty_block": "كتلة فارغة",
   "audit.kind.unused_layer": "طبقة غير مستخدمة",
-  "manage.blockEdit": "احفظ تحرير البلوك في المكان أو تجاهله أولًا (REFCLOSE)، ثم نظّف الرسم أو دقّقه"
+  "manage.blockEdit": "احفظ تحرير البلوك في المكان أو تجاهله أولًا (REFCLOSE)، ثم نظّف الرسم أو دقّقه",
+  "options.crosshairLater": "لون مؤشر التقاطع محفوظ لإصدار لاحق: لا يوجد مؤشر تقاطع على اللوحة بعد."
 }

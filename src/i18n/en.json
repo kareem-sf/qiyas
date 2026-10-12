@@ -1156,5 +1156,6 @@
   "audit.kind.missing_text_style": "Texts in a missing style",
   "audit.kind.empty_block": "Empty block",
   "audit.kind.unused_layer": "Unused layer",
-  "manage.blockEdit": "Save or discard the block edit in place first (REFCLOSE), then purge or audit"
+  "manage.blockEdit": "Save or discard the block edit in place first (REFCLOSE), then purge or audit",
+  "options.crosshairLater": "The crosshair colour is kept for a later version: the canvas has no crosshair yet."
 }

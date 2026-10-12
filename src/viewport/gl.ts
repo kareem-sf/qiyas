@@ -26,9 +26,10 @@ import {
 import type { PaperView, Ucs } from "../api";
 import type { Camera } from "./camera";
 import { GRID_MAJOR, gridLevels, offsetInPeriod } from "./grid";
+import type { Palette } from "./colours";
 import { scissorBox, viewCamera, viewSpans } from "./inset";
 
-export type Theme = "light" | "dark";
+export type { Theme } from "./colours";
 
 export type Renderer = {
   /** `null` clears the drawing. A batch whose `segments` are the very array of the one before
@@ -52,7 +53,8 @@ export type Renderer = {
    *  own drawing. `null` for none. A batch with the same `segments` as the last uploads only its
    *  glyphs. */
   setInset(batch: Batch | null, views: PaperView[]): void;
-  draw(camera: Camera, theme: Theme): void;
+  /** Draws the view with `look`'s colours (`palette`: the theme's, or the user's). */
+  draw(camera: Camera, look: Palette): void;
   dispose(): void;
 };
 
@@ -61,9 +63,6 @@ const rgb = (hex: number): [number, number, number] => [
   ((hex >> 8) & 255) / 255,
   (hex & 255) / 255,
 ];
-const INK = rgb(0x0e0f12);
-const PAPER = rgb(0xf9f8f4);
-const VIOLET = rgb(0x6e4a9e);
 /** Highlight width in CSS pixels. */
 const HIGHLIGHT_PX = 2;
 
@@ -786,10 +785,10 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       gl.bindVertexArray(null);
     },
 
-    draw(camera, theme) {
-      const light = theme === "light";
+    draw(camera, look) {
+      const { light, ink, paper, background, highlight: violet } = look;
       gl.viewport(0, 0, canvas.width, canvas.height);
-      gl.clearColor(...(light ? PAPER : INK), 1);
+      gl.clearColor(...background, 1);
       gl.clear(gl.COLOR_BUFFER_BIT);
 
       // The grid under the drawing, its dots hidden when they would crowd together.
@@ -839,8 +838,8 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
           gl.uniform4f(uColor, 0, 0, 0, 0);
           gl.uniform2f(uOffset, 0, 0);
           gl.uniform1i(uLight, light ? 1 : 0);
-          gl.uniform3f(uInk, ...INK);
-          gl.uniform3f(uPaper, ...PAPER);
+          gl.uniform3f(uInk, ...ink);
+          gl.uniform3f(uPaper, ...paper);
           gl.bindVertexArray(insetFillVao);
           for (const [first, count] of v.fills) gl.drawArrays(gl.TRIANGLES, 3 * first, 3 * count);
           gl.bindVertexArray(insetVao);
@@ -851,8 +850,8 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
             gl.uniform2f(tCenter, mc.cx - m.origin[0], mc.cy - m.origin[1]);
             gl.uniform2f(tToClip, ...toClip);
             gl.uniform1i(tLight, light ? 1 : 0);
-            gl.uniform3f(tInk, ...INK);
-            gl.uniform3f(tPaper, ...PAPER);
+            gl.uniform3f(tInk, ...ink);
+            gl.uniform3f(tPaper, ...paper);
             gl.uniform4f(tColor, 0, 0, 0, 0);
             gl.uniform1i(tAtlas, 0);
             gl.activeTexture(gl.TEXTURE0);
@@ -873,7 +872,7 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
         gl.uniform2f(iCenter, camera.cx - batch.origin[0], camera.cy - batch.origin[1]);
         gl.uniform2f(iToClip, 2 / (camera.width * camera.scale), 2 / (camera.height * camera.scale));
         gl.uniform1i(iLight, light ? 1 : 0);
-        gl.uniform3f(iBackground, ...(light ? PAPER : INK));
+        gl.uniform3f(iBackground, ...background);
         gl.uniform1i(iImage, 0);
         gl.activeTexture(gl.TEXTURE0);
         for (let i = 0; i < batch.images.length; i++) {
@@ -895,8 +894,8 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       gl.uniform2f(uCenter, camera.cx - batch.origin[0], camera.cy - batch.origin[1]);
       gl.uniform2f(uToClip, 2 / (camera.width * camera.scale), 2 / (camera.height * camera.scale));
       gl.uniform1i(uLight, light ? 1 : 0);
-      gl.uniform3f(uInk, ...INK);
-      gl.uniform3f(uPaper, ...PAPER);
+      gl.uniform3f(uInk, ...ink);
+      gl.uniform3f(uPaper, ...paper);
       gl.uniform2f(uOffset, 0, 0);
       // Fills under the lines; wipeouts over both in the background colour, their frames last.
       gl.uniform4f(uColor, 0, 0, 0, 0);
@@ -908,7 +907,7 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       for (const [first, count] of spans.lines) gl.drawArrays(gl.LINES, 2 * first, 2 * count);
       if (backgroundCount > 0) {
         gl.bindVertexArray(backgroundVao);
-        gl.uniform4f(uColor, ...(light ? PAPER : INK), 1);
+        gl.uniform4f(uColor, ...background, 1);
         gl.drawArrays(gl.TRIANGLES, 0, backgroundCount);
         gl.uniform4f(uColor, 0, 0, 0, 0);
         gl.bindVertexArray(vao);
@@ -923,8 +922,8 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
         gl.uniform2f(tCenter, camera.cx - batch!.origin[0], camera.cy - batch!.origin[1]);
         gl.uniform2f(tToClip, 2 / (camera.width * camera.scale), 2 / (camera.height * camera.scale));
         gl.uniform1i(tLight, light ? 1 : 0);
-        gl.uniform3f(tInk, ...INK);
-        gl.uniform3f(tPaper, ...PAPER);
+        gl.uniform3f(tInk, ...ink);
+        gl.uniform3f(tPaper, ...paper);
         gl.uniform4f(tColor, ...((color ?? [0, 0, 0, 0]) as [number, number, number, number]));
         gl.uniform1i(tAtlas, 0);
         gl.activeTexture(gl.TEXTURE0);
@@ -939,7 +938,7 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       };
       text(textAll, textIndices, null);
 
-      text(textHighlight, textHighlightIndices, [...VIOLET, 1]);
+      text(textHighlight, textHighlightIndices, [...violet, 1]);
 
       // Line width is 1 device pixel on most platforms, so violet work is thickened by redrawing
       // it nudged one device pixel at a time across and down.
@@ -948,7 +947,7 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       const px = 2 / canvas.width;
       const py = 2 / canvas.height;
       const thick = (drawOnce: () => void) => {
-        gl.uniform4f(uColor, ...VIOLET, 1);
+        gl.uniform4f(uColor, ...violet, 1);
         for (let i = 0; i < steps; i++) {
           for (const [dx, dy] of i === 0 ? [[0, 0]] : [[i, 0], [0, -i]]) {
             gl.uniform2f(uOffset, dx * px, dy * py);

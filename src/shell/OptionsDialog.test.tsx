@@ -59,6 +59,8 @@ const save = () => fireEvent.click(screen.getByRole("button", { name: "Save" }))
 
 test("options round trip: precision, snap aperture, pick box and colours are saved with the rest", async () => {
   const { onSaved, onClose } = await setup();
+  // The crosshair colour is kept but not drawn yet, and the dialog says so.
+  expect(screen.getByText("The crosshair colour is kept for a later version: the canvas has no crosshair yet.")).toBeTruthy();
   // The ruling, said where the choice is made.
   expect(screen.getByText(/drafting settings.*while it is open/i)).toBeTruthy();
   fireEvent.change(screen.getByRole("combobox", { name: "Decimals with no drawing open" }), { target: { value: "2" } });

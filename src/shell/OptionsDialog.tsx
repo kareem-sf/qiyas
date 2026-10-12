@@ -223,6 +223,7 @@ export function OptionsDialog({
                         onChange={(e) => change({ [key]: e.target.value.toLowerCase() })}
                       />
                     </span>
+                    {key === "crosshair_color" && <span className="status">{t("options.crosshairLater")}</span>}
                   </div>
                 );
               })}

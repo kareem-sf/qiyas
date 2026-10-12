@@ -4,6 +4,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { getSettings, type DrawingInfo, type RibbonLayout, type Settings } from "../api";
 import { SHORTCUT_COMMANDS } from "../shell/OptionsDialog";
+import type { CanvasColours } from "../viewport/colours";
 import type { T } from "./shared";
 import type { Shell } from "./useShell";
 
@@ -22,6 +23,8 @@ export function useOptions({ t, info, setError }: Deps) {
   /** CSS pixels around the cursor snaps and picks reach. */
   const [px, setPx] = useState({ snap: 10, pick: 6 });
   const [userShortcuts, setUserShortcuts] = useState<Record<string, string>>({});
+  /** The canvas's background and highlight colours; null for the theme's. */
+  const [colours, setColours] = useState<CanvasColours>({ background: null, highlight: null });
   /** The user's ribbon; null draws the default. */
   const [ribbon, setRibbon] = useState<RibbonLayout | null>(null);
   /** The shortcuts the keyboard handler can run (a hand-edited file may name others). */
@@ -36,6 +39,7 @@ export function useOptions({ t, info, setError }: Deps) {
     setPx({ snap: s.snap_aperture_px ?? 10, pick: s.pick_box_px ?? 6 });
     setUserShortcuts(s.shortcuts ?? {});
     setRibbon(s.ribbon ?? null);
+    setColours({ background: s.background_color ?? null, highlight: s.highlight_color ?? null });
   }
 
   /** Purge and Audit wait while a block is edited in place (the core would purge or repair the
@@ -73,6 +77,7 @@ export function useOptions({ t, info, setError }: Deps) {
     displayPrecision,
     px,
     shortcuts,
+    colours,
     ribbon,
     setRibbon,
     takeSettings,

@@ -27,6 +27,7 @@ import type { EditKind } from "../tools/editTools";
 import type { ModifyKind } from "../tools/modifyTools";
 import type { TextKind } from "../tools/textTools";
 import type { PaperView, Ucs } from "../api";
+import { palette, type CanvasColours } from "./colours";
 import { createRenderer, type Renderer, type Theme } from "./gl";
 import { wheelFactor } from "./wheel";
 
@@ -85,6 +86,8 @@ type Props = {
   highlight: Target[];
   tool: Tool;
   theme: Theme;
+  /** The user's background and highlight colours over the theme's (the Options dialog's). */
+  colours?: CanvasColours | null;
   /** Violet segments `x0 y0 x1 y1` in absolute drawing coordinates, drawn over the drawing. */
   overlay?: Float64Array | null;
   /** Drawing units between the grid's dots; null or left out for no grid. */
@@ -136,6 +139,7 @@ export function Viewport({
   highlight,
   tool,
   theme,
+  colours = null,
   overlay = null,
   grid = null,
   ucs = null,
@@ -155,7 +159,7 @@ export function Viewport({
   const camera = useRef<Camera>({ cx: 0, cy: 0, scale: 1, width: 1, height: 1 });
   /** The world box the user (or the app) last chose to show; a resize keeps it in view. */
   const view = useRef<Bounds | null>(null);
-  const themeRef = useRef(theme);
+  const lookRef = useRef(palette(theme, colours));
   const batchRef = useRef(batch);
   const frame = useRef(0);
   const drag = useRef<Drag | null>(null);
@@ -212,7 +216,7 @@ export function Viewport({
     if (frame.current) return;
     frame.current = requestAnimationFrame(() => {
       frame.current = 0;
-      renderer.current?.draw(camera.current, themeRef.current);
+      renderer.current?.draw(camera.current, lookRef.current);
     });
   }
 
@@ -342,9 +346,9 @@ export function Viewport({
   }, [pictures]);
 
   useEffect(() => {
-    themeRef.current = theme;
+    lookRef.current = palette(theme, colours);
     requestDraw();
-  }, [theme]);
+  }, [theme, colours?.background, colours?.highlight]);
 
   useEffect(() => {
     renderer.current!.setHighlight(highlight);
