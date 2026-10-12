@@ -8,8 +8,16 @@ export type RecoveryAsk = { id: number; items: Recoverable[]; then: string | nul
 let next = 1;
 
 /** `q` with a question for `items` (opening `then` after), crashed ones first, each kind in the
- *  order given; `first` puts it ahead of the others. */
+ *  order given; `first` puts it ahead of the others. A drawing is asked about once: one already
+ *  in `q` is left out (a drawing double-clicked at launch is found by the launch question and by
+ *  its open), and when nothing is left `then` opens after the launch question holding it. */
 export function enqueue(q: RecoveryAsk[], items: Recoverable[], then: string | null, first = false): RecoveryAsk[] {
+  const asked = new Set(q.flatMap((a) => a.items.map((i) => i.drawing)));
+  items = items.filter((i) => !asked.has(i.drawing));
+  if (items.length === 0) {
+    const k = q.findIndex((a) => a.then === null && a.items.some((i) => i.drawing === then));
+    return then !== null && k >= 0 ? q.map((a, j) => (j === k ? { ...a, then } : a)) : q;
+  }
   const ask = { id: next++, items: [...items.filter((i) => i.crashed), ...items.filter((i) => !i.crashed)], then };
   return first ? [ask, ...q] : [...q, ask];
 }

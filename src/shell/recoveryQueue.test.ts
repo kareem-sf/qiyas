@@ -47,3 +47,23 @@ test("times are the user's own locale's date and time", () => {
   const at = Date.UTC(2026, 9, 12, 11, 3) / 1000;
   expect(localTime(at)).toBe(new Date(at * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }));
 });
+
+test("a drawing is asked about once: a double-clicked drawing the launch question holds opens after it", () => {
+  // The launch question found X first; the double click's open finds it again.
+  let q = enqueue([], [item("/x.dwg"), item("/y.dwg")], null, true);
+  q = enqueue(q, [item("/x.dwg")], "/x.dwg");
+  expect(q).toHaveLength(1);
+  expect(q[0].items.map((i) => i.drawing)).toEqual(["/x.dwg", "/y.dwg"]);
+  expect(q[0].then).toBe("/x.dwg");
+
+  // The other way round: the launch question leaves out what an open asks already.
+  let r = enqueue([], [item("/x.dwg")], "/x.dwg");
+  r = enqueue(r, [item("/x.dwg"), item("/y.dwg")], null, true);
+  expect(r.map((a) => [a.items.map((i) => i.drawing), a.then])).toEqual([
+    [["/y.dwg"], null],
+    [["/x.dwg"], "/x.dwg"],
+  ]);
+  // Nothing left to ask: no empty question.
+  expect(enqueue(r, [item("/y.dwg")], null, true)).toBe(r);
+  expect(enqueue(r, [item("/x.dwg")], "/x.dwg")).toBe(r);
+});

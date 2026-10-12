@@ -43,7 +43,8 @@ test("files given at launch open in turn, then files sent later", async () => {
   });
   renderHook(() => useOpenRequests(openPath));
   await settle();
-  // The second waits for the first (its autosave question, its drawing shown).
+  // The second waits until `openPath` of the first returns (the real one returns once the drawing
+  // shows, or as soon as it queues its autosave question: then the second may show first).
   expect(opened).toEqual(["start /d/plan.dwg"]);
   await act(async () => finish());
   expect(opened).toEqual(["start /d/plan.dwg", "end /d/plan.dwg", "start /d/site.dxf", "end /d/site.dxf"]);
