@@ -41,6 +41,8 @@ Checked again on 2026-10-12, after the final fix wave (`8342692` to `61f8eee`) a
 
 The check ran again after adding `examples/phase3_walkthrough.rs`, with the same result.
 
+After the fix wave (2026-10-12), `scripts/check.sh` stopped at its first step: `cargo fmt` on files other agents were still writing in the same checkout (audit, purge). The rest was run by hand: the Rust tests of qiyas-core (without the script, autosave, audit and purge tests being rewritten then), qiyas-geom, qiyas-render, qiyas-boq, qiyas-takeoff, qiyas-ai and qiyas-pdf: 577 passed, 0 failed; the PDF tests 5 passed, 0 ignored; both release speed guards passed; clippy was clean on the changed crates. tsc and vitest failed only in the recovery dialog files another agent was changing (5 of 473 tests).
+
 ## Numbers per drawing
 
 All timings are from release builds, on copies of the drawings. `bench_open` was run three times. The new walkthrough (`cargo run --release -p qiyas-core --example phase3_walkthrough`) was run on each drawing. "Phase 1b" is the end of the last check. "Phase 3 start" is commit `3f7a890`, rebuilt and run on 2026-10-09. "Before the fix wave" is the first check (`48deb76`). "After the fix wave" is the re-check on 2026-10-12. The re-check ran while other agents were building on the same laptop (load average 6 to 10, swap in use): its times are upper bounds. `bench_open` ran eight times per drawing; the ALJ range leaves out four runs taken while the laptop was swapping (1.9 to 3.7 s).
