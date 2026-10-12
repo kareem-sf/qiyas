@@ -1,4 +1,4 @@
-import { useRef, useState, type FocusEvent, type KeyboardEvent } from "react";
+import { useLayoutEffect, useRef, useState, type FocusEvent, type KeyboardEvent } from "react";
 
 /** The tab to focus after `key` from tab `i` of `n` (arrows go round); null for any other key. In
  *  a right-to-left page the arrows are mirrored. */
@@ -51,4 +51,39 @@ export function useRoving<T extends HTMLElement = HTMLDivElement>(n: number, act
     props: { ref, onFocus, onBlur, onKeyDown, onKeyUp },
     tabIndex: (i: number) => (i === current ? 0 : -1),
   };
+}
+
+/** The same for a `role="toolbar"` of buttons the caller does not number (a split button is two
+ *  stops): the enabled buttons outside any menu are the stops, one of them (the last focused,
+ *  else the first) is in the Tab order, and the arrows (mirrored in a right-to-left page), Home
+ *  and End move focus. Spread `props` on the toolbar; Space stays with the buttons. */
+export function useToolbarRoving<T extends HTMLElement = HTMLDivElement>() {
+  const ref = useRef<T>(null);
+  const last = useRef<HTMLElement | null>(null);
+  const stops = () =>
+    Array.from(ref.current?.querySelectorAll<HTMLElement>('button:not([role="menuitem"]):not(:disabled)') ?? []);
+  const apply = () => {
+    const all = stops();
+    const keep = last.current && all.includes(last.current) ? last.current : all[0];
+    for (const b of all) b.tabIndex = b === keep ? 0 : -1;
+  };
+  // After every render: a button enabled or taken away meanwhile changes the stops.
+  useLayoutEffect(apply);
+
+  const onFocus = (e: FocusEvent) => {
+    if (stops().includes(e.target as HTMLElement)) {
+      last.current = e.target as HTMLElement;
+      apply();
+    }
+  };
+  const onKeyDown = (e: KeyboardEvent) => {
+    const all = stops();
+    const at = all.indexOf(e.target as HTMLElement);
+    if (at < 0) return;
+    const to = nextIndex(e.key, at, all.length, document.documentElement.dir === "rtl");
+    if (to === null) return;
+    e.preventDefault();
+    all[to].focus();
+  };
+  return { props: { ref, onFocus, onKeyDown } };
 }

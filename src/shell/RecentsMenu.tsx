@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent } from "react";
+import { useState, type CSSProperties, type KeyboardEvent } from "react";
 import type { Recent } from "../api";
 import { useT } from "../i18n";
 import { useMenu } from "./useMenu";
@@ -19,6 +19,9 @@ export function RecentsMenu({ onOpen, load, onOpenRecent, onClear, onKey }: Prop
   const t = useT();
   const menu = useMenu<HTMLDivElement>();
   const [list, setList] = useState<Recent[]>([]);
+  // The tabs' row scrolls sideways, which would clip a menu inside it: the menu is placed on the
+  // window under the button instead (its start edge under the button's, RTL too).
+  const [at, setAt] = useState<CSSProperties>();
 
   async function toggle() {
     if (menu.open) {
@@ -26,6 +29,11 @@ export function RecentsMenu({ onOpen, load, onOpenRecent, onClear, onKey }: Prop
       return;
     }
     setList(await load().catch(() => []));
+    const r = menu.ref.current?.getBoundingClientRect();
+    if (r) {
+      const rtl = document.documentElement.dir === "rtl";
+      setAt({ position: "fixed", top: r.bottom, ...(rtl ? { right: window.innerWidth - r.right } : { left: r.left }) });
+    }
     menu.setOpen(true);
   }
 
@@ -48,7 +56,7 @@ export function RecentsMenu({ onOpen, load, onOpenRecent, onClear, onKey }: Prop
         ▾
       </button>
       {menu.open && (
-        <div className="menu" role="menu" aria-label={t("recent.title")}>
+        <div className="menu" role="menu" aria-label={t("recent.title")} style={at}>
           {list.length === 0 && <div className="menu-note">{t("recent.none")}</div>}
           {list.map((r) => (
             <button

@@ -529,3 +529,86 @@ test("in Arabic the ribbon reads right to left: the same order from the start ed
   expect(grid).toContain("grid-template-rows: repeat(3, auto)");
   for (const r of [rule(".quick-access"), rule(".ribbon-group"), panel]) expect(r).not.toMatch(/\b(left|right)\b/);
 });
+
+// The rule `selector { … }` at the top level of theme.css.
+const rule = (selector: string) => css.match(new RegExp(`\\n${selector.replace(/[.+]/g, "\\$&")} \\{([^}]*)\\}`))![1];
+
+test("the tabs' row scrolls sideways and keeps room for the preferences instead of lying under them", () => {
+  // The quick-access buttons never wrap and never shrink.
+  expect(rule(".quick-access button")).toContain("white-space: nowrap");
+  expect(rule(".ribbon-tabs > \\*")).toContain("flex-shrink: 0");
+  // The row scrolls (thin bar) and its end padding is the overlay's width, from one variable the
+  // overlay reads too, so they stay in step.
+  const row = rule(".ribbon-tabs");
+  expect(row).toContain("overflow-x: auto");
+  expect(row).toContain("scrollbar-width: thin");
+  expect(row).toMatch(/padding-inline-end: calc\(var\(--prefs-width\) \+ \d+px\)/);
+  expect(rule(".prefs")).toContain("min-width: var(--prefs-width)");
+  expect(css).toMatch(/\.ribbon-tabs::-webkit-scrollbar \{\s*height: 6px/);
+  // Both breakpoints moved up by the quick-access bar: words dropped under 1420px (and the
+  // variable shrinks with them), the prefs on their own row under 1020px.
+  const narrow = css.match(/@media \(max-width: 1420px\) \{([\s\S]*?)\n\}/)![1];
+  expect(narrow).toMatch(/--prefs-width: 2\d\dpx/);
+  expect(narrow).toContain("display: none");
+  const stacked = css.match(/@media \(max-width: 1020px\) \{([\s\S]*?)\n\}/)![1];
+  expect(stacked).toContain("position: static");
+  expect(stacked).toMatch(/\.ribbon-tabs \{\s*padding-inline-end: \d+px/);
+  expect(css).not.toMatch(/max-width: (1100|700)px/);
+  // Logical sides only, so Arabic mirrors the row and the overlay.
+  for (const r of [row, rule(".prefs"), stacked]) expect(r).not.toMatch(/\b(left|right)\b/);
+});
+
+test("the quick-access bar is a toolbar: one tab stop, arrows, Home and End move between its buttons", () => {
+  const handlers = { onSave() {}, onSaveAs() {}, onUndo() {}, onRedo() {} };
+  render(
+    <Ribbon
+      {...props}
+      {...handlers}
+      loadRecents={async () => []}
+      onOpenRecent={() => {}}
+      onClearRecents={async () => {}}
+    />,
+  );
+  const bar = screen.getByRole("toolbar", { name: "Quick access" });
+  const names = () => within(bar).getAllByRole("button").map((b) => b.getAttribute("aria-label") ?? b.textContent);
+  expect(names()).toEqual(["Open…", "Recent drawings", "Save", "Save as", "Undo", "Redo"]);
+  const stops = () => within(bar).getAllByRole("button").map((b) => b.tabIndex);
+  expect(stops()).toEqual([0, -1, -1, -1, -1, -1]);
+  const button = (name: string) => within(bar).getByRole("button", { name });
+  button("Open…").focus();
+  fireEvent.keyDown(button("Open…"), { key: "ArrowRight" });
+  expect(document.activeElement).toBe(button("Recent drawings"));
+  expect(stops()).toEqual([-1, 0, -1, -1, -1, -1]);
+  fireEvent.keyDown(button("Recent drawings"), { key: "ArrowRight" });
+  expect(document.activeElement).toBe(button("Save"));
+  fireEvent.keyDown(button("Save"), { key: "End" });
+  expect(document.activeElement).toBe(button("Redo"));
+  fireEvent.keyDown(button("Redo"), { key: "ArrowRight" });
+  expect(document.activeElement).toBe(button("Open…"));
+  fireEvent.keyDown(button("Open…"), { key: "ArrowLeft" });
+  expect(document.activeElement).toBe(button("Redo"));
+  fireEvent.keyDown(button("Redo"), { key: "Home" });
+  expect(document.activeElement).toBe(button("Open…"));
+  // The tab stop stays on the last button focused when focus leaves the bar.
+  button("Undo").focus();
+  fireEvent.keyDown(button("Undo"), { key: "ArrowLeft" });
+  screen.getByRole("tab", { name: "Home" }).focus();
+  expect(stops()).toEqual([-1, -1, -1, 0, -1, -1]);
+});
+
+test("the quick-access arrows skip a disabled button and mirror in Arabic", () => {
+  // Only Open and Undo have handlers here; Save, Save as and Redo are disabled.
+  render(<Ribbon {...props} onUndo={() => {}} />);
+  const bar = screen.getByRole("toolbar", { name: "Quick access" });
+  const button = (name: string) => within(bar).getByRole("button", { name });
+  button("Open…").focus();
+  fireEvent.keyDown(button("Open…"), { key: "ArrowRight" });
+  expect(document.activeElement).toBe(button("Undo"));
+  document.documentElement.dir = "rtl";
+  try {
+    fireEvent.keyDown(button("Undo"), { key: "ArrowRight" });
+    expect(document.activeElement).toBe(button("Open…"));
+  } finally {
+    document.documentElement.dir = "ltr";
+  }
+});

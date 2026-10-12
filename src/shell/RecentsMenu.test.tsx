@@ -56,3 +56,10 @@ test("an empty list says so", async () => {
   expect(await screen.findByText("No recent drawings")).toBeTruthy();
   expect(screen.queryByRole("menuitem", { name: "Clear recents" })).toBeNull();
 });
+
+test("the menu is placed on the window, so the scrolling tabs' row does not clip it", async () => {
+  render(<RecentsMenu onOpen={() => {}} load={async () => list} onOpenRecent={() => {}} onClear={async () => {}} />);
+  fireEvent.click(screen.getByRole("button", { name: "Recent drawings" }));
+  const menu = await screen.findByRole("menu");
+  expect(menu.style.position).toBe("fixed");
+});

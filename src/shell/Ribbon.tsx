@@ -4,7 +4,7 @@ import { useT } from "../i18n";
 import type { Tool } from "../viewport/Viewport";
 import { RecentsMenu } from "./RecentsMenu";
 import { DEFAULT_RIBBON, QUICK_ACCESS } from "./ribbonLayout";
-import { useRoving } from "./useRoving";
+import { useRoving, useToolbarRoving } from "./useRoving";
 import { ViewsMenu } from "./ViewsMenu";
 
 export type { Tool };
@@ -155,6 +155,7 @@ export function Ribbon(props: Props) {
   // A layout without the tab chosen (saved meanwhile) shows its first.
   const tab = tabs.find((x) => x.id === chosen) ?? tabs[0];
   const roving = useRoving(tabs.length, tab ? tabs.indexOf(tab) : 0);
+  const quick = useToolbarRoving();
   const handlers = actions(props);
 
   const action = (key: string, label: string, onClick?: () => void) => (
@@ -240,7 +241,7 @@ export function Ribbon(props: Props) {
     <div className="ribbon">
       <div className="ribbon-tabs">
         <span className="app-name heading">{t("appName")}</span>
-        <div className="quick-access" role="toolbar" aria-label={t("ribbon.quickAccess")}>
+        <div className="quick-access" role="toolbar" aria-label={t("ribbon.quickAccess")} {...quick.props}>
           {QUICK_ACCESS.map((b) => draw(b, b.command))}
         </div>
         <div className="ribbon-tablist" role="tablist" {...roving.props}>
