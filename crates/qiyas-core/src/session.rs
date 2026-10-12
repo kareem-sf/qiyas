@@ -176,6 +176,9 @@ pub struct DrawingInfo {
     pub viewports: Vec<crate::ViewportInfo>,
     /// The user coordinate system (`Session::ucs`).
     pub ucs: Ucs,
+    /// The drawing has (or had) parametric constraints: its `QIYAS-PARAM` application is
+    /// registered, so the window keeps the constraint bar's list read.
+    pub has_constraints: bool,
 }
 
 /// An entity by its handle and the block references it sits inside (outermost first).
@@ -675,6 +678,7 @@ impl Session {
             groups: self.groups(),
             viewports: self.viewports(),
             ucs: self.ucs,
+            has_constraints: !self.needs_param_app(),
         }
     }
 

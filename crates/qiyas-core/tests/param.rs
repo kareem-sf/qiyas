@@ -140,7 +140,9 @@ fn height(s: &mut Session, rect: u64) -> u32 {
 fn auto_constrain_on_the_sample_rectangle_infers_4_coincident_2_horizontal_2_vertical() {
     let (_dir, mut s) = open(&sample_doc(), "plan.dxf");
     let rect = rectangle(&s);
+    assert!(!s.info().has_constraints);
     let added = auto(&mut s, rect);
+    assert!(s.info().has_constraints);
     let list = constraints(&mut s);
     assert_eq!(added.len(), 8, "{list:?}");
     assert_eq!(count(&list, ConstraintKind::Coincident), 4);
