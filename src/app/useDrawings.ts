@@ -20,6 +20,7 @@ import {
   recoverAutosave,
   recoverDrawing,
   runCommand,
+  runScript,
   saveDrawing,
   saveDrawingAs,
   saveProject,
@@ -34,6 +35,7 @@ import {
   type EntityFilter,
   type Field,
   type ReadReport,
+  type ScriptResult,
   type TabInfo,
 } from "../api";
 import { cycleTab } from "../shell/FileTabs";
@@ -146,6 +148,8 @@ export function useDrawings({
   const recovery = recoveries[0] ?? null;
   /** What RECOVER read and dropped from a damaged drawing. */
   const [recoverReport, setRecoverReport] = useState<{ path: string; report: ReadReport } | null>(null);
+  /** What the last Run script did, for its dialog. */
+  const [scriptRun, setScriptRun] = useState<{ path: string; result: ScriptResult } | null>(null);
   const [sheetSetShown, setSheetSetShown] = useState(false);
   const [opening, setOpening] = useState(false);
   const [xrefsOpen, setXrefsOpen] = useState(false);
@@ -395,6 +399,41 @@ export function useDrawings({
     );
   }
 
+  /** Run script (SCRIPT): asks for a `.scr` command script and runs it on the drawing on screen,
+   *  then shows what each line did. A drawing its OPEN put on screen is shown as a tab switch is;
+   *  else the drawing on screen is read and drawn again. Either way the take-off is saved. */
+  async function runScriptFile() {
+    if (infoRef.current?.block_edit) {
+      setError(t("script.blockEdit"));
+      return;
+    }
+    const path = await open({ filters: [{ name: t("script.file"), extensions: ["scr"] }] });
+    if (typeof path !== "string") return;
+    let changed = false;
+    await drawingChange(() =>
+      run(async () => {
+        const before = (await readTabs()).active;
+        const result = await runScript(path);
+        setScriptRun({ path, result });
+        if (!result.changed) return;
+        changed = true;
+        const now = await readTabs();
+        const gen = now.active === before ? switchGen.current : beginShow();
+        const next = await drawingInfo();
+        if (isStale(gen, switchGen.current)) return;
+        if (now.active !== before) {
+          await showDrawing(next, gen);
+          return;
+        }
+        setInfo(next);
+        setHidden(new Set(next.hidden_layers));
+        await refreshTakeoffAndBoq();
+        await redraw();
+      }),
+    );
+    if (changed) await autosave();
+  }
+
   /** The sheet set manager's file dialogs and core commands. */
   const sheetSetApi: SheetSetApi = {
     open: sheetSetOpen,
@@ -590,6 +629,8 @@ export function useDrawings({
     setRecoveries,
     recoverReport,
     setRecoverReport,
+    scriptRun,
+    setScriptRun,
     sheetSetShown,
     setSheetSetShown,
     xrefsOpen,
@@ -603,6 +644,7 @@ export function useDrawings({
     discardFrom,
     openAnyway,
     recoverFile,
+    runScriptFile,
     sheetSetApi,
     openAll,
     switchTab,

@@ -33,6 +33,7 @@ import { FindReplaceDialog } from "../shell/FindReplaceDialog";
 import { GroupNameDialog, LayerStatesDialog } from "../shell/LayerDialogs";
 import { LayerTranslator } from "../shell/LayerTranslator";
 import { RecoverReportDialog, RecoveryDialog } from "../shell/RecoveryDialog";
+import { ScriptResultDialog } from "../shell/ScriptResultDialog";
 import { SettingsDialog } from "../shell/SettingsDialog";
 import { SheetSetManager } from "../shell/SheetSetManager";
 import { NewTableDialog, TableEditor } from "../shell/TableEditor";
@@ -546,6 +547,8 @@ export function FileDialogs({ drawings }: { drawings: Drawings }) {
     openPath,
     recoverReport,
     setRecoverReport,
+    scriptRun,
+    setScriptRun,
     sheetSetShown,
     setSheetSetShown,
     sheetSetApi,
@@ -574,6 +577,9 @@ export function FileDialogs({ drawings }: { drawings: Drawings }) {
           report={recoverReport.report}
           onClose={() => setRecoverReport(null)}
         />
+      )}
+      {scriptRun && (
+        <ScriptResultDialog path={scriptRun.path} result={scriptRun.result} onClose={() => setScriptRun(null)} />
       )}
       {sheetSetShown && (
         <SheetSetManager api={sheetSetApi} onOpenAll={openAll} onClose={() => setSheetSetShown(false)} />

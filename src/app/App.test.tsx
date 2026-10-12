@@ -5,6 +5,7 @@
  *  core, in order. */
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { LanguageProvider } from "../i18n";
 import en from "../i18n/en.json";
 import App from "./App";
@@ -17,6 +18,9 @@ const core = vi.hoisted(() => ({
   autosaved: new Set<string>(),
   /** What the Open dialog answers. */
   chosen: "/d/plan.dwg",
+  /** The tab on screen; a script's OPEN puts tab 2 there. */
+  active: 1,
+  scriptOpens: false,
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -56,7 +60,17 @@ vi.mock("@tauri-apps/api/core", () => ({
       case "batch_version":
         return 1;
       case "tabs":
-        return { tabs: [{ id: 1, path: PLAN, title: "plan.dwg", dirty: false }], active: 1 };
+        return { tabs: [{ id: 1, path: PLAN, title: "plan.dwg", dirty: false }], active: core.active };
+      case "run_script":
+        if (core.scriptOpens) core.active = 2;
+        return {
+          lines: [
+            { line_no: 1, text: "COUNT DOOR", ok: true, message: "DOOR count = 3 pcs" },
+            { line_no: 2, text: "MEASURE FFFF", ok: false, message: "No entity FFFF" },
+          ],
+          changed: true,
+          took_ms: 12,
+        };
       case "render_batch":
         // "Not modified": the window keeps the batch it has.
         return new Uint8Array([0x51, 0x49, 0x4e, 0x4d, 0, 0, 0, 0]).buffer;
@@ -125,6 +139,7 @@ beforeAll(() => {
   };
   HTMLDialogElement.prototype.close ??= function (this: HTMLDialogElement) {
     this.open = false;
+    this.dispatchEvent(new Event("close"));
   };
 });
 
@@ -132,6 +147,8 @@ beforeEach(() => {
   core.calls.length = 0;
   core.autosaved.clear();
   core.chosen = PLAN;
+  core.active = 1;
+  core.scriptOpens = false;
 });
 
 afterEach(cleanup);
@@ -270,4 +287,56 @@ test("another sheet cancels the tool in use, which is made after the sheets", as
   await typeLine("SHEET Layout1");
   expect(core.calls).toContain(`set_sheet {"block":"*Paper_Space"}`);
   expect(prompt()).toBe(en["draw.prompt.firstPoint"]);
+});
+
+test("Run script (Manage tab, SCRIPT, SCR): a .scr runs on the drawing, its log shows, and the window catches up", async () => {
+  await mount();
+  await clickOpen();
+  core.calls.length = 0;
+  core.chosen = "/d/count.scr";
+
+  fireEvent.click(screen.getByRole("tab", { name: en.manage }));
+  fireEvent.click(screen.getByRole("button", { name: en["script.run"] }));
+  await settle();
+  expect(vi.mocked(openDialog)).toHaveBeenLastCalledWith({ filters: [{ name: en["script.file"], extensions: ["scr"] }] });
+  // The same drawing on screen after it: its info, take-off and batch read again, the take-off saved.
+  expect(core.calls).toEqual([
+    "tabs null",
+    `run_script {"path":"/d/count.scr"}`,
+    "tabs null",
+    "drawing_info null",
+    "takeoff null",
+    "totals null",
+    "boq null",
+    "conflicts null",
+    "batch_version null",
+    "tabs null",
+    "render_batch {}",
+    "save_project null",
+  ]);
+  const log = screen.getByRole("dialog", { name: en["script.title"].replace("{name}", "count.scr") });
+  expect(log.textContent).toContain("DOOR count = 3 pcs");
+  expect(log.textContent).toContain(en["script.stopped"].replace("{line}", "2"));
+  fireEvent.click(screen.getByRole("button", { name: en["script.close"] }));
+  await settle();
+  expect(screen.queryByRole("dialog", { name: en["script.title"].replace("{name}", "count.scr") })).toBeNull();
+
+  // Typed, with an OPEN in the script: the drawing it put on screen is shown as a tab switch is.
+  core.calls.length = 0;
+  core.scriptOpens = true;
+  await typeLine("SCR");
+  expect(core.calls).toEqual([
+    "tabs null",
+    `run_script {"path":"/d/count.scr"}`,
+    "tabs null",
+    "drawing_info null",
+    ...SHOWN,
+    "save_project null",
+  ]);
+  expect(screen.getByRole("dialog", { name: en["script.title"].replace("{name}", "count.scr") })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: en["script.close"] }));
+  await settle();
+  core.calls.length = 0;
+  await typeLine("SCRIPT");
+  expect(core.calls.filter((c) => c.startsWith("run_script"))).toEqual([`run_script {"path":"/d/count.scr"}`]);
 });

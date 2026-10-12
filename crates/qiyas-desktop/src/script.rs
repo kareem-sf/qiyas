@@ -1,0 +1,663 @@
+//! Run script (SCRIPT, the ribbon's Manage tab): a `.scr` file in the grammar of
+//! `qiyas_core::script` (read and checked whole first, with its folder rule: paths from the
+//! script's folder, inside it or the folder of the drawing on screen) run on the drawing on
+//! screen, each step as the window does it: OPEN opens a tab (or shows the one open already),
+//! SAVE and SAVEAS save as the app does, each drawing command is its own undo step, QUIT ends the
+//! script (never the app), DELAY waits, ECHO writes its text in the log. A drawing the script
+//! changed has its take-off saved beside it before OPEN takes another one on screen, as the
+//! window saves it after every command (the window saves the one on screen after the run).
+//! Refused while a block is edited in place.
+
+use std::path::Path;
+use std::sync::PoisonError;
+use std::time::{Duration, Instant};
+
+use qiyas_core::script::{self, Action, Context};
+use qiyas_core::{Command, Current, Kind, LayerProp, Outcome, Session, Source};
+use serde::Serialize;
+use tauri::{AppHandle, Manager, Runtime};
+
+use crate::commands::{new_conversation, remember_recent, with_session};
+use crate::settings::same_file;
+use crate::state::AppState;
+use crate::tabs;
+
+/// One script line as run: its number (from 1), its text, and what it did or why it failed.
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+pub struct ScriptLine {
+    pub line_no: usize,
+    pub text: String,
+    pub ok: bool,
+    pub message: String,
+}
+
+/// What a run did: the lines run, the failing one last (a script that doesn't read is its bad
+/// line alone, and nothing ran); whether a drawing, its take-off or the tabs may have changed;
+/// and how long it took.
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+pub struct ScriptResult {
+    pub lines: Vec<ScriptLine>,
+    pub changed: bool,
+    pub took_ms: u64,
+}
+
+/// Runs the script at `path` on the drawing on screen; fails only when the script can't be read
+/// or a block is edited in place.
+#[tauri::command]
+pub async fn run_script<R: Runtime>(
+    path: String,
+    app: AppHandle<R>,
+) -> Result<ScriptResult, String> {
+    // DELAY sleeps and steps read and write files: off the async runtime's threads.
+    tauri::async_runtime::spawn_blocking(move || run_file(&app, Path::new(&path)))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn run_file<R: Runtime>(app: &AppHandle<R>, path: &Path) -> Result<ScriptResult, String> {
+    let started = Instant::now();
+    let state = app.state::<AppState>();
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("The script {} could not be read: {e}", path.display()))?;
+    let drawing = {
+        let session = state.session.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(name) = session.as_ref().and_then(Session::block_edit_name) {
+            return Err(format!(
+                "Block {name} is being edited in place: save or discard the edit first (REFCLOSE), then run the script"
+            ));
+        }
+        session.as_ref().map(|s| s.drawing.path.clone())
+    };
+    let source: Vec<&str> = text
+        .strip_prefix('\u{feff}')
+        .unwrap_or(&text)
+        .lines()
+        .collect();
+    let line = |line_no: usize, ok: bool, message: String| ScriptLine {
+        line_no,
+        text: source
+            .get(line_no.wrapping_sub(1))
+            .map_or("", |t| t.trim())
+            .to_string(),
+        ok,
+        message,
+    };
+    let cx = Context {
+        script: path,
+        drawing: drawing.as_deref(),
+        out_dir: None,
+    };
+    let mut lines = Vec::new();
+    let mut changed = false;
+    match script::parse(&text, &cx) {
+        Err(e) => lines.push(line(e.line, false, e.message)),
+        Ok(script) => {
+            // The drawing on screen has changes of the script's its project file lacks.
+            let mut unsaved = false;
+            // The drawing on screen is one the failsafe reader repaired on open: the window asks
+            // before saving over it, a script can't, so SAVE is refused (SAVEAS elsewhere is not).
+            let mut repaired = on_screen_repaired(&state);
+            for step in &script.steps {
+                if let Action::Quit = step.action {
+                    lines.push(line(step.line, true, "quit".to_string()));
+                    break;
+                }
+                if repaired && saves_over_drawing(&state, &step.action) {
+                    let why =
+                        "the drawing was repaired when it opened: SAVE would write what Qiyas \
+                               could read over it; use SAVEAS to a new path, or Save in the \
+                               window, which asks first";
+                    lines.push(line(step.line, false, why.to_string()));
+                    break;
+                }
+                if matches!(step.action, Action::Open(_)) && unsaved {
+                    if let Err(e) = with_session(&state, |s| s.save_project().map(|_| ())) {
+                        let why = format!("the take-off could not be saved first: {e}");
+                        lines.push(line(step.line, false, why));
+                        break;
+                    }
+                }
+                match run_step(app, &state, &step.action) {
+                    Ok((message, change)) => {
+                        changed |= change;
+                        unsaved = match step.action {
+                            Action::Open(_) | Action::Save | Action::SaveAs(_) => false,
+                            _ => unsaved || change,
+                        };
+                        repaired = match step.action {
+                            Action::Open(_) => on_screen_repaired(&state),
+                            Action::SaveAs(_) => false,
+                            _ => repaired,
+                        };
+                        lines.push(line(step.line, true, message));
+                    }
+                    Err(message) => {
+                        lines.push(line(step.line, false, message));
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Ok(ScriptResult {
+        lines,
+        changed,
+        took_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+    })
+}
+
+/// How many records the failsafe reader dropped or repaired reading `session`'s drawing.
+fn read_problems(session: &Session) -> usize {
+    session.drawing.report.dropped.iter().map(|d| d.count).sum()
+}
+
+/// Whether the drawing on screen was repaired by the failsafe reader when it opened.
+fn on_screen_repaired(state: &AppState) -> bool {
+    with_session(state, |s| Ok(read_problems(s) > 0)).unwrap_or(false)
+}
+
+/// SAVE, or SAVEAS onto the drawing's own file.
+fn saves_over_drawing(state: &AppState, action: &Action) -> bool {
+    match action {
+        Action::Save => true,
+        Action::SaveAs(path) => {
+            with_session(state, |s| Ok(same_file(&s.drawing.path, path))).unwrap_or(false)
+        }
+        _ => false,
+    }
+}
+
+/// Runs one step (not QUIT) as the window would: what it did, in a line, and whether it may have
+/// changed a drawing, its take-off or the tabs.
+fn run_step<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+    action: &Action,
+) -> Result<(String, bool), String> {
+    Ok(match action {
+        Action::Quit => ("quit".to_string(), false),
+        Action::Delay(ms) => {
+            std::thread::sleep(Duration::from_millis(*ms));
+            (format!("waited {ms} ms"), false)
+        }
+        Action::Echo(text) => (text.clone(), false),
+        Action::Zoom => ("zoom: nothing to do in a script".to_string(), false),
+        Action::Open(path) => (open(app, state, path)?, true),
+        Action::SaveAs(path) => {
+            with_session(state, |s| s.save_as(path))?;
+            remember_recent(state, &path.display().to_string());
+            (format!("saved {}", path.display()), true)
+        }
+        Action::Save => {
+            let path = with_session(state, |s| {
+                s.save()?;
+                Ok(s.drawing.path.clone())
+            })?;
+            (format!("saved {}", path.display()), true)
+        }
+        Action::CurrentLayer(name) => {
+            with_session(state, |s| {
+                let current = Current {
+                    layer: name.clone(),
+                    ..s.current.clone()
+                };
+                s.run(Command::SetCurrent { current })
+            })?;
+            (format!("current layer {name}"), true)
+        }
+        Action::Export(path) => {
+            // As the Export button: the take-off copied out, so writing doesn't hold the lock.
+            let (items, totals, title) = with_session(state, |s| {
+                let title = match s.drawing.path.file_name() {
+                    Some(name) => format!("{} take-off", name.to_string_lossy()),
+                    None => "Take-off".to_string(),
+                };
+                Ok((s.takeoff.items.clone(), s.takeoff.totals(), title))
+            })?;
+            qiyas_boq::export_takeoff(path, &items, &totals, &title).map_err(|e| e.to_string())?;
+            (format!("exported {}", path.display()), false)
+        }
+        Action::ImportBoq(path) => {
+            let boq = qiyas_boq::import_boq(path).map_err(|e| e.to_string())?;
+            let items = boq.items.len();
+            with_session(state, |s| s.run(Command::SetBoq { boq }))?;
+            (
+                format!("imported {items} BOQ items from {}", path.display()),
+                true,
+            )
+        }
+        Action::Compare => {
+            let conflicts = with_session(state, |s| {
+                qiyas_takeoff::compare_session(s, qiyas_takeoff::DEFAULT_TOLERANCE, Source::User)
+            })?;
+            (format!("{} conflicts", conflicts.len()), true)
+        }
+        Action::Command(cmd) => {
+            let outcome = with_session(state, |s| s.run(cmd.clone()))?;
+            let change = !matches!(
+                outcome,
+                Outcome::Nothing | Outcome::Info { .. } | Outcome::Table { .. }
+            );
+            (describe(cmd, outcome), change)
+        }
+    })
+}
+
+/// OPEN: the drawing's tab is shown when it is open already; else it opens in a new tab, as the
+/// Open button does (the assistant starts a new conversation, the file goes first in recents).
+fn open<R: Runtime>(app: &AppHandle<R>, state: &AppState, path: &Path) -> Result<String, String> {
+    let shown = path.display().to_string();
+    if let Some(id) = tabs::find_path(state, path) {
+        tabs::activate(app, state, id)?;
+        remember_recent(state, &shown);
+        return Ok(format!("showed {shown}, open already"));
+    }
+    let session = Session::open(path).map_err(|e| e.to_string())?;
+    let problems = read_problems(&session);
+    new_conversation(app, state);
+    tabs::add(state, session);
+    remember_recent(state, &shown);
+    Ok(match problems {
+        0 => format!("opened {shown}"),
+        1 => format!("opened {shown} (1 problem reading it)"),
+        n => format!("opened {shown} ({n} problems reading it)"),
+    })
+}
+
+/// What `cmd` did, in a line, as `qiyas-cli run` says it (`qiyas_core::script` keeps its own
+/// private).
+fn describe(cmd: &Command, outcome: Outcome) -> String {
+    match outcome {
+        Outcome::Measured { measurement: m } => {
+            let shown = match m.kind {
+                Kind::Count => format!("{:.0}", m.shown),
+                _ => format!("{:.3}", m.shown),
+            };
+            format!("{} = {shown} {}", m.description, m.unit)
+        }
+        Outcome::Changed => match cmd {
+            Command::SetLayerHidden { name, hidden } => {
+                format!("layer {name} {}", if *hidden { "off" } else { "on" })
+            }
+            Command::SetLayer {
+                name,
+                prop: LayerProp::Frozen,
+                value,
+            } => format!(
+                "layer {name} {}",
+                if value.as_bool() == Some(true) {
+                    "frozen"
+                } else {
+                    "thawed"
+                }
+            ),
+            _ => "done".to_string(),
+        },
+        Outcome::Added { handles } => format!("added {} entities", handles.len()),
+        Outcome::Nothing => "nothing to do".to_string(),
+        other => format!("{other:?}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use serde_json::{json, Value};
+    use tauri::ipc::{CallbackFn, InvokeBody};
+    use tauri::test::{get_ipc_response, mock_builder, mock_context, noop_assets, MockRuntime};
+    use tauri::webview::InvokeRequest;
+    use tauri::{App, Manager, WebviewWindow, WebviewWindowBuilder};
+
+    use crate::state::AppState;
+
+    /// The app on the mock runtime with the sample drawing (`sample.dxf`) open in a tab.
+    struct Ipc {
+        dir: tempfile::TempDir,
+        app: App<MockRuntime>,
+        webview: WebviewWindow<MockRuntime>,
+    }
+
+    impl Ipc {
+        fn open() -> Ipc {
+            let dir = tempfile::tempdir().unwrap();
+            let path = qiyas_core::fixtures::write_sample(dir.path(), "dxf");
+            let app = mock_builder()
+                .invoke_handler(tauri::generate_handler![
+                    crate::commands::open_drawing,
+                    crate::commands::drawing_info,
+                    crate::commands::recents,
+                    crate::commands::run_command,
+                    crate::commands::takeoff,
+                    crate::commands::undo,
+                    crate::commands::pick,
+                    crate::tabs::tabs,
+                    super::run_script
+                ])
+                .build(mock_context(noop_assets()))
+                .unwrap();
+            app.manage(AppState::new(dir.path().join("config")));
+            let webview = WebviewWindowBuilder::new(&app, "main", Default::default())
+                .build()
+                .unwrap();
+            let ipc = Ipc { dir, app, webview };
+            ipc.call("open_drawing", json!({ "path": path })).unwrap();
+            ipc
+        }
+
+        fn call(&self, cmd: &str, body: Value) -> Result<Value, Value> {
+            let request = InvokeRequest {
+                cmd: cmd.into(),
+                callback: CallbackFn(0),
+                error: CallbackFn(1),
+                url: if cfg!(windows) {
+                    "http://tauri.localhost"
+                } else {
+                    "tauri://localhost"
+                }
+                .parse()
+                .unwrap(),
+                body: InvokeBody::Json(body),
+                headers: Default::default(),
+                invoke_key: tauri::test::INVOKE_KEY.to_string(),
+            };
+            get_ipc_response(&self.webview, request).map(|b| b.deserialize().unwrap())
+        }
+
+        /// Writes `text` as the script `name` beside the drawing and runs it.
+        fn run(&self, name: &str, text: &str) -> Result<Value, Value> {
+            let script = self.path(name);
+            std::fs::write(&script, text).unwrap();
+            self.call("run_script", json!({ "path": script }))
+        }
+
+        fn path(&self, name: &str) -> PathBuf {
+            self.dir.path().join(name)
+        }
+
+        fn takeoff_len(&self) -> usize {
+            self.call("takeoff", json!({}))
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len()
+        }
+    }
+
+    /// The lines of a result as (line, text, ok, message).
+    fn lines(result: &Value) -> Vec<(u64, String, bool, String)> {
+        result["lines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|l| {
+                (
+                    l["line_no"].as_u64().unwrap(),
+                    l["text"].as_str().unwrap().to_string(),
+                    l["ok"].as_bool().unwrap(),
+                    l["message"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect()
+    }
+
+    fn line(no: u64, text: &str, ok: bool, message: &str) -> (u64, String, bool, String) {
+        (no, text.to_string(), ok, message.to_string())
+    }
+
+    #[test]
+    fn a_script_runs_on_the_drawing_on_screen_one_undo_step_per_command() {
+        let ipc = Ipc::open();
+        let result = ipc
+            .run(
+                "count.scr",
+                "; one undo step per command\n\
+                 {\"type\":\"draw\",\"kind\":\"line\",\"a\":[0,0],\"b\":[0,5]}\n\
+                 COUNT DOOR\n\
+                 DI 0,0\n\
+                 3,4\n\
+                 LAYOFF A-WALL\n\
+                 ECHO hello there\n\
+                 QUIT\n\
+                 COUNT DOOR\n",
+            )
+            .unwrap();
+        assert_eq!(
+            lines(&result),
+            [
+                line(
+                    2,
+                    "{\"type\":\"draw\",\"kind\":\"line\",\"a\":[0,0],\"b\":[0,5]}",
+                    true,
+                    "added 1 entities"
+                ),
+                line(3, "COUNT DOOR", true, "DOOR count = 3 pcs"),
+                line(4, "DI 0,0", true, "Distance = 5.000 m"),
+                line(6, "LAYOFF A-WALL", true, "layer A-WALL off"),
+                line(7, "ECHO hello there", true, "hello there"),
+                line(8, "QUIT", true, "quit"),
+            ]
+        );
+        assert_eq!(result["changed"], json!(true));
+        assert!(result["took_ms"].is_u64());
+
+        // QUIT ended the script, not the app: the drawing is still on screen with what it did.
+        let info = ipc.call("drawing_info", json!({})).unwrap();
+        assert!(info["path"].as_str().unwrap().ends_with("sample.dxf"));
+        assert_eq!(info["hidden_layers"], json!(["A-WALL"]));
+        assert_eq!(ipc.takeoff_len(), 2);
+        // The line, the count and the distance are one undo step each (hiding a layer is none).
+        assert_eq!(ipc.call("undo", json!({})).unwrap(), json!(true));
+        assert_eq!(ipc.takeoff_len(), 1);
+        assert_eq!(ipc.call("undo", json!({})).unwrap(), json!(true));
+        assert_eq!(ipc.takeoff_len(), 0);
+        assert_eq!(ipc.call("undo", json!({})).unwrap(), json!(true));
+        assert_eq!(ipc.call("undo", json!({})).unwrap(), json!(false));
+    }
+
+    #[test]
+    fn open_shows_a_tab_and_saves_go_as_the_app_does() {
+        let ipc = Ipc::open();
+        let dir = ipc.dir.path().to_path_buf();
+        std::fs::create_dir(dir.join("sub")).unwrap();
+        qiyas_core::fixtures::write_sample(&dir.join("sub"), "dwg");
+        let shown = |name: &str| dir.join(name).canonicalize().unwrap().display().to_string();
+
+        // Before OPEN takes another drawing on screen, the take-off of the one the script changed
+        // is saved beside it, as the window does after every command.
+        assert!(!dir.join("sample.qiyas").exists());
+        let result = ipc
+            .run("open.scr", "COUNT DOOR\nOPEN sub/sample.dwg\n")
+            .unwrap();
+        assert_eq!(
+            lines(&result),
+            [
+                line(1, "COUNT DOOR", true, "DOOR count = 3 pcs"),
+                line(
+                    2,
+                    "OPEN sub/sample.dwg",
+                    true,
+                    &format!("opened {}", shown("sub/sample.dwg"))
+                ),
+            ]
+        );
+        assert!(std::fs::read_to_string(dir.join("sample.qiyas"))
+            .unwrap()
+            .contains("DOOR"));
+
+        let result = ipc
+            .run(
+                "files.scr",
+                "COUNT DOOR\nSAVEAS sub/copy dxf\nOPEN sample.dxf\nSAVE\nDELAY 5\n",
+            )
+            .unwrap();
+        assert_eq!(
+            lines(&result),
+            [
+                line(1, "COUNT DOOR", true, "DOOR count = 3 pcs"),
+                line(
+                    2,
+                    "SAVEAS sub/copy dxf",
+                    true,
+                    &format!("saved {}", shown("sub/copy.dxf"))
+                ),
+                line(
+                    3,
+                    "OPEN sample.dxf",
+                    true,
+                    &format!("showed {}, open already", shown("sample.dxf"))
+                ),
+                line(4, "SAVE", true, &format!("saved {}", shown("sample.dxf"))),
+                line(5, "DELAY 5", true, "waited 5 ms"),
+            ]
+        );
+        assert_eq!(result["changed"], json!(true));
+
+        // Two tabs: the drawing the first script started on, on screen again, and the one its
+        // OPEN made, now the copy.
+        let tabs = ipc.call("tabs", json!({})).unwrap();
+        let titles: Vec<&str> = tabs["tabs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["title"].as_str().unwrap())
+            .collect();
+        assert_eq!(titles, ["sample.dxf", "copy.dxf"]);
+        assert_eq!(tabs["active"], tabs["tabs"][0]["id"]);
+        assert_eq!(ipc.takeoff_len(), 1);
+        // Save As wrote the copy and its project; Save kept the original as .bak.
+        assert!(dir.join("sub/copy.dxf").exists());
+        assert!(dir.join("sub/copy.qiyas").exists());
+        assert!(dir.join("sample.dxf.bak").exists());
+        // Both went first in the recent list, as the app's Open and Save As do.
+        let recents = ipc.call("recents", json!({})).unwrap();
+        let recent: Vec<&str> = recents
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(&recent[..2], ["sample.dxf", "copy.dxf"]);
+    }
+
+    #[test]
+    fn a_bad_line_stops_the_script_and_says_why() {
+        let ipc = Ipc::open();
+        // A line that doesn't read: nothing runs.
+        let result = ipc.run("bad.scr", "COUNT DOOR\n\nFOO bar\n").unwrap();
+        assert_eq!(
+            lines(&result),
+            [line(3, "FOO bar", false, "unknown command FOO")]
+        );
+        assert_eq!(result["changed"], json!(false));
+        assert_eq!(ipc.takeoff_len(), 0);
+
+        // A path outside the script's and the drawing's folders: refused before anything runs.
+        let elsewhere = tempfile::tempdir().unwrap();
+        let outside = elsewhere.path().join("x.xlsx").display().to_string();
+        let result = ipc
+            .run("out.scr", &format!("COUNT DOOR\nEXPORT {outside}\n"))
+            .unwrap();
+        let got = lines(&result);
+        assert_eq!(got.len(), 1);
+        assert_eq!((got[0].0, got[0].2), (2, false));
+        assert!(got[0].3.contains("outside the script's folder"), "{got:?}");
+        assert!(!Path::new(&outside).exists());
+        assert_eq!(ipc.takeoff_len(), 0);
+
+        // A step that fails: the steps before it stay done, those after it never run.
+        let result = ipc
+            .run("fails.scr", "COUNT DOOR\nMEASURE FFFF\nCOUNT DOOR\n")
+            .unwrap();
+        let got = lines(&result);
+        assert_eq!(got.len(), 2, "{got:?}");
+        assert_eq!(got[0], line(1, "COUNT DOOR", true, "DOOR count = 3 pcs"));
+        assert_eq!((got[1].0, got[1].2), (2, false));
+        assert!(!got[1].3.is_empty());
+        assert_eq!(result["changed"], json!(true));
+        assert_eq!(ipc.takeoff_len(), 1);
+
+        // A script that isn't there.
+        let missing = ipc.path("none.scr").display().to_string();
+        let error = ipc
+            .call("run_script", json!({ "path": missing }))
+            .unwrap_err();
+        assert!(
+            error.as_str().unwrap().contains("could not be read"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_drawing_repaired_on_open_is_never_saved_over() {
+        let ipc = Ipc::open();
+        // As if the failsafe reader had dropped records reading it.
+        {
+            let state = ipc.app.state::<AppState>();
+            let mut session = state.session.lock().unwrap();
+            session
+                .as_mut()
+                .unwrap()
+                .drawing
+                .report
+                .dropped
+                .push(qiyas_core::Dropped {
+                    kind: "LINE".to_string(),
+                    count: 2,
+                });
+        }
+        let dir = ipc.dir.path().to_path_buf();
+        for (name, text) in [
+            ("save.scr", "COUNT DOOR\nSAVE\n"),
+            ("over.scr", "SAVEAS sample.dxf\n"),
+        ] {
+            let result = ipc.run(name, text).unwrap();
+            let got = lines(&result);
+            let last = got.last().unwrap();
+            assert!(!last.2, "{got:?}");
+            assert!(last.3.contains("repaired"), "{got:?}");
+        }
+        assert!(!dir.join("sample.dxf.bak").exists());
+
+        // Saved as a new file, it is what Qiyas wrote: SAVE goes over that one.
+        let result = ipc.run("new.scr", "SAVEAS fixed.dxf\nSAVE\n").unwrap();
+        assert!(
+            result["lines"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|l| l["ok"] == json!(true)),
+            "{result}"
+        );
+        assert!(dir.join("fixed.dxf.bak").exists());
+    }
+
+    #[test]
+    fn a_script_waits_for_the_block_edit_in_place_to_end() {
+        let ipc = Ipc::open();
+        // The first DOOR's leaf runs from (1,1) to (1.9,1).
+        let picked = ipc
+            .call("pick", json!({ "x": 1.5, "y": 1.0, "tol": 0.05 }))
+            .unwrap();
+        let target = json!({ "handle": picked["top"], "chain": [] });
+        ipc.call(
+            "run_command",
+            json!({ "cmd": { "type": "edit_block_in_place", "target": target } }),
+        )
+        .unwrap();
+        let error = ipc.run("count.scr", "COUNT DOOR\n").unwrap_err();
+        assert!(
+            error.as_str().unwrap().contains("being edited in place"),
+            "{error}"
+        );
+        assert_eq!(ipc.takeoff_len(), 0);
+
+        ipc.call(
+            "run_command",
+            json!({ "cmd": { "type": "discard_block_edits" } }),
+        )
+        .unwrap();
+        let result = ipc.run("count.scr", "COUNT DOOR\n").unwrap();
+        assert_eq!(result["lines"][0]["ok"], json!(true));
+    }
+}

@@ -430,4 +430,6 @@ test("the clipboard, viewport, UCS, sheet set and recover commands", () => {
   expect(parse("UCS X", cmd)).toEqual({ type: "error", key: "cmd.ucsOption" });
   expect(parse("SHEETSET", cmd)).toEqual({ type: "run", what: "sheetSet" });
   expect(parse("RECOVER", cmd)).toEqual({ type: "run", what: "recover" });
+  expect(parse("SCRIPT", cmd)).toEqual({ type: "run", what: "script" });
+  expect(parse("scr", cmd)).toEqual({ type: "run", what: "script" });
 });

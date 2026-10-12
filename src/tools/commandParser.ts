@@ -64,7 +64,9 @@ export type Run =
   /** UCS W: back to the world coordinate system. */
   | "ucsWorld"
   | "sheetSet"
-  | "recover";
+  | "recover"
+  /** SCRIPT: runs a `.scr` command script. */
+  | "script";
 
 export type Action =
   /** An empty line where a command is expected: run the last command again. */
@@ -124,6 +126,7 @@ const RUNS: Partial<Record<CommandName, Run>> = {
   PROPERTIES: "properties",
   SHEETSET: "sheetSet",
   RECOVER: "recover",
+  SCRIPT: "script",
 };
 
 const TOOLS: Partial<Record<CommandName, Tool>> = {

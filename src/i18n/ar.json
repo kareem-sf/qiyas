@@ -950,5 +950,20 @@
   "props.viewportScale": "مقياس نافذة العرض",
   "props.viewportCentre": "مركز العرض (x، y)",
   "settings.autosave": "حفظ تلقائي كل (دقائق، 0 لإيقافه)",
-  "settings.autosaveWhole": "الحفظ التلقائي يأخذ عددًا صحيحًا من الدقائق من 0 إلى 120 (0 لإيقافه)"
+  "settings.autosaveWhole": "الحفظ التلقائي يأخذ عددًا صحيحًا من الدقائق من 0 إلى 120 (0 لإيقافه)",
+  "manage": "إدارة",
+  "script.run": "تشغيل سكريبت…",
+  "script.file": "سكريبتات الأوامر",
+  "script.title": "السكريبت {name}",
+  "script.ran": "الأسطر المنفّذة: {n}",
+  "script.stopped": "توقف عند السطر {line}",
+  "script.tookMs": "{n} مللي ثانية",
+  "script.tookS": "{n} ث",
+  "script.line": "السطر",
+  "script.command": "الأمر",
+  "script.result": "النتيجة",
+  "script.ok": "تم",
+  "script.error": "فشل",
+  "script.close": "إغلاق",
+  "script.blockEdit": "احفظ تحرير البلوك في المكان أو تجاهله أولًا (REFCLOSE)، ثم شغّل السكريبت"
 }

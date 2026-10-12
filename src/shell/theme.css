@@ -2253,3 +2253,11 @@ button.close {
   border-inline-start: 3px solid var(--warn);
   color: var(--warn);
 }
+
+/* Run script's log: one script line a row; a failed one in the warning colour. */
+.script-result {
+  width: 640px;
+}
+.script-result tr.failed {
+  color: var(--warn);
+}

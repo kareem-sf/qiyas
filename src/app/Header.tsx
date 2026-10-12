@@ -65,6 +65,7 @@ export function Header({
     setExtractOpen,
     setSheetSetShown,
     recoverFile,
+    runScriptFile,
   } = drawings;
   const { importBoqFile, compareNow, exportConflictsFile } = takeoff;
 
@@ -133,6 +134,7 @@ export function Header({
         onUcsWorld={info ? () => apply({ type: "ucs", origin: [0, 0], x_axis: [1, 0] }) : undefined}
         onSheetSet={() => setSheetSetShown(true)}
         onRecover={recoverFile}
+        onRunScript={runScriptFile}
         arabicReversed={arabicReversed}
         onArabicReversed={info ? chooseArabicReversed : undefined}
         {...(onModel && {

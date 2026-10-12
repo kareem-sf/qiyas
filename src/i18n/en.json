@@ -950,5 +950,20 @@
   "props.viewportScale": "Viewport scale",
   "props.viewportCentre": "View centre (x, y)",
   "settings.autosave": "Autosave every (minutes, 0 off)",
-  "settings.autosaveWhole": "Autosave takes a whole number of minutes from 0 to 120 (0 turns it off)"
+  "settings.autosaveWhole": "Autosave takes a whole number of minutes from 0 to 120 (0 turns it off)",
+  "manage": "Manage",
+  "script.run": "Run script…",
+  "script.file": "Command scripts",
+  "script.title": "Script {name}",
+  "script.ran": "{n} lines run",
+  "script.stopped": "Stopped at line {line}",
+  "script.tookMs": "{n} ms",
+  "script.tookS": "{n} s",
+  "script.line": "Line",
+  "script.command": "Command",
+  "script.result": "Result",
+  "script.ok": "Done",
+  "script.error": "Failed",
+  "script.close": "Close",
+  "script.blockEdit": "Save or discard the block edit in place first (REFCLOSE), then run the script"
 }

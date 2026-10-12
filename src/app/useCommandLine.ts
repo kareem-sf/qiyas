@@ -43,6 +43,7 @@ type Deps = {
     | "switching"
     | "openFile"
     | "recoverFile"
+    | "runScriptFile"
     | "setSheetSetShown"
     | "saveFile"
     | "saveFileAs"
@@ -88,6 +89,7 @@ export function useCommandLine({
     switching,
     openFile,
     recoverFile,
+    runScriptFile,
     setSheetSetShown,
     saveFile,
     saveFileAs,
@@ -273,6 +275,11 @@ export function useCommandLine({
     }
     if (what === "sheetSet") {
       setSheetSetShown(true);
+      return;
+    }
+    // A script may OPEN its drawing.
+    if (what === "script") {
+      runScriptFile();
       return;
     }
     if (!info) {

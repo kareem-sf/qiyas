@@ -78,6 +78,8 @@ type Props = {
   onSheetSet?(): void;
   /** RECOVER: opens a damaged drawing and says what was dropped. */
   onRecover?(): void;
+  /** The Manage tab: SCRIPT asks for a `.scr` command script and runs it. */
+  onRunScript?(): void;
 };
 
 /** The modify tools on the Home tab's Layers group, not its Modify group. */
@@ -86,8 +88,8 @@ const LAYER_TOOLS = ["group", "ungroup", "matchprop"] as const;
 /** The Home tab's Clipboard group: the copies are modify tools, the pastes click tools. */
 const CLIPBOARD_TOOLS = ["copyclip", "copybase", "pasteclip", "pasteblock"] as const;
 
-type Tab = "home" | "measure" | "annotate" | "insert" | "view";
-const TABS: Tab[] = ["home", "measure", "annotate", "insert", "view"];
+type Tab = "home" | "measure" | "annotate" | "insert" | "view" | "manage";
+const TABS: Tab[] = ["home", "measure", "annotate", "insert", "view", "manage"];
 
 /** The Annotate tab's Leaders group; the rest of `DIM_TOOLS` are the Dimensions group. */
 const NOTE_TOOLS = ["leader", "mleader", "tolerance"] as const;
@@ -292,6 +294,7 @@ export function Ribbon(props: Props) {
             {t("arabicReversed")}
           </label>,
         ]}
+        {tab === "manage" && [action("script.run", props.onRunScript)]}
       </div>
     </div>
   );

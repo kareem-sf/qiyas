@@ -1194,6 +1194,19 @@ export type ReadReport = {
 export const recoverDrawing = (path: string) =>
   invoke<{ info: DrawingInfo; report: ReadReport }>("recover_drawing", { path });
 
+/** One line of a command script as run: its number (from 1), its text, and what it did or why it
+ *  failed. */
+export type ScriptLine = { line_no: number; text: string; ok: boolean; message: string };
+
+/** What a script run did: the lines run (the failing one last; a script that doesn't read is its
+ *  bad line alone, and nothing ran), whether a drawing, its take-off or the tabs may have changed,
+ *  and how long it took. */
+export type ScriptResult = { lines: ScriptLine[]; changed: boolean; took_ms: number };
+
+/** SCRIPT: runs the `.scr` command script at `path` on the drawing on screen (its OPEN lines open
+ *  tabs). Refused while a block is edited in place. */
+export const runScript = (path: string) => invoke<ScriptResult>("run_script", { path });
+
 /** A sheet set (`.qss`): drawings by path relative to it, and their layouts (none: all). */
 export type SheetSet = { name: string; drawings: { path: string; layouts: string[] }[] };
 
