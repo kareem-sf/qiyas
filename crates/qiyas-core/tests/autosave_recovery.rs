@@ -12,8 +12,8 @@ use opencadcodec::Handle;
 use qiyas_core::fixtures::{sample_doc, write_drawing, write_sample};
 use qiyas_core::{
     autosave_all, autosave_copy_of, autosave_path, discard_autosave, discard_recoverable,
-    lock_path, read_lock, recoverable, release_lock, take_lock, Command, DrawSpec, DrawingLock,
-    LockStatus, Outcome, Session, AUTOSAVE_EVERY,
+    lock_path, read_lock, recoverable, release_lock, take_lock, Command, CopyKind, DrawSpec,
+    DrawingLock, LockStatus, Outcome, Session, AUTOSAVE_EVERY,
 };
 
 /// The drawing the child process opens (see `recovery_child`).
@@ -122,7 +122,8 @@ fn recovery_child() {
     let added = line(&mut s, 100.0);
     measure(&mut s);
     s.autosave().unwrap().expect("an autosave");
-    assert!(take_lock(&path).unwrap());
+    // As the app does; under another's lock (a foreign lock written first) it is not taken.
+    take_lock(&path).unwrap();
     let mut out = std::io::stdout();
     writeln!(out, "READY:{added}").unwrap();
     out.flush().unwrap();
@@ -498,9 +499,10 @@ fn under_another_computers_lock_the_autosave_goes_beside_and_a_save_deletes_it()
     assert!(!autosave_path(&path).exists());
     assert_eq!(autosave_copy_of(&beside), Some(path.clone()));
 
-    // Offered when it is the only one, last behind the other Qiyas's own.
+    // This process runs: its own instance autosave is no news to anyone.
     let found = recoverable(&path).unwrap();
-    assert_eq!(found.autosave, Some(beside.display().to_string()));
+    assert_eq!(found.autosave, None);
+    assert!(found.older_copies.is_empty());
     assert!(found.locked_elsewhere.is_some());
     std::fs::copy(&beside, autosave_path(&path)).unwrap();
     assert_eq!(
@@ -597,4 +599,64 @@ fn autosave_all_writes_every_drawing_with_changes_and_says_which_failed() {
     // A failed attempt counts: the 1 s watch does not try it again every second (the timer does).
     assert!(!broken.autosave_due());
     assert!(!autosave_path(&dir.path().join("a.dwg")).exists());
+}
+
+#[test]
+fn a_qiyas_that_crashed_under_another_lock_leaves_its_autosave_in_older_copies() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_sample(dir.path(), "dwg");
+    // Another computer has the drawing open and has autosaved it.
+    std::fs::write(
+        lock_path(&path),
+        r#"{"pid": 7, "host": "elsewhere", "started_at": 1760000000}"#,
+    )
+    .unwrap();
+    std::fs::copy(&path, autosave_path(&path)).unwrap();
+    let theirs = std::fs::read(autosave_path(&path)).unwrap();
+
+    // A child Qiyas opens it anyway, changes it and autosaves beside theirs, then is killed.
+    let mut running = Running(child(Some(&path)).stdout(Stdio::piped()).spawn().unwrap());
+    let pid = running.0.id();
+    let out = BufReader::new(running.0.stdout.take().unwrap());
+    let added: u64 = out
+        .lines()
+        .map_while(Result::ok)
+        .find_map(|l| {
+            l.split_once("READY:")
+                .map(|(_, h)| h.trim().parse().unwrap())
+        })
+        .expect("the child autosaved");
+    let instance = dir.path().join(format!("sample.dwg.sv$.{pid}"));
+    assert!(instance.exists(), "{:?}", files(dir.path()));
+    assert_eq!(std::fs::read(autosave_path(&path)).unwrap(), theirs);
+    // While it runs, its autosave is its own: not listed, not deleted.
+    assert!(recoverable(&path).unwrap().older_copies.is_empty());
+    assert!(discard_autosave(&instance).is_err());
+    assert!(instance.exists());
+
+    running.0.kill().unwrap();
+    running.0.wait().unwrap();
+    // Listed beside the other computer's `.sv$`, which stays the autosave offered.
+    let found = recoverable(&path).unwrap();
+    assert_eq!(
+        found.autosave,
+        Some(autosave_path(&path).display().to_string())
+    );
+    assert!(found.locked_elsewhere.is_some());
+    assert_eq!(found.older_copies.len(), 1);
+    assert_eq!(found.older_copies[0].path, instance.display().to_string());
+    assert_eq!(found.older_copies[0].kind, CopyKind::Instance);
+
+    // Recover brings its work back; Discard by its path deletes it, theirs stays.
+    let r = Session::open_autosave(&instance).unwrap();
+    assert!(r.drawing.doc.get_entity(Handle::new(added)).is_some());
+    assert_eq!(r.takeoff.items.len(), 1);
+    discard_autosave(&instance).unwrap();
+    assert!(!instance.exists());
+    assert!(!dir
+        .path()
+        .join(format!("sample.dwg.sv$.{pid}.qiyas"))
+        .exists());
+    assert_eq!(std::fs::read(autosave_path(&path)).unwrap(), theirs);
+    assert!(recoverable(&path).unwrap().older_copies.is_empty());
 }

@@ -483,14 +483,16 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
   autosave is moved to `<file>.sv$.crash-<yyyymmdd-hhmmss>` (when written, UTC) with its
   `.qiyas`, before anything writes a new `.sv$`; at most 3 per drawing (the oldest go). The
   window asks before every open, so a crash copy was offered once already (as the crash's
-  `.sv$`): `recoverable` lists it in `older_copies` (`{ path, saved_at }`, newest first), never
+  `.sv$`): `recoverable` lists it in `older_copies` (`{ path, saved_at, kind: "crash" }`, newest first), never
   as `autosave` and never as `crashed` (which is a dead lock only). Recover (`recover_autosave`)
   or Discard (`discard_autosave`) with a copy's path opens or deletes that copy; a recovered
   copy's first save deletes it (`autosave_copy_of`).
 - Instance autosaves: an autosave (timer, 20 changes, panic flush) never writes over another
   Qiyas's: under a lock this process doesn't own (Open anyway) it goes to `<file>.sv$.<pid>`
-  with its `.qiyas`. `recoverable` offers the drawing's `.sv$` first (whatever its age), else its
-  newest instance autosave. A save or Don't Save deletes this process's own instance autosave
+  with its `.qiyas`. `recoverable` offers the drawing's `.sv$` (whatever its age) as `autosave`;
+  every instance autosave whose process has ended goes in `older_copies` (`kind: "instance"`),
+  even beside another Qiyas's `.sv$`; a running process's is never listed, and deleting it is
+  refused. A save or Don't Save deletes this process's own instance autosave
   even while the `.sv$` is kept for the other Qiyas. The IPC `discard_autosave`: a copy's path
   deletes that copy; a drawing open here (Don't Save) its own autosave; else (the dialog's
   Discard) the autosave offered, never a crash copy.

@@ -30,9 +30,10 @@
 //! never as the autosave offered; Recover or Discard one by its path.
 //!
 //! An autosave never writes over another Qiyas's: while another process (or computer) holds the
-//! drawing's lock (Open anyway), this process autosaves to `<file name>.sv$.<pid>` instead, offered
-//! last and deleted by a save or Don't Save like the main one. Qiyas itself never writes a lock
-//! without the app asking.
+//! drawing's lock (Open anyway), this process autosaves to `<file name>.sv$.<pid>` instead,
+//! deleted by a save or Don't Save like the main one. Once that process has ended, its instance
+//! autosave is listed in `older_copies` (kind `instance`); a running process's is never offered
+//! or deleted by another. Qiyas itself never writes a lock without the app asking.
 //!
 //! Recover (opening a damaged file) is an ordinary open: the reader is failsafe already;
 //! `Session::read_report` says what it read and what it dropped, by kind.
@@ -407,8 +408,7 @@ fn host_name() -> String {
 pub struct Recoverable {
     /// The drawing it is about.
     pub drawing: String,
-    /// The autosave offered: `<file>.sv$`, else this drawing's newest instance autosave
-    /// (`<file>.sv$.<pid>`); `None` when there is none.
+    /// The autosave offered: `<file>.sv$`, whatever its age; `None` when there is none.
     pub autosave: Option<String>,
     /// When it was written, in seconds since 1970.
     pub saved_at: Option<u64>,
@@ -418,18 +418,47 @@ pub struct Recoverable {
     pub crashed: bool,
     /// The drawing is open in another Qiyas: a running process's lock, or another computer's.
     pub locked_elsewhere: Option<DrawingLock>,
-    /// Crash copies kept from earlier crashes, newest first: offered once already (as the
-    /// autosave the crash left), so listed here, never as `autosave`. Recover or Discard one by
-    /// its path.
+    /// Copies kept from a Qiyas that is gone, newest first: crash copies (offered once already,
+    /// as the autosave the crash left) and the instance autosaves of processes that have ended.
+    /// Listed here, never as `autosave`; Recover or Discard one by its path.
     pub older_copies: Vec<OlderCopy>,
 }
 
-/// A crash copy kept beside a drawing.
+/// A copy kept beside a drawing from a Qiyas that is gone.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct OlderCopy {
     pub path: String,
-    /// When it was written (the crashed session's last autosave), in seconds since 1970.
+    /// When it was written (that session's last autosave), in seconds since 1970.
     pub saved_at: u64,
+    pub kind: CopyKind,
+}
+
+/// What an older copy is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CopyKind {
+    /// A crash's `<file>.sv$`, kept aside when the drawing opened again (`<file>.sv$.crash-…`).
+    Crash,
+    /// The autosave of a Qiyas that had the drawing open under another's lock and has ended
+    /// (`<file>.sv$.<pid>`).
+    Instance,
+}
+
+/// The pid an instance autosave's name carries.
+fn instance_pid(path: &Path) -> Option<u32> {
+    autosave_copy_of(path)?;
+    path.file_name()?
+        .to_string_lossy()
+        .rsplit_once(".sv$.")?
+        .1
+        .parse()
+        .ok()
+}
+
+/// An instance autosave another running process on this computer writes: never offered or
+/// deleted here.
+fn live_instance(path: &Path) -> bool {
+    instance_pid(path).is_some_and(|pid| pid != std::process::id() && process_alive(pid))
 }
 
 fn modified(path: &Path) -> Option<SystemTime> {
@@ -446,21 +475,39 @@ struct Offer {
     saved: SystemTime,
 }
 
-/// The autosave offered for `drawing`: its `<file>.sv$`, whatever its age; else its newest
-/// instance autosave (`<file>.sv$.<pid>`, last).
+/// The autosave offered for `drawing`: its `<file>.sv$`, whatever its age. Copies are listed in
+/// `older_copies` instead.
 fn offered(drawing: &Path) -> Option<Offer> {
-    let autosave = autosave_path(drawing);
-    if let Some(saved) = modified(&autosave) {
-        return Some(Offer {
-            path: autosave,
-            saved,
-        });
-    }
-    autosave_copies(drawing, false)
+    let path = autosave_path(drawing);
+    Some(Offer {
+        saved: modified(&path)?,
+        path,
+    })
+}
+
+/// The older copies of `drawing`, newest first: its crash copies, and the instance autosaves of
+/// processes that have ended (a running one's is its own business, and this process's is not
+/// news).
+fn older_copies(drawing: &Path) -> Vec<OlderCopy> {
+    let instances = autosave_copies(drawing, false)
         .into_iter()
-        .filter_map(|path| Some((modified(&path)?, path)))
-        .max_by_key(|(saved, _)| *saved)
-        .map(|(saved, path)| Offer { path, saved })
+        .filter(|p| instance_pid(p).is_some_and(|pid| !process_alive(pid)))
+        .map(|p| (p, CopyKind::Instance));
+    let crashes = crash_copies(drawing)
+        .into_iter()
+        .map(|p| (p, CopyKind::Crash));
+    let mut copies: Vec<OlderCopy> = crashes
+        .chain(instances)
+        .filter_map(|(path, kind)| {
+            Some(OlderCopy {
+                saved_at: secs(modified(&path)?),
+                path: path.display().to_string(),
+                kind,
+            })
+        })
+        .collect();
+    copies.sort_by(|a, b| b.saved_at.cmp(&a.saved_at).then(b.path.cmp(&a.path)));
+    copies
 }
 
 /// What there is to say about `drawing` before it opens: the autosave offered (see `offered`),
@@ -473,16 +520,7 @@ pub fn recoverable(drawing: &Path) -> Option<Recoverable> {
     let dead = status == Some(LockStatus::Dead);
     let elsewhere = matches!(status, Some(LockStatus::Alive | LockStatus::OtherHost));
     let offer = offered(drawing);
-    let older_copies: Vec<OlderCopy> = crash_copies(drawing)
-        .into_iter()
-        .rev()
-        .filter_map(|path| {
-            Some(OlderCopy {
-                saved_at: secs(modified(&path)?),
-                path: path.display().to_string(),
-            })
-        })
-        .collect();
+    let older_copies = older_copies(drawing);
     if offer.is_none() && !dead && !elsewhere && older_copies.is_empty() {
         return None;
     }
@@ -535,6 +573,12 @@ fn refuse_open_elsewhere(drawing: &Path) -> Result<Option<LockStatus>, CoreError
 /// also be an autosave copy (`autosave_copy_of`: a recovered drawing's first save, or Discard of
 /// an older copy): then that copy and its project go.
 pub fn discard_autosave(path: &Path) -> Result<(), CoreError> {
+    if live_instance(path) {
+        return Err(CoreError::InvalidCommand(format!(
+            "{} is the autosave of a running Qiyas: it stays",
+            path.display()
+        )));
+    }
     if autosave_copy_of(path).is_some() {
         return remove_with_project(path);
     }
@@ -548,8 +592,8 @@ pub fn discard_autosave(path: &Path) -> Result<(), CoreError> {
 }
 
 /// Discard in the recovery dialog: deletes the autosave `recoverable` offers for `drawing` (its
-/// `<file>.sv$`, else an instance autosave) with its project, and a dead lock beside it; crash
-/// copies stay (each is discarded by its path). Refused while another Qiyas has the drawing open.
+/// `<file>.sv$`) with its project, and a dead lock beside it; older copies stay (each is
+/// discarded by its path). Refused while another Qiyas has the drawing open.
 pub fn discard_recoverable(drawing: &Path) -> Result<(), CoreError> {
     let dead = refuse_open_elsewhere(drawing)? == Some(LockStatus::Dead);
     if let Some(offer) = offered(drawing) {
