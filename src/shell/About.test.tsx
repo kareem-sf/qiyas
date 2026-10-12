@@ -4,9 +4,20 @@ import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import { LanguageProvider } from "../i18n";
 import { About } from "./About";
 
-const api = vi.hoisted(() => ({ checkUpdate: vi.fn(), installUpdate: vi.fn() }));
+const api = vi.hoisted(() => ({ checkUpdate: vi.fn(), installUpdate: vi.fn(), cancelUpdate: vi.fn() }));
+const events = vi.hoisted(() => new Map<string, (e: { payload: unknown }) => void>());
 
 vi.mock("../api", async (original) => ({ ...(await original<object>()), ...api }));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(async (name: string, handler: (e: { payload: unknown }) => void) => {
+    events.set(name, handler);
+    return () => events.delete(name);
+  }),
+}));
+
+/** The core sends `name` to the window. */
+const send = (name: string, payload: unknown = null) =>
+  act(async () => events.get(name)?.({ payload }));
 
 beforeAll(() => {
   // jsdom may not implement modal dialogs.
@@ -22,6 +33,7 @@ beforeAll(() => {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  events.clear();
   localStorage.clear();
 });
 
@@ -51,7 +63,7 @@ test("check for updates: up to date", async () => {
   expect(api.installUpdate).not.toHaveBeenCalled();
 });
 
-test("an update found is installed only on a click, and the box stays open meanwhile", async () => {
+test("an update found is installed only on a click; the download shows its progress", async () => {
   api.checkUpdate.mockResolvedValue({ status: "available", version: "0.2.0", notes: "Plotting to PDF." });
   let fail: (e: string) => void = () => {};
   api.installUpdate.mockReturnValue(new Promise((_, reject) => (fail = reject)));
@@ -63,7 +75,16 @@ test("an update found is installed only on a click, and the box stays open meanw
 
   await click("Install and restart");
   expect(api.installUpdate).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole("button", { name: "Downloading…" })).toBeTruthy();
+  await send("update:progress", { downloaded: 45, total: 100 });
+  expect(screen.getByRole("button", { name: "Downloading… 45%" })).toBeTruthy();
+  await send("update:progress", { downloaded: 3_500_000, total: null });
+  expect(screen.getByRole("button", { name: "Downloading… 3.5 MB" })).toBeTruthy();
+  // While it downloads, Close still works (it stops the download: below).
+  expect((screen.getByRole("button", { name: "Close" }) as HTMLButtonElement).disabled).toBe(false);
+
   // Installing: neither the button nor Close can be pressed, and Escape is ignored.
+  await send("update:installing");
   expect((screen.getByRole("button", { name: "Installing…" }) as HTMLButtonElement).disabled).toBe(true);
   expect((screen.getByRole("button", { name: "Close" }) as HTMLButtonElement).disabled).toBe(true);
   const escape = new Event("cancel", { cancelable: true });
@@ -104,6 +125,40 @@ test("unsaved drawings stop the install; a failed check says why", async () => {
   api.checkUpdate.mockRejectedValue("error sending request");
   await click("Check for updates");
   expect(screen.getByRole("alert").textContent).toBe("The update check failed: error sending request");
+});
+
+test("closing the box during the download stops it", async () => {
+  api.checkUpdate.mockResolvedValue({ status: "available", version: "0.2.0", notes: null });
+  api.installUpdate.mockReturnValue(new Promise(() => {}));
+  api.cancelUpdate.mockResolvedValue(undefined);
+  const onClose = show();
+  await click("Check for updates");
+  await click("Install and restart");
+  await click("Close");
+  expect(api.cancelUpdate).toHaveBeenCalledTimes(1);
+  expect(onClose).toHaveBeenCalled();
+});
+
+test("installed while a drawing got unsaved changes: Qiyas waits for the user to restart", async () => {
+  api.checkUpdate.mockResolvedValue({ status: "available", version: "0.2.0", notes: null });
+  api.installUpdate.mockRejectedValue("installed_restart_later");
+  show();
+  await click("Check for updates");
+  await click("Install and restart");
+  expect(screen.getByRole("status").textContent).toBe(
+    "Installed. Restart Qiyas when you are ready: save your drawings first.",
+  );
+  expect(screen.queryByRole("button", { name: "Install and restart" })).toBeNull();
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+test("an install already running (the launch dialog's) is said so", async () => {
+  api.checkUpdate.mockResolvedValue({ status: "available", version: "0.2.0", notes: null });
+  api.installUpdate.mockRejectedValue("update_busy");
+  show();
+  await click("Check for updates");
+  await click("Install and restart");
+  expect(screen.getByRole("alert").textContent).toBe("An update is being installed already.");
 });
 
 test("in Arabic", async () => {

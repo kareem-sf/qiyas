@@ -1285,6 +1285,12 @@ export type UpdateCheck =
 export const UPDATES_NOT_CONFIGURED = "updates_not_configured";
 export const UNSAVED_DRAWINGS = "unsaved_drawings";
 export const NO_UPDATE = "no_update";
+/** Another install runs (the launch dialog's). */
+export const UPDATE_BUSY = "update_busy";
+/** The download was stopped (`cancelUpdate`). */
+export const UPDATE_CANCELLED = "update_cancelled";
+/** Installed, but a drawing got unsaved changes meanwhile: Qiyas didn't restart. */
+export const RESTART_LATER = "installed_restart_later";
 
 /** Asks the update feed whether a newer Qiyas is out. */
 export const checkUpdate = () => invoke<UpdateCheck>("check_update");
@@ -1292,6 +1298,15 @@ export const checkUpdate = () => invoke<UpdateCheck>("check_update");
 /** Downloads the update the last check found, checks its signature, installs it and restarts
  *  Qiyas; it only comes back, rejected, when that failed. */
 export const installUpdate = () => invoke<void>("install_update");
+
+/** Stops the download of the running install; nothing once the install itself started. */
+export const cancelUpdate = () => invoke<void>("cancel_update");
+
+/** Sent during the download: how much has come, of how much when the server says. */
+export const UPDATE_PROGRESS = "update:progress";
+export type UpdateProgress = { downloaded: number; total: number | null };
+/** Sent when the download is done and checked and the install starts: it can't be stopped now. */
+export const UPDATE_INSTALLING = "update:installing";
 
 /** Sent when the OS asked Qiyas to open files (a double click on a drawing, or a second launch
  *  with one); `takeOpenRequests` gives them. */
