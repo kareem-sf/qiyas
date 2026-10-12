@@ -385,6 +385,7 @@ fn run(out: &Out, script_path: &Path, drawing: Option<&Path>, allow: bool) -> Do
 fn takeoff(out: &Out, drawing: &Path, blocks: &[String], export: Option<&Path>) -> Done {
     let mut session = open(drawing)?;
     let problems = script::read_problems(&session);
+    let project = script::project_problems(&session);
     let mut counts = BTreeMap::new();
     for name in blocks {
         let outcome = session
@@ -409,9 +410,13 @@ fn takeoff(out: &Out, drawing: &Path, blocks: &[String], export: Option<&Path>) 
     out.json(&serde_json::json!({
         "drawing": drawing,
         "problems": problems,
+        "warnings": project,
         "counts": counts,
         "export": export,
     }));
+    if let Some(problem) = project.first() {
+        return Ok(Some(format!("{}: {problem}", drawing.display())));
+    }
     Ok(opened_with(drawing, problems, "its counts"))
 }
 
@@ -423,6 +428,8 @@ struct FileReport {
     /// "ok", "warning" (it ran, but the reader repaired the drawing) or "error".
     status: &'static str,
     problems: usize,
+    /// Why it is a warning: `Run::warnings` (the reader's repairs, a project file not read).
+    warnings: Vec<String>,
     counts: BTreeMap<String, f64>,
     error: Option<String>,
 }
@@ -434,8 +441,21 @@ impl FileReport {
             return format!("{path} error {error}");
         }
         let mut line = format!("{path} {}", self.status);
+        let mut why = Vec::new();
         if self.problems > 0 {
-            line.push_str(&format!(" ({})", script::problems_reading(self.problems)));
+            why.push(script::problems_reading(self.problems));
+        }
+        // A project file not read: its message, without the drawing's path in front.
+        let prefix = format!("{path}: ");
+        why.extend(
+            self.warnings
+                .iter()
+                .filter_map(|w| w.strip_prefix(&prefix))
+                .filter(|w| w.starts_with("Project file"))
+                .map(str::to_string),
+        );
+        if !why.is_empty() {
+            line.push_str(&format!(" ({})", why.join("; ")));
         }
         for (name, count) in &self.counts {
             line.push_str(&format!(" {name}={count}"));
@@ -448,6 +468,7 @@ impl FileReport {
             path: path.to_path_buf(),
             status: "error",
             problems: 0,
+            warnings: Vec::new(),
             counts: BTreeMap::new(),
             error: Some(error),
         }
@@ -529,16 +550,22 @@ fn written_by(script: &Script, drawing: &Path) -> Vec<PathBuf> {
 /// Each drawing's script, read for it, or why it can't run: a bad line, or a file it would write
 /// that another drawing of the batch writes too (both refused, never one over the other).
 fn prepare(files: &[PathBuf], scripts: Vec<Result<Script, String>>) -> Vec<Result<Script, String>> {
-    let mut writers: HashMap<PathBuf, Vec<usize>> = HashMap::new();
+    // Keyed in lower case on every system: Windows and macOS take `Plan.xlsx` and `plan.xlsx` for
+    // one file, and a batch should mean the same everywhere.
+    let mut writers: HashMap<String, (PathBuf, Vec<usize>)> = HashMap::new();
     for (i, script) in scripts.iter().enumerate() {
         if let Ok(script) = script {
             for path in written_by(script, &files[i]) {
-                writers.entry(path).or_default().push(i);
+                let key = path.to_string_lossy().to_lowercase();
+                let entry = writers.entry(key).or_insert_with(|| (path, Vec::new()));
+                if !entry.1.contains(&i) {
+                    entry.1.push(i);
+                }
             }
         }
     }
     let mut collisions: BTreeMap<usize, Vec<String>> = BTreeMap::new();
-    for (path, who) in &writers {
+    for (path, who) in writers.values() {
         if who.len() < 2 {
             continue;
         }
@@ -682,6 +709,7 @@ fn run_one(file: &Path, script: &Script, allow: bool) -> FileReport {
                 "warning"
             },
             problems,
+            warnings: run.warnings,
             counts: run.counts,
             error: None,
         },

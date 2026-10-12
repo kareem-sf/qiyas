@@ -728,9 +728,12 @@ their measurements are marked `mcp`).
     set's drawings in its order; the script is checked once before any drawing is opened, then
     read for every drawing, and two drawings that would write the same file (EXPORT, SAVEAS,
     SAVE, `write_block`) are both refused before anything runs (`error output <path> collides
-    with <other>`); one line per drawing in that order, `<path> ok COLUMN=6 DOOR=3`,
-    `<path> warning (N problems reading it) COLUMN=0 …` (the reader repaired the drawing; the
-    script ran: check its counts) or `<path> error <message>`; then `N drawings: A ok, W with
+    with <other>`; paths compared in lower case on every system, as Windows and macOS do); one
+    line per drawing in that order, `<path> ok COLUMN=6 DOOR=3`, `<path> warning (N problems
+    reading it) COLUMN=0 …` (the reader repaired the drawing; the script ran: check its counts),
+    `<path> warning (Project file could not be read …) …` (its `.qiyas` is there but unreadable:
+    opened with an empty take-off, the file backed up to `.qiyas.bak`) or `<path> error
+    <message>`; then `N drawings: A ok, W with
     warnings, F failed`. Jobs 1 to 64 (default 1), each worker with its own session.
     `--allow-repaired-save` as for `run`.
   - `--quiet` prints nothing on stdout but a batch's summary line; `--json` prints one JSON
@@ -742,7 +745,7 @@ their measurements are marked `mcp`).
     |---|---|---|
     | 0 | done | nothing |
     | 1 | an error: a bad argument, script line or drawing; a batch with a failed drawing | `qiyas-cli: …` (`F of N drawings failed`) |
-    | 2 | done, but a drawing opened with problems the reader repaired (warnings only) | `qiyas-cli: … opened with problems: check …` |
+    | 2 | done, but a drawing opened with problems the reader repaired, or with a project file that could not be read (warnings only) | `qiyas-cli: … opened with problems: check …` |
 
     A panic (the reader on a damaged DWG) is caught: `crashed: <message>`, and the batch goes on.
   - Damaged drawings (tested): a DWG cut off in the middle does not open at all ("no usable

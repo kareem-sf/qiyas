@@ -623,3 +623,32 @@ fn save_refuses_a_drawing_the_reader_repaired() {
     .unwrap_or_else(|e| panic!("{e}"));
     assert!(dir.path().join("sample.dwg.bak").exists());
 }
+
+#[test]
+fn a_project_file_that_cannot_be_read_is_a_warning() {
+    let dir = tempfile::tempdir().unwrap();
+    let drawing = write_sample(dir.path(), "dwg");
+    std::fs::write(dir.path().join("sample.qiyas"), b"not json {").unwrap();
+    let session = Session::open(&drawing).unwrap();
+    assert!(
+        session.takeoff.items.is_empty(),
+        "opens with an empty take-off"
+    );
+    let script = parsed("COUNT DOOR\nSAVE\n", dir.path(), Some(&drawing));
+    let run =
+        script::run(&script, Some(session), &mut Stub::default()).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(run.warnings.len(), 1, "{:?}", run.warnings);
+    assert!(
+        run.warnings[0].contains("Project file could not be read"),
+        "{:?}",
+        run.warnings
+    );
+    // Not a repaired drawing: SAVE still writes (the broken project was backed up on open).
+    assert!(dir.path().join("sample.dwg.bak").exists());
+
+    // An OPEN in the script warns the same way.
+    std::fs::write(dir.path().join("sample.qiyas"), b"not json {").unwrap();
+    let script = parsed("OPEN sample.dwg\n", dir.path(), None);
+    let run = script::run(&script, None, &mut Stub::default()).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(run.warnings.len(), 1, "{:?}", run.warnings);
+}

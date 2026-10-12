@@ -896,3 +896,78 @@ fn drawings_opened_with_problems_warn_with_exit_2_and_are_not_saved_over() {
         .iter()
         .any(|c| Path::new(&format!("{}.bak", c.display())).exists()));
 }
+
+#[test]
+fn a_project_file_that_cannot_be_read_is_a_warning_on_its_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let plans = dir.path().join("plans");
+    std::fs::create_dir_all(&plans).unwrap();
+    write_plan(&plans, "a.dwg");
+    write_plan(&plans, "b.dwg");
+    std::fs::write(plans.join("b.qiyas"), b"not json {").unwrap();
+    let script = dir.path().join("count.scr");
+    std::fs::write(&script, COUNT_SCRIPT).unwrap();
+    let out = dir.path().join("out");
+
+    let run = cli(&["batch", s(&plans), "--script", s(&script), "--out", s(&out)]);
+    let text = stdout(&run);
+    assert_eq!(
+        warned(run),
+        "qiyas-cli: 1 of 2 drawings opened with problems: check their counts"
+    );
+    let lines: Vec<&str> = text.lines().collect();
+    assert!(
+        lines[0].ends_with("a.dwg ok COLUMN=6 DOOR=3 WINDOW=5"),
+        "{text}"
+    );
+    assert!(lines[1].contains("b.dwg warning ("), "{text}");
+    assert!(
+        lines[1].contains("Project file could not be read"),
+        "{text}"
+    );
+    assert!(lines[1].ends_with(" COLUMN=6 DOOR=3 WINDOW=5"), "{text}");
+    assert_eq!(lines[2], "2 drawings: 1 ok, 1 with warnings, 0 failed");
+    // It still opened, with an empty take-off: the workbook has the counts alone.
+    assert_eq!(rows(&out.join("b.dwg.xlsx")).len(), 3);
+    let v = json(&stdout(&cli(&[
+        "batch",
+        s(&plans),
+        "--script",
+        s(&script),
+        "--out",
+        s(&out),
+        "--json",
+    ])));
+    let b = &v["files"][1];
+    assert_eq!(b["status"], "warning");
+    assert!(b["warnings"][0]
+        .as_str()
+        .unwrap()
+        .contains("Project file could not be read"));
+    // takeoff and run warn too.
+    let err = warned(cli(&[
+        "takeoff",
+        s(&plans.join("b.dwg")),
+        "--count",
+        "DOOR",
+    ]));
+    assert!(err.contains("Project file could not be read"), "{err}");
+    let err = warned(cli(&["run", s(&script), s(&plans.join("b.dwg"))]));
+    assert!(err.contains("Project file could not be read"), "{err}");
+}
+
+#[test]
+fn outputs_that_differ_only_in_case_collide() {
+    // Windows and macOS see Plan.xlsx and plan.xlsx as one file: refused everywhere.
+    let dir = tempfile::tempdir().unwrap();
+    let plans = dir.path().join("plans");
+    std::fs::create_dir_all(&plans).unwrap();
+    write_plan(&plans, "Plan.dwg");
+    write_plan(&plans, "plan.dwg");
+    let script = dir.path().join("x.scr");
+    std::fs::write(&script, "COUNT DOOR\nEXPORT {name}.xlsx\n").unwrap();
+    let run = cli(&["batch", s(&plans), "--script", s(&script)]);
+    let text = stdout(&run);
+    assert_eq!(failed(run), "qiyas-cli: 2 of 2 drawings failed");
+    assert_eq!(text.matches("collides with").count(), 2, "{text}");
+}

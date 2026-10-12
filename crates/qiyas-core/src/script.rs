@@ -109,7 +109,8 @@ pub struct Done {
 }
 
 /// What a run did: each step's line, the block counts (COUNT, by block name), the drawings it
-/// worked on that the failsafe reader had to repair (`<path> opened with N problems`) and the
+/// worked on that the failsafe reader had to repair (`<path> opened with N problems`) or whose
+/// project file could not be read (`<path>: Project file could not be read …`) and the
 /// session as the script left it (`None` when it never opened a drawing).
 #[derive(Serialize)]
 pub struct Run {
@@ -281,8 +282,24 @@ pub fn problems_reading(n: usize) -> String {
     }
 }
 
-/// Notes in `warnings` that the session's drawing was repaired on open; whether it was.
+/// The session's problems with its project file: one that is there but could not be read (it
+/// opened with an empty take-off; `Session::open` backed the file up).
+pub fn project_problems(session: &Session) -> Vec<String> {
+    session
+        .drawing
+        .problems
+        .iter()
+        .filter(|p| p.starts_with("Project file could not be read"))
+        .cloned()
+        .collect()
+}
+
+/// Notes in `warnings` that the session's drawing was repaired on open, or that its project file
+/// could not be read; whether the drawing was repaired (only that stops SAVE).
 fn warn_if_repaired(session: &Session, warnings: &mut Vec<String>) -> bool {
+    for problem in project_problems(session) {
+        warnings.push(format!("{}: {problem}", session.drawing.path.display()));
+    }
     let n = read_problems(session);
     if n > 0 {
         let s = if n == 1 { "" } else { "s" };
