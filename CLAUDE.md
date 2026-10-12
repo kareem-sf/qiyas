@@ -39,7 +39,7 @@ Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example 
 
 Frontend layout: `src/main.tsx` renders `src/app/App.tsx`, the composition root (`src/App.tsx`
 re-exports it). It calls the hooks in `src/app/` in this order, which keeps their effects in the
-order they always ran: `useShell`, `useFileTabs`, `useAutosave`, `useDrafting`,
+order they always ran: `useShell`, `useOptions`, `useFileTabs`, `useAutosave`, `useDrafting`,
 `useTakeoffState`, `useSheets`, `useLayers`, `useToolChoice`, `useAttach`, `useBlocks`,
 `useAnnotate`, `useCommands`, `useTool`, `useAssistantWiring`, `useDrawings`, `useTakeoff`,
 `usePlot`, `useCommandLine`, `useSelection`, `useOverlay`. It hands `apply`, `onCommand` and
@@ -116,7 +116,7 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
   (depth 4); View tab, External references to reload or locate one (kept in the project file).
 - Command line (Ctrl+9 shows or hides it): AutoCAD-style words and aliases (DI, AA, COUNT, DIV,
   ME, ID, Z E/W/IN/OUT, LAYOFF, U…), typed points `x,y`, `@dx,dy`, `@d<angle` in drawing units,
-  Arabic digits accepted. Extra aliases: `aliases` in `settings.json` (no screen for them yet).
+  Arabic digits accepted. Extra aliases: `aliases` in `settings.json`, edited in ALIASEDIT.
 - Properties palette under Layers: what the Select tool picked (colour as drawn, linetype,
   weight, attributes, values in metres); a drawing's own entity is edited there (see Layers,
   groups and properties).
@@ -559,6 +559,30 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
   `{ kind: tool | action | toggle, command, label }` as `Ribbon.tsx` draws them (Home, Measure,
   Annotate, Insert, View, Manage, Output) plus Audit and Purge; a saved layout may only use the default's buttons, and one that no longer checks out
   falls back to the default on load. The dialogs (Options, Customize, Aliases) are the window's.
+- The window's half (`src/app/useOptions.ts`, read at start and after a dialog saves; Manage tab,
+  Drawing group Audit… and Purge…, Setup group Options…, Customize…, Aliases…): PURGE (`PU`)
+  opens `PurgeDialog` on a dry run of every kind, listed by kind with a tick each (kinds with
+  nothing are disabled) and `limited_reason` when set; Purge runs the ticked kinds through
+  `runDrawingCommand` (redraw, info, autosave) and lists what went. AUDIT opens `AuditDialog`
+  (`fix: false`): counts by kind and one row per item (`line` as its tooltip); Fix (`fix: true`)
+  shows only when a fixable item (missing layer or text style, gone group member) is left. Both
+  need a drawing and show the core's refusal while a block is edited in place. OPTIONS (`OP`):
+  `display_precision` is for where no drawing is open (the status bar with none); a drawing's
+  drafting precision wins while it is open (the dialog says so). The autosave interval stays the
+  Settings dialog's (shown, with a button there). Snap aperture and pick box reach `useTool`
+  (its `px`). Colours are kept (null = "Theme default") but the canvas does not draw with them
+  yet. Shortcuts: a table of the built-in keys (`BUILT_IN_SHORTCUTS` in `src/tools/shortcuts.ts`)
+  and the user's; a key cell takes the keys pressed (physical key, `keyOf`), a key another
+  command holds is refused (`shortcutClash`); `shortcutFor(e, user)` puts the user's first and a
+  command given a key loses its built-in one. Only tools and the built-in keys' commands can be
+  bound (`SHORTCUT_COMMANDS`), not ribbon actions. CUI (`CustomizeUi`): the ribbon as a tree
+  (`ribbonLayout.ts` `editTree`: the saved layout, or the window's default, then what the core's
+  `get_default_ribbon` has that it leaves out, hidden); show/hide and up/down; Reset saves null.
+  `Ribbon.tsx` draws `layout ?? DEFAULT_RIBBON` (the core's data with Audit and Purge moved to
+  Manage, plus Options, Customize and Aliases, which the core's data lacks: a saved layout can't
+  hold those three until it has them, and the dialog says so). ALIASEDIT (`AliasEditor`): alias
+  to command, upper-cased; refused: two that differ only in case, a command's own name
+  (`COMMANDS`), a command that is not one; saved aliases reach the command line (`loadAliases`).
 
 ## PDF
 
