@@ -899,6 +899,10 @@ async fn gemini_parallel_calls_run_apart_and_the_log_tells_the_whole_turn() {
     let calls = second[2]["tool_calls"].as_array().unwrap();
     assert_eq!(calls.len(), 3);
     assert_eq!(calls[2]["function"]["name"], "list_takeoff");
+    assert_eq!(
+        second[2]["content"], "",
+        "never null beside calls (Gemini refuses it)"
+    );
     assert_eq!(second[5]["tool_call_id"], "f3");
 
     let (result, _) = turn(&mut agent, "Again").await;
@@ -919,6 +923,12 @@ async fn gemini_parallel_calls_run_apart_and_the_log_tells_the_whole_turn() {
         "DONE\n",
         "ERROR\n    The AI service answered 400: The request was rejected",
         "INVALID_ARGUMENT",
+        // A 4xx logs what was sent, so the next refusal can be read in the log.
+        "\n    The request: {",
+        r#""content":"","role":"assistant","tool_calls":["#,
+        r#""role":"tool","tool_call_id":"f3""#,
+        " tools: ",
+        "<system prompt, ",
     ] {
         assert!(text.contains(part), "the log lacks {part:?}:\n{text}");
     }

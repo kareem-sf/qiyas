@@ -63,6 +63,7 @@ impl Provider for Anthropic {
                         .json(&body)
                 },
                 &self.api_key,
+                &body,
             )
             .await?;
             let mut turn = Turn::default();

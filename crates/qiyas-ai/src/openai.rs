@@ -2,6 +2,7 @@
 //! with streaming and function calling.
 
 use std::collections::HashMap;
+use std::sync::Mutex;
 
 use serde_json::{json, Value};
 
@@ -16,6 +17,10 @@ pub struct OpenAiCompatible {
     base_url: String,
     api_key: Option<String>,
     client: reqwest::Client,
+    /// Each streamed call's `extra_content` by call id, sent back on that call. Gemini 3 puts its
+    /// thought signature there (`{"google": {"thought_signature": ...}}`) and refuses a request
+    /// whose calls of the current turn come back without it.
+    extras: Mutex<HashMap<String, Value>>,
 }
 
 impl OpenAiCompatible {
@@ -25,6 +30,7 @@ impl OpenAiCompatible {
             base_url: base_url.trim().trim_end_matches('/').to_string(),
             api_key,
             client: http_client(),
+            extras: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -36,7 +42,8 @@ impl Provider for OpenAiCompatible {
         sink: Sink<'a>,
     ) -> BoxFuture<'a, Result<TurnResult, AiError>> {
         Box::pin(async move {
-            let body = request_body(&req);
+            let extras = self.extras.lock().map(|m| m.clone()).unwrap_or_default();
+            let body = request_body(&req, &extras);
             let url = format!("{}/chat/completions", self.base_url);
             let response = send(
                 || {
@@ -47,12 +54,16 @@ impl Provider for OpenAiCompatible {
                     }
                 },
                 self.api_key.as_deref().unwrap_or(""),
+                &body,
             )
             .await?;
             let mut turn = Turn::default();
             read_events(response, |e| turn.on_event(&e.data, sink))
                 .await
                 .map_err(|e| e.scrubbed(self.api_key.as_deref().unwrap_or("")))?;
+            if let Ok(mut kept) = self.extras.lock() {
+                kept.extend(turn.extras());
+            }
             Ok(turn.finish(sink))
         })
     }
@@ -60,10 +71,11 @@ impl Provider for OpenAiCompatible {
 
 /// The JSON body. `effort` and `max_tokens` are not sent: services differ on those names
 /// (`max_tokens` is refused by OpenAI's reasoning models) and each has its own default.
-pub fn request_body(req: &TurnRequest) -> Value {
+/// `extras` are the calls' `extra_content` as streamed, by call id.
+pub fn request_body(req: &TurnRequest, extras: &HashMap<String, Value>) -> Value {
     let mut messages = vec![json!({ "role": "system", "content": req.system })];
     for m in &req.messages {
-        push_messages(&mut messages, m);
+        push_messages(&mut messages, m, extras);
     }
     let tools: Vec<Value> = req
         .tools
@@ -92,8 +104,9 @@ pub fn request_body(req: &TurnRequest) -> Value {
 }
 
 /// One of our messages as Chat Completions messages. Tool results become `tool` messages; their
-/// pictures follow in one user message, as a tool message can't carry images.
-fn push_messages(out: &mut Vec<Value>, m: &Message) {
+/// pictures follow in one user message, as a tool message can't carry images. A tool message
+/// holds `role`, `tool_call_id` and a string `content`, nothing else.
+fn push_messages(out: &mut Vec<Value>, m: &Message, extras: &HashMap<String, Value>) {
     match m.role {
         Role::Assistant => {
             let text: String = m
@@ -114,18 +127,22 @@ fn push_messages(out: &mut Vec<Value>, m: &Message) {
                     } else {
                         "{}".to_string()
                     };
-                    json!({
+                    let mut call = json!({
                         "id": id,
                         "type": "function",
                         "function": { "name": name, "arguments": arguments }
-                    })
+                    });
+                    if let Some(extra) = extras.get(id) {
+                        call["extra_content"] = extra.clone();
+                    }
+                    call
                 })
                 .collect();
+            // The content stays a string, empty beside calls with no text: OpenAI takes `null`
+            // there, but Gemini's OpenAI-compatible endpoint (and Runware in front of it) refuses
+            // it, and some services refuse a missing content; every one of them takes "".
             let mut msg = json!({ "role": "assistant", "content": text });
             if !calls.is_empty() {
-                if text.is_empty() {
-                    msg["content"] = Value::Null;
-                }
                 msg["tool_calls"] = Value::Array(calls);
             }
             out.push(msg);
@@ -179,6 +196,8 @@ struct Call {
     id: String,
     name: String,
     arguments: String,
+    /// The service's `extra_content` (Gemini's thought signature), sent back with the call.
+    extra: Option<Value>,
 }
 
 #[derive(Default)]
@@ -221,6 +240,9 @@ impl Turn {
             let call = &mut self.calls[at];
             if let Some(id) = id {
                 call.id = id.to_string();
+            }
+            if let Some(extra) = c.get("extra_content").filter(|x| !x.is_null()) {
+                call.extra = Some(extra.clone());
             }
             if let Some(name) = name {
                 call.name.push_str(name);
@@ -275,6 +297,22 @@ impl Turn {
             }
             at
         })
+    }
+
+    /// Each call's `extra_content`, by the id `finish` gives it.
+    fn extras(&self) -> Vec<(String, Value)> {
+        self.calls
+            .iter()
+            .enumerate()
+            .filter_map(|(at, call)| {
+                let id = if call.id.is_empty() {
+                    format!("call_{at}")
+                } else {
+                    call.id.clone()
+                };
+                Some((id, call.extra.clone()?))
+            })
+            .collect()
     }
 
     fn finish(self, sink: Sink<'_>) -> TurnResult {
@@ -407,6 +445,7 @@ mod tests {
                 name: "list_layers".into(),
                 input: Value::String("{}{}".into()),
             }]),
+            &HashMap::new(),
         );
         assert_eq!(out[0]["tool_calls"][0]["function"]["arguments"], "{}");
     }
@@ -421,6 +460,7 @@ mod tests {
                 name: "view_image".into(),
                 input: json!({}),
             }]),
+            &HashMap::new(),
         );
         push_messages(
             &mut out,
@@ -432,9 +472,12 @@ mod tests {
                 ],
                 is_error: false,
             }]),
+            &HashMap::new(),
         );
-        assert_eq!(out[0]["content"], Value::Null);
+        // Gemini's OpenAI-compatible endpoint refuses a null content beside the calls.
+        assert_eq!(out[0]["content"], "");
         assert_eq!(out[0]["tool_calls"][0]["function"]["arguments"], "{}");
+        assert!(out[0]["tool_calls"][0].get("extra_content").is_none());
         assert_eq!(
             out[1],
             json!({"role":"tool","tool_call_id":"c1","content":"cap"})
@@ -444,5 +487,83 @@ mod tests {
             out[2]["content"][0]["image_url"]["url"],
             "data:image/png;base64,QUJD"
         );
+    }
+
+    #[test]
+    fn a_tool_message_is_role_id_and_string_content_only() {
+        let mut out = Vec::new();
+        push_messages(
+            &mut out,
+            &Message::user(vec![ContentBlock::ToolResult {
+                tool_use_id: "call_446341".into(),
+                content: vec![
+                    ResultPart::Text("{\"rows\":[]}".into()),
+                    ResultPart::Text("second".into()),
+                ],
+                is_error: true,
+            }]),
+            &HashMap::new(),
+        );
+        assert_eq!(out.len(), 1, "no user message without pictures or text");
+        let tool = out[0].as_object().unwrap();
+        let mut keys: Vec<&str> = tool.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(keys, ["content", "role", "tool_call_id"]);
+        assert_eq!(tool["role"], "tool");
+        assert_eq!(tool["tool_call_id"], "call_446341");
+        assert_eq!(tool["content"], "{\"rows\":[]}\nsecond");
+    }
+
+    #[test]
+    fn arguments_are_a_json_string_and_text_beside_calls_is_kept() {
+        let mut out = Vec::new();
+        push_messages(
+            &mut out,
+            &Message::assistant(vec![
+                ContentBlock::Text {
+                    text: "Looking.".into(),
+                },
+                ContentBlock::ToolUse {
+                    id: "c1".into(),
+                    name: "find_entities".into(),
+                    input: json!({"layer": "A-WALL"}),
+                },
+            ]),
+            &HashMap::new(),
+        );
+        assert_eq!(out[0]["content"], "Looking.");
+        let args = &out[0]["tool_calls"][0]["function"]["arguments"];
+        assert!(args.is_string());
+        assert_eq!(
+            serde_json::from_str::<Value>(args.as_str().unwrap()).unwrap(),
+            json!({"layer": "A-WALL"})
+        );
+    }
+
+    #[test]
+    fn a_streamed_thought_signature_goes_back_on_its_call() {
+        let signature = json!({"google": {"thought_signature": "c2ln"}});
+        let mut turn = Turn::default();
+        let mut sink = |_: StreamEvent| {};
+        let mut first = call(
+            Some("f1"),
+            Some(0),
+            "find_entities",
+            r#"{"layer":"A-WALL"}"#,
+        );
+        first["choices"][0]["delta"]["tool_calls"][0]["extra_content"] = signature.clone();
+        turn.on_event(&first.to_string(), &mut sink).unwrap();
+        turn.on_event(
+            &call(Some("f2"), Some(0), "list_layers", "{}").to_string(),
+            &mut sink,
+        )
+        .unwrap();
+        let extras: HashMap<String, Value> = turn.extras().into_iter().collect();
+        assert_eq!(extras.len(), 1);
+        let result = turn.finish(&mut sink);
+        let mut out = Vec::new();
+        push_messages(&mut out, &Message::assistant(result.content), &extras);
+        assert_eq!(out[0]["tool_calls"][0]["extra_content"], signature);
+        assert!(out[0]["tool_calls"][1].get("extra_content").is_none());
     }
 }

@@ -259,7 +259,13 @@ impl Agent {
                 Ok(turn) => turn,
                 Err(e) => {
                     self.log("ERROR", || match &e {
-                        AiError::Api { body, .. } => format!("{e}\nThe service's answer: {body}"),
+                        AiError::Api { body, request, .. } => {
+                            let mut text = format!("{e}\nThe service's answer: {body}");
+                            if let Some(request) = request {
+                                text.push_str(&format!("\nThe request: {request}"));
+                            }
+                            text
+                        }
                         _ => e.to_string(),
                     });
                     return Err(e);

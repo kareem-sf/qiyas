@@ -197,12 +197,15 @@ pub enum AiError {
     Auth,
     #[error("The AI service is busy or the rate limit was reached; try again shortly")]
     RateLimited { retry_after: Option<u64> },
-    /// `body` is the service's whole answer (scrubbed, clipped), for the log.
+    /// `body` is the service's whole answer (scrubbed, clipped), for the log. `request` is, for
+    /// a 4xx, the JSON that was sent as `request_for_log` writes it, so the log shows what the
+    /// service refused.
     #[error("The AI service answered {status}: {message}")]
     Api {
         status: u16,
         message: String,
         body: String,
+        request: Option<String>,
     },
     #[error("Could not reach the AI service: {0}")]
     Network(String),
@@ -222,10 +225,12 @@ impl AiError {
                 status,
                 message,
                 body,
+                request,
             } => AiError::Api {
                 status,
                 message: scrub(&message, secret),
                 body: scrub(&body, secret),
+                request: request.map(|r| scrub(&r, secret)),
             },
             AiError::Network(m) => AiError::Network(scrub(&m, secret)),
             AiError::Stream(m) => AiError::Stream(scrub(&m, secret)),
@@ -263,10 +268,12 @@ pub(crate) fn http_client() -> reqwest::Client {
 }
 
 /// Sends the request built by `make`, retrying once after a 429 or 529, and maps failures to
-/// `AiError`. `make` is called again for the retry.
+/// `AiError`. `make` is called again for the retry. `body` is the JSON `make` sends, kept in a
+/// 4xx error for the log (the key is a header, never in it).
 pub(crate) async fn send(
     make: impl Fn() -> reqwest::RequestBuilder,
     secret: &str,
+    body: &Value,
 ) -> Result<reqwest::Response, AiError> {
     let mut retried = false;
     loop {
@@ -299,13 +306,66 @@ pub(crate) async fn send(
             return Err(AiError::Auth);
         }
         // Scrubbed before `error_message` may cut the body short, so no part of the key is left.
-        let body = scrub(&response.text().await.unwrap_or_default(), secret);
+        let answer = scrub(&response.text().await.unwrap_or_default(), secret);
+        let request = (400..500)
+            .contains(&status)
+            .then(|| scrub(&request_for_log(body), secret));
         return Err(AiError::Api {
             status,
-            message: error_message(&body),
-            body: crate::log::clip(&body),
+            message: error_message(&answer),
+            body: crate::log::clip(&answer),
+            request,
         });
     }
+}
+
+/// A request body as the log keeps it: compact JSON, pictures as `<image>`, the tool definitions
+/// as their names and the system prompt as its length (both the same in every request of a
+/// conversation, and long enough to push the messages past the clip), clipped at
+/// `log::MAX_TEXT` characters.
+pub(crate) fn request_for_log(body: &Value) -> String {
+    fn pictures(v: &mut Value) {
+        match v {
+            Value::String(s) if s.starts_with("data:image/") => *s = "<image>".into(),
+            Value::Array(items) => items.iter_mut().for_each(pictures),
+            Value::Object(map) => {
+                // Claude's `{"type": "base64", "media_type": ..., "data": ...}`.
+                if map.get("type").and_then(Value::as_str) == Some("base64") {
+                    if let Some(data) = map.get_mut("data") {
+                        *data = Value::String("<image>".into());
+                    }
+                }
+                map.values_mut().for_each(pictures);
+            }
+            _ => {}
+        }
+    }
+    let mut v = body.clone();
+    pictures(&mut v);
+    if let Some(tools) = v.get_mut("tools").filter(|t| t.is_array()) {
+        let names: Vec<&str> = tools
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|t| t["function"]["name"].as_str().or(t["name"].as_str()))
+            .collect();
+        *tools = Value::String(format!("<{} tools: {}>", names.len(), names.join(", ")));
+    }
+    let system = |text: &Value| {
+        let n = text
+            .as_str()
+            .map_or_else(|| text.to_string().chars().count(), |s| s.chars().count());
+        format!("<system prompt, {n} characters>")
+    };
+    if let Some(s) = v.get_mut("system") {
+        *s = Value::String(system(s));
+    }
+    for m in v["messages"].as_array_mut().into_iter().flatten() {
+        if m["role"] == "system" {
+            m["content"] = Value::String(system(&m["content"]));
+        }
+    }
+    crate::log::clip(&v.to_string())
 }
 
 /// `text` with every copy of `secret` blanked out, in case a service echoes the key back.
@@ -399,6 +459,36 @@ pub(crate) async fn read_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn the_logged_request_hides_pictures_tools_and_the_system_prompt() {
+        let body = json!({
+            "model": "m",
+            "messages": [
+                {"role": "system", "content": "You are Mizan."},
+                {"role": "user", "content": [
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,QUJD"}},
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "QUJD"}},
+                ]},
+                {"role": "tool", "tool_call_id": "c1", "content": "done"},
+            ],
+            "tools": [{"type": "function", "function": {"name": "find_entities"}}, {"name": "list_layers"}],
+            "system": [{"type": "text", "text": "long"}],
+        });
+        let text = request_for_log(&body);
+        assert!(!text.contains("QUJD"), "{text}");
+        assert_eq!(text.matches("<image>").count(), 2, "{text}");
+        assert!(
+            text.contains("<2 tools: find_entities, list_layers>"),
+            "{text}"
+        );
+        assert!(!text.contains("You are Mizan"), "{text}");
+        assert!(text.contains("<system prompt, 14 characters>"), "{text}");
+        assert!(text.contains(r#""tool_call_id":"c1""#), "{text}");
+        let long = json!({"messages": [{"role": "user", "content": "a".repeat(9000)}]});
+        assert!(request_for_log(&long).ends_with("more characters)"));
+    }
 
     #[test]
     fn sse_reader_joins_split_chunks_and_crlf() {
