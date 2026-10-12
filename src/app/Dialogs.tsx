@@ -38,6 +38,7 @@ import { LayerTranslator } from "../shell/LayerTranslator";
 import { PlotDialog } from "../shell/PlotDialog";
 import { PlotStyleEditor } from "../shell/PlotStyleEditor";
 import { RecoverReportDialog, RecoveryDialog } from "../shell/RecoveryDialog";
+import { laterOpens } from "../shell/recoveryQueue";
 import { ScriptResultDialog } from "../shell/ScriptResultDialog";
 import { SettingsDialog } from "../shell/SettingsDialog";
 import { SheetSetManager } from "../shell/SheetSetManager";
@@ -607,7 +608,7 @@ export function FileDialogs({ drawings }: { drawings: Drawings }) {
           onDiscard={discardFrom}
           onOpen={openAnyway}
           onClose={() => {
-            const then = recovery.then;
+            const then = laterOpens(recovery);
             setRecoveries((q) => q.filter((r) => r.id !== recovery.id));
             if (then) openPath(then, false);
           }}

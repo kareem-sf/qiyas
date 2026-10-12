@@ -43,7 +43,7 @@ import {
 } from "../api";
 import { cycleTab } from "../shell/FileTabs";
 import { useOpenRequests } from "../shell/openRequests";
-import { drop, enqueue, localTime, type RecoveryAsk } from "../shell/recoveryQueue";
+import { atLaunch, drop, enqueue, localTime, offered, type RecoveryAsk } from "../shell/recoveryQueue";
 import type { SheetSetApi } from "../shell/SheetSetManager";
 import { isStale, serial } from "../shell/switcher";
 import { leaveDrawing, readChoice } from "../shell/unsaved";
@@ -233,7 +233,7 @@ export function useDrawings({
   useEffect(() => {
     (async () => {
       const paths = (await readRecents()).map((r) => r.path);
-      const found = await recoverableDrawings(paths);
+      const found = atLaunch(await recoverableDrawings(paths));
       if (found.length > 0) setRecoveries((q) => enqueue(q, found, null, true));
     })().catch(() => {});
   }, []);
@@ -325,7 +325,7 @@ export function useDrawings({
    *  (`recover` false skips that: the user chose to open the drawing itself). */
   async function openPath(path: string, recover = true) {
     if (recover) {
-      const found = await recoverableDrawings([path]).catch(() => []);
+      const found = offered(await recoverableDrawings([path]).catch(() => []));
       const open = fileTabs.some((f) => f.path === path);
       if (found.length > 0 && !open) {
         setRecoveries((q) => enqueue(q, found, path));
@@ -367,7 +367,7 @@ export function useDrawings({
     // The recovered drawing itself: this render's `info` is the one before it (none at launch).
     await saveAs(recovered);
     // The time isolated (FSI … PDI): it keeps its own order inside Arabic.
-    if (savedAt !== undefined) setNotice(t("recovery.done", { time: `\u2068${localTime(savedAt)}\u2069` }));
+    if (savedAt != null) setNotice(t("recovery.done", { time: `\u2068${localTime(savedAt)}\u2069` }));
   }
 
   /** Discard: the autosave of `drawing` is deleted; the drawing about to open opens. */

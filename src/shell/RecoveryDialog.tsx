@@ -33,7 +33,8 @@ type Props = {
   items: Recoverable[];
   /** Opens the autosave of the drawing as a new drawing; an error stays in the dialog. */
   onRecover(drawing: string): Promise<void>;
-  /** Deletes the autosave of the drawing. */
+  /** Deletes the autosave of the drawing (with nothing autosaved: the crash's dead lock); a
+   *  refusal (another Qiyas took the drawing meanwhile) stays in the dialog. */
   onDiscard(drawing: string): Promise<void>;
   /** Opens the drawing itself, open in another Qiyas: its autosave is that Qiyas's, left alone. */
   onOpen(drawing: string): Promise<void>;
@@ -49,6 +50,8 @@ export function RecoveryDialog({ items, onRecover, onDiscard, onOpen, onClose }:
   const t = useT();
   const dialog = useModal();
   const crashed = items.some((i) => i.crashed);
+  /** Something to recover or discard; else every drawing is only open in another Qiyas. */
+  const saved = items.some((i) => i.autosave != null);
   /** Crashed and newer drawings together: the heading speaks of the crash, rows mark their own. */
   const mixed = crashed && items.some((i) => !i.crashed);
   const [busy, setBusy] = useState(false);
@@ -76,9 +79,9 @@ export function RecoveryDialog({ items, onRecover, onDiscard, onOpen, onClose }:
       onKeyDown={(e) => e.stopPropagation()}
     >
       <h2 id="recovery-title" className="heading">
-        {t(crashed ? "recovery.crashedTitle" : "recovery.title")}
+        {t(crashed ? "recovery.crashedTitle" : saved ? "recovery.title" : "recovery.lockedTitle")}
       </h2>
-      <p>{t("recovery.intro")}</p>
+      {saved && <p>{t("recovery.intro")}</p>}
       <ul className="recovery-list">
         {items.map((item) => {
           const [name, folder] = split(item.drawing);
@@ -88,13 +91,17 @@ export function RecoveryDialog({ items, onRecover, onDiscard, onOpen, onClose }:
                 <strong>{name}</strong> <span className="muted">{folder}</span>
               </span>
               {mixed && item.crashed && <span className="warn">{t("recovery.crashedItem")}</span>}
-              <span className="muted">{fill(t("recovery.savedAt"), { time: localTime(item.saved_at) })}</span>
+              {item.saved_at != null ? (
+                <span className="muted">{fill(t("recovery.savedAt"), { time: localTime(item.saved_at) })}</span>
+              ) : (
+                item.crashed && <span className="muted">{t("recovery.nothingSaved")}</span>
+              )}
               <span className="muted">
                 {item.drawing_at == null
                   ? t("recovery.drawingGone")
                   : fill(t("recovery.drawingAt"), { time: localTime(item.drawing_at) })}
               </span>
-              {item.drawing_at != null && item.saved_at < item.drawing_at && (
+              {item.drawing_at != null && item.saved_at != null && item.saved_at < item.drawing_at && (
                 <span className="warn">{t("recovery.older")}</span>
               )}
               <span className="actions">
@@ -104,9 +111,11 @@ export function RecoveryDialog({ items, onRecover, onDiscard, onOpen, onClose }:
                   </button>
                 ) : (
                   <>
-                    <button type="button" disabled={busy} onClick={() => act(() => onRecover(item.drawing))}>
-                      {t("recovery.recover")}
-                    </button>
+                    {item.autosave != null && (
+                      <button type="button" disabled={busy} onClick={() => act(() => onRecover(item.drawing))}>
+                        {t("recovery.recover")}
+                      </button>
+                    )}
                     <button type="button" disabled={busy} onClick={() => act(() => onDiscard(item.drawing))}>
                       {t("recovery.discard")}
                     </button>

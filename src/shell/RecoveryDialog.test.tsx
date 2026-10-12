@@ -125,6 +125,40 @@ test("open in another Qiyas: a warning with its PID and computer; only Open anyw
   expect(onDiscard).not.toHaveBeenCalled();
 });
 
+test("open elsewhere, nothing to recover: the warning, Open anyway and Later, no autosave time", async () => {
+  const onOpen = vi.fn(async () => {});
+  const lockOnly = newer("/jobs/villa.dwg", 0, {
+    autosave: null,
+    saved_at: null,
+    drawing_at: 1_760_000_000,
+    locked_elsewhere: { pid: 4242, host: "site-office-pc", started_at: 1 },
+  });
+  render(
+    <LanguageProvider>
+      <RecoveryDialog items={[lockOnly]} onRecover={noop} onDiscard={noop} onOpen={onOpen} onClose={() => {}} />
+    </LanguageProvider>,
+  );
+  expect(screen.getByRole("heading").textContent).toBe(en["recovery.lockedTitle"]);
+  // Nothing to recover: no Recover/Discard explanation, no autosave time.
+  expect(screen.getByRole("dialog").textContent).not.toContain(en["recovery.intro"]);
+  const row = screen.getByRole("listitem");
+  expect(row.textContent).not.toContain("Autosaved");
+  expect(row.textContent).toContain(localTime(1_760_000_000));
+  expect(screen.getByRole("note").textContent).toContain("PID 4242 on site-office-pc");
+  expect(within(row).getAllByRole("button").map((b) => b.textContent)).toEqual(["Open anyway"]);
+  expect(screen.getByRole("button", { name: "Later" })).toBeTruthy();
+  fireEvent.click(within(row).getByRole("button", { name: "Open anyway" }));
+  await waitFor(() => expect(onOpen).toHaveBeenCalledWith("/jobs/villa.dwg"));
+});
+
+test("crashed with nothing autosaved: says so, and offers Discard (it clears the crash) but no Recover", () => {
+  show([newer("/jobs/villa.dwg", 0, { autosave: null, saved_at: null, crashed: true })]);
+  expect(screen.getByRole("heading").textContent).toBe(en["recovery.crashedTitle"]);
+  const row = screen.getByRole("listitem");
+  expect(row.textContent).toContain(en["recovery.nothingSaved"]);
+  expect(within(row).getAllByRole("button").map((b) => b.textContent)).toEqual(["Discard"]);
+});
+
 test("in Arabic the times, the PID and the computer are isolated, so they read in their own order", () => {
   function Arabic() {
     const { setLang } = useLanguage();
@@ -202,6 +236,26 @@ test("a failed recovery says why and keeps the dialog", async () => {
   );
   fireEvent.click(screen.getByRole("button", { name: "Recover" }));
   await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("could not be read"));
+});
+
+test("a refused Discard (the drawing was opened elsewhere meanwhile) says why and keeps the row", async () => {
+  render(
+    <LanguageProvider>
+      <RecoveryDialog
+        items={items.slice(0, 1)}
+        onRecover={noop}
+        onDiscard={async () => {
+          throw "villa.dwg is open in another Qiyas (PID 4242 on site-office-pc): its autosave is kept";
+        }}
+        onOpen={noop}
+        onClose={() => {}}
+      />
+    </LanguageProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+  await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("PID 4242"));
+  expect(screen.getAllByRole("listitem")).toHaveLength(1);
+  expect((screen.getByRole("button", { name: "Discard" }) as HTMLButtonElement).disabled).toBe(false);
 });
 
 test("Recover's report lists what the reader dropped, by kind", () => {

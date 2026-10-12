@@ -12,14 +12,20 @@ import { useDrawings } from "./useDrawings";
 const VILLA = "/jobs/villa.dwg";
 const RECOVERED = "/jobs/villa (recovered).dwg";
 
-const core = vi.hoisted(() => ({ calls: [] as string[] }));
+const core = vi.hoisted(() => ({
+  calls: [] as string[],
+  /** What `discard_autosave` refuses with (a live lock), or null. */
+  refuseDiscard: null as string | null,
+}));
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (cmd: string, args?: Record<string, unknown>) => {
     core.calls.push(`${cmd} ${JSON.stringify(args ?? null)}`);
     switch (cmd) {
       case "recents":
+        return recoverable.recents.map((path) => ({ path }));
       case "recoverable_drawings":
+        return recoverable.found;
       case "take_open_requests":
         return [];
       case "get_settings":
@@ -28,6 +34,9 @@ vi.mock("@tauri-apps/api/core", () => ({
         return info(RECOVERED);
       case "open_drawing":
         return info(args!.path as string);
+      case "discard_autosave":
+        if (core.refuseDiscard) throw core.refuseDiscard;
+        return null;
       default:
         return null;
     }
@@ -37,6 +46,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) })
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ onCloseRequested: async () => () => {} }),
 }));
+const recoverable = vi.hoisted(() => ({ recents: [] as string[], found: [] as unknown[] }));
 const dialogs = vi.hoisted(() => ({ save: vi.fn(async (_options: { defaultPath?: string }) => null) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn(async () => null),
@@ -48,6 +58,9 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 afterEach(() => {
   cleanup();
   core.calls.length = 0;
+  core.refuseDiscard = null;
+  recoverable.recents = [];
+  recoverable.found = [];
   dialogs.save.mockClear();
 });
 
@@ -157,4 +170,26 @@ test("Open anyway: a drawing open in another Qiyas opens here once, its autosave
   expect(core.calls.filter((c) => c.startsWith("open_drawing"))).toEqual([`open_drawing {"path":"${VILLA}"}`]);
   expect(core.calls.some((c) => c.startsWith("discard_autosave"))).toBe(false);
   expect(result.current.recovery).toBeNull();
+});
+
+test("a refused Discard reaches the dialog as its error: the question stays and nothing opens", async () => {
+  const { result } = await launch();
+  act(() => result.current.setRecoveries((q) => enqueue(q, [item({ crashed: false })], VILLA)));
+  core.refuseDiscard = "villa.dwg is open in another Qiyas: its autosave is kept";
+  core.calls.length = 0;
+
+  await act(() => expect(result.current.discardFrom(VILLA)).rejects.toBe(core.refuseDiscard));
+
+  expect(core.calls).toEqual([`discard_autosave {"path":"${VILLA}"}`]);
+  expect(result.current.recovery?.items.map((i) => i.drawing)).toEqual([VILLA]);
+});
+
+test("at launch a recent drawing open in another Qiyas is not asked about; one that crashed is", async () => {
+  recoverable.found = [
+    item({ drawing: "/jobs/a.dwg" }),
+    item({ drawing: "/jobs/b.dwg", autosave: null, saved_at: null, crashed: false, locked_elsewhere: { pid: 7, host: "x", started_at: 1 } }),
+  ];
+  recoverable.recents = ["/jobs/a.dwg", "/jobs/b.dwg"];
+  const { result } = await launch();
+  expect(result.current.recovery?.items.map((i) => i.drawing)).toEqual(["/jobs/a.dwg"]);
 });
