@@ -294,8 +294,9 @@ pub async fn recoverable_drawings(paths: Vec<String>) -> Result<Vec<Recoverable>
         .collect())
 }
 
-/// Opens the autosave of the drawing `path` in a new tab as a new drawing with unsaved changes
-/// beside it (`Session::open_autosave`); the window then offers Save As.
+/// Opens the autosave of the drawing `path` (or, for an older copy's path, that copy) in a new
+/// tab as a new drawing with unsaved changes beside it (`Session::open_autosave`); the window
+/// then offers Save As.
 #[tauri::command]
 pub async fn recover_autosave<R: Runtime>(
     path: String,
@@ -315,11 +316,13 @@ pub async fn discard_autosave(path: String, state: State<'_, AppState>) -> Resul
     discard(&state, Path::new(&path)).map_err(|e| e.to_string())
 }
 
-/// Don't Save on a drawing open here deletes its own `<file>.sv$` (never a crash copy); the
-/// recovery dialog's Discard, on a drawing not open here, deletes what the dialog offered (a
-/// crash copy too). Both are refused while another Qiyas has the drawing open.
+/// Don't Save on a drawing open here deletes its own autosave (never a crash copy); the
+/// recovery dialog's Discard, on a drawing not open here, deletes the autosave it offered; an
+/// older copy's path (`older_copies`) deletes that copy. A drawing's `<file>.sv$` is kept, with an
+/// error, while another Qiyas has the drawing open.
 fn discard(state: &AppState, drawing: &Path) -> Result<(), CoreError> {
-    if tabs::find_path(state, drawing).is_some() {
+    if qiyas_core::autosave_copy_of(drawing).is_some() || tabs::find_path(state, drawing).is_some()
+    {
         qiyas_core::discard_autosave(drawing)
     } else {
         qiyas_core::discard_recoverable(drawing)
@@ -685,8 +688,12 @@ mod tests {
         discard(&state, &a).unwrap();
         assert!(!autosave_path(&a).exists());
         assert_eq!(crash_copies(&a), 1);
-        // The recovery dialog's Discard on `c`, not open: the crash copy it offered goes.
+        // The recovery dialog's Discard on `c`, not open: no autosave offered, the crash copy
+        // stays; Discard of the older copy by its path deletes it.
         discard(&state, &c).unwrap();
+        assert_eq!(crash_copies(&c), 1);
+        let older = recoverable(&c).unwrap().older_copies[0].path.clone();
+        discard(&state, Path::new(&older)).unwrap();
         assert_eq!(crash_copies(&c), 0);
     }
 }

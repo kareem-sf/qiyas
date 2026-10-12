@@ -11,9 +11,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use opencadcodec::Handle;
 use qiyas_core::fixtures::{sample_doc, write_drawing, write_sample};
 use qiyas_core::{
-    autosave_all, autosave_path, discard_autosave, discard_recoverable, lock_path, read_lock,
-    recoverable, release_lock, take_lock, Command, DrawSpec, DrawingLock, LockStatus, Outcome,
-    Session, AUTOSAVE_EVERY,
+    autosave_all, autosave_copy_of, autosave_path, discard_autosave, discard_recoverable,
+    lock_path, read_lock, recoverable, release_lock, take_lock, Command, DrawSpec, DrawingLock,
+    LockStatus, Outcome, Session, AUTOSAVE_EVERY,
 };
 
 /// The drawing the child process opens (see `recovery_child`).
@@ -162,13 +162,25 @@ fn a_killed_qiyas_leaves_a_dead_lock_and_its_autosave_is_offered() {
     assert!(!live.crashed);
     assert_eq!(live.locked_elsewhere.as_ref().map(|l| l.pid), Some(pid));
     assert_eq!(read_lock(&path).unwrap().status(), LockStatus::Alive);
+    assert!(live.older_copies.is_empty());
     // Opening it here too leaves the other's lock alone (no read-only open: only a warning).
     assert!(!take_lock(&path).unwrap());
     assert_eq!(read_lock(&path).unwrap().pid, pid);
-    // Its autosave is the other Qiyas's safety net: Discard is refused, nothing is deleted.
+    // Open anyway: this process autosaves beside the other's autosave, never over it.
+    let theirs = std::fs::read(autosave_path(&path)).unwrap();
+    let mut here = Session::open(&path).unwrap();
+    line(&mut here, 500.0);
+    let beside = here.autosave().unwrap().expect("an autosave");
+    let ours = format!("sample.dwg.sv$.{}", std::process::id());
+    assert_eq!(beside, dir.path().join(&ours));
+    assert!(dir.path().join(format!("{ours}.qiyas")).exists());
+    assert_eq!(std::fs::read(autosave_path(&path)).unwrap(), theirs);
+    // Its autosave is the other Qiyas's safety net: Discard is refused and keeps it; Don't Save
+    // here still deletes this process's own.
     assert!(discard_autosave(&path).is_err());
+    assert!(!beside.exists());
     assert!(discard_recoverable(&path).is_err());
-    assert!(autosave_path(&path).exists());
+    assert_eq!(std::fs::read(autosave_path(&path)).unwrap(), theirs);
     assert_eq!(read_lock(&path).unwrap().pid, pid);
 
     // SIGKILL: no clean exit, so the lock stays behind with a dead pid.
@@ -196,7 +208,8 @@ fn a_killed_qiyas_leaves_a_dead_lock_and_its_autosave_is_offered() {
     assert!(r.is_dirty());
 
     // Opening the drawing again (Later) cleans the stale lock up and keeps the crash's autosave
-    // aside as a crash copy, which is still offered; this process holds the drawing now.
+    // aside as a crash copy, offered once already: listed as an older copy, no new crash; this
+    // process holds the drawing now.
     assert!(take_lock(&path).unwrap());
     let mine = read_lock(&path).unwrap();
     assert_eq!(mine.pid, std::process::id());
@@ -206,12 +219,15 @@ fn a_killed_qiyas_leaves_a_dead_lock_and_its_autosave_is_offered() {
     assert_eq!(copies.len(), 1, "{:?}", files(dir.path()));
     let copy = dir.path().join(&copies[0]);
     assert!(dir.path().join(format!("{}.qiyas", copies[0])).exists());
-    let kept = recoverable(&path).expect("the crash copy is still offered");
-    assert!(kept.crashed);
-    assert_eq!(kept.autosave, Some(copy.display().to_string()));
+    let kept = recoverable(&path).expect("the crash copy is listed");
+    assert!(!kept.crashed);
+    assert_eq!(kept.autosave, None);
+    assert_eq!(kept.older_copies.len(), 1);
+    assert_eq!(kept.older_copies[0].path, copy.display().to_string());
+    assert_eq!(autosave_copy_of(&copy), Some(path.clone()));
 
-    // Recover from the crash copy; its first save deletes the copy and nothing else.
-    let mut r = Session::open_autosave(&path).unwrap();
+    // Recover from the crash copy by its path; its first save deletes the copy and nothing else.
+    let mut r = Session::open_autosave(&copy).unwrap();
     assert!(r.drawing.doc.get_entity(Handle::new(added)).is_some());
     assert_eq!(r.takeoff.items.len(), 1);
     r.save_as(&dir.path().join("kept.dwg")).unwrap();
@@ -405,13 +421,14 @@ fn an_autosave_before_the_lock_is_taken_keeps_the_crash_autosave_aside() {
     // The crash copy still holds what the crashed session drew.
     std::fs::remove_file(autosave_path(&path)).unwrap();
     let found = recoverable(&path).unwrap();
-    assert!(found.crashed);
-    let r = Session::open_autosave(&path).unwrap();
+    assert_eq!(found.autosave, None);
+    let copy = PathBuf::from(&found.older_copies[0].path);
+    let r = Session::open_autosave(&copy).unwrap();
     assert!(r.drawing.doc.get_entity(Handle::new(lost)).is_some());
 }
 
 #[test]
-fn at_most_three_crash_copies_are_kept_and_discard_takes_the_newest() {
+fn at_most_three_crash_copies_are_kept_listed_newest_first_and_discarded_by_path() {
     let dir = tempfile::tempdir().unwrap();
     let path = write_sample(dir.path(), "dwg");
     let mut s = Session::open(&path).unwrap();
@@ -436,21 +453,65 @@ fn at_most_three_crash_copies_are_kept_and_discard_takes_the_newest() {
     sorted.sort();
     assert_eq!(names, sorted);
 
-    let newest = dir.path().join(&seen[2]);
+    // Listed, newest first; never offered as a fresh crash.
     let found = recoverable(&path).unwrap();
-    assert!(found.crashed);
-    assert_eq!(found.autosave, Some(newest.display().to_string()));
-    // Discard takes the copy offered (and its project); the next newest is offered then.
-    discard_recoverable(&path).unwrap();
+    assert!(!found.crashed);
+    assert_eq!(found.autosave, None);
+    let listed: Vec<String> = found.older_copies.iter().map(|c| c.path.clone()).collect();
+    let newest_first: Vec<String> = seen
+        .iter()
+        .rev()
+        .map(|n| dir.path().join(n).display().to_string())
+        .collect();
+    assert_eq!(listed, newest_first);
+
+    // Discard one by its path: it and its project go, the others stay listed.
+    let newest = dir.path().join(&seen[2]);
+    discard_autosave(&newest).unwrap();
     assert!(!newest.exists());
     assert!(!dir.path().join(format!("{}.qiyas", seen[2])).exists());
+    assert_eq!(recoverable(&path).unwrap().older_copies.len(), 2);
+    // Don't Save of a session of the drawing, or the dialog's Discard of the drawing, deletes
+    // its autosave, never a crash copy.
+    discard_autosave(&path).unwrap();
+    discard_recoverable(&path).unwrap();
+    assert_eq!(crash_copies(dir.path()).len(), 2);
+}
+
+#[test]
+fn under_another_computers_lock_the_autosave_goes_beside_and_a_save_deletes_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_sample(dir.path(), "dwg");
+    std::fs::write(
+        lock_path(&path),
+        r#"{"pid": 7, "host": "elsewhere", "started_at": 1760000000}"#,
+    )
+    .unwrap();
+    let mut s = Session::open(&path).unwrap();
+    line(&mut s, 100.0);
+    let beside = s.autosave().unwrap().unwrap();
+    assert_eq!(
+        beside,
+        dir.path()
+            .join(format!("sample.dwg.sv$.{}", std::process::id()))
+    );
+    assert!(!autosave_path(&path).exists());
+    assert_eq!(autosave_copy_of(&beside), Some(path.clone()));
+
+    // Offered when it is the only one, last behind the other Qiyas's own.
+    let found = recoverable(&path).unwrap();
+    assert_eq!(found.autosave, Some(beside.display().to_string()));
+    assert!(found.locked_elsewhere.is_some());
+    std::fs::copy(&beside, autosave_path(&path)).unwrap();
     assert_eq!(
         recoverable(&path).unwrap().autosave,
-        Some(dir.path().join(&seen[1]).display().to_string())
+        Some(autosave_path(&path).display().to_string())
     );
-    // Don't Save of a session of the drawing deletes its own autosave, never a crash copy.
-    discard_autosave(&path).unwrap();
-    assert_eq!(crash_copies(dir.path()).len(), 2);
+
+    // A save deletes this process's autosave and leaves the other Qiyas's.
+    s.save().unwrap();
+    assert!(!beside.exists());
+    assert!(autosave_path(&path).exists());
 }
 
 #[test]

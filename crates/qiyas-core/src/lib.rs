@@ -48,9 +48,9 @@ mod xref;
 
 pub use self::image::{draw_picture, image_size, ImageDisplay, IMAGE_EXTENSIONS, IMAGE_LAYER};
 pub use autosave::{
-    autosave_all, autosave_path, discard_autosave, discard_recoverable, lock_path, read_lock,
-    recoverable, release_lock, take_lock, AutosaveRun, DrawingLock, Dropped, LockStatus,
-    ReadReport, Recoverable, AUTOSAVE_EVERY, CRASH_COPIES,
+    autosave_all, autosave_copy_of, autosave_path, discard_autosave, discard_recoverable,
+    lock_path, read_lock, recoverable, release_lock, take_lock, AutosaveRun, DrawingLock, Dropped,
+    LockStatus, OlderCopy, ReadReport, Recoverable, AUTOSAVE_EVERY, CRASH_COPIES,
 };
 pub use blocks::{drawing_blocks, AttDefInfo, BlockInfo};
 pub use boq::{Boq, BoqItem};
