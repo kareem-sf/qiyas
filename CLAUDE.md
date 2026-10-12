@@ -217,7 +217,7 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
   polylines are reshaped; anything drawn can cut or bound. Trim and break keep the handle on the
   longest piece; join keeps the first's. Offset keeps exact arcs (kernel `offset_polyline`, sharp
   straight corners). Fillet and chamfer: two lines or two straight sides of one polyline.
-  `Outcome::Edited { added, removed, left_alone }`. Modify's second row; command line TR, EX
+  `Outcome::Edited { added, removed, left_alone }`. Home tab, Modify group, after the modify tools; command line TR, EX
   (Shift+click swaps), BR, J, LEN, REVERSE, O, F, CHA, BLEND, PE, OVERKILL, FLATTEN.
 
 ## Text
@@ -240,7 +240,7 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
   lines, or a single-line attribute it would break, is left as it is and counted in `skipped`. `FindText` lists the
   matches (`Outcome::Found`), no step. `DrawingInfo` has `text_styles` and `text_style`;
   `EntityInfo::plain_text` is an MText's text without codes.
-- Home tab, Text group; command line TEXT (DT): click, type in place, Enter (a click elsewhere
+- Home tab, Annotation group; command line TEXT (DT): click, type in place, Enter (a click elsewhere
   places it too; Esc drops it), H height, R rotation; MTEXT (MT, T): two corners, then the MText
   dialog; TEXTEDIT (ED, DDEDIT) or a double click on a text with Select: the edit dialog (an
   unchanged value sends nothing); FIND: the find and replace dialog (Find next zooms to each
@@ -576,7 +576,7 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
 - Panic hook (`files::install_panic_hook`): after the usual report, autosaves every drawing with
   unsaved changes on its own thread, at most 5 s, best effort: `try_lock`, so the drawing whose
   command panicked (its lock held) is skipped; a panic during it starts no other.
-- RECOVER (Home tab, Recover…): opens a damaged drawing through the failsafe reader (as every open
+- RECOVER (Manage tab, Drawing group, Recover…): opens a damaged drawing through the failsafe reader (as every open
   does) and `RecoverReportDialog` lists what it read and dropped by kind (`ReadReport`: DWG object
   types by number, else the reader's code). A truncated DWG loses its file header and does not
   open at all. AUDIT: see Audit, purge and options.
@@ -618,13 +618,21 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
   two commands on one key refused, `settings::shortcut_key` spells a key one way), `ribbon`
   (null = `ribbon::default_ribbon`), `aliases` (no two that differ only in case). The ribbon
   (`qiyas-desktop/src/ribbon.rs`, IPC `get_default_ribbon`) is data: tabs, groups, buttons
-  `{ kind: tool | action | toggle, command, label }` as `Ribbon.tsx` draws them (Home, Measure,
-  Annotate, Insert, View, Manage, Output); `src/shell/ribbon.default.json` is that default, and
-  both `tests/options.rs` and `ribbonLayout.test.ts` compare theirs with it. A saved layout may
-  only use the default's buttons, and one that no longer checks out falls back to the default on
-  load. The dialogs (Options, Customize, Aliases) are the window's.
+  `{ kind: tool | action | toggle, command, label }` as `Ribbon.tsx` draws them (Home: Draw,
+  Modify, Annotation, Clipboard, Layers; Measure: Measure, Inquiry, Take-off (export, import BOQ,
+  compare, export conflicts); Annotate, Parametric, Insert, View, Manage (Drawing: Audit, Purge,
+  Recover), Output); `src/shell/ribbon.default.json` is that default, and both
+  `tests/options.rs` and `ribbonLayout.test.ts` compare theirs with it. A saved layout may only
+  use the default's buttons (moved between groups and tabs as it likes), and one that no longer
+  checks out falls back to the default on load. As AutoCAD's: each group is a box of its buttons
+  in up to three rows filled column by column, its name small and muted under them, a thin rule
+  between groups; the panel never wraps (fixed height, scrolls sideways in a narrow window; a
+  drop-down in it, Views, is placed on the window so the scroll never clips it). Open (with its
+  recents arrow), Save, Save as, Undo and Redo are not in the data: they are the quick-access bar
+  on the tabs' row after the app name (`QUICK_ACCESS` in `ribbonLayout.ts`; logical sides, so
+  Arabic mirrors it), always shown. The dialogs (Options, Customize, Aliases) are the window's.
 - The window's half (`src/app/useOptions.ts`, read at start and after a dialog saves; Manage tab,
-  Drawing group Audit… and Purge…, Setup group Options…, Customize…, Aliases…): PURGE (`PU`)
+  Drawing group Audit…, Purge… and Recover…, Setup group Options…, Customize…, Aliases…): PURGE (`PU`)
   opens `PurgeDialog` on a dry run of every kind, listed by kind with a tick each (kinds with
   nothing are disabled) and `limited_reason` when set; Purge runs the ticked kinds through
   `runDrawingCommand` (redraw, info, autosave) and lists what went. AUDIT opens `AuditDialog`
@@ -772,7 +780,8 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
   facts in an Info card at the top of the right panel), Divide (click, then the number of parts),
   Measure along (click, then the step in metres), ID point (snapped coordinates in metres), and
   Extract data (filter by layers, type, block, text; pick fields and attribute tags; copy as TSV
-  or export one "Data" sheet to Excel).
+  or export one "Data" sheet to Excel). Its Take-off group exports the take-off, imports a BOQ,
+  compares and exports the conflicts.
 - Divide and measure along place point entities on layer `QIYAS-POINT` by true arc length and
   count them in the take-off; points and count are one undo step (a drawing change: Save asks).
 - The same five are AI tools: `measure_geometry`, `divide_along`, `measure_along` (step in
@@ -813,12 +822,17 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
 - Agent log: `logs/agent.log` beside `settings.json` (mode 0600, moved to `agent.log.1` past
   5 MB). Each conversation's provider, model and address, then every user message, request,
   answer (text, calls, tokens, time), tool run (input, result) and error with the service's
-  whole answer; texts clipped at 4,000 characters, never the key. The panel's Log button shows
+  whole answer, and for a 4xx the request sent (`provider::request_for_log`: compact JSON,
+  pictures as `<image>`, tools as their names, the system prompt as its length); texts clipped
+  at 4,000 characters, never the key. The panel's Log button shows
   its newest 256 KB (`ai_log`); an error offers "Show log".
 - OpenAI-compatible streams: Gemini (also behind Runware) sends parallel calls whole, all at
   index 0 or with none, so a new id, or a second name, starts a new call (`openai.rs`, `slot`).
   Input that was not valid JSON goes back as `{}`, as for Claude, so one bad call can't make
-  every later request fail.
+  every later request fail. An assistant message with calls and no text sends `"content": ""`
+  (Gemini's endpoint, Runware in front of it, refuses `null`); a tool message holds only `role`,
+  `tool_call_id` and string `content`. A call's streamed `extra_content` (Gemini 3's thought
+  signature) is kept by call id in the provider and sent back on that call.
 
 ## MCP
 

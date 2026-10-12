@@ -5,68 +5,6 @@
       "label": "home",
       "groups": [
         {
-          "id": "file",
-          "label": "ribbon.file",
-          "buttons": [
-            {
-              "kind": "action",
-              "command": "open",
-              "label": "open"
-            },
-            {
-              "kind": "action",
-              "command": "save",
-              "label": "save"
-            },
-            {
-              "kind": "action",
-              "command": "saveAs",
-              "label": "saveAs"
-            },
-            {
-              "kind": "action",
-              "command": "recover",
-              "label": "recover.button"
-            },
-            {
-              "kind": "action",
-              "command": "exportTakeoff",
-              "label": "exportTakeoff"
-            },
-            {
-              "kind": "action",
-              "command": "importBoq",
-              "label": "importBoq"
-            },
-            {
-              "kind": "action",
-              "command": "compare",
-              "label": "compare"
-            },
-            {
-              "kind": "action",
-              "command": "exportConflicts",
-              "label": "exportConflicts"
-            }
-          ]
-        },
-        {
-          "id": "history",
-          "label": "ribbon.history",
-          "buttons": [
-            {
-              "kind": "action",
-              "command": "undo",
-              "label": "undo"
-            },
-            {
-              "kind": "action",
-              "command": "redo",
-              "label": "redo"
-            }
-          ]
-        },
-        {
           "id": "draw",
           "label": "draw.group",
           "buttons": [
@@ -249,6 +187,32 @@
           ]
         },
         {
+          "id": "text",
+          "label": "ribbon.annotation",
+          "buttons": [
+            {
+              "kind": "tool",
+              "command": "text",
+              "label": "text.text"
+            },
+            {
+              "kind": "tool",
+              "command": "mtext",
+              "label": "text.mtext"
+            },
+            {
+              "kind": "tool",
+              "command": "textEdit",
+              "label": "text.textEdit"
+            },
+            {
+              "kind": "action",
+              "command": "find",
+              "label": "text.find"
+            }
+          ]
+        },
+        {
           "id": "clipboard",
           "label": "clip.group",
           "buttons": [
@@ -271,32 +235,6 @@
               "kind": "tool",
               "command": "pasteblock",
               "label": "clip.pasteblock"
-            }
-          ]
-        },
-        {
-          "id": "text",
-          "label": "text.group",
-          "buttons": [
-            {
-              "kind": "tool",
-              "command": "text",
-              "label": "text.text"
-            },
-            {
-              "kind": "tool",
-              "command": "mtext",
-              "label": "text.mtext"
-            },
-            {
-              "kind": "tool",
-              "command": "textEdit",
-              "label": "text.textEdit"
-            },
-            {
-              "kind": "action",
-              "command": "find",
-              "label": "text.find"
             }
           ]
         },
@@ -396,6 +334,32 @@
               "kind": "action",
               "command": "extract",
               "label": "extract"
+            }
+          ]
+        },
+        {
+          "id": "takeoff",
+          "label": "ribbon.takeoff",
+          "buttons": [
+            {
+              "kind": "action",
+              "command": "exportTakeoff",
+              "label": "exportTakeoff"
+            },
+            {
+              "kind": "action",
+              "command": "importBoq",
+              "label": "importBoq"
+            },
+            {
+              "kind": "action",
+              "command": "compare",
+              "label": "compare"
+            },
+            {
+              "kind": "action",
+              "command": "exportConflicts",
+              "label": "exportConflicts"
             }
           ]
         }
@@ -843,6 +807,11 @@
               "kind": "action",
               "command": "purge",
               "label": "purge.button"
+            },
+            {
+              "kind": "action",
+              "command": "recover",
+              "label": "recover.button"
             }
           ]
         },

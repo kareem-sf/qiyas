@@ -6,7 +6,7 @@ import { getSettings, setSettings, type Settings } from "../api";
 import { useT } from "../i18n";
 import { normalizeDigits } from "../tools/commandParser";
 import { BUILT_IN_SHORTCUTS, keyOf, normalizeKey, shortcutClash } from "../tools/shortcuts";
-import { DEFAULT_RIBBON } from "./ribbonLayout";
+import { DEFAULT_RIBBON, QUICK_ACCESS } from "./ribbonLayout";
 
 /** The core's ranges (`settings::validate_options`). */
 const PRECISIONS = [2, 3, 4];
@@ -27,10 +27,10 @@ const PICKER_START: Record<ColourKey, string> = {
 };
 
 /** The commands a key can run, each with its label's i18n key: the built-in keys' (labelled as
- *  their ribbon button when they have one) and every tool on the ribbon, which is what the
- *  keyboard handler knows how to run. */
+ *  their ribbon or quick-access button when they have one) and every tool on the ribbon, which is
+ *  what the keyboard handler knows how to run. */
 export const SHORTCUT_COMMANDS: [string, string][] = (() => {
-  const buttons = DEFAULT_RIBBON.tabs.flatMap((x) => x.groups.flatMap((g) => g.buttons));
+  const buttons = [...QUICK_ACCESS, ...DEFAULT_RIBBON.tabs.flatMap((x) => x.groups.flatMap((g) => g.buttons))];
   const ribbonLabel = (command: string) => buttons.find((b) => b.command === command)?.label;
   const labels = new Map<string, string>();
   for (const [command] of BUILT_IN_SHORTCUTS) labels.set(command, ribbonLabel(command) ?? `shortcut.${command}`);

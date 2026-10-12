@@ -207,13 +207,78 @@ fn the_default_ribbon_is_valid_and_holds_every_tab() {
             "{command}"
         );
     }
-    // The JSON the window reads.
+    // The JSON the window reads: Home starts with Draw, Line.
     let json = serde_json::to_value(&layout).unwrap();
     assert_eq!(
         json["tabs"][0]["groups"][0]["buttons"][0]["command"],
-        "open"
+        "line"
     );
-    assert_eq!(json["tabs"][0]["groups"][0]["buttons"][0]["kind"], "action");
+    assert_eq!(json["tabs"][0]["groups"][0]["buttons"][0]["kind"], "tool");
+    let home: Vec<&str> = layout.tabs[0]
+        .groups
+        .iter()
+        .map(|g| g.id.as_str())
+        .collect();
+    assert_eq!(home, ["draw", "modify", "text", "clipboard", "layers"]);
+    let measure: Vec<&str> = layout.tabs[1]
+        .groups
+        .iter()
+        .map(|g| g.id.as_str())
+        .collect();
+    assert_eq!(measure, ["measure", "inquiry", "takeoff"]);
+    // Open, Save, Save as, Undo and Redo are the window's quick-access bar, in no layout.
+    for command in ["open", "save", "saveAs", "undo", "redo"] {
+        assert!(buttons.iter().all(|b| b.command != command), "{command}");
+    }
+}
+
+#[test]
+fn a_saved_ribbon_may_move_buttons_between_groups_and_tabs_but_not_add_the_quick_access_ones() {
+    let mut layout = ribbon::default_ribbon();
+    // Compare from Measure's Take-off to Home's Draw, Recover from Manage to a new Home group,
+    // and Draw's Line to the end of Modify.
+    let takeoff = &mut layout.tabs[1].groups[2];
+    let at = takeoff
+        .buttons
+        .iter()
+        .position(|b| b.command == "compare")
+        .unwrap();
+    let compare = takeoff.buttons.remove(at);
+    let manage = layout.tabs.iter_mut().find(|t| t.id == "manage").unwrap();
+    let drawing = manage
+        .groups
+        .iter_mut()
+        .find(|g| g.id == "drawing")
+        .unwrap();
+    let recover = drawing.buttons.pop().unwrap();
+    assert_eq!(recover.command, "recover");
+    let home = &mut layout.tabs[0];
+    let line = home.groups[0].buttons.remove(0);
+    home.groups[0].buttons.push(compare);
+    home.groups[1].buttons.push(line);
+    home.groups.push(ribbon::RibbonGroup {
+        id: "mine".into(),
+        label: "My files".into(),
+        buttons: vec![recover],
+    });
+    assert_eq!(ribbon::validate(&layout), Ok(()));
+    let dir = tempfile::tempdir().unwrap();
+    let s = Settings {
+        ribbon: Some(layout.clone()),
+        ..Settings::default()
+    };
+    settings::save(dir.path(), &s).unwrap();
+    assert_eq!(settings::load(dir.path()).ribbon, Some(layout.clone()));
+
+    // A layout from before the quick-access bar, with Open in Home, is not one this version
+    // draws: it gives way to the default on load.
+    let mut old = layout;
+    old.tabs[0].groups[0].buttons.push(ribbon::RibbonButton {
+        kind: ButtonKind::Action,
+        command: "open".into(),
+        label: "open".into(),
+    });
+    assert!(ribbon::validate(&old).unwrap_err().contains("open"));
 }
 
 #[test]

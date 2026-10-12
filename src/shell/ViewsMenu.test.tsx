@@ -63,3 +63,25 @@ test("× deletes a view and the list is read again", async () => {
   expect(onDelete).toHaveBeenCalledWith("Hall");
   expect(await screen.findByText("No named views")).toBeTruthy();
 });
+
+test("the menu is placed on the window under the button, so the ribbon's scrolling panel never clips it", async () => {
+  const rect = { top: 40, bottom: 64, left: 300, right: 380, width: 80, height: 24, x: 300, y: 40 };
+  const spy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ ...rect, toJSON() {} });
+  try {
+    for (const dir of ["ltr", "rtl"]) {
+      document.documentElement.dir = dir;
+      render(<ViewsMenu load={async () => []} onGo={() => {}} onSave={async () => {}} onDelete={async () => {}} />);
+      fireEvent.click(screen.getByRole("button", { name: /Views/ }));
+      const menu = await screen.findByRole("menu");
+      expect(menu.style.position).toBe("fixed");
+      expect(menu.style.top).toBe("64px");
+      // Its start edge under the button's: the left in English, the right in Arabic.
+      if (dir === "ltr") expect(menu.style.left).toBe("300px");
+      else expect(menu.style.right).toBe(`${window.innerWidth - 380}px`);
+      cleanup();
+    }
+  } finally {
+    spy.mockRestore();
+    document.documentElement.dir = "ltr";
+  }
+});

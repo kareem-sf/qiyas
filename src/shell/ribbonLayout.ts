@@ -13,22 +13,17 @@ const tools = (prefix: string, names: string[]) => names.map((n) => tool(n, `${p
 const group = (id: string, label: string, buttons: RibbonButton[]): RibbonGroup => ({ id, label, buttons });
 const tab = (id: string, groups: RibbonGroup[]): RibbonTab => ({ id, label: id, groups });
 
+/** The quick-access bar on the ribbon's tabs row (`Ribbon.tsx`): Open, Save, Save as, Undo and
+ *  Redo, always shown, never part of a layout. */
+export const QUICK_ACCESS: RibbonButton[] = [action("open"), action("save"), action("saveAs"), action("undo"), action("redo")];
+
 /** The ribbon Qiyas ships: the same as the core's `default_ribbon` (`qiyas-desktop/src/ribbon.rs`);
- *  `ribbon.default.json` pins both (`ribbonLayout.test.ts` and the core's `tests/options.rs`). */
+ *  `ribbon.default.json` pins both (`ribbonLayout.test.ts` and the core's `tests/options.rs`).
+ *  Open, Save, Save as, Undo and Redo are not in it: `Ribbon.tsx` keeps them in the quick-access
+ *  bar beside the tabs. */
 export const DEFAULT_RIBBON: RibbonLayout = {
   tabs: [
     tab("home", [
-      group("file", "ribbon.file", [
-        action("open"),
-        action("save"),
-        action("saveAs"),
-        action("recover", "recover.button"),
-        action("exportTakeoff"),
-        action("importBoq"),
-        action("compare"),
-        action("exportConflicts"),
-      ]),
-      group("history", "ribbon.history", [action("undo"), action("redo")]),
       group(
         "draw",
         "draw.group",
@@ -52,8 +47,8 @@ export const DEFAULT_RIBBON: RibbonLayout = {
           "flatten",
         ]),
       ]),
+      group("text", "ribbon.annotation", [...tools("text", ["text", "mtext", "textEdit"]), action("find", "text.find")]),
       group("clipboard", "clip.group", tools("clip", ["copyclip", "copybase", "pasteclip", "pasteblock"])),
-      group("text", "text.group", [...tools("text", ["text", "mtext", "textEdit"]), action("find", "text.find")]),
       group("layers", "layers", [
         action("layerStates", "layer.statesButton"),
         action("translateLayers", "layer.translateButton"),
@@ -67,6 +62,7 @@ export const DEFAULT_RIBBON: RibbonLayout = {
         ...["geometry", "divide", "measureAlong", "idPoint"].map((n) => tool(n)),
         action("extract"),
       ]),
+      group("takeoff", "ribbon.takeoff", [action("exportTakeoff"), action("importBoq"), action("compare"), action("exportConflicts")]),
     ]),
     tab("annotate", [
       group("dims", "dim.group", [
@@ -158,7 +154,11 @@ export const DEFAULT_RIBBON: RibbonLayout = {
     ]),
     tab("manage", [
       group("scripts", "ribbon.scripts", [action("runScript", "script.run")]),
-      group("drawing", "ribbon.drawing", [action("audit", "audit.button"), action("purge", "purge.button")]),
+      group("drawing", "ribbon.drawing", [
+        action("audit", "audit.button"),
+        action("purge", "purge.button"),
+        action("recover", "recover.button"),
+      ]),
       group("setup", "ribbon.setup", [
         action("options", "options.button"),
         action("customize", "cui.button"),

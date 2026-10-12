@@ -95,34 +95,18 @@ fn tab(id: &str, groups: Vec<RibbonGroup>) -> RibbonTab {
     }
 }
 
-/// The ribbon Qiyas ships: Home, Measure, Annotate, Parametric (geometric and dimensional
-/// constraints, Parameters manager, Delete constraints, the constraint bar), Insert, View, Manage (Run script; Audit and
-/// Purge; Options, Customize and Aliases) and Output (Plot, Quick print, Print all layouts, Plot
-/// styles), as `Ribbon.tsx` draws them. Labels are i18n keys.
+/// The ribbon Qiyas ships: Home (Draw, Modify, Annotation, Clipboard, Layers), Measure (Measure,
+/// Inquiry, Take-off: export, import BOQ, compare, export conflicts), Annotate, Parametric
+/// (geometric and dimensional constraints, Parameters manager, Delete constraints, the constraint
+/// bar), Insert, View, Manage (Run script; Audit, Purge and Recover; Options, Customize and
+/// Aliases) and Output (Plot, Quick print, Print all layouts, Plot styles), as `Ribbon.tsx` draws
+/// them. Labels are i18n keys. Open, Save, Save as, Undo and Redo are not here: they are the
+/// window's quick-access bar beside the tabs, always shown.
 pub fn default_ribbon() -> RibbonLayout {
     use ButtonKind::Toggle;
     let home = tab(
         "home",
         vec![
-            group(
-                "file",
-                "ribbon.file",
-                vec![
-                    action("open", "open"),
-                    action("save", "save"),
-                    action("saveAs", "saveAs"),
-                    action("recover", "recover.button"),
-                    action("exportTakeoff", "exportTakeoff"),
-                    action("importBoq", "importBoq"),
-                    action("compare", "compare"),
-                    action("exportConflicts", "exportConflicts"),
-                ],
-            ),
-            group(
-                "history",
-                "ribbon.history",
-                vec![action("undo", "undo"), action("redo", "redo")],
-            ),
             group(
                 "draw",
                 "draw.group",
@@ -160,16 +144,16 @@ pub fn default_ribbon() -> RibbonLayout {
                 ));
                 buttons
             }),
+            group("text", "ribbon.annotation", {
+                let mut buttons = tools("text", &["text", "mtext", "textEdit"]);
+                buttons.push(action("find", "text.find"));
+                buttons
+            }),
             group(
                 "clipboard",
                 "clip.group",
                 tools("clip", &["copyclip", "copybase", "pasteclip", "pasteblock"]),
             ),
-            group("text", "text.group", {
-                let mut buttons = tools("text", &["text", "mtext", "textEdit"]);
-                buttons.push(action("find", "text.find"));
-                buttons
-            }),
             group("layers", "layers", {
                 let mut buttons = vec![
                     action("layerStates", "layer.statesButton"),
@@ -201,6 +185,16 @@ pub fn default_ribbon() -> RibbonLayout {
                 buttons.push(action("extract", "extract"));
                 buttons
             }),
+            group(
+                "takeoff",
+                "ribbon.takeoff",
+                vec![
+                    action("exportTakeoff", "exportTakeoff"),
+                    action("importBoq", "importBoq"),
+                    action("compare", "compare"),
+                    action("exportConflicts", "exportConflicts"),
+                ],
+            ),
         ],
     );
     let annotate = tab(
@@ -313,6 +307,7 @@ pub fn default_ribbon() -> RibbonLayout {
                 vec![
                     action("audit", "audit.button"),
                     action("purge", "purge.button"),
+                    action("recover", "recover.button"),
                 ],
             ),
             group(

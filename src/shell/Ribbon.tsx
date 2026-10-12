@@ -3,7 +3,7 @@ import type { NamedView, Recent, RibbonButton, RibbonLayout } from "../api";
 import { useT } from "../i18n";
 import type { Tool } from "../viewport/Viewport";
 import { RecentsMenu } from "./RecentsMenu";
-import { DEFAULT_RIBBON } from "./ribbonLayout";
+import { DEFAULT_RIBBON, QUICK_ACCESS } from "./ribbonLayout";
 import { useRoving } from "./useRoving";
 import { ViewsMenu } from "./ViewsMenu";
 
@@ -234,36 +234,39 @@ export function Ribbon(props: Props) {
     return action(key, label, handlers[b.command]);
   }
 
+  // AutoCAD's ribbon: each group a box of up to three rows of buttons, filled column by column,
+  // with its name under them; the panel scrolls sideways rather than wrap (`theme.css`).
   return (
     <div className="ribbon">
-      <div className="ribbon-tabs" role="tablist" {...roving.props}>
+      <div className="ribbon-tabs">
         <span className="app-name heading">{t("appName")}</span>
-        {tabs.map((x, i) => (
-          <button
-            key={x.id}
-            type="button"
-            role="tab"
-            aria-selected={x === tab}
-            tabIndex={roving.tabIndex(i)}
-            onClick={() => setTab(x.id)}
-          >
-            {t(x.label)}
-          </button>
-        ))}
+        <div className="quick-access" role="toolbar" aria-label={t("ribbon.quickAccess")}>
+          {QUICK_ACCESS.map((b) => draw(b, b.command))}
+        </div>
+        <div className="ribbon-tablist" role="tablist" {...roving.props}>
+          {tabs.map((x, i) => (
+            <button
+              key={x.id}
+              type="button"
+              role="tab"
+              aria-selected={x === tab}
+              tabIndex={roving.tabIndex(i)}
+              onClick={() => setTab(x.id)}
+            >
+              {t(x.label)}
+            </button>
+          ))}
+        </div>
       </div>
       <div className="ribbon-panel" role="tabpanel">
-        {tab?.groups.map((g, gi) => [
-          gi > 0 && <span key={`sep-${g.id}`} className="sep" />,
-          <span key={g.id} className="ribbon-group" role="group" aria-label={t(g.label)}>
-            {g.buttons.map((b, i) => [
-              // Modify's second row: trim, extend, fillet…
-              b.label.startsWith("edit.") && g.buttons[i - 1]?.label.startsWith("modify.") && (
-                <span key={`break-${i}`} className="ribbon-break" />
-              ),
-              draw(b, `${i}`),
-            ])}
-          </span>,
-        ])}
+        {tab?.groups.map((g) => (
+          <div key={g.id} className="ribbon-group" role="group" aria-label={t(g.label)}>
+            <div className="ribbon-group-buttons">{g.buttons.map((b, i) => draw(b, `${i}`))}</div>
+            <div className="ribbon-group-label" aria-hidden="true">
+              {t(g.label)}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );

@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type KeyboardEvent } from "react";
+import { useState, type CSSProperties, type FormEvent, type KeyboardEvent } from "react";
 import type { NamedView } from "../api";
 import { useT } from "../i18n";
 import { useMenu } from "./useMenu";
@@ -22,6 +22,9 @@ export function ViewsMenu({ load, onGo, onSave, onDelete, onKey }: Props) {
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // The ribbon's panel scrolls sideways, which would clip a menu inside it: the menu is placed
+  // on the window under the button instead (its start edge under the button's, RTL too).
+  const [at, setAt] = useState<CSSProperties>();
 
   async function toggle() {
     if (menu.open) {
@@ -31,6 +34,11 @@ export function ViewsMenu({ load, onGo, onSave, onDelete, onKey }: Props) {
     setNaming(false);
     setError(null);
     setList(await load().catch(() => []));
+    const r = menu.ref.current?.getBoundingClientRect();
+    if (r) {
+      const rtl = document.documentElement.dir === "rtl";
+      setAt({ position: "fixed", top: r.bottom, ...(rtl ? { right: window.innerWidth - r.right } : { left: r.left }) });
+    }
     menu.setOpen(true);
   }
 
@@ -68,7 +76,7 @@ export function ViewsMenu({ load, onGo, onSave, onDelete, onKey }: Props) {
         {t("views")} ▾
       </button>
       {menu.open && (
-        <div className="menu" role="menu" aria-label={t("views")}>
+        <div className="menu" role="menu" aria-label={t("views")} style={at}>
           {list.length === 0 && <div className="menu-note">{t("views.none")}</div>}
           {list.map((v) => (
             <div key={v.name} className="menu-row">

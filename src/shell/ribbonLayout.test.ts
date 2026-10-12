@@ -3,7 +3,7 @@ import type { RibbonLayout } from "../api";
 import fixture from "./ribbon.default.json";
 import { buttonKeys, DEFAULT_RIBBON, editTree, layoutOf } from "./ribbonLayout";
 
-/** The core's default, cut down: Home (file with Audit, history) and Manage (Run script). */
+/** The core's default, cut down: Home (Draw with Audit, Annotation) and Manage (Run script). */
 const CORE: RibbonLayout = {
   tabs: [
     {
@@ -11,14 +11,14 @@ const CORE: RibbonLayout = {
       label: "home",
       groups: [
         {
-          id: "file",
-          label: "ribbon.file",
+          id: "draw",
+          label: "draw.group",
           buttons: [
-            { kind: "action", command: "open", label: "open" },
+            { kind: "tool", command: "line", label: "draw.line" },
             { kind: "action", command: "audit", label: "audit.button" },
           ],
         },
-        { id: "history", label: "ribbon.history", buttons: [{ kind: "action", command: "undo", label: "undo" }] },
+        { id: "text", label: "ribbon.annotation", buttons: [{ kind: "action", command: "find", label: "text.find" }] },
       ],
     },
     {
@@ -29,7 +29,7 @@ const CORE: RibbonLayout = {
   ],
 };
 
-test("the window's default has the eight tabs, and Manage has Audit, Purge, Options, Customize and Aliases", () => {
+test("the window's default has the eight tabs, Home its five groups, and Manage has Audit, Purge, Recover, Options, Customize and Aliases", () => {
   expect(DEFAULT_RIBBON.tabs.map((t) => t.id)).toEqual([
     "home",
     "measure",
@@ -40,6 +40,18 @@ test("the window's default has the eight tabs, and Manage has Audit, Purge, Opti
     "manage",
     "output",
   ]);
+  const home = DEFAULT_RIBBON.tabs[0];
+  expect(home.groups.map((g) => g.id)).toEqual(["draw", "modify", "text", "clipboard", "layers"]);
+  // Open, Save, Save as, Undo and Redo are the quick-access bar's, never a layout's.
+  const commands = DEFAULT_RIBBON.tabs.flatMap((t) => t.groups.flatMap((g) => g.buttons.map((b) => b.command)));
+  for (const c of ["open", "save", "saveAs", "undo", "redo"]) expect(commands).not.toContain(c);
+  const measure = DEFAULT_RIBBON.tabs.find((t) => t.id === "measure")!;
+  expect(measure.groups.find((g) => g.id === "takeoff")!.buttons.map((b) => b.command)).toEqual([
+    "exportTakeoff",
+    "importBoq",
+    "compare",
+    "exportConflicts",
+  ]);
   const parametric = DEFAULT_RIBBON.tabs.find((t) => t.id === "parametric")!;
   expect(parametric.groups.map((g) => g.buttons.length)).toEqual([13, 5, 3]);
   const manage = DEFAULT_RIBBON.tabs.find((t) => t.id === "manage")!;
@@ -47,6 +59,7 @@ test("the window's default has the eight tabs, and Manage has Audit, Purge, Opti
     "runScript",
     "audit",
     "purge",
+    "recover",
     "options",
     "customize",
     "aliases",
@@ -64,7 +77,7 @@ test("a saved layout shows in its order, and what the core's default has that it
       {
         id: "home",
         label: "home",
-        groups: [{ id: "history", label: "ribbon.history", buttons: [{ kind: "action", command: "undo", label: "undo" }] }],
+        groups: [{ id: "text", label: "ribbon.annotation", buttons: [{ kind: "action", command: "find", label: "text.find" }] }],
       },
     ],
   };
@@ -74,8 +87,8 @@ test("a saved layout shows in its order, and what the core's default has that it
     ["manage", true],
   ]);
   expect(tree[0].groups.map((g) => [g.id, g.hidden])).toEqual([
-    ["history", false],
-    ["file", true],
+    ["text", false],
+    ["draw", true],
   ]);
   // Nothing hidden changes: the same layout back.
   expect(layoutOf(tree)).toEqual(saved);
@@ -87,9 +100,10 @@ test("with no saved layout the tree is the window's default, less the buttons th
   // Options, Customize and Aliases are the window's own: the core can't keep them in a layout
   // (nor Purge, which this cut-down core lacks).
   expect(keys("manage")).toEqual(["runScript", "audit"]);
-  // Audit, beside Open in the core's data, is hidden there (it shows on Manage in the window's).
-  const file = tree[0].groups.find((g) => g.id === "file")!;
-  expect(file.buttons.find((b) => b.command === "audit")!.hidden).toBe(true);
+  // Audit, beside Line in the core's data, is hidden there (it shows on Manage in the window's).
+  const draw = tree[0].groups.find((g) => g.id === "draw")!;
+  expect(draw.buttons.find((b) => b.command === "audit")!.hidden).toBe(true);
+  expect(draw.buttons.find((b) => b.command === "line")!.hidden).toBe(false);
   // Every button the layout saves is one the core knows.
   const known = buttonKeys(CORE);
   for (const k of buttonKeys(layoutOf(tree)!)) expect(known.has(k)).toBe(true);
@@ -105,7 +119,7 @@ test("hidden tabs, groups and buttons are left out; empty groups and tabs go; no
       {
         id: "home",
         label: "home",
-        groups: [{ id: "file", label: "ribbon.file", buttons: [{ kind: "action", command: "open", label: "open" }] }],
+        groups: [{ id: "draw", label: "draw.group", buttons: [{ kind: "tool", command: "line", label: "draw.line" }] }],
       },
     ],
   });

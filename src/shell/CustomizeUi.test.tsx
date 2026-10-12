@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import type { RibbonLayout, Settings } from "../api";
 import { CustomizeUi } from "./CustomizeUi";
+import fixture from "./ribbon.default.json";
 
 /** The core's default, cut down: Home (File: Open, Save; History: Undo) and Manage (Run script). */
 const CORE: RibbonLayout = {
@@ -123,4 +124,16 @@ test("the window's own buttons the core can't keep in a layout are named", async
   await setup(null);
   // Options, Customize and Aliases are on the window's default but not the core's.
   expect(screen.getByText(/Options….*Customize….*Aliases…/)).toBeTruthy();
+});
+
+test("with the shipped default it shows the new groups: Home's Annotation, Measure's Take-off, no File", async () => {
+  api.getSettings.mockResolvedValue({ ...settings, ribbon: null });
+  api.getDefaultRibbon.mockResolvedValue(fixture);
+  render(<CustomizeUi onSaved={() => {}} onClose={() => {}} />);
+  await screen.findByRole("checkbox", { name: "Show Home" });
+  for (const name of ["Draw", "Modify", "Annotation", "Clipboard", "Layers", "Take-off"]) {
+    expect(screen.getByRole("checkbox", { name: `Show ${name}` })).toBeTruthy();
+  }
+  expect(screen.queryByRole("checkbox", { name: "Show File" })).toBeNull();
+  expect(screen.queryByRole("checkbox", { name: "Show History" })).toBeNull();
 });

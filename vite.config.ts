@@ -10,5 +10,7 @@ export default defineConfig({
   },
   test: {
     passWithNoTests: true,
+    // `Ribbon.test.tsx` reads the ribbon's rules from `theme.css?raw` (other CSS stays empty).
+    css: { include: [/theme\.css/] },
   },
 });

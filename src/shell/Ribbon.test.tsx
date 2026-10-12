@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
+import { LanguageProvider } from "../i18n";
 import { Ribbon } from "./Ribbon";
+import css from "./theme.css?raw";
 
 afterEach(cleanup);
 
@@ -132,11 +134,11 @@ test("the Home tab has the Modify group", () => {
   }
 });
 
-test("the Home tab has the Text group with Find and replace", () => {
+test("the Home tab has the Annotation group with Find and replace", () => {
   const onTool = vi.fn();
   const onFind = vi.fn();
   render(<Ribbon {...props} onTool={onTool} onFind={onFind} />);
-  const group = screen.getByRole("group", { name: "Text" });
+  const group = screen.getByRole("group", { name: "Annotation" });
   for (const [name, tool] of [
     ["Text", "text"],
     ["MText", "mtext"],
@@ -274,7 +276,7 @@ test("Home has a Layers group: layer states, the translator, groups, match prope
   expect(onGroupSelect).toHaveBeenCalledWith(false);
 });
 
-test("the Home tab has the Clipboard group and Recover", () => {
+test("the Home tab has the Clipboard group, and Recover is on Manage beside Audit and Purge", () => {
   const onTool = vi.fn();
   const onRecover = vi.fn();
   render(<Ribbon {...props} onTool={onTool} onRecover={onRecover} />);
@@ -288,7 +290,11 @@ test("the Home tab has the Clipboard group and Recover", () => {
     fireEvent.click(within(group).getByRole("button", { name }));
     expect(onTool).toHaveBeenLastCalledWith(tool);
   }
-  fireEvent.click(screen.getByRole("button", { name: "Recover…" }));
+  expect(screen.queryByRole("button", { name: "Recover…" })).toBeNull();
+  fireEvent.click(screen.getByRole("tab", { name: "Manage" }));
+  const drawing = screen.getByRole("group", { name: "Drawing" });
+  expect(within(drawing).getAllByRole("button").map((b) => b.textContent)).toEqual(["Audit…", "Purge…", "Recover…"]);
+  fireEvent.click(within(drawing).getByRole("button", { name: "Recover…" }));
   expect(onRecover).toHaveBeenCalled();
 });
 
@@ -343,12 +349,12 @@ test("the Manage tab has Audit, Purge, Options, Customize and Aliases", () => {
 
 test("a saved layout is drawn as it is: its tabs, groups and buttons in their order, the rest gone", () => {
   const onTool = vi.fn();
-  const onSave = vi.fn();
+  const onCompare = vi.fn();
   render(
     <Ribbon
       {...props}
       onTool={onTool}
-      onSave={onSave}
+      onCompare={onCompare}
       layout={{
         tabs: [
           {
@@ -368,7 +374,8 @@ test("a saved layout is drawn as it is: its tabs, groups and buttons in their or
                   { kind: "tool", command: "line", label: "draw.line" },
                 ],
               },
-              { id: "file", label: "ribbon.file", buttons: [{ kind: "action", command: "save", label: "save" }] },
+              // Moved from Measure to Home.
+              { id: "takeoff", label: "ribbon.takeoff", buttons: [{ kind: "action", command: "compare", label: "compare" }] },
             ],
           },
         ],
@@ -379,12 +386,146 @@ test("a saved layout is drawn as it is: its tabs, groups and buttons in their or
   // The first tab is on screen.
   expect(screen.getByRole("button", { name: "Zoom window" })).toBeTruthy();
   fireEvent.click(screen.getByRole("tab", { name: "Home" }));
-  expect(screen.getAllByRole("group").map((g) => g.getAttribute("aria-label"))).toEqual(["Draw", "File"]);
+  expect(screen.getAllByRole("group").map((g) => g.getAttribute("aria-label"))).toEqual(["Draw", "Take-off"]);
   expect(within(screen.getByRole("group", { name: "Draw" })).getAllByRole("button").map((b) => b.textContent)).toEqual([
     "Circle",
     "Line",
   ]);
   expect(screen.queryByRole("button", { name: "Polyline" })).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "Save" }));
-  expect(onSave).toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Compare" }));
+  expect(onCompare).toHaveBeenCalled();
+  // The quick-access bar is the window's, whatever the layout.
+  expect(within(screen.getByRole("toolbar", { name: "Quick access" })).getAllByRole("button").length).toBe(5);
+});
+
+test("the quick-access bar sits after the app name, before the tabs: Open (with recents), Save, Save as, Undo, Redo", () => {
+  const handlers = { onOpen: vi.fn(), onSave: vi.fn(), onSaveAs: vi.fn(), onUndo: vi.fn(), onRedo: vi.fn() };
+  render(
+    <Ribbon
+      {...props}
+      {...handlers}
+      loadRecents={async () => []}
+      onOpenRecent={() => {}}
+      onClearRecents={async () => {}}
+    />,
+  );
+  const bar = screen.getByRole("toolbar", { name: "Quick access" });
+  expect(within(bar).getAllByRole("button").map((b) => b.getAttribute("aria-label") ?? b.textContent)).toEqual([
+    "Open…",
+    "Recent drawings",
+    "Save",
+    "Save as",
+    "Undo",
+    "Redo",
+  ]);
+  for (const [name, handler] of [
+    ["Open…", handlers.onOpen],
+    ["Save", handlers.onSave],
+    ["Save as", handlers.onSaveAs],
+    ["Undo", handlers.onUndo],
+    ["Redo", handlers.onRedo],
+  ] as const) {
+    fireEvent.click(within(bar).getByRole("button", { name }));
+    expect(handler).toHaveBeenCalledTimes(1);
+  }
+  // On the tabs' row, after the app name and before the tablist; never in a tab's panel.
+  const row = bar.parentElement!;
+  expect(row.firstElementChild!.textContent).toBe("Qiyas");
+  expect(row.children[1]).toBe(bar);
+  expect(row.children[2].getAttribute("role")).toBe("tablist");
+  const panel = screen.getByRole("tabpanel");
+  for (const name of ["Save", "Undo", "Redo"]) expect(within(panel).queryByRole("button", { name })).toBeNull();
+  // Without a drawing, Save and Save as are disabled; Open never is.
+  cleanup();
+  render(<Ribbon {...props} />);
+  const plain = screen.getByRole("toolbar", { name: "Quick access" });
+  expect((within(plain).getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
+  expect((within(plain).getByRole("button", { name: "Open…" }) as HTMLButtonElement).disabled).toBe(false);
+});
+
+test("Home is Draw, Modify, Annotation, Clipboard and Layers; each group is a box of buttons with its name under them", () => {
+  const { container } = render(<Ribbon {...props} />);
+  const groups = screen.getAllByRole("group");
+  expect(groups.map((g) => g.getAttribute("aria-label"))).toEqual(["Draw", "Modify", "Annotation", "Clipboard", "Layers"]);
+  for (const g of groups) {
+    const [buttons, label] = Array.from(g.children);
+    expect(buttons.className).toBe("ribbon-group-buttons");
+    expect(label.className).toBe("ribbon-group-label");
+    expect(label.textContent).toBe(g.getAttribute("aria-label"));
+  }
+  // Modify is one group of its 23 tools, no row break inside it.
+  const modify = screen.getByRole("group", { name: "Modify" });
+  expect(within(modify).getAllByRole("button")).toHaveLength(23);
+  expect(container.querySelector(".ribbon-break, .sep")).toBeNull();
+  const layers = screen.getByRole("group", { name: "Layers" });
+  expect(within(layers).getAllByRole("button").map((b) => b.textContent)).toEqual([
+    "Layer states",
+    "Translate layers",
+    "Group",
+    "Ungroup",
+    "Match properties",
+  ]);
+  expect(within(layers).getByRole("checkbox", { name: "Group selection" })).toBeTruthy();
+});
+
+test("the Measure tab has a Take-off group: export, import BOQ, compare, export conflicts", () => {
+  const handlers = { onExport: vi.fn(), onImportBoq: vi.fn(), onCompare: vi.fn(), onExportConflicts: vi.fn() };
+  render(<Ribbon {...props} {...handlers} />);
+  expect(screen.queryByRole("button", { name: "Compare" })).toBeNull();
+  fireEvent.click(screen.getByRole("tab", { name: "Measure" }));
+  expect(screen.getAllByRole("group").map((g) => g.getAttribute("aria-label"))).toEqual(["Measure", "Inquiry", "Take-off"]);
+  const group = screen.getByRole("group", { name: "Take-off" });
+  const buttons = within(group).getAllByRole("button");
+  expect(buttons).toHaveLength(4);
+  buttons.forEach((b) => fireEvent.click(b));
+  for (const h of Object.values(handlers)) expect(h).toHaveBeenCalledTimes(1);
+});
+
+test("in Arabic the ribbon reads right to left: the same order from the start edge, Arabic names, logical sides", () => {
+  localStorage.setItem("qiyas.lang", "ar");
+  try {
+    render(
+      <LanguageProvider>
+        <Ribbon {...props} />
+      </LanguageProvider>,
+    );
+    expect(document.documentElement.dir).toBe("rtl");
+    // The flex rows follow the page direction: the app name, the quick-access bar and the
+    // first tab sit at the right, and Draw is the rightmost group (the start edge).
+    const bar = screen.getByRole("toolbar", { name: "الوصول السريع" });
+    expect(bar.previousElementSibling!.textContent).toBe("قياس");
+    expect(bar.nextElementSibling!.getAttribute("role")).toBe("tablist");
+    expect(screen.getAllByRole("group").map((g) => g.getAttribute("aria-label"))).toEqual([
+      "رسم",
+      "تعديل",
+      "توضيح",
+      "الحافظة",
+      "الطبقات",
+    ]);
+    expect(screen.getAllByRole("group").map((g) => g.lastElementChild!.textContent)).toEqual([
+      "رسم",
+      "تعديل",
+      "توضيح",
+      "الحافظة",
+      "الطبقات",
+    ]);
+  } finally {
+    cleanup();
+    localStorage.clear();
+    document.documentElement.dir = "ltr";
+    document.documentElement.lang = "en";
+  }
+  // The styles use start/end sides only, so Arabic mirrors them, and the panel scrolls sideways
+  // instead of wrapping (a right-to-left panel starts scrolled to its right edge).
+  const rule = (selector: string) => css.match(new RegExp(`\\n${selector.replace(".", "\\.")} \\{([^}]*)\\}`))![1];
+  expect(rule(".quick-access")).toContain("border-inline-end");
+  expect(rule(".ribbon-group \\+ \\.ribbon-group")).toContain("border-inline-start");
+  const panel = rule(".ribbon-panel");
+  expect(panel).toContain("flex-wrap: nowrap");
+  expect(panel).toContain("overflow-x: auto");
+  expect(panel).toMatch(/\bheight: \d+px/);
+  const grid = rule(".ribbon-group-buttons");
+  expect(grid).toContain("grid-auto-flow: column");
+  expect(grid).toContain("grid-template-rows: repeat(3, auto)");
+  for (const r of [rule(".quick-access"), rule(".ribbon-group"), panel]) expect(r).not.toMatch(/\b(left|right)\b/);
 });
