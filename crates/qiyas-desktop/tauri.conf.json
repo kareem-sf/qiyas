@@ -78,8 +78,8 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "REPLACE-ME: the public key printed by `pnpm tauri signer generate` (CLAUDE.md, Updates and installers)",
-      "endpoints": ["https://REPLACE-ME.invalid/qiyas/latest.json"]
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNBMERGNTY1MjlCRThGOEQKUldTTmo3NHBaZlVOT2wvMkl2ZmsvOWNhL3V6ZHBFblpkdFlSRWUySW4za0F3dm5RclpDN24vUlMK",
+      "endpoints": ["https://qsmind.app/qiyas/latest.json"]
     }
   }
 }
