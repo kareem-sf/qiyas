@@ -208,6 +208,21 @@ fn the_default_ribbon_is_valid_and_holds_every_tab() {
 }
 
 #[test]
+fn the_default_ribbon_is_the_one_the_window_draws() {
+    // `src/shell/ribbon.default.json`: `DEFAULT_RIBBON` in `src/shell/ribbonLayout.ts` is pinned
+    // to it by `ribbonLayout.test.ts`, so the two defaults can't drift apart.
+    let window: serde_json::Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../src/shell/ribbon.default.json"
+    )))
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(ribbon::default_ribbon()).unwrap(),
+        window
+    );
+}
+
+#[test]
 fn a_ribbon_with_an_unknown_button_or_twin_ids_is_refused() {
     let mut unknown = ribbon::default_ribbon();
     unknown.tabs[0].groups[0].buttons[0].command = "format_disk".into();

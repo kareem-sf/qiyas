@@ -13,9 +13,8 @@ const tools = (prefix: string, names: string[]) => names.map((n) => tool(n, `${p
 const group = (id: string, label: string, buttons: RibbonButton[]): RibbonGroup => ({ id, label, buttons });
 const tab = (id: string, groups: RibbonGroup[]): RibbonTab => ({ id, label: id, groups });
 
-/** The ribbon Qiyas ships: the core's `default_ribbon` (`qiyas-desktop/src/ribbon.rs`), except
- *  that Audit and Purge sit on the Manage tab with Options, Customize and Aliases (the core's
- *  data has them beside Recover and lacks the last three). */
+/** The ribbon Qiyas ships: the same as the core's `default_ribbon` (`qiyas-desktop/src/ribbon.rs`);
+ *  `ribbon.default.json` pins both (`ribbonLayout.test.ts` and the core's `tests/options.rs`). */
 export const DEFAULT_RIBBON: RibbonLayout = {
   tabs: [
     tab("home", [

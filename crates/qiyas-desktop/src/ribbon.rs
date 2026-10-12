@@ -1,6 +1,6 @@
 //! The ribbon as data: tabs, their groups and the groups' buttons, each with the command it runs.
-//! `default_ribbon` is the layout Qiyas ships (the one `src/shell/Ribbon.tsx` draws, plus Audit
-//! and Purge); the user's own layout lives in `settings.json` (`Settings::ribbon`, null for the
+//! `default_ribbon` is the layout Qiyas ships, the one `src/shell/Ribbon.tsx` draws
+//! (`src/shell/ribbon.default.json` pins the two to one JSON); the user's own layout lives in `settings.json` (`Settings::ribbon`, null for the
 //! default), so the Customize dialog can change it and reset it. Data only: the window draws it.
 
 use std::collections::HashSet;
@@ -95,9 +95,9 @@ fn tab(id: &str, groups: Vec<RibbonGroup>) -> RibbonTab {
     }
 }
 
-/// The ribbon Qiyas ships: Home, Measure, Annotate, Insert, View, Manage (Run script) and
-/// Output (Plot, Quick print, Print all layouts, Plot styles), as `Ribbon.tsx` draws them, with
-/// Audit and Purge beside Recover. Group labels are i18n keys; `ribbon.*` ones are new.
+/// The ribbon Qiyas ships: Home, Measure, Annotate, Insert, View, Manage (Run script; Audit and
+/// Purge; Options, Customize and Aliases) and Output (Plot, Quick print, Print all layouts, Plot
+/// styles), as `Ribbon.tsx` draws them. Labels are i18n keys.
 pub fn default_ribbon() -> RibbonLayout {
     use ButtonKind::Toggle;
     let home = tab(
@@ -111,8 +111,6 @@ pub fn default_ribbon() -> RibbonLayout {
                     action("save", "save"),
                     action("saveAs", "saveAs"),
                     action("recover", "recover.button"),
-                    action("audit", "audit.button"),
-                    action("purge", "purge.button"),
                     action("exportTakeoff", "exportTakeoff"),
                     action("importBoq", "importBoq"),
                     action("compare", "compare"),
@@ -302,11 +300,30 @@ pub fn default_ribbon() -> RibbonLayout {
     );
     let manage = tab(
         "manage",
-        vec![group(
-            "scripts",
-            "ribbon.scripts",
-            vec![action("runScript", "script.run")],
-        )],
+        vec![
+            group(
+                "scripts",
+                "ribbon.scripts",
+                vec![action("runScript", "script.run")],
+            ),
+            group(
+                "drawing",
+                "ribbon.drawing",
+                vec![
+                    action("audit", "audit.button"),
+                    action("purge", "purge.button"),
+                ],
+            ),
+            group(
+                "setup",
+                "ribbon.setup",
+                vec![
+                    action("options", "options.button"),
+                    action("customize", "cui.button"),
+                    action("aliases", "aliasEdit.button"),
+                ],
+            ),
+        ],
     );
     let output = tab(
         "output",

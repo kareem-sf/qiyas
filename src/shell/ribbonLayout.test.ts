@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
 import type { RibbonLayout } from "../api";
+import fixture from "./ribbon.default.json";
 import { buttonKeys, DEFAULT_RIBBON, editTree, layoutOf } from "./ribbonLayout";
 
 /** The core's default, cut down: Home (file with Audit, history) and Manage (Run script). */
@@ -39,6 +40,11 @@ test("the window's default has the seven tabs, and Manage has Audit, Purge, Opti
     "customize",
     "aliases",
   ]);
+});
+
+test("the window's default is ribbon.default.json, which the core's default_ribbon is pinned to too", () => {
+  // crates/qiyas-desktop/tests/options.rs compares default_ribbon() with the same file.
+  expect(DEFAULT_RIBBON).toEqual(fixture);
 });
 
 test("a saved layout shows in its order, and what the core's default has that it leaves out is hidden", () => {

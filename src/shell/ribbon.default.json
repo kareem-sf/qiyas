@@ -1,0 +1,782 @@
+{
+  "tabs": [
+    {
+      "id": "home",
+      "label": "home",
+      "groups": [
+        {
+          "id": "file",
+          "label": "ribbon.file",
+          "buttons": [
+            {
+              "kind": "action",
+              "command": "open",
+              "label": "open"
+            },
+            {
+              "kind": "action",
+              "command": "save",
+              "label": "save"
+            },
+            {
+              "kind": "action",
+              "command": "saveAs",
+              "label": "saveAs"
+            },
+            {
+              "kind": "action",
+              "command": "recover",
+              "label": "recover.button"
+            },
+            {
+              "kind": "action",
+              "command": "exportTakeoff",
+              "label": "exportTakeoff"
+            },
+            {
+              "kind": "action",
+              "command": "importBoq",
+              "label": "importBoq"
+            },
+            {
+              "kind": "action",
+              "command": "compare",
+              "label": "compare"
+            },
+            {
+              "kind": "action",
+              "command": "exportConflicts",
+              "label": "exportConflicts"
+            }
+          ]
+        },
+        {
+          "id": "history",
+          "label": "ribbon.history",
+          "buttons": [
+            {
+              "kind": "action",
+              "command": "undo",
+              "label": "undo"
+            },
+            {
+              "kind": "action",
+              "command": "redo",
+              "label": "redo"
+            }
+          ]
+        },
+        {
+          "id": "draw",
+          "label": "draw.group",
+          "buttons": [
+            {
+              "kind": "tool",
+              "command": "line",
+              "label": "draw.line"
+            },
+            {
+              "kind": "tool",
+              "command": "polyline",
+              "label": "draw.polyline"
+            },
+            {
+              "kind": "tool",
+              "command": "rectangle",
+              "label": "draw.rectangle"
+            },
+            {
+              "kind": "tool",
+              "command": "circle",
+              "label": "draw.circle"
+            },
+            {
+              "kind": "tool",
+              "command": "arc",
+              "label": "draw.arc"
+            },
+            {
+              "kind": "tool",
+              "command": "ellipse",
+              "label": "draw.ellipse"
+            },
+            {
+              "kind": "tool",
+              "command": "spline",
+              "label": "draw.spline"
+            },
+            {
+              "kind": "tool",
+              "command": "point",
+              "label": "draw.point"
+            },
+            {
+              "kind": "tool",
+              "command": "hatch",
+              "label": "draw.hatch"
+            },
+            {
+              "kind": "tool",
+              "command": "revcloud",
+              "label": "draw.revcloud"
+            },
+            {
+              "kind": "tool",
+              "command": "wipeout",
+              "label": "draw.wipeout"
+            }
+          ]
+        },
+        {
+          "id": "modify",
+          "label": "modify.group",
+          "buttons": [
+            {
+              "kind": "tool",
+              "command": "move",
+              "label": "modify.move"
+            },
+            {
+              "kind": "tool",
+              "command": "copy",
+              "label": "modify.copy"
+            },
+            {
+              "kind": "tool",
+              "command": "rotate",
+              "label": "modify.rotate"
+            },
+            {
+              "kind": "tool",
+              "command": "scale",
+              "label": "modify.scale"
+            },
+            {
+              "kind": "tool",
+              "command": "mirror",
+              "label": "modify.mirror"
+            },
+            {
+              "kind": "tool",
+              "command": "stretch",
+              "label": "modify.stretch"
+            },
+            {
+              "kind": "tool",
+              "command": "align",
+              "label": "modify.align"
+            },
+            {
+              "kind": "tool",
+              "command": "array",
+              "label": "modify.array"
+            },
+            {
+              "kind": "tool",
+              "command": "explode",
+              "label": "modify.explode"
+            },
+            {
+              "kind": "tool",
+              "command": "erase",
+              "label": "modify.erase"
+            },
+            {
+              "kind": "tool",
+              "command": "trim",
+              "label": "edit.trim"
+            },
+            {
+              "kind": "tool",
+              "command": "extend",
+              "label": "edit.extend"
+            },
+            {
+              "kind": "tool",
+              "command": "break",
+              "label": "edit.break"
+            },
+            {
+              "kind": "tool",
+              "command": "join",
+              "label": "edit.join"
+            },
+            {
+              "kind": "tool",
+              "command": "lengthen",
+              "label": "edit.lengthen"
+            },
+            {
+              "kind": "tool",
+              "command": "reverse",
+              "label": "edit.reverse"
+            },
+            {
+              "kind": "tool",
+              "command": "offset",
+              "label": "edit.offset"
+            },
+            {
+              "kind": "tool",
+              "command": "fillet",
+              "label": "edit.fillet"
+            },
+            {
+              "kind": "tool",
+              "command": "chamfer",
+              "label": "edit.chamfer"
+            },
+            {
+              "kind": "tool",
+              "command": "blend",
+              "label": "edit.blend"
+            },
+            {
+              "kind": "tool",
+              "command": "pedit",
+              "label": "edit.pedit"
+            },
+            {
+              "kind": "tool",
+              "command": "overkill",
+              "label": "edit.overkill"
+            },
+            {
+              "kind": "tool",
+              "command": "flatten",
+              "label": "edit.flatten"
+            }
+          ]
+        },
+        {
+          "id": "clipboard",
+          "label": "clip.group",
+          "buttons": [
+            {
+              "kind": "tool",
+              "command": "copyclip",
+              "label": "clip.copyclip"
+            },
+            {
+              "kind": "tool",
+              "command": "copybase",
+              "label": "clip.copybase"
+            },
+            {
+              "kind": "tool",
+              "command": "pasteclip",
+              "label": "clip.pasteclip"
+            },
+            {
+              "kind": "tool",
+              "command": "pasteblock",
+              "label": "clip.pasteblock"
+            }
+          ]
+        },
+        {
+          "id": "text",
+          "label": "text.group",
+          "buttons": [
+            {
+              "kind": "tool",
+              "command": "text",
+              "label": "text.text"
+            },
+            {
+              "kind": "tool",
+              "command": "mtext",
+              "label": "text.mtext"
+            },
+            {
+              "kind": "tool",
+              "command": "textEdit",
+              "label": "text.textEdit"
+            },
+            {
+              "kind": "action",
+              "command": "find",
+              "label": "text.find"
+            }
+          ]
+        },
+        {
+          "id": "layers",
+          "label": "layers",
+          "buttons": [
+            {
+              "kind": "action",
+              "command": "layerStates",
+              "label": "layer.statesButton"
+            },
+            {
+              "kind": "action",
+              "command": "translateLayers",
+              "label": "layer.translateButton"
+            },
+            {
+              "kind": "tool",
+              "command": "group",
+              "label": "layerTool.group"
+            },
+            {
+              "kind": "tool",
+              "command": "ungroup",
+              "label": "layerTool.ungroup"
+            },
+            {
+              "kind": "tool",
+              "command": "matchprop",
+              "label": "layerTool.matchprop"
+            },
+            {
+              "kind": "toggle",
+              "command": "groupSelect",
+              "label": "group.select"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "measure",
+      "label": "measure",
+      "groups": [
+        {
+          "id": "measure",
+          "label": "ribbon.measure",
+          "buttons": [
+            {
+              "kind": "tool",
+              "command": "select",
+              "label": "select"
+            },
+            {
+              "kind": "tool",
+              "command": "distance",
+              "label": "distance"
+            },
+            {
+              "kind": "tool",
+              "command": "area",
+              "label": "area"
+            },
+            {
+              "kind": "tool",
+              "command": "count",
+              "label": "count"
+            }
+          ]
+        },
+        {
+          "id": "inquiry",
+          "label": "ribbon.inquiry",
+          "buttons": [
+            {
+              "kind": "tool",
+              "command": "geometry",
+              "label": "geometry"
+            },
+            {
+              "kind": "tool",
+              "command": "divide",
+              "label": "divide"
+            },
+            {
+              "kind": "tool",
+              "command": "measureAlong",
+              "label": "measureAlong"
+            },
+            {
+              "kind": "tool",
+              "command": "idPoint",
+              "label": "idPoint"
+            },
+            {
+              "kind": "action",
+              "command": "extract",
+              "label": "extract"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "annotate",
+      "label": "annotate",
+      "groups": [
+        {
+          "id": "dims",
+          "label": "dim.group",
+          "buttons": [
+            {
+              "kind": "tool",
+              "command": "dimLinear",
+              "label": "dim.dimLinear"
+            },
+            {
+              "kind": "tool",
+              "command": "dimAligned",
+              "label": "dim.dimAligned"
+            },
+            {
+              "kind": "tool",
+              "command": "dimAngular",
+              "label": "dim.dimAngular"
+            },
+            {
+              "kind": "tool",
+              "command": "dimRadius",
+              "label": "dim.dimRadius"
+            },
+            {
+              "kind": "tool",
+              "command": "dimDiameter",
+              "label": "dim.dimDiameter"
+            },
+            {
+              "kind": "tool",
+              "command": "dimArc",
+              "label": "dim.dimArc"
+            },
+            {
+              "kind": "tool",
+              "command": "dimOrdinate",
+              "label": "dim.dimOrdinate"
+            },
+            {
+              "kind": "tool",
+              "command": "dimBaseline",
+              "label": "dim.dimBaseline"
+            },
+            {
+              "kind": "tool",
+              "command": "dimContinue",
+              "label": "dim.dimContinue"
+            },
+            {
+              "kind": "tool",
+              "command": "qdim",
+              "label": "dim.qdim"
+            },
+            {
+              "kind": "tool",
+              "command": "dimEdit",
+              "label": "dim.dimEdit"
+            },
+            {
+              "kind": "tool",
+              "command": "dimBreak",
+              "label": "dim.dimBreak"
+            },
+            {
+              "kind": "tool",
+              "command": "dimSpace",
+              "label": "dim.dimSpace"
+            },
+            {
+              "kind": "tool",
+              "command": "dimJogLine",
+              "label": "dim.dimJogLine"
+            },
+            {
+              "kind": "action",
+              "command": "dimStyle",
+              "label": "dim.styleButton"
+            }
+          ]
+        },
+        {
+          "id": "notes",
+          "label": "dim.notes",
+          "buttons": [
+            {
+              "kind": "tool",
+              "command": "leader",
+              "label": "dim.leader"
+            },
+            {
+              "kind": "tool",
+              "command": "mleader",
+              "label": "dim.mleader"
+            },
+            {
+              "kind": "tool",
+              "command": "tolerance",
+              "label": "dim.tolerance"
+            }
+          ]
+        },
+        {
+          "id": "tables",
+          "label": "table.group",
+          "buttons": [
+            {
+              "kind": "tool",
+              "command": "table",
+              "label": "table.table"
+            },
+            {
+              "kind": "tool",
+              "command": "tableEdit",
+              "label": "table.tableEdit"
+            },
+            {
+              "kind": "tool",
+              "command": "field",
+              "label": "table.fieldTool"
+            },
+            {
+              "kind": "action",
+              "command": "updateFields",
+              "label": "table.updateFields"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "insert",
+      "label": "insert",
+      "groups": [
+        {
+          "id": "block",
+          "label": "block.group",
+          "buttons": [
+            {
+              "kind": "tool",
+              "command": "block",
+              "label": "block.createTool"
+            },
+            {
+              "kind": "action",
+              "command": "blockPalette",
+              "label": "block.insertTool"
+            },
+            {
+              "kind": "action",
+              "command": "writeBlock",
+              "label": "block.writeTool"
+            },
+            {
+              "kind": "tool",
+              "command": "refedit",
+              "label": "block.refedit"
+            },
+            {
+              "kind": "tool",
+              "command": "attdef",
+              "label": "block.attdefTool"
+            },
+            {
+              "kind": "tool",
+              "command": "textEdit",
+              "label": "block.attedit"
+            },
+            {
+              "kind": "action",
+              "command": "attributeManager",
+              "label": "block.manager"
+            },
+            {
+              "kind": "action",
+              "command": "designCenter",
+              "label": "block.designCenter"
+            },
+            {
+              "kind": "action",
+              "command": "toolPalettes",
+              "label": "block.toolPalettes"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "view",
+      "label": "view",
+      "groups": [
+        {
+          "id": "views",
+          "label": "ribbon.views",
+          "buttons": [
+            {
+              "kind": "action",
+              "command": "zoomExtents",
+              "label": "zoomExtents"
+            },
+            {
+              "kind": "tool",
+              "command": "zoomWindow",
+              "label": "zoomWindow"
+            },
+            {
+              "kind": "action",
+              "command": "views",
+              "label": "views"
+            },
+            {
+              "kind": "action",
+              "command": "xrefs",
+              "label": "xrefs"
+            },
+            {
+              "kind": "action",
+              "command": "attachPdf",
+              "label": "attachPdf"
+            },
+            {
+              "kind": "action",
+              "command": "attachImage",
+              "label": "attachImage"
+            },
+            {
+              "kind": "action",
+              "command": "calibrate",
+              "label": "calibrate"
+            }
+          ]
+        },
+        {
+          "id": "vports",
+          "label": "vport.group",
+          "buttons": [
+            {
+              "kind": "tool",
+              "command": "mview",
+              "label": "vport.mview"
+            },
+            {
+              "kind": "action",
+              "command": "split",
+              "label": "vport.two"
+            },
+            {
+              "kind": "tool",
+              "command": "ucs",
+              "label": "ucs.tool"
+            },
+            {
+              "kind": "tool",
+              "command": "ucsObject",
+              "label": "ucs.object"
+            },
+            {
+              "kind": "action",
+              "command": "ucsWorld",
+              "label": "ucs.world"
+            },
+            {
+              "kind": "action",
+              "command": "sheetSet",
+              "label": "sheetSet.button"
+            }
+          ]
+        },
+        {
+          "id": "display",
+          "label": "ribbon.display",
+          "buttons": [
+            {
+              "kind": "toggle",
+              "command": "arabicReversed",
+              "label": "arabicReversed"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "manage",
+      "label": "manage",
+      "groups": [
+        {
+          "id": "scripts",
+          "label": "ribbon.scripts",
+          "buttons": [
+            {
+              "kind": "action",
+              "command": "runScript",
+              "label": "script.run"
+            }
+          ]
+        },
+        {
+          "id": "drawing",
+          "label": "ribbon.drawing",
+          "buttons": [
+            {
+              "kind": "action",
+              "command": "audit",
+              "label": "audit.button"
+            },
+            {
+              "kind": "action",
+              "command": "purge",
+              "label": "purge.button"
+            }
+          ]
+        },
+        {
+          "id": "setup",
+          "label": "ribbon.setup",
+          "buttons": [
+            {
+              "kind": "action",
+              "command": "options",
+              "label": "options.button"
+            },
+            {
+              "kind": "action",
+              "command": "customize",
+              "label": "cui.button"
+            },
+            {
+              "kind": "action",
+              "command": "aliases",
+              "label": "aliasEdit.button"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "output",
+      "label": "output",
+      "groups": [
+        {
+          "id": "plot",
+          "label": "ribbon.plot",
+          "buttons": [
+            {
+              "kind": "action",
+              "command": "plot",
+              "label": "plot.button"
+            },
+            {
+              "kind": "action",
+              "command": "quickPrint",
+              "label": "plot.quickPrint"
+            },
+            {
+              "kind": "action",
+              "command": "printAll",
+              "label": "plot.printAll"
+            }
+          ]
+        },
+        {
+          "id": "plotStyles",
+          "label": "ribbon.plotStyles",
+          "buttons": [
+            {
+              "kind": "action",
+              "command": "plotStyles",
+              "label": "plot.styles"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
