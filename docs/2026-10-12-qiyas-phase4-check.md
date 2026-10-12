@@ -10,8 +10,8 @@ The laptop was busy during the check (other agents building and testing, load av
 
 - **The check script passes**: 804 Rust tests, 557 front end tests, 0 failed. The PDF tests ran. It needed one small fix first (see What broke).
 - **The Linux installers build**: deb 26.1 MB, rpm 26.1 MB, AppImage 118.8 MB. Each holds the app, the `qiyas-mcp` bridge and pdfium. Nobody has installed or opened them yet.
-- **Plots of your drawings come out**: right page size, lines and real text. KMQ on A1 takes about 1.2 s and gives a 2.7 MB PDF; ALJ takes about 5 s and gives 8.7 MB.
-- **Arabic in plotted PDFs looks right but copies wrong.** On the page, ALJ's title block reads correctly. Copied or searched in a PDF viewer, many words come out with the wrong letters: "جميل" comes out as "حميل", "الجيزة" as "الحيرة", "التصميم" as "اليصميم". Letters that share a shape and differ only by their dots get mixed up. Not fixed: it is product code.
+- **Plots of your drawings come out**: right page size, lines and real text. drawing A on A1 takes about 1.2 s and gives a 2.7 MB PDF; drawing B takes about 5 s and gives 8.7 MB.
+- **Arabic in plotted PDFs looks right but copies wrong.** On the page, drawing B's title block reads correctly. Copied or searched in a PDF viewer, many words come out with the wrong letters: "جميل" comes out as "حميل", "الجيزة" as "الحيرة", "التصميم" as "اليصميم". Letters that share a shape and differ only by their dots get mixed up. Not fixed: it is product code.
 - **The headless batch works**: 5 drawings (your two, the test plan twice, one damaged file) in 0.14 s. 4 workbooks were written; the damaged file was reported and skipped. Exit code 1, as designed.
 - **The parametric rectangle works on your drawings**: a 4 × 3 rectangle drawn on each, auto-constrained (8 constraints), width set from 4 to 6. It stayed a rectangle, in 1 to 5 ms.
 - **The Thmanyah font is inside the installers.** The window's Arabic font is built into the app. Shipping it to others needs Thmanyah's licence to allow it. Please confirm before anyone outside the company gets an installer.
@@ -62,7 +62,7 @@ The Phase 4 suites in that run:
 
 Release builds, on copies. `bench_open` ran 3 times per drawing. "Phase 3" is the last check's "after the fix wave" column.
 
-| What | Test plan | KMQ X GAC (1.61 MB) | ALJ HO Option B (2.65 MB) |
+| What | Test plan | office drawing A (1.61 MB) | office drawing B (2.65 MB) |
 |---|---|---|---|
 | Open | 2–3 ms | 30–33 ms | 78–88 ms |
 | First draw (and every redraw) | 1 ms | **214–237 ms** (Phase 3: 259–389) | **894–951 ms** (Phase 3: 1,052–1,223) |
@@ -77,7 +77,7 @@ The redraw is a little faster than at the end of Phase 3; the laptop was quieter
 
 **Plot to PDF** (`cargo run --release -p qiyas-plot --example phase4_check -- <drawing> <out>`). "Read" is gathering the drawing under the lock; "write" is drawing the PDF without it, which the window does off its main thread.
 
-| Plot | Test plan | KMQ | ALJ |
+| Plot | Test plan | drawing A | drawing B |
 |---|---|---|---|
 | Model, A1 landscape, fit: read + write | 0 + 1 ms | 267 + 886 ms | 1,364 + 3,726 ms |
 | PDF size | 7.8 KB | 2.65 MB | 8.69 MB |
@@ -89,10 +89,10 @@ The redraw is a little faster than at the end of Phase 3; the laptop was quieter
 
 - `pdfinfo` on every PDF: 1 page, A1 2383.94 × 1683.78 pt (A4 841.89 × 595.28 pt for the label plots), producer Qiyas.
 - `pdffonts`: Noto Sans (and Noto Sans Arabic where there is Arabic) embedded as subsets, with a ToUnicode map.
-- At 1:100 your drawings are bigger than A1 (KMQ 690 × 806 mm, ALJ 13.3 m wide). The middle is plotted and the rest is cut off at the page edge, as expected.
+- At 1:100 your drawings are bigger than A1 (drawing A 690 × 806 mm, drawing B 13.3 m wide). The middle is plotted and the rest is cut off at the page edge, as expected.
 - The layouts in both your drawings are empty: everything is in model space. The test plan's empty layout says "Nothing to plot", yours give a blank page. Two answers to the same case; small.
 
-**Arabic in the PDF.** An Arabic label, "غرفة المعيشة ٥٨٫٢٩ م²", was added in memory to each drawing and plotted on A4. On the test plan and KMQ, `pdftotext` gave it back exactly. ALJ's own Arabic (its title blocks) has the problem in In short: drawn right (checked in a 1440 dpi render of the title block), extracted wrong.
+**Arabic in the PDF.** An Arabic label, "غرفة المعيشة ٥٨٫٢٩ م²", was added in memory to each drawing and plotted on A4. On the test plan and drawing A, `pdftotext` gave it back exactly. drawing B's own Arabic (its title blocks) has the problem in In short: drawn right (checked in a 1440 dpi render of the title block), extracted wrong.
 
 | In the drawing (`convert` to DXF) | Copied from the PDF |
 |---|---|
@@ -105,7 +105,7 @@ The likely cause: Noto Sans Arabic draws ت, ب, ن, ي (and ج/ح, س/ش...) in
 
 **Purge (dry run) and audit** (`fix: false`), on the whole drawing:
 
-| | Test plan | KMQ | ALJ |
+| | Test plan | drawing A | drawing B |
 |---|---|---|---|
 | Purge dry run | 0 ms, nothing | 24 ms: 3 (1 layer, 2 blocks) | 57 ms: 99 (10 layers, 44 blocks, 45 linetypes) |
 | Audit | 0 ms, nothing | 9 ms: 1 empty block, 1 unused layer | 29 ms: 1 empty block, 10 unused layers |
@@ -114,7 +114,7 @@ No missing layers, styles or blocks in either of your drawings. Nothing was purg
 
 **A constraint on a drawn rectangle.** A 4 × 3 rectangle drawn beside each drawing's extents, then Auto constrain, a linear width constraint (d1 = 4), then d1 = 6:
 
-| | Test plan | KMQ | ALJ |
+| | Test plan | drawing A | drawing B |
 |---|---|---|---|
 | Auto constrain | 8 constraints, 0 ms | 8, 1 ms | 8, 3 ms |
 | Width constraint | 0 ms | 1 ms | 5 ms |
@@ -123,7 +123,7 @@ No missing layers, styles or blocks in either of your drawings. Nothing was purg
 
 ## Real-file checks (no window)
 
-**The headless batch.** A folder of 5 copies: ALJ, KMQ, the test plan twice (one renamed), and KMQ cut off after 800 KB (damaged). The script:
+**The headless batch.** A folder of 5 copies: drawing B, drawing A, the test plan twice (one renamed), and drawing A cut off after 800 KB (damaged). The script:
 
 ```
 COUNT DOOR
@@ -136,9 +136,9 @@ EXPORT {name}.xlsx
 
 | Drawing | Result | DOOR | WINDOW | COLUMN |
 |---|---|---|---|---|
-| ALJ HO - Option B Design Package.dwg | ok | 7 | 0 | 0 |
+| drawing B HO - Option B Design Package.dwg | ok | 7 | 0 | 0 |
 | corrupt-cut.dwg | error: "This drawing can't be opened: no usable drawing data found" | – | – | – |
-| KMQ X GAC 17.09.2026.dwg | ok | 7 | 0 | 0 |
+| office drawing A 17.09.2026.dwg | ok | 7 | 0 | 0 |
 | test-plan-copy.dwg | ok | 3 | 5 | 6 |
 | test-plan.dwg | ok | 3 | 5 | 6 |
 
@@ -150,12 +150,12 @@ EXPORT {name}.xlsx
 
 | From | To | Time | Reopened |
 |---|---|---|---|
-| ALJ (DWG 2018) | DXF, 17.3 MB | 233 ms | – |
-| ALJ | DWG 2004, 2.59 MB | 197 ms | 1,485,161 segments, 0 problems |
-| KMQ | DXF, 7.4 MB | 81 ms | 347,843 segments, 0 problems |
-| KMQ DXF | DWG 2013, 1.14 MB | 118 ms | 347,843 segments, 0 problems |
+| drawing B (DWG 2018) | DXF, 17.3 MB | 233 ms | – |
+| drawing B | DWG 2004, 2.59 MB | 197 ms | 1,485,161 segments, 0 problems |
+| drawing A | DXF, 7.4 MB | 81 ms | 347,843 segments, 0 problems |
+| drawing A DXF | DWG 2013, 1.14 MB | 118 ms | 347,843 segments, 0 problems |
 | Test plan | DXF | 5 ms | – |
-| The damaged KMQ | DXF | refused, exit 1 | – |
+| The damaged drawing A | DXF | refused, exit 1 | – |
 
 **Autosave and recovery**: the Rust tests only, as asked (6 autosave and 14 recovery tests, all passed). One of them starts a child process, kills it mid-edit and checks its autosave is offered with its take-off. The window's recovery dialog was not seen.
 
@@ -201,7 +201,7 @@ Small things in the packages:
 3. **To decide: the Thmanyah font ships inside the app.** Vite puts `thmanyahsans-Regular/Medium/Bold.otf` (about 240 KB each) into the app, so every installer carries them. The repo rules keep the files out of git, but an installer handed to anyone is distribution. If Thmanyah's licence does not allow embedding in an app, the window needs another Arabic font in the installers (Noto Sans Arabic is already there for drawings).
 4. **The packages lack our `LICENSES/` texts** (above). Small to fix: add the folder as a bundle resource.
 5. **An empty layout gives a blank page on your drawings, "Nothing to plot" on the test plan.** Small.
-6. **Plots of big drawings are slow-ish and large**: ALJ fitted on A1 takes about 5 s and 8.7 MB. The window does this off its main thread, so it does not freeze. Whether 5 s is fine for you is your call.
+6. **Plots of big drawings are slow-ish and large**: drawing B fitted on A1 takes about 5 s and 8.7 MB. The window does this off its main thread, so it does not freeze. Whether 5 s is fine for you is your call.
 
 No crash, no wrong count on the test plan, no wrong constraint.
 
@@ -246,9 +246,9 @@ No agent saw the window. To get the files:
 - `cargo run --release -p qiyas-plot --example phase4_check -- "<drawing>" <out folder>` plots a drawing to the PDFs used above, reads the drawing only and writes only into the out folder.
 
 1. **Install and start.** `sudo apt install ./Qiyas_0.0.1_amd64.deb` on a Debian or Ubuntu computer, or on this laptop just run the AppImage (`chmod +x`, then start it). Does Qiyas start, with its icon and its Arabic name in the menu? Does double-clicking a `.dwg` offer Qiyas under "Open with" (deb only)?
-2. **Open your drawings.** ALJ and KMQ: do they look as before? A redraw should take about 0.2 s on KMQ and about 1 s on ALJ.
+2. **Open your drawings.** drawing B and drawing A: do they look as before? A redraw should take about 0.2 s on drawing A and about 1 s on drawing B.
 3. **Plot a layout or the model to PDF** (Output tab, Plot…). Open it in another viewer (Firefox, Okular, Acrobat) and put it next to an AutoCAD print of the same sheet: line weights, text, hatches, colours, what is missing.
-4. **Copy Arabic from that PDF** into a text editor. Expect wrong letters on ALJ (problem 2).
+4. **Copy Arabic from that PDF** into a text editor. Expect wrong letters on drawing B (problem 2).
 5. **Run a script from the Manage tab** (Run script…), e.g. the four lines above. Does the dialog list each line with a mark and the time?
 6. **Kill the app mid-edit**: change a drawing, wait for the autosave (set 1 minute in Settings), then `pkill qiyas`. Start again: does the recovery dialog say Qiyas closed unexpectedly, and does Recover bring your edits and take-off back?
 7. **About box, Check for updates**: it should say updates are not set up in this build yet.

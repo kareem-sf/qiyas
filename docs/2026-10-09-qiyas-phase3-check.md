@@ -6,12 +6,12 @@ Checked again on 2026-10-12, after the final fix wave (`8342692` to `61f8eee`) a
 
 ## In short
 
-- **After the fix wave, the redraw is much faster again.** On ALJ the first draw (and every redraw) took about 1.0 to 1.5 s, down from 3.4 to 4.0 s. On KMQ it took about 0.3 to 0.4 s, down from 0.7 s. The laptop was busy while these ran (other agents building, load average 6 to 10, swap in use), so these are upper bounds; the first check ran on a quiet laptop. Both are still above Phase 1b (0.6 to 0.72 s on ALJ, 0.1 s on KMQ): part of the gap is the load, part is what Phase 3 draws more (fills, pattern lines; the batch grew from 49.7 to 59.3 MB on ALJ and 9.1 to 11.1 MB on KMQ). A run on a quiet laptop would tell how much.
-- **Hatch areas are right now.** A hatch takes its islands away. On the test plan, the living room hatched round the fountain measures 51.211 m² (58.280 − 7.069), where it gave 65.077 m² before. On copies of your drawings, the room hatches measure their region less their islands (KMQ 6.363 m², ALJ 7.584 m²).
+- **After the fix wave, the redraw is much faster again.** On drawing B the first draw (and every redraw) took about 1.0 to 1.5 s, down from 3.4 to 4.0 s. On drawing A it took about 0.3 to 0.4 s, down from 0.7 s. The laptop was busy while these ran (other agents building, load average 6 to 10, swap in use), so these are upper bounds; the first check ran on a quiet laptop. Both are still above Phase 1b (0.6 to 0.72 s on drawing B, 0.1 s on drawing A): part of the gap is the load, part is what Phase 3 draws more (fills, pattern lines; the batch grew from 49.7 to 59.3 MB on drawing B and 9.1 to 11.1 MB on drawing A). A run on a quiet laptop would tell how much.
+- **Hatch areas are right now.** A hatch takes its islands away. On the test plan, the living room hatched round the fountain measures 51.211 m² (58.280 − 7.069), where it gave 65.077 m² before. On copies of your drawings, the room hatches measure their region less their islands (drawing A 6.363 m², drawing B 7.584 m²).
 - **Hatch by a click follows true circles and arcs.** A click inside the fountain gives 7.069 m², exactly 2.25π. Before, it followed the 5 cm pieces drawn on screen and was 3 to 4 % off.
 - **This re-check found two more hatch problems, both fixed the same day:**
-  - A hatch by a click with islands, saved as DWG, came back broken. On ALJ, reopening the saved file crashed Qiyas. Saving as DXF was fine.
-  - A click region with an island touching its wall measured the island in instead of out: 6.932 m² on a KMQ room of 6.363 m².
+  - A hatch by a click with islands, saved as DWG, came back broken. On drawing B, reopening the saved file crashed Qiyas. Saving as DXF was fine.
+  - A click region with an island touching its wall measured the island in instead of out: 6.932 m² on a drawing A room of 6.363 m².
 - **The spec's Phase 3 check still works inside Qiyas.** On the test plan and on copies of both your drawings, Qiyas redrew a wall, added a dimension and a revision cloud, hatched a room by a click, saved as DWG and DXF and reopened them. Every entity came back, and every take-off row still points at its entity. Whether AutoCAD shows the same thing is still for you to check: this laptop has no other CAD program.
 - On real office plans, a click still finds the floor between furniture, not the whole room. That is by design.
 
@@ -45,9 +45,9 @@ After the fix wave (2026-10-12), `scripts/check.sh` stopped at its first step: `
 
 ## Numbers per drawing
 
-All timings are from release builds, on copies of the drawings. `bench_open` was run three times. The new walkthrough (`cargo run --release -p qiyas-core --example phase3_walkthrough`) was run on each drawing. "Phase 1b" is the end of the last check. "Phase 3 start" is commit `3f7a890`, rebuilt and run on 2026-10-09. "Before the fix wave" is the first check (`48deb76`). "After the fix wave" is the re-check on 2026-10-12. The re-check ran while other agents were building on the same laptop (load average 6 to 10, swap in use): its times are upper bounds. `bench_open` ran eight times per drawing; the ALJ range leaves out four runs taken while the laptop was swapping (1.9 to 3.7 s).
+All timings are from release builds, on copies of the drawings. `bench_open` was run three times. The new walkthrough (`cargo run --release -p qiyas-core --example phase3_walkthrough`) was run on each drawing. "Phase 1b" is the end of the last check. "Phase 3 start" is commit `3f7a890`, rebuilt and run on 2026-10-09. "Before the fix wave" is the first check (`48deb76`). "After the fix wave" is the re-check on 2026-10-12. The re-check ran while other agents were building on the same laptop (load average 6 to 10, swap in use): its times are upper bounds. `bench_open` ran eight times per drawing; the drawing B range leaves out four runs taken while the laptop was swapping (1.9 to 3.7 s).
 
-**KMQ X GAC 17.09.2026.dwg** (1.61 MB, office floor plans, metres)
+**office drawing A 17.09.2026.dwg** (1.61 MB, office floor plans, metres)
 
 | What | Phase 1b | Phase 3 start | Before the fix wave | After the fix wave |
 |---|---|---|---|---|
@@ -58,7 +58,7 @@ All timings are from release builds, on copies of the drawings. `bench_open` was
 | Batch sent to the screen | 9.1 MB | – | 11.1 MB | 11.1 MB |
 | Problems | 0 | – | 0 | 0 |
 
-**ALJ HO - Option B Design Package.dwg** (2.65 MB, about 40 sheets in model space, metres)
+**drawing B HO - Option B Design Package.dwg** (2.65 MB, about 40 sheets in model space, metres)
 
 | What | Phase 1b | Phase 3 start | Before the fix wave | After the fix wave |
 |---|---|---|---|---|
@@ -72,7 +72,7 @@ All timings are from release builds, on copies of the drawings. `bench_open` was
 
 **Each step on the real drawings** (the walkthrough). "Redraw" is building and sending the sheet again. The window does this after every change.
 
-| Step | KMQ, before | KMQ, after the fix wave | ALJ, before | ALJ, after the fix wave |
+| Step | drawing A, before | drawing A, after the fix wave | drawing B, before | drawing B, after the fix wave |
 |---|---|---|---|---|
 | Draw a wall (polyline) | 5 ms + 0.68 s redraw | 6 ms + 0.29 s redraw | 23 ms + 3.78 s redraw | 35 ms + 1.23 s redraw |
 | Undo it | 6 ms + 0.68 s redraw | 6 ms + 0.39 s redraw | 23 ms + 3.57 s redraw | 36 ms + 1.31 s redraw |
@@ -109,17 +109,17 @@ The new example `examples/phase3_walkthrough.rs` does the spec's check and more.
 10. Autosaves and recovers.
 11. Saves as DWG and DXF, then reopens both.
 
-It ran on `samples/test-plan.dwg` and on copies of your two drawings. The copies are deleted. In the re-check, the room hatch on your drawings was clicked at a point given with `--room` (KMQ `40.890,54.329`, beside the first "MAIN MEETING ROOM" label; ALJ `-126.610,102.729`, beside its label): the first check's points were not written down, and the first room label the walkthrough finds on its own ("Chair Ergonomic Office") gives "zoom in".
+It ran on `samples/test-plan.dwg` and on copies of your two drawings. The copies are deleted. In the re-check, the room hatch on your drawings was clicked at a point given with `--room` (drawing A `40.890,54.329`, beside the first "MAIN MEETING ROOM" label; drawing B `-126.610,102.729`, beside its label): the first check's points were not written down, and the first room label the walkthrough finds on its own ("Chair Ergonomic Office") gives "zoom in".
 
 **Save and reopen.** Everything came back, in both DWG and DXF, with 0 problems, before and after the fix wave.
 
 | Drawing | Entities on the sheet after the edits | Back after DWG / DXF | Take-off rows still linked |
 |---|---|---|---|
 | Test plan | 38 (9 kinds) | 38 / 38, same kinds | 6 of 6 |
-| KMQ | 6,231 (13 kinds) | 6,231 / 6,231, same kinds | 6 of 6 |
-| ALJ | 47,256 (13 kinds) | 47,256 / 47,256, same kinds | 5 of 5 |
+| drawing A | 6,231 (13 kinds) | 6,231 / 6,231, same kinds | 6 of 6 |
+| drawing B | 47,256 (13 kinds) | 47,256 / 47,256, same kinds | 5 of 5 |
 
-In every reopened file, three things read back: the attribute value "W1", a table cell and the edited text. The new wall measured the same before and after: 8.680 m on the test plan, 48.352 m on KMQ and 203.837 m on ALJ.
+In every reopened file, three things read back: the attribute value "W1", a table cell and the edited text. The new wall measured the same before and after: 8.680 m on the test plan, 48.352 m on drawing A and 203.837 m on drawing B.
 
 The walkthrough counts entities by kind; it did not compare a hatch's paths. That is how the broken DWG islands (below) got past the first check: the hatch came back as a hatch, with garbage paths. A test now compares them.
 
@@ -143,7 +143,7 @@ The walkthrough counts entities by kind; it did not compare a hatch's paths. Tha
 - Exploding the biggest block, then undoing it, left the take-off rows as they were.
 - Find and replace changed exactly the one edited text.
 - Copy and paste:
-  - Seven entities went from the test plan to a second drawing, and all seven arrived: a dimension, 2 hatches, a block, 2 polylines and a table. From ALJ it was six, because one hatch was refused (see below).
+  - Seven entities went from the test plan to a second drawing, and all seven arrived: a dimension, 2 hatches, a block, 2 polylines and a table. From drawing B it was six, because one hatch was refused (see below).
   - Paste as block worked.
   - A DOOR block copied back from the second drawing pasted fine.
 - Autosave and recovery:
@@ -152,11 +152,11 @@ The walkthrough counts entities by kind; it did not compare a hatch's paths. Tha
 
 **Hatch by a click on your drawings** (after the fix wave):
 
-- On KMQ, the click beside "MAIN MEETING ROOM" found a 7.785 m² region with 20 islands (chairs and similar, 1.422 m²). The hatch measures 6.363 m²: the region less its islands.
-- On ALJ, the click beside its "MAIN MEETING ROOM" found 7.819 m² with 140 islands (0.235 m²). The hatch measures 7.584 m².
-- In the first check, other clicks gave KMQ 17.244 m² for 16.774 m² and ALJ 10.392 m² for 7.577 m²: the islands added. Those points were not written down, so they were not repeated.
-- On these office plans, the furniture lines cut the room into pieces. So a click finds the floor between the furniture, not the whole room. A click right on the KMQ label found the 1.818 m² meeting table.
-- A 44 × 36 m rectangle drawn in the middle of the ALJ sheet was refused as "too dense, zoom in". That is by design: there were more than 50,000 line pieces in the search box.
+- On drawing A, the click beside "MAIN MEETING ROOM" found a 7.785 m² region with 20 islands (chairs and similar, 1.422 m²). The hatch measures 6.363 m²: the region less its islands.
+- On drawing B, the click beside its "MAIN MEETING ROOM" found 7.819 m² with 140 islands (0.235 m²). The hatch measures 7.584 m².
+- In the first check, other clicks gave drawing A 17.244 m² for 16.774 m² and drawing B 10.392 m² for 7.577 m²: the islands added. Those points were not written down, so they were not repeated.
+- On these office plans, the furniture lines cut the room into pieces. So a click finds the floor between the furniture, not the whole room. A click right on the drawing A label found the 1.818 m² meeting table.
+- A 44 × 36 m rectangle drawn in the middle of the drawing B sheet was refused as "too dense, zoom in". That is by design: there were more than 50,000 line pieces in the search box.
 - The first room label the walkthrough finds on both drawings, "Chair Ergonomic Office", also gives "zoom in", not "no closed region". The search grows until it hits the limit.
 
 ## What broke or looked wrong
@@ -164,14 +164,14 @@ The walkthrough counts entities by kind; it did not compare a hatch's paths. Tha
 Items 1, 2, 3 and 5 below are fixed. Items 6 and 7 were found in the re-check and fixed. Item 4 is how the tool works.
 
 1. **Fixed: the redraw was about 6 times slower on drawings full of blocks** (`8342692`).
-   - On ALJ, every drawing change, undo, redo and layer click waited about 3.6 to 3.9 s, up from 0.65 s at the start of Phase 3. On KMQ it was 0.7 s, up from 0.1 s. The jump came from `502c371` "fill triangles, hatch pattern lines, rays and construction lines".
+   - On drawing B, every drawing change, undo, redo and layer click waited about 3.6 to 3.9 s, up from 0.65 s at the start of Phase 3. On drawing A it was 0.7 s, up from 0.1 s. The jump came from `502c371` "fill triangles, hatch pattern lines, rays and construction lines".
    - The cause: a fill (a solid hatch, a 2D solid or a trace) inside a block was cut into triangles again for every reference to that block, not once per fill. Cutting a fill into triangles costs more the more corners it has (with the square of them), so a block with a big fill, placed hundreds of times, did that work hundreds of times on every redraw.
    - Now each fill is cut once per redraw and the triangles are placed for every reference. A fill of more than 2,000 corners draws its outline only. A release-only test in `scripts/check.sh` guards it.
-   - After the fix: ALJ about 1.0 to 1.5 s, KMQ about 0.3 to 0.4 s per redraw (see the tables).
+   - After the fix: drawing B about 1.0 to 1.5 s, drawing A about 0.3 to 0.4 s per redraw (see the tables).
    - Every change still redraws the whole sheet. Building the click index in the background, carried from Phase 1b, was not done.
 2. **Fixed: measuring a hatch with islands gave too much** (`5de3ab5`, and `1f0981a` from the re-check).
    - The cause: the areas of all the hatch's boundary paths were added, so the islands were added instead of taken away. Now a hatch measures even-odd, as it is filled: a path inside an odd number of others is taken away.
-   - Before: test plan 65.077 m², KMQ 17.244 m² for 16.774 m², ALJ 10.392 m² for 7.577 m².
+   - Before: test plan 65.077 m², drawing A 17.244 m² for 16.774 m², drawing B 10.392 m² for 7.577 m².
    - After: the test plan's living room measures 51.211 m², exactly 58.280 − 7.069. The room hatches on your drawings measure their region less their islands (see above).
 3. **Fixed: hatch by a click followed straight line pieces, not true arcs** (`1829c6d`, `78c7065`, `61f8eee`).
    - The cause: the region was found on the lines as drawn on screen, which cut curves into pieces up to 5 cm off (0.05 drawing units), not on the drawing.
@@ -181,11 +181,11 @@ Items 1, 2, 3 and 5 below are fixed. Items 6 and 7 were found in the re-check an
 5. **Fixed: the check script had a gap** (`b6d5618`). Where pdfium is installed, `scripts/check.sh` now fails if the PDF tests are skipped.
 6. **Found in the re-check, fixed (`4977add`): a hatch by a click with islands came back broken from a saved DWG.**
    - The islands' paths lost their "polyline" mark when they were made, and the DWG writer then wrote each one in a form the reader can't read back. The hatch reopened with garbage paths.
-   - On ALJ, the hatch with 140 islands, saved as DWG and reopened, crashed Qiyas while drawing. On the test plan and KMQ the file opened, but the hatch's islands were wrong. DXF was not affected.
+   - On drawing B, the hatch with 140 islands, saved as DWG and reopened, crashed Qiyas while drawing. On the test plan and drawing A the file opened, but the hatch's islands were wrong. DXF was not affected.
    - Now the islands keep the mark. A test saves a hatch with an island as DWG and as DXF and checks its paths and its area come back the same.
 7. **Found in the re-check, fixed (`1f0981a`): a click region with an island touching its wall measured the island in.**
    - When furniture touches a wall, the region found by a click runs round it and touches itself there. Such a path was measured as the sum of its loops, so the piece of furniture was added.
-   - KMQ: 6.932 m² for a region of 6.363 m². Now each loop goes into the even-odd count with the hatch's other paths: 6.363 m².
+   - drawing A: 6.932 m² for a region of 6.363 m². Now each loop goes into the even-odd count with the hatch's other paths: 6.363 m².
 
 ## Phase 3 limits (left for later)
 
@@ -253,7 +253,7 @@ This writes `check.dwg` and `check-dxf.dxf` there from the test plan. They hold 
    - Insert: create, insert and edit a block in place.
    - View: viewports, split view, UCS, sheet set.
    - Measure.
-   - Watch for anything that does not respond, and time a few changes on the ALJ drawing (expect about 1.0 to 1.5 s after the fix wave, see above).
+   - Watch for anything that does not respond, and time a few changes on the drawing B drawing (expect about 1.0 to 1.5 s after the fix wave, see above).
 5. **Recovery:**
    - Edit a drawing, wait for the autosave (set 1 minute in Settings), then kill the app (`pkill qiyas`).
    - Start it again. Does the recovery dialog appear?
@@ -265,4 +265,4 @@ This writes `check.dwg` and `check-dxf.dxf` there from the test plan. They hold 
 8. **The layer translator against a real standard:**
    - Use your office's layer standard drawing (or a client's) as the source on one of your drawings.
    - Are the renames, merges and colours what you expect?
-9. **Speed:** is about 0.3 to 0.4 s per change on a KMQ-sized drawing, and about 1.0 to 1.5 s on ALJ, fast enough for now?
+9. **Speed:** is about 0.3 to 0.4 s per change on a drawing A-sized drawing, and about 1.0 to 1.5 s on drawing B, fast enough for now?

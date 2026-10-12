@@ -31,7 +31,7 @@ Date: 2026-10-09. Qiyas commit `4c6651f` (branch main, not pushed). Same laptop 
 
 From `bench_open` (release build), three runs each, plus a temporary test example (now deleted) that timed the parts separately. "Phase 1" is from the foundation check. "Phase 1 code today" is the Phase 1 commit rebuilt and run on the same laptop today, so you can compare like with like. "After the fix" is Qiyas commit `f65c79d` and later (the click index fix, see below), three to five runs on copies of the drawings; `bench_open` now times the click index on its own.
 
-**KMQ X GAC 17.09.2026.dwg** (1.61 MB, office floor plans)
+**office drawing A 17.09.2026.dwg** (1.61 MB, office floor plans)
 
 | What | Phase 1 | Before the fix | After the fix |
 |---|---|---|---|
@@ -44,7 +44,7 @@ From `bench_open` (release build), three runs each, plus a temporary test exampl
 | Texts drawn | boxes | 98 texts, 1,248 letters | same |
 | Problems | 0 | 0 | 0 |
 
-**ALJ HO - Option B Design Package.dwg** (2.65 MB, about 40 sheets in model space)
+**drawing B HO - Option B Design Package.dwg** (2.65 MB, about 40 sheets in model space)
 
 | What | Phase 1 | Phase 1 code today | Before the fix | After the fix |
 |---|---|---|---|---|
@@ -63,7 +63,7 @@ How the time splits:
 - **Text** costs about 60 ms on the big drawing. All 13,462 texts fit on one 2048 × 2048 letter page.
 - **Lines:** the extra cost (101 to 340 ms) comes from picking inside blocks. The drawing now keeps 390,000 small pieces, one per line inside a block, against 47,000 before.
 - **The click index** went from 330 ms to 1,240 ms, with the same index code as in Phase 1. To check the drawing data was not the cause, the Phase 1 build and today's build were each given the other's line data. Each kept its own speed, whichever data it got. So the slowdown came from the build itself, not the drawing.
-- **Cause, found after the check:** as `qiyas-render` grew, the compiler split it into more pieces ("codegen units", 16 in release, 256 in dev builds). The click index's bulk load (from the `rstar` library) was split with it and ran about 4 times slower. The fix builds `qiyas-render` as one piece (`codegen-units = 1` in `Cargo.toml`, for dev and release builds). The click index is back to 335–400 ms on the big drawing (60–79 ms on KMQ) and the first draw to 0.6–0.7 s. In a dev build (`pnpm tauri dev`) the big drawing now draws in about 0.8 s, of which the index is about 0.47 s. A release test in `scripts/check.sh` (1 million segments must index in under 0.6 s) keeps it from coming back: without the setting it takes 1.1 s and fails.
+- **Cause, found after the check:** as `qiyas-render` grew, the compiler split it into more pieces ("codegen units", 16 in release, 256 in dev builds). The click index's bulk load (from the `rstar` library) was split with it and ran about 4 times slower. The fix builds `qiyas-render` as one piece (`codegen-units = 1` in `Cargo.toml`, for dev and release builds). The click index is back to 335–400 ms on the big drawing (60–79 ms on drawing A) and the first draw to 0.6–0.7 s. In a dev build (`pnpm tauri dev`) the big drawing now draws in about 0.8 s, of which the index is about 0.47 s. A release test in `scripts/check.sh` (1 million segments must index in under 0.6 s) keeps it from coming back: without the setting it takes 1.1 s and fails.
 
 ## Real-file checks (through the core, no window)
 
@@ -71,9 +71,9 @@ How the time splits:
 
 | Drawing | What was clicked | Phase 1 answer | Now |
 |---|---|---|---|
-| ALJ | wall polyline inside `BASE-B` | "Insert on A-WALL-EXST", 1 pcs | **5.632 m**, length |
-| ALJ | wall line inside `BASE-B` | "Insert on A-WALL-EXST", 1 pcs | **0.622 m**, length |
-| KMQ | wall line inside an unnamed block | "Insert on WALL", 1 pcs | **0.393 m**, length |
+| drawing B | wall polyline inside `BASE-B` | "Insert on A-WALL-EXST", 1 pcs | **5.632 m**, length |
+| drawing B | wall line inside `BASE-B` | "Insert on A-WALL-EXST", 1 pcs | **0.622 m**, length |
+| drawing A | wall line inside an unnamed block | "Insert on WALL", 1 pcs | **0.393 m**, length |
 
 The longest wall polyline inside `BASE-B` reads 95.484 m. The description still carries the raw bound-xref layer name, for example "LwPolyline on 02-First floor (arch&furn)$0$02-FIRST FLOOR (ARCH&FURN)$0$A-WALL". That is too long for a QS (see below).
 
@@ -83,7 +83,7 @@ The longest wall polyline inside `BASE-B` reads 95.484 m. The description still 
 
 ## PDF and image (copies, headless)
 
-**PDF:** `9-Fire Station ARCH DWG 1.pdf` from your Zamanan tender folder (copied). It is an AutoCAD 2022 plot, A3, 11 pages, vector. Page 1 is the ground floor plan, "SCALE 1:150 @ A3". It was attached to a copy of the KMQ drawing.
+**PDF:** `9-Fire Station ARCH DWG 1.pdf` from your Zamanan tender folder (copied). It is an AutoCAD 2022 plot, A3, 11 pages, vector. Page 1 is the ground floor plan, "SCALE 1:150 @ A3". It was attached to a copy of the drawing A drawing.
 
 | Step | Result |
 |---|---|
@@ -101,7 +101,7 @@ Two things this real sheet shows:
 - **Calibrate before you measure, even when the sheet states a scale.** The title says 1:150, but the plot is about 1:148. The graphic scale bar on the same sheet says 1:100, and it is wrong for this plot.
 - **Most of the sheet's text came in as lines, not text.** It was plotted from SHX fonts. Only 301 real texts came in, and the dimension numbers are lines.
 
-**Image:** the WhatsApp photo in your ALJ folder (899 × 1599 px, a hand sketch). It is under the 200 KB the brief asked for, but it is the only real image on this machine. The other large images are screenshots.
+**Image:** the WhatsApp photo in your drawing B folder (899 × 1599 px, a hand sketch). It is under the 200 KB the brief asked for, but it is the only real image on this machine. The other large images are screenshots.
 
 - Attach: 4 ms. Picture drawn in 30 ms.
 - Calibrated the bottom edge from 10 m to 5 m. It measured 5.000 m, and the height followed (8.893 m, shape kept).
@@ -118,7 +118,7 @@ The app page ran in the built-in browser (1400 × 900). A temporary test served 
    - First click: "Arc, A-DOOR, length 1.414 m, radius 0.900 m, inside DOOR".
    - Second click: the whole DOOR reference (`p1b-3`, `p1b-4`).
 4. **Tabs:**
-   - Opened KMQ, then the big drawing, as second and third tabs.
+   - Opened drawing A, then the big drawing, as second and third tabs.
    - Switching tabs took about 60 ms in the core during the check. After the fix wave a tab in the back drops its drawn lines and click index to save memory, so switching back to the big drawing now takes about 0.6 s.
    - Each tab keeps its own take-off (`p1b-5`, `p1b-6`).
 5. **Attach PDF:**

@@ -1,6 +1,6 @@
 # Qiyas
 
-Qiyas (قياس) is a desktop measurement CAD for quantity surveyors, part of QS Mind. It opens DWG and DXF drawings, lets the QS measure and edit, and uses AI to build and check BOQs against the drawing. Private repo (`kareem-sf/qiyas`). Stack: Tauri 2, React, TypeScript, Vite, Rust.
+Qiyas (قياس) is a desktop measurement CAD for quantity surveyors, part of QS Mind. It opens DWG and DXF drawings, lets the QS measure and edit, and uses AI to build and check BOQs against the drawing. Public repo (`kareem-sf/qiyas`, Apache-2.0, `LICENSE`). Stack: Tauri 2, React, TypeScript, Vite, Rust.
 
 ## Layout
 
@@ -54,7 +54,7 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
 
 ## Global constraints
 
-- Desktop only. No web build, no CI workflows. Local check is `scripts/check.sh`.
+- Desktop only. No web build, no CI workflows yet. Local check is `scripts/check.sh`.
 - Window title and product name: `Qiyas`. Arabic name: `قياس`. Bundle identifier: `com.qsmind.qiyas`.
 - This repo is its own git repo. Commit inside it. Never push or release without the founder's yes.
 - Only MPL-2.0, Apache-2.0, MIT, BSD, ISC, OFL, Zlib or BSL-1.0 dependencies (ISC: `ring`,
@@ -987,8 +987,8 @@ their measurements are marked `mcp`).
   version, notes, pub_date, a `url` and `signature` per platform key `linux-x86_64-appimage`,
   `linux-x86_64-deb`, `linux-x86_64-rpm`, `windows-x86_64-nsis`, `windows-x86_64-msi`,
   `darwin-aarch64-app`, `darwin-x86_64-app`). Its address is `plugins.updater.endpoints` in `tauri.conf.json` and the
-  signing public key `plugins.updater.pubkey`. Both are set (the feed at `https://qsmind.app/qiyas/latest.json`, which the site does
-  not serve yet: a check reports the feed's error until the first `latest.json` is uploaded); a
+  signing public key `plugins.updater.pubkey`. Both are set (the feed is the `latest.json` asset of the newest GitHub release,
+  `https://github.com/kareem-sf/qiyas/releases/latest/download/latest.json`); a
   `REPLACE-ME` placeholder in either (or a feed that is not `https://`) makes every check refused (`updates_not_configured`, and the
   About box says "Updates are not set up in this build yet"), never a silent failure.
 - About box: Check for updates, then Install and restart (download with its progress, signature
@@ -1015,8 +1015,10 @@ their measurements are marked `mcp`).
   bundle:signed` (the password never typed or in shell history) adds `tauri.updater.conf.json`
   (`createUpdaterArtifacts`), so each bundle gets a `.sig` beside it. Then `scripts/release-feed.sh
   ["notes"]` writes `target/release/bundle/latest.json` from the `.sig` files (download address
-  `https://qsmind.app/downloads/qiyas/<version>/`). Upload the bundles, then `latest.json` to
-  `https://qsmind.app/qiyas/latest.json` last. Plain
+  `https://github.com/kareem-sf/qiyas/releases/download/v<version>/`). Publish a GitHub release
+  tagged `v<version>` with the bundles, their `.sig` files and `latest.json` as assets
+  (`gh release create v<version> target/release/bundle/{appimage,deb,rpm}/* target/release/bundle/latest.json`);
+  the newest release must always carry a `latest.json`. Plain
   `pnpm bundle` needs no key and makes unsigned bundles. The Tauri CLI (`@tauri-apps/cli`
   2.12.1) doesn't write the version into the signature yet, so `requireSignedVersion`
   (downgrade protection: whoever controls the feed host could offer an older signed build as

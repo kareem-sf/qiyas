@@ -31,7 +31,7 @@ Open and first-draw times are from `cargo run --release -p qiyas-core --example 
 
 Pan times come from the Vite page in the built-in browser (Chromium, real Iris Xe GPU) at 1360 × 948 px, 1× pixel density. They cover 60 frames of continuous middle-drag panning and time each frame until the GPU has finished drawing it. Faked IPC served the real core.
 
-**KMQ X GAC 17.09.2026.dwg** (1.61 MB, AC1032)
+**office drawing A 17.09.2026.dwg** (1.61 MB, AC1032)
 
 | What | Result |
 |---|---|
@@ -45,7 +45,7 @@ Pan times come from the Vite page in the built-in browser (Chromium, real Iris X
 | Pan at full extents, average / worst frame | 6.0–6.9 ms / 7.6–14.3 ms: **60 fps, yes** |
 | Open button to drawing on screen (in the page) | about 0.24 s |
 
-**ALJ HO - Option B Design Package.dwg** (2.65 MB, AC1032)
+**drawing B HO - Option B Design Package.dwg** (2.65 MB, AC1032)
 
 | What | Result |
 |---|---|
@@ -62,7 +62,7 @@ Pan times come from the Vite page in the built-in browser (Chromium, real Iris X
 
 Picking an entity takes about 0.002 ms on both drawings. Copying the whole drawing in memory, which every save now does so a failed save changes nothing, takes 3 ms and 8 ms.
 
-## Measurement round trip (KMQ drawing)
+## Measurement round trip (drawing A drawing)
 
 These steps were done in the real app page, driven through the real core:
 
