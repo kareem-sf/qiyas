@@ -1642,7 +1642,7 @@ fn purge_for_save(doc: &mut CadDocument) -> Purged {
         match e {
             EntityType::Dimension(d) => {
                 let name = &d.base().block_name;
-                unnamed_dimension |= name.is_empty();
+                unnamed_dimension |= crate::purge::no_block(name);
                 used.insert(normalize_name(name));
             }
             EntityType::Table(t) => {
@@ -1657,13 +1657,8 @@ fn purge_for_save(doc: &mut CadDocument) -> Purged {
             _ => {}
         }
     }
-    let anonymous = |name: &str, kind: char| {
-        let mut chars = name.chars();
-        chars.next() == Some('*')
-            && chars.next().is_some_and(|c| c.eq_ignore_ascii_case(&kind))
-            && chars.clone().next().is_some()
-            && chars.all(|c| c.is_ascii_digit())
-    };
+    // One rule with PURGE (`crate::purge`).
+    let anonymous = |name: &str, kind: char| crate::purge::anonymous_kind(name) == Some(kind);
     let orphans: Vec<String> = doc
         .block_records
         .iter()

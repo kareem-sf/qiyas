@@ -1,7 +1,12 @@
 //! PURGE: what nothing uses (layers, blocks, text styles, linetypes, dimension styles, groups)
 //! listed by a dry run, then taken out in one undo step.
 
-use opencadcodec::{BlockRecord, CadDocument, DimStyle, EntityType, Line, LineType, TextStyle};
+use opencadcodec::entities::{CellContent, Insert, MultiLeader, Table, TableRow};
+use opencadcodec::objects::ObjectType;
+use opencadcodec::{
+    BlockRecord, CadDocument, DimStyle, EntityType, Handle, Layer, Line, LineType, TextStyle,
+    Vector3,
+};
 use qiyas_core::fixtures::{sample_doc, write_drawing, write_sample};
 use qiyas_core::purge::{PurgeKind, PurgeReport};
 use qiyas_core::{Command, DimSpec, Outcome, Session, Target};
@@ -39,8 +44,8 @@ fn sorted(names: &[String]) -> Vec<String> {
     names
 }
 
-/// A block `name` holding `entities`.
-fn add_block(doc: &mut CadDocument, name: &str, entities: Vec<EntityType>) {
+/// A block `name` holding `entities`; its record's handle.
+fn add_block(doc: &mut CadDocument, name: &str, entities: Vec<EntityType>) -> Handle {
     let mut record = BlockRecord::new(name);
     record.handle = doc.allocate_handle();
     record.block_entity_handle = doc.allocate_handle();
@@ -51,6 +56,7 @@ fn add_block(doc: &mut CadDocument, name: &str, entities: Vec<EntityType>) {
         entity.common_mut().owner_handle = owner;
         doc.add_entity(entity).unwrap();
     }
+    owner
 }
 
 fn line() -> EntityType {
@@ -297,4 +303,184 @@ fn the_takeoff_layers_every_save_writes_stay() {
     s.save_as(&dir.path().join("saved.dwg")).unwrap();
     assert!(s.drawing.doc.layers.get("QIYAS-LENGTH").is_some());
     assert!(purge(&mut s, &[PurgeKind::Layers], true).layers.is_empty());
+}
+
+fn layer(doc: &mut CadDocument, name: &str) -> Handle {
+    let mut layer = Layer::new(name);
+    layer.handle = doc.allocate_handle();
+    let h = layer.handle;
+    doc.layers.add(layer).unwrap();
+    h
+}
+
+fn text_style(doc: &mut CadDocument, name: &str) -> Handle {
+    let mut style = TextStyle::new(name);
+    style.handle = doc.allocate_handle();
+    let h = style.handle;
+    doc.text_styles.add(style).unwrap();
+    h
+}
+
+fn linetype(doc: &mut CadDocument, name: &str) -> Handle {
+    let mut lt = LineType::new(name);
+    lt.handle = doc.allocate_handle();
+    let h = lt.handle;
+    doc.line_types.add(lt).unwrap();
+    h
+}
+
+fn dimstyle(doc: &mut CadDocument, name: &str) -> DimStyle {
+    let mut d = DimStyle::new(name);
+    d.handle = doc.allocate_handle();
+    d
+}
+
+fn every_list(report: &PurgeReport) -> Vec<String> {
+    [
+        &report.layers,
+        &report.blocks,
+        &report.styles,
+        &report.linetypes,
+        &report.dimstyles,
+    ]
+    .into_iter()
+    .flatten()
+    .cloned()
+    .collect()
+}
+
+#[test]
+fn what_only_a_less_plain_reference_uses_is_never_listed() {
+    let (_dir, mut s) = open(&sample_doc());
+    let doc = &mut s.drawing.doc;
+    // A block only an MLEADER shows, one only a table cell shows, one only a dimension style's
+    // DIMBLK is; a text style only that dimension style names.
+    let mleader_block = add_block(doc, "MLBLOCK", vec![line()]);
+    let mut leader = MultiLeader::new();
+    leader.block_content_handle = Some(mleader_block);
+    doc.add_entity(EntityType::MultiLeader(leader)).unwrap();
+    let cell_block = add_block(doc, "CELLBLOCK", vec![line()]);
+    let mut table = Table::new(Vector3::new(50.0, 0.0, 0.0), 0, 0);
+    table.rows = vec![TableRow::from_texts(&["A"])];
+    table.rows[0].cells[0].contents.push(CellContent {
+        block_handle: Some(cell_block),
+        ..CellContent::default()
+    });
+    // A `*T` block its table uses.
+    add_block(doc, "*T7", vec![line()]);
+    table.block_name = "*T7".into();
+    doc.add_entity(EntityType::Table(table)).unwrap();
+    let dimblk = add_block(doc, "ARRBLK", vec![line()]);
+    let dimtext = text_style(doc, "DIMTEXT");
+    let mut arrows = dimstyle(doc, "ARROWS");
+    arrows.dimblk = dimblk;
+    arrows.dimblk_name = "ARRBLK".into();
+    arrows.dimtxsty = "DIMTEXT".into();
+    arrows.dimtxsty_handle = dimtext;
+    doc.dim_styles.add(arrows).unwrap();
+    // A linetype only a layer in use has.
+    linetype(doc, "LAYLT");
+    layer(doc, "LTLAYER");
+    doc.layers.get_mut("LTLAYER").unwrap().line_type = "LAYLT".into();
+    let mut on_it = line();
+    on_it.common_mut().layer = "LTLAYER".into();
+    doc.add_entity(on_it).unwrap();
+    // A layer used only inside a block definition that a reference keeps.
+    layer(doc, "INBLOCK");
+    let mut inside = line();
+    inside.common_mut().layer = "INBLOCK".into();
+    add_block(doc, "KEPT", vec![inside]);
+    doc.add_entity(EntityType::Insert(Insert::new("KEPT", Vector3::ZERO)))
+        .unwrap();
+    // The current text style and dimension style.
+    let current_text = text_style(doc, "CURTEXT");
+    doc.header.current_text_style_name = "CURTEXT".into();
+    doc.header.current_text_style_handle = current_text;
+    let current_dim = dimstyle(doc, "CURDIM");
+    doc.header.current_dimstyle_name = "CURDIM".into();
+    doc.header.current_dimstyle_handle = current_dim.handle;
+    doc.dim_styles.add(current_dim).unwrap();
+    // An xref's names.
+    layer(doc, "XR|WALL");
+    text_style(doc, "XR|STYLE");
+    linetype(doc, "XR|DASH");
+    add_block(doc, "XR|BLOCK", vec![line()]);
+    let xr_dim = dimstyle(doc, "XR|DIM");
+    doc.dim_styles.add(xr_dim).unwrap();
+    // And one that nothing uses, which is listed.
+    add_block(doc, "SPARE", vec![line()]);
+
+    let report = purge(&mut s, &[], true);
+    assert_eq!(report.limited_reason, None, "every kind was looked at");
+    assert_eq!(report.blocks, vec!["SPARE".to_string()]);
+    let listed = every_list(&report);
+    for name in [
+        "MLBLOCK",
+        "CELLBLOCK",
+        "*T7",
+        "ARRBLK",
+        "DIMTEXT",
+        "LAYLT",
+        "LTLAYER",
+        "INBLOCK",
+        "KEPT",
+        "CURTEXT",
+        "CURDIM",
+        "XR|WALL",
+        "XR|STYLE",
+        "XR|DASH",
+        "XR|BLOCK",
+        "XR|DIM",
+    ] {
+        assert!(
+            !listed.contains(&name.to_string()),
+            "{name} is in use: {listed:?}"
+        );
+    }
+}
+
+#[test]
+fn a_drawing_with_unread_data_purges_layers_only_and_says_why() {
+    let (_dir, mut s) = open(&cluttered());
+    let h = s.drawing.doc.allocate_handle();
+    s.drawing.doc.objects.insert(
+        h,
+        ObjectType::Unknown {
+            type_name: "AECC_THING".into(),
+            handle: h,
+            owner: Handle::NULL,
+            raw_dxf_codes: Some(vec![(340, "1F".into())]),
+            raw_dwg_data: None,
+            raw_dwg_handle_bits: 0,
+            raw_dwg_version: None,
+        },
+    );
+    let report = purge(&mut s, &[], true);
+    assert_eq!(report.layers, vec!["OLD".to_string()]);
+    assert!(report.blocks.is_empty() && report.styles.is_empty());
+    assert!(report.linetypes.is_empty() && report.dimstyles.is_empty());
+    assert!(report
+        .limited_reason
+        .as_deref()
+        .unwrap()
+        .contains("1 object"));
+    // Layers alone are not limited.
+    assert_eq!(
+        purge(&mut s, &[PurgeKind::Layers], true).limited_reason,
+        None
+    );
+    // The real run takes the layer only.
+    purge(&mut s, &[], false);
+    assert!(s.drawing.doc.layers.get("OLD").is_none());
+    assert!(s.drawing.doc.block_records.get("SPARE").is_some());
+}
+
+#[test]
+fn a_non_ascii_separator_and_an_arabic_layer_name_scan_safely() {
+    let (_dir, mut s) = open(&cluttered());
+    s.drawing.doc.header.dim_decimal_separator = 'Ä';
+    layer(&mut s.drawing.doc, "جدار");
+    let report = purge(&mut s, &[], true);
+    assert!(report.layers.contains(&"جدار".to_string()));
+    assert!(report.blocks.contains(&"SPARE".to_string()));
 }

@@ -60,6 +60,10 @@ pub struct PurgeReport {
     pub group_members: usize,
     /// Everything above: the entries listed and the gone members.
     pub total: usize,
+    /// Why only layers were looked at, when the drawing holds data Qiyas can't read (objects
+    /// or entities of kinds it does not know), whose references to blocks, styles and linetypes
+    /// it can't see; `None` when every kind asked for was looked at.
+    pub limited_reason: Option<String>,
 }
 
 /// Handles and names something mentions, read off its `Debug` text: every `Handle(n)` and every
@@ -74,42 +78,53 @@ impl Mentions {
     fn scan(&mut self, value: &impl Debug) {
         let text = format!("{value:?}");
         let bytes = text.as_bytes();
+        // Indexes move by bytes, but only ever stop on ASCII bytes (a quote, `H`, a digit) or
+        // on the char boundaries `char_indices` gives, so slicing never splits a character.
         let mut i = 0;
         while i < bytes.len() {
-            if bytes[i] == b'"' {
-                // A Debug string: `\` escapes the next character.
-                let mut name = String::new();
-                let mut chars = text[i + 1..].char_indices();
-                let mut end = text.len();
-                while let Some((j, c)) = chars.next() {
-                    match c {
-                        '\\' => {
-                            if let Some((_, next)) = chars.next() {
-                                name.push(next);
-                            }
-                        }
-                        '"' => {
-                            end = i + 1 + j + 1;
-                            break;
-                        }
-                        c => name.push(c),
+            match bytes[i] {
+                b'"' => {
+                    let (name, end) = debug_string(&text[i + 1..]);
+                    i += 1 + end;
+                    if name.is_empty() {
+                        continue;
                     }
-                }
-                if !name.is_empty() {
+                    // DXF raw pairs keep handles as hex text.
+                    if name.len() <= 16 && name.bytes().all(|b| b.is_ascii_hexdigit()) {
+                        if let Ok(h) = u64::from_str_radix(&name, 16) {
+                            self.handles.insert(h);
+                        }
+                    }
                     self.names.insert(normalize_name(&name));
                 }
-                i = end;
-            } else if text[i..].starts_with("Handle(") {
-                let digits: String = text[i + 7..]
-                    .chars()
-                    .take_while(char::is_ascii_digit)
-                    .collect();
-                if let Ok(h) = digits.parse::<u64>() {
-                    self.handles.insert(h);
+                // A char literal (`'"'`, `'\''`, `'Ä'`): skipped whole, so a quote in it
+                // starts no string.
+                b'\'' => {
+                    let rest = &text[i + 1..];
+                    let mut chars = rest.char_indices();
+                    let skip = match chars.next() {
+                        // The escaped character is ASCII (`'`, `n`, `u`...): the closing
+                        // quote is the first one after it.
+                        Some((_, '\\')) => rest.get(2..).and_then(|r| r.find('\'')).map(|k| k + 3),
+                        Some((_, c)) => rest[c.len_utf8()..]
+                            .starts_with('\'')
+                            .then(|| c.len_utf8() + 1),
+                        None => None,
+                    };
+                    i += 1 + skip.unwrap_or(0);
                 }
-                i += 7 + digits.len();
-            } else {
-                i += 1;
+                b'H' if bytes[i..].starts_with(b"Handle(") => {
+                    let digits = bytes[i + 7..]
+                        .iter()
+                        .take_while(|b| b.is_ascii_digit())
+                        .count();
+                    if let Ok(h) = text[i + 7..i + 7 + digits].parse::<u64>() {
+                        self.handles.insert(h);
+                    }
+                    i += 7 + digits;
+                }
+                // Past one whole character.
+                _ => i += text[i..].chars().next().map_or(1, char::len_utf8),
             }
         }
     }
@@ -118,6 +133,42 @@ impl Mentions {
         self.names.contains(&normalize_name(name))
             || (!handle.is_null() && self.handles.contains(&handle.value()))
     }
+}
+
+/// A Debug string's text up to its closing quote, unescaped (`\"`, `\\`, `\n`, `\u{64e}`),
+/// and how many bytes it took with the quote.
+fn debug_string(rest: &str) -> (String, usize) {
+    let mut name = String::new();
+    let mut chars = rest.char_indices().peekable();
+    while let Some((j, c)) = chars.next() {
+        match c {
+            '"' => return (name, j + 1),
+            '\\' => match chars.next() {
+                Some((_, 'n')) => name.push('\n'),
+                Some((_, 't')) => name.push('\t'),
+                Some((_, 'r')) => name.push('\r'),
+                Some((_, '0')) => name.push('\0'),
+                Some((k, 'u')) => {
+                    // `\u{64e}`
+                    let hex: String = rest[k + 1..]
+                        .chars()
+                        .skip(1)
+                        .take_while(|c| *c != '}')
+                        .collect();
+                    if let Some(c) = u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
+                        name.push(c);
+                    }
+                    for _ in 0..hex.len() + 2 {
+                        chars.next();
+                    }
+                }
+                Some((_, other)) => name.push(other),
+                None => {}
+            },
+            c => name.push(c),
+        }
+    }
+    (name, rest.len())
 }
 
 /// What the entities left in the drawing name, with the handles and names their less plain
@@ -224,6 +275,15 @@ impl Held {
     pub(crate) fn read(doc: &CadDocument) -> Held {
         let mut header = Mentions::default();
         header.scan(&doc.header);
+        // The section view style's arrowhead blocks are bare numbers, not `Handle`s.
+        if let Some(style) = &doc.section_view_style {
+            header.scan(style);
+            header.handles.extend(
+                [style.arrow_start_handle, style.arrow_end_handle]
+                    .into_iter()
+                    .filter(|&h| h != 0),
+            );
+        }
         let mut dimstyles = Mentions::default();
         for d in doc.dim_styles.iter() {
             dimstyles.scan(d);
@@ -282,6 +342,7 @@ struct Plan {
     /// Groups that stay, with the members still in the drawing; and how many went.
     group_members: Vec<(Handle, Vec<Handle>)>,
     gone_members: usize,
+    limited_reason: Option<String>,
 }
 
 impl Plan {
@@ -301,6 +362,7 @@ impl Plan {
             groups: sorted(&self.groups),
             group_members: self.gone_members,
             total: 0,
+            limited_reason: self.limited_reason.clone(),
         };
         let total = report.layers.len()
             + report.blocks.len()
@@ -317,6 +379,31 @@ impl Plan {
 /// null block handle.
 pub(crate) fn no_block(name: &str) -> bool {
     name.is_empty() || name.eq_ignore_ascii_case("*U0")
+}
+
+/// Every kind, in the report's order.
+const ALL_KINDS: [PurgeKind; 6] = [
+    PurgeKind::Layers,
+    PurgeKind::Blocks,
+    PurgeKind::Styles,
+    PurgeKind::Linetypes,
+    PurgeKind::Dimstyles,
+    PurgeKind::Groups,
+];
+
+/// How many objects and entities the codec keeps unread (unknown kinds, proxies): what they
+/// point at can't be seen.
+fn unread_data(doc: &CadDocument) -> usize {
+    let objects = doc
+        .objects
+        .values()
+        .filter(|o| matches!(o, ObjectType::Unknown { .. } | ObjectType::ProxyObject(_)))
+        .count();
+    let entities = doc
+        .entities()
+        .filter(|e| matches!(e, EntityType::Unknown(_)))
+        .count();
+    objects + entities
 }
 
 /// `*D12` is an anonymous block of kind `D`.
@@ -477,8 +564,16 @@ impl Session {
     }
 
     fn purge_plan(&self, kinds: &[PurgeKind]) -> Plan {
-        let want = |k| kinds.is_empty() || kinds.contains(&k);
         let doc = &self.drawing.doc;
+        let asked = |k| kinds.is_empty() || kinds.contains(&k);
+        // Data the codec keeps unread may point at any table entry: then only layers, which
+        // every entity names in the open, are looked at.
+        let unread = unread_data(doc);
+        let limited = unread > 0
+            && ALL_KINDS
+                .iter()
+                .any(|&k| k != PurgeKind::Layers && asked(k));
+        let want = |k| asked(k) && (k == PurgeKind::Layers || unread == 0);
         // Layers and groups need none of it, and reading it formats every object.
         let held = if [
             PurgeKind::Blocks,
@@ -493,7 +588,16 @@ impl Session {
         } else {
             Held::default()
         };
-        let mut plan = Plan::default();
+        let mut plan = Plan {
+            limited_reason: limited.then(|| {
+                format!(
+                    "The drawing holds {unread} object{} Qiyas can't read, which may use blocks, \
+                     styles or linetypes: only layers were looked at",
+                    if unread == 1 { "" } else { "s" }
+                )
+            }),
+            ..Plan::default()
+        };
 
         // Blocks first: what an unused block holds uses nothing.
         let doubled = twice(doc.block_records.iter().map(|b| b.name.as_str()));
@@ -699,6 +803,17 @@ mod tests {
         m.scan(&(Handle::new(42), "Dash \"dot\"", Some(Handle::new(7))));
         assert!(m.handles.contains(&42) && m.handles.contains(&7));
         assert!(m.names.contains("DASH \"DOT\""));
+    }
+
+    #[test]
+    fn mentions_survive_non_ascii_chars_and_read_escapes_and_hex() {
+        let mut m = Mentions::default();
+        // A char outside any string ('Ä' is two bytes), a quote char, then a handle.
+        m.scan(&('Ä', '"', '\'', Handle::new(5), "\u{64e}جدار", "1A"));
+        assert!(m.handles.contains(&5), "{:?}", m.handles);
+        assert!(m.names.contains("\u{64e}جدار"), "{:?}", m.names);
+        // DXF raw pairs keep handles as hex text.
+        assert!(m.handles.contains(&0x1a));
     }
 
     #[test]
