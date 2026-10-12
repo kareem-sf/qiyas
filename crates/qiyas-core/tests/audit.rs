@@ -273,3 +273,29 @@ fn empty_blocks_and_unused_layers_are_listed() {
     assert_eq!(json["counts"]["empty_block"], 1);
     assert_eq!(json["items"][0]["kind"], "empty_block");
 }
+
+/// While a block is edited in place the repairs wait (the edit's working copies are on the
+/// sheet); the report alone still runs.
+#[test]
+fn audit_fix_waits_for_a_block_edit_in_place() {
+    let (_dir, mut s) = open(&sample_doc(), "sample.dxf");
+    let door = s
+        .drawing
+        .doc
+        .entities_in_block("*Model_Space")
+        .find_map(|e| match e {
+            EntityType::Insert(i) if i.block_name == "DOOR" => Some(e.common().handle.value()),
+            _ => None,
+        })
+        .expect("a DOOR reference");
+    s.run(Command::EditBlockInPlace { target: t(door) })
+        .unwrap();
+    let refused = s.run(Command::Audit { fix: true }).unwrap_err();
+    assert!(
+        matches!(&refused, qiyas_core::CoreError::InvalidCommand(m) if m.contains("REFCLOSE")),
+        "{refused:?}"
+    );
+    assert!(!audit(&mut s, false).fix);
+    s.run(Command::DiscardBlockEdits).unwrap();
+    assert!(audit(&mut s, true).fix);
+}

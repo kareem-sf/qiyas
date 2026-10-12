@@ -174,6 +174,13 @@ fn line(kind: AuditKind, name: &str, count: usize, fixed: bool) -> String {
 impl Session {
     /// `Command::Audit`: the report, and with `fix` the safe repairs (see the module).
     pub(crate) fn audit(&mut self, fix: bool) -> Result<AuditReport, CoreError> {
+        // The edit's working copies sit on the sheet: a repair would drop group members it took
+        // out for the while (as purge, only the dry run goes ahead).
+        if let Some(name) = self.block_edit_name().filter(|_| fix) {
+            return Err(CoreError::InvalidCommand(format!(
+                "Block {name} is being edited in place: save or discard the edit first (REFCLOSE)"
+            )));
+        }
         let found = self.audit_scan();
         let doc = &self.drawing.doc;
         let zero = doc.layers.get("0").map(|l| l.name.clone());
