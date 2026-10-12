@@ -5,7 +5,7 @@ anything bigger than a fix, open an issue or a discussion first so we agree on t
 
 ## Build and run
 
-You need Rust stable (`rust-toolchain.toml` picks it), Node 20 or newer and pnpm. On Linux, the
+You need Rust stable (`rust-toolchain.toml` picks it), Node 24 (what CI uses) and pnpm. On Linux, the
 Tauri system packages too (`libwebkit2gtk-4.1-dev`, `libayatana-appindicator3-dev`,
 `librsvg2-dev`, `libxdo-dev`, `libssl-dev`, `patchelf`; see `.github/workflows/ci.yml`).
 
@@ -32,7 +32,7 @@ New behaviour comes with a test. Keep changes to what the pull request is about.
 
 ## Commits
 
-Conventional commit subjects in the imperative, with the area in brackets, as in `git log`:
+Conventional commit subjects, with the area in brackets, for example:
 
 ```
 feat(ribbon): AutoCAD-style groups and a quick-access bar
@@ -40,10 +40,6 @@ fix(plot): Windows print runs PowerShell hidden, without a console
 docs: Phase 4 rulings and carried items
 build(updater): release-feed.sh writes latest.json from the signed bundles
 ```
-
-Sign off every commit (`git commit -s`): the `Signed-off-by:` line certifies the
-[Developer Certificate of Origin](https://developercertificate.org/), that you wrote the change
-or have the right to submit it under the project's licence.
 
 ## Licence
 

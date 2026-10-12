@@ -12,5 +12,4 @@
 
 - [ ] `scripts/check.sh` passes (fmt, clippy, tests, the release speed guards, tsc, vitest)
 - [ ] New behaviour has a test, or the PR says why it cannot
-- [ ] Commits are signed off (`git commit -s`, see CONTRIBUTING.md)
 - [ ] No new dependency outside the allowed licences (CONTRIBUTING.md)

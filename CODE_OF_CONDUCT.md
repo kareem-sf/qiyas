@@ -59,8 +59,11 @@ representative at an online or offline event.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the community leaders responsible for enforcement: the maintainer,
-[@kareem-sf](https://github.com/kareem-sf) on GitHub.
+reported privately to the community leaders responsible for enforcement, the
+maintainer [@kareem-sf](https://github.com/kareem-sf): open a private report through
+[GitHub's private vulnerability reporting](https://github.com/kareem-sf/qiyas/security/advisories/new)
+with "Code of Conduct" in the title (only the maintainer sees it), or use the contact
+details on the maintainer's GitHub profile.
 All complaints will be reviewed and investigated promptly and fairly.
 
 All community leaders are obligated to respect the privacy and security of the

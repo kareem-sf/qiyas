@@ -35,7 +35,9 @@ Download the newest release from [Releases](https://github.com/kareem-sf/qiyas/r
 AppImage, deb or rpm on Linux; from the next release on, also the Windows (NSIS, MSI) and macOS
 (Apple silicon, Intel) installers, built by the release workflow. Installed copies check that
 page for updates (About, Check for updates). The installers are not code-signed yet, so Windows
-SmartScreen and macOS Gatekeeper warn on first open.
+SmartScreen and macOS Gatekeeper warn on first open; on a Mac, if Qiyas is reported as
+"damaged", open it once from System Settings, Privacy & Security, Open Anyway (or run
+`xattr -dr com.apple.quarantine /Applications/Qiyas.app`).
 
 ## Build
 
@@ -47,7 +49,7 @@ pnpm tauri dev --config crates/qiyas-desktop/tauri.conf.json  # run the app
 pnpm bundle                                                   # installers in target/release/bundle
 ```
 
-Needs Rust stable, Node 20+ and pnpm. The window's Arabic font is Thmanyah Sans, a licensed
+Needs Rust stable, Node 24 and pnpm. The window's Arabic font is Thmanyah Sans, a licensed
 font that is not in the repo: `scripts/fonts.sh` copies it from the company's copy, and
 without it the system's Arabic font is used. Drawing text uses Noto Sans and Noto Sans Arabic
 (OFL, included).

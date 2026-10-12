@@ -60,7 +60,7 @@ body:
     id: version
     attributes:
       label: Qiyas version
-      description: From Help, About.
+      description: From the About button in the window's header.
       placeholder: 0.0.1
     validations:
       required: true

@@ -3,7 +3,7 @@
 ## Supported versions
 
 Qiyas is young: only the newest release gets security fixes. Installed copies update themselves
-from GitHub releases (Help, About, Check for updates).
+from GitHub releases (the About button in the header, Check for updates).
 
 | Version | Supported |
 |---|---|
