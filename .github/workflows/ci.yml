@@ -1,0 +1,92 @@
+# Checks every push to main and every pull request: the same steps as scripts/check.sh on Linux,
+# and a release build of the app (no installers) on Linux, Windows and macOS.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - name: Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
+            patchelf libgtk-3-dev libssl-dev build-essential curl wget file libxdo-dev \
+            libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: pnpm install --frozen-lockfile
+      # pdfium installed, so check.sh runs the PDF tests and fails if any is ignored.
+      - run: scripts/pdfium.sh
+      - run: scripts/check.sh
+
+  build-smoke:
+    name: build-smoke (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - name: Tauri Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
+            patchelf libgtk-3-dev libssl-dev build-essential curl wget file libxdo-dev \
+            libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: pnpm install --frozen-lockfile
+      - run: scripts/pdfium.sh
+      - run: scripts/build-sidecar.sh
+      # Compiles the app as a release would, without making installers. Uploads nothing.
+      - run: pnpm tauri build --config crates/qiyas-desktop/tauri.bundle.conf.json --no-bundle
+
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    # Advisory only: it reports new vulnerable or badly licensed dependencies, never blocks.
+    continue-on-error: true
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/dependency-review-action@v5
+        with:
+          comment-summary-in-pr: on-failure

@@ -54,7 +54,13 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
 
 ## Global constraints
 
-- Desktop only. No web build, no CI workflows yet. Local check is `scripts/check.sh`.
+- Desktop only, no web build. Local check is `scripts/check.sh`. CI on GitHub
+  (`.github/workflows/ci.yml`, on every pull request and push to `main`): `check` runs
+  `scripts/pdfium.sh` and `scripts/check.sh` on Ubuntu (required to merge into `main`;
+  branch protection, admins may push directly); `build-smoke` compiles the app in release with
+  the sidecar (`pnpm tauri build --no-bundle`) on Ubuntu, Windows and macOS; `dependency-review`
+  is advisory on pull requests. Dependabot (`.github/dependabot.yml`) bumps cargo, npm and the
+  actions weekly. Releases: `.github/workflows/release.yml` (see Updates and installers).
 - Window title and product name: `Qiyas`. Arabic name: `قياس`. Bundle identifier: `com.qsmind.qiyas`.
 - This repo is its own git repo. Commit inside it. Never push or release without the founder's yes.
 - Only MPL-2.0, Apache-2.0, MIT, BSD, ISC, OFL, Zlib or BSL-1.0 dependencies (ISC: `ring`,
@@ -1010,7 +1016,25 @@ their measurements are marked `mcp`).
   `.tauri/`. A lost private key means installed copies can never update again: keep a backup
   of the two files off this laptop. To make a new pair: `pnpm tauri signer generate -w
   ~/.tauri/qiyas.key` (never paste the password into a chat).
-- Release with updates: `export TAURI_SIGNING_PRIVATE_KEY=~/.tauri/qiyas.key
+- Release (GitHub Actions, `.github/workflows/release.yml`): bump the version in
+  `crates/qiyas-desktop/tauri.conf.json`, `package.json` and `Cargo.toml`, move `CHANGELOG.md`'s
+  Unreleased notes into a `## [<version>] - <date>` section (it becomes the release notes; the
+  workflow refuses a tag without one), commit, then `git tag v<version> && git push origin
+  v<version>`. The workflow refuses a tag that does not match `tauri.conf.json`'s version or
+  whose release is already published, builds Linux (ubuntu-22.04: AppImage, deb, rpm), Windows
+  (NSIS, MSI) and macOS (macos-latest: aarch64; macos-15-intel: x86_64, the Intel image after
+  macos-13 was retired) with `tauri-apps/tauri-action`, signs them for the updater and uploads
+  the bundles, their `.sig` files and `latest.json` (NSIS preferred for Windows) to a DRAFT
+  release `Qiyas <version>`; the `feed` job checks `latest.json` has all seven platform keys.
+  Then review the draft on GitHub and click Publish: only a published release is what
+  `releases/latest/download/latest.json` serves. Signing needs two repository secrets, which
+  the founder sets himself (never an agent): `gh secret set TAURI_SIGNING_PRIVATE_KEY <
+  ~/.tauri/qiyas.key` and `gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD <
+  ~/.tauri/qiyas.key.password`. Without them the tag still builds, unsigned, with no `.sig` and
+  no `latest.json` (a warning says so): installed copies cannot update to such a release. Run
+  the workflow by hand with a tag to build that draft again; with no tag (or on a pull request
+  that changes `release.yml`) it is a dry run: unsigned bundles as workflow artifacts, no release.
+- Release by hand (fallback): `export TAURI_SIGNING_PRIVATE_KEY=~/.tauri/qiyas.key
   TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$(cat ~/.tauri/qiyas.key.password)" && pnpm
   bundle:signed` (the password never typed or in shell history) adds `tauri.updater.conf.json`
   (`createUpdaterArtifacts`), so each bundle gets a `.sig` beside it. Then `scripts/release-feed.sh
