@@ -80,7 +80,7 @@ jobs:
             # The release notes are the CHANGELOG.md section of this version.
             notes=$(awk -v v="$version" '
               /^## \[/ { if (on) exit; if (index($0, "## [" v "]") == 1) { on = 1; next } }
-              on { print }' CHANGELOG.md | sed -e '/./,$!d')
+              on && !/^\[[^]]*\]: http/ { print }' CHANGELOG.md | sed -e '/./,$!d')
             if [[ -z "$notes" ]]; then
               echo "::error::CHANGELOG.md has no section '## [$version]': add the release notes first."
               exit 1
