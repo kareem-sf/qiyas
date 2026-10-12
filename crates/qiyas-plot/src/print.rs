@@ -1,8 +1,13 @@
 //! Printing hands the plotted PDF to the operating system: Linux `lp -d <printer>` (or the PDF
 //! viewer through `xdg-open` when no printer is chosen), macOS `lpr`, Windows the PDF handler's
 //! Print or PrintTo verb. Qiyas draws no print dialog of its own.
+//!
+//! No name or path is ever put inside a command string: on Windows a fixed PowerShell script
+//! (`-EncodedCommand`) reads the file and the printer from environment variables and starts the
+//! handler through `ProcessStartInfo` (no wildcards, no quoting); elsewhere they are separate
+//! arguments of `lp`, `lpr` or `xdg-open`.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::PlotError;
@@ -16,11 +21,59 @@ pub struct PrintPlan {
     /// Wait for it and report its error (a print command); a viewer is left running.
     pub wait: bool,
     pub message: String,
+    /// Environment variables for it (Windows: the file and the printer).
+    pub env: Vec<(String, String)>,
 }
 
-/// A single-quoted PowerShell string.
-fn ps_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "''"))
+/// The Windows print script: the file and printer come from the environment only.
+const WINDOWS_SCRIPT: &str = "$ErrorActionPreference = 'Stop'
+$i = New-Object System.Diagnostics.ProcessStartInfo
+$i.FileName = $env:QIYAS_PRINT_FILE
+$i.UseShellExecute = $true
+$i.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+if ($env:QIYAS_PRINT_PRINTER) {
+  $i.Verb = 'PrintTo'
+  $i.Arguments = '\"' + $env:QIYAS_PRINT_PRINTER + '\"'
+} else {
+  $i.Verb = 'Print'
+}
+[void][System.Diagnostics.Process]::Start($i)
+";
+
+/// Standard base64.
+fn base64(data: &[u8]) -> String {
+    const ABC: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let n = chunk
+            .iter()
+            .enumerate()
+            .fold(0u32, |acc, (i, b)| acc | u32::from(*b) << (16 - 8 * i));
+        for k in 0..4 {
+            if k <= chunk.len() {
+                out.push(char::from(ABC[(n >> (18 - 6 * k) & 63) as usize]));
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+/// `path` without Windows' verbatim prefix (`\\?\C:\…`, `\\?\UNC\server\…`) that
+/// `canonicalize` gives: PDF handlers, PowerShell and the window read plain paths.
+pub fn plain_path(path: &Path) -> PathBuf {
+    let s = path.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    if let Some(rest) = s.strip_prefix(r"\\?\") {
+        let b = rest.as_bytes();
+        if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
+            return PathBuf::from(rest);
+        }
+    }
+    path.to_path_buf()
 }
 
 /// How to print `pdf` on `os` (`std::env::consts::OS`), on `printer` or the default one.
@@ -29,22 +82,23 @@ pub fn print_plan(os: &str, pdf: &Path, printer: Option<&str>) -> PrintPlan {
     let sent = |p: &str| format!("Sent to {p}");
     match (os, printer) {
         ("windows", printer) => {
-            let script = match printer {
-                Some(p) => format!(
-                    "Start-Process -FilePath {} -Verb PrintTo -ArgumentList {}",
-                    ps_quote(&file),
-                    ps_quote(&format!("\"{p}\""))
-                ),
-                None => format!("Start-Process -FilePath {} -Verb Print", ps_quote(&file)),
-            };
+            let utf16: Vec<u8> = WINDOWS_SCRIPT
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes)
+                .collect();
+            let mut env = vec![("QIYAS_PRINT_FILE".to_string(), file)];
+            if let Some(p) = printer {
+                env.push(("QIYAS_PRINT_PRINTER".to_string(), p.to_string()));
+            }
             PrintPlan {
                 program: "powershell".into(),
                 args: vec![
                     "-NoProfile".into(),
                     "-NonInteractive".into(),
-                    "-Command".into(),
-                    script,
+                    "-EncodedCommand".into(),
+                    base64(&utf16),
                 ],
+                env,
                 wait: true,
                 message: match printer {
                     Some(p) => sent(p),
@@ -61,6 +115,7 @@ pub fn print_plan(os: &str, pdf: &Path, printer: Option<&str>) -> PrintPlan {
             PrintPlan {
                 program: "lpr".into(),
                 args,
+                env: Vec::new(),
                 wait: true,
                 message: printer.map_or("Sent to the default printer".into(), sent),
             }
@@ -68,12 +123,14 @@ pub fn print_plan(os: &str, pdf: &Path, printer: Option<&str>) -> PrintPlan {
         (_, Some(p)) => PrintPlan {
             program: "lp".into(),
             args: vec!["-d".into(), p.into(), file],
+            env: Vec::new(),
             wait: true,
             message: sent(p),
         },
         (_, None) => PrintPlan {
             program: "xdg-open".into(),
             args: vec![file],
+            env: Vec::new(),
             wait: false,
             message: "Opened in the PDF viewer: print from there".into(),
         },
@@ -97,11 +154,16 @@ pub fn print_dry_run(pdf: &Path, printer: Option<&str>) -> Result<PrintPlan, Plo
         return Err(bad("The PDF to print is not there"));
     }
     if let Some(p) = printer {
-        if p.is_empty() || p.starts_with('-') || p.chars().any(char::is_control) || p.len() > 256 {
+        if p.is_empty()
+            || p.starts_with('-')
+            || p.contains('"')
+            || p.chars().any(char::is_control)
+            || p.len() > 256
+        {
             return Err(bad("That is not a printer name"));
         }
     }
-    Ok(print_plan(std::env::consts::OS, &pdf, printer))
+    Ok(print_plan(std::env::consts::OS, &plain_path(&pdf), printer))
 }
 
 /// Prints `pdf` on `printer` (or the default; on Linux without one, opens the PDF viewer);
@@ -110,6 +172,7 @@ pub fn print_pdf(pdf: &Path, printer: Option<&str>) -> Result<String, PlotError>
     let plan = print_dry_run(pdf, printer)?;
     let mut command = Command::new(&plan.program);
     command.args(&plan.args);
+    command.envs(plan.env.iter().map(|(k, v)| (k, v)));
     let failed = |e: std::io::Error| PlotError::Print(format!("Can't run {}: {e}", plan.program));
     if plan.wait {
         let out = command.output().map_err(failed)?;

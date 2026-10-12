@@ -46,8 +46,13 @@ fn ctb_text() -> String {
 /// `text` in the binary form: the 48-byte header, adler32 of the zlib body, the text's length,
 /// the body's length, then the body.
 fn binary(header: &str, text: &str) -> Vec<u8> {
+    binary_bytes(header, text.as_bytes())
+}
+
+/// `binary` over raw text bytes (not UTF-8, or with a NUL at the end as AutoCAD writes it).
+fn binary_bytes(header: &str, text: &[u8]) -> Vec<u8> {
     let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
-    z.write_all(text.as_bytes()).unwrap();
+    z.write_all(text).unwrap();
     let body = z.finish().unwrap();
     let mut a: u32 = 1;
     let mut b: u32 = 0;
@@ -62,6 +67,59 @@ fn binary(header: &str, text: &str) -> Vec<u8> {
     out.extend((body.len() as u32).to_le_bytes());
     out.extend(body);
     out
+}
+
+/// The text inside a compressed plot style file, and the text length its header gives.
+fn unpacked(bytes: &[u8]) -> (Vec<u8>, usize) {
+    let mut text = Vec::new();
+    std::io::Read::read_to_end(&mut flate2::read::ZlibDecoder::new(&bytes[60..]), &mut text)
+        .unwrap();
+    let len = u32::from_le_bytes(bytes[52..56].try_into().unwrap()) as usize;
+    (text, len)
+}
+
+/// Where the checked-in fixtures live (written by Qiyas's own writer: `write_fixtures`).
+fn fixture(name: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+}
+
+/// The fixtures' tables: the office CTB (pen 1 black at 0.50 mm, pen 3 not plotted, pen 5
+/// screened to half), and an STB with Normal and a heavy black style.
+fn office_ctb() -> PlotStyle {
+    let mut ctb = PlotStyle::default_ctb();
+    ctb.description = "Qiyas test pens".to_string();
+    ctb.styles[0].color = Some([0, 0, 0]);
+    ctb.styles[0].lineweight = 13;
+    ctb.styles[2].screen = 0;
+    ctb.styles[4].screen = 50;
+    ctb
+}
+
+fn named_stb() -> PlotStyle {
+    let office = office_ctb();
+    let named = |i: usize, name: &str| {
+        let mut style = office.styles[i].clone();
+        style.name = name.to_string();
+        style.localized_name = name.to_string();
+        style
+    };
+    PlotStyle {
+        kind: StyleKind::Stb,
+        description: "Qiyas test styles".to_string(),
+        styles: vec![named(1, "Normal"), named(0, "Heavy")],
+        ..office.clone()
+    }
+}
+
+/// Writes the fixtures again: `cargo test -p qiyas-plot --test ctb -- --ignored write_fixtures`.
+#[test]
+#[ignore]
+fn write_fixtures() {
+    std::fs::create_dir_all(fixture("")).unwrap();
+    office_ctb().save(&fixture("office.ctb")).unwrap();
+    named_stb().save(&fixture("named.stb")).unwrap();
 }
 
 const CTB_HEADER: &str = "PIAFILEVERSION_2.0,CTBVER1,compress\r\npmzlibcodec";
@@ -242,4 +300,67 @@ fn a_plot_style_travels_as_json() {
     assert_eq!(wire["styles"][0]["name"], "Color_1");
     let back: PlotStyle = serde_json::from_value(wire).unwrap();
     assert_eq!(back, style);
+}
+
+/// AutoCAD's files end their text with a NUL that the header's length counts, use LF line ends,
+/// and may hold a description in the computer's code page: such a file loads.
+#[test]
+fn a_file_shaped_like_autocads_loads() {
+    let mut text = ctb_text().replace("\r\n", "\n").into_bytes();
+    // "Café" in Windows-1252, not UTF-8.
+    let at = text.iter().position(|b| *b == b'\n').unwrap();
+    text.splice(at..at, [b' ', b'C', b'a', b'f', 0xE9]);
+    text.push(0);
+    let style = PlotStyle::parse(&binary_bytes(CTB_HEADER, &text)).unwrap();
+    assert!(
+        style.description.starts_with("Office pens Caf"),
+        "{}",
+        style.description
+    );
+    assert_eq!(style.styles[0].color, Some([0, 0, 0]));
+    assert_eq!(style.styles[0].lineweight, 13);
+    assert_eq!(style.styles[2].screen, 0);
+    // Several NULs, and blank lines or spaces after the last brace, too.
+    let mut padded = ctb_text().into_bytes();
+    padded.extend(b"\r\n  \n\0\0");
+    assert!(PlotStyle::parse(&binary_bytes(CTB_HEADER, &padded)).is_ok());
+    // A plain-text table with the NUL as well.
+    let mut plain = ctb_text().into_bytes();
+    plain.push(0);
+    assert!(PlotStyle::parse(&plain).is_ok());
+}
+
+/// Qiyas writes the file as AutoCAD does: LF lines, the text ending in a NUL the header's
+/// length counts, the adler32 of the compressed body.
+#[test]
+fn the_writer_ends_the_text_with_a_nul_as_autocad_does() {
+    let bytes = office_ctb().to_bytes();
+    let (text, len) = unpacked(&bytes);
+    assert_eq!(text.last(), Some(&0));
+    assert!(text.ends_with(b"}\n\0"));
+    assert_eq!(len, text.len());
+    assert!(!text.contains(&b'\r'));
+}
+
+/// The checked-in fixtures (written by Qiyas's own writer in AutoCAD's layout) load with their
+/// pens.
+#[test]
+fn the_checked_in_fixtures_load() {
+    let ctb = PlotStyle::load(&fixture("office.ctb")).unwrap();
+    assert_eq!(ctb, office_ctb());
+    let bytes = std::fs::read(fixture("office.ctb")).unwrap();
+    let (text, len) = unpacked(&bytes);
+    assert_eq!((text.last(), len), (Some(&0), text.len()));
+    let pen = ctb.apply([255, 0, 0], None);
+    assert_eq!(
+        (pen.rgb, pen.lineweight_mm, pen.plot),
+        ([0, 0, 0], Some(0.5), true)
+    );
+    assert!(!ctb.apply([0, 255, 0], None).plot);
+
+    let stb = PlotStyle::load(&fixture("named.stb")).unwrap();
+    assert_eq!(stb, named_stb());
+    assert_eq!(stb.kind, StyleKind::Stb);
+    assert_eq!(stb.apply([255, 0, 0], Some("Heavy")).rgb, [0, 0, 0]);
+    assert_eq!(stb.apply([255, 0, 0], None).rgb, [255, 0, 0]);
 }

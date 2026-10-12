@@ -40,6 +40,8 @@ pub struct Page {
     pub glyphs: Vec<Glyph>,
     /// Images painted (`Do`).
     pub images: usize,
+    /// Each image painted: its unit square's map to the page, and whether inside a clip.
+    pub pictures: Vec<([f32; 6], bool)>,
     /// Every operator, in order.
     pub ops: Vec<String>,
 }
@@ -98,6 +100,7 @@ pub fn read(path: &Path) -> Page {
     let mut paints = Vec::new();
     let mut glyphs = Vec::new();
     let mut images = 0;
+    let mut pictures = Vec::new();
     let mut ops = Vec::new();
     for op in &content.operations {
         let o = &op.operands;
@@ -163,7 +166,10 @@ pub fn read(path: &Path) -> Page {
                 tm: concat(&tm, &st.ctm),
                 fill: st.fill,
             }),
-            "Do" => images += 1,
+            "Do" => {
+                images += 1;
+                pictures.push((st.ctm, st.clipped));
+            }
             _ => {}
         }
     }
@@ -174,6 +180,7 @@ pub fn read(path: &Path) -> Page {
         paints,
         glyphs,
         images,
+        pictures,
         ops,
     }
 }

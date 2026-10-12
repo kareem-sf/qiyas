@@ -2,7 +2,9 @@
 
 use std::path::Path;
 
-use qiyas_plot::{parse_default_printer, parse_printers, print_dry_run, print_plan, PlotError};
+use qiyas_plot::{
+    parse_default_printer, parse_printers, plain_path, print_dry_run, print_plan, PlotError,
+};
 
 #[test]
 fn linux_prints_with_lp_or_opens_the_pdf_viewer() {
@@ -28,21 +30,88 @@ fn macos_prints_with_lpr() {
     assert_eq!(plan.args, ["/Users/q/plan.pdf"]);
 }
 
+/// Base64 back to bytes, for reading the encoded PowerShell command.
+fn unbase64(s: &str) -> Vec<u8> {
+    let value = |c: u8| match c {
+        b'A'..=b'Z' => c - b'A',
+        b'a'..=b'z' => c - b'a' + 26,
+        b'0'..=b'9' => c - b'0' + 52,
+        b'+' => 62,
+        b'/' => 63,
+        _ => panic!("not base64: {c}"),
+    };
+    let mut out = Vec::new();
+    for chunk in s.trim_end_matches('=').as_bytes().chunks(4) {
+        let v: Vec<u32> = chunk.iter().map(|c| u32::from(value(*c))).collect();
+        let n = v.iter().fold(0, |acc, x| acc << 6 | x) << (6 * (4 - v.len()));
+        out.extend(&n.to_be_bytes()[1..v.len()]);
+    }
+    out
+}
+
+/// Windows prints through the PDF handler's Print or PrintTo verb from a fixed PowerShell
+/// script: the file and the printer travel in environment variables, never inside the script,
+/// so a name with any quote, `$( )` or `[ ]` stays a name.
 #[test]
-fn windows_uses_the_pdf_handlers_print_verb() {
-    let pdf = Path::new(r"C:\Users\q\o'brien plan.pdf");
-    let plan = print_plan("windows", pdf, None);
-    assert_eq!(plan.program, "powershell");
-    let script = plan.args.last().unwrap();
-    assert!(script.contains("-Verb Print"), "{script}");
-    assert!(
-        script.contains(r"'C:\Users\q\o''brien plan.pdf'"),
-        "{script}"
+fn windows_passes_the_file_and_printer_outside_the_script() {
+    let hostile = r"C:\Users\q\plan-x’$(calc)’ ‘a‚b‛ 'c' `d` [rev A].pdf";
+    let printer = "HP ’$(calc)’ ; & | [x]";
+    for printer in [None, Some(printer)] {
+        let plan = print_plan("windows", Path::new(hostile), printer);
+        assert_eq!(plan.program, "powershell");
+        assert_eq!(
+            plan.args[..3],
+            ["-NoProfile", "-NonInteractive", "-EncodedCommand"]
+        );
+        assert_eq!(plan.args.len(), 4);
+        for arg in &plan.args {
+            assert!(!arg.contains("calc") && !arg.contains("plan-x"), "{arg}");
+        }
+        let utf16: Vec<u16> = unbase64(&plan.args[3])
+            .chunks(2)
+            .map(|b| u16::from_le_bytes([b[0], b[1]]))
+            .collect();
+        let script = String::from_utf16(&utf16).unwrap();
+        assert!(script.contains("$env:QIYAS_PRINT_FILE"), "{script}");
+        assert!(script.contains("UseShellExecute"), "{script}");
+        assert!(
+            !script.contains("calc") && !script.contains("plan-x"),
+            "{script}"
+        );
+        let env: Vec<(&str, &str)> = plan
+            .env
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        assert!(env.contains(&("QIYAS_PRINT_FILE", hostile)), "{env:?}");
+        match printer {
+            Some(p) => assert!(env.contains(&("QIYAS_PRINT_PRINTER", p)), "{env:?}"),
+            None => assert!(env.iter().all(|(k, _)| *k != "QIYAS_PRINT_PRINTER")),
+        }
+    }
+}
+
+/// Windows' verbatim prefix (`\\?\`, from canonicalize) is taken off: the PDF handlers and
+/// the window read plain paths.
+#[test]
+fn verbatim_windows_paths_become_plain() {
+    assert_eq!(
+        plain_path(Path::new(r"\\?\C:\Users\q\plan.pdf")),
+        Path::new(r"C:\Users\q\plan.pdf")
     );
-    let plan = print_plan("windows", pdf, Some("Office HP"));
-    let script = plan.args.last().unwrap();
-    assert!(script.contains("-Verb PrintTo"), "{script}");
-    assert!(script.contains("'\"Office HP\"'"), "{script}");
+    assert_eq!(
+        plain_path(Path::new(r"\\?\UNC\server\share\plan.pdf")),
+        Path::new(r"\\server\share\plan.pdf")
+    );
+    assert_eq!(
+        plain_path(Path::new("/home/q/plan.pdf")),
+        Path::new("/home/q/plan.pdf")
+    );
+    // A verbatim path that is not a drive or a share stays as it is.
+    assert_eq!(
+        plain_path(Path::new(r"\\?\Volume{x}\plan.pdf")),
+        Path::new(r"\\?\Volume{x}\plan.pdf")
+    );
 }
 
 #[test]
@@ -76,6 +145,7 @@ fn only_an_existing_pdf_is_handed_over_and_printer_names_are_checked() {
         (pdf.clone(), Some("-o evil")),
         (pdf.clone(), Some("bad\nname")),
         (pdf.clone(), Some("")),
+        (pdf.clone(), Some("say \"hi\"")),
     ] {
         assert!(
             matches!(print_dry_run(&path, printer), Err(PlotError::Print(_))),

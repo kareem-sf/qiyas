@@ -3,7 +3,8 @@
 //! A file is a 48-byte header (`PIAFILEVERSION_2.0,CTBVER1,compress\r\npmzlibcodec`, `STBVER1`
 //! for an STB), the adler32 of the zlib body, the text's length and the body's length (`u32`
 //! little-endian each), then the zlib body: text of `key=value` lines and `name{` ... `}`
-//! blocks, strings written with a leading `"` only. Plain text is read too. A CTB has 255 pens,
+//! blocks, strings written with a leading `"` only, LF line ends, the text ending in a NUL the
+//! length counts (CR LF, NULs and a description not in UTF-8 are read too). Plain text is read too. A CTB has 255 pens,
 //! one per colour (ACI 1 to 255); an STB names its styles ("Normal" first). Screening 0 is
 //! AutoCAD's way of not plotting a colour (it has no other flag). Keys Qiyas does not know are
 //! kept and written back.
@@ -195,12 +196,13 @@ impl PlotStyle {
             if data.len() < 60 {
                 return Err(bad("The plot style file is cut short"));
             }
-            let mut text = String::new();
+            let mut text = Vec::new();
             flate2::read::ZlibDecoder::new(&data[60..])
                 .take(MAX_TEXT)
-                .read_to_string(&mut text)
+                .read_to_end(&mut text)
                 .map_err(|e| bad(format!("The plot style file is damaged: {e}")))?;
-            (Some(kind), text)
+            // A description in the computer's code page (not UTF-8) is read as best it can.
+            (Some(kind), String::from_utf8_lossy(&text).into_owned())
         } else {
             let text = String::from_utf8_lossy(data).into_owned();
             if !text
@@ -216,7 +218,9 @@ impl PlotStyle {
 
     /// The table in AutoCAD's compressed form.
     pub fn to_bytes(&self) -> Vec<u8> {
-        let text = self.to_text();
+        // As AutoCAD writes it: the text ends with a NUL its length counts.
+        let mut text = self.to_text();
+        text.push('\0');
         let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
         z.write_all(text.as_bytes()).expect("writing to memory");
         let body = z.finish().expect("writing to memory");
@@ -386,8 +390,12 @@ fn parse_block<'a>(
 ) -> Result<Vec<(String, Node)>, PlotError> {
     let mut out = Vec::new();
     while let Some(raw) = lines.next() {
-        let line = raw.trim_end_matches('\r').trim_start();
-        if line.is_empty() {
+        // AutoCAD ends the text with a NUL; lines may end in CR LF.
+        let line = raw.trim_end_matches(['\r', '\0']).trim_start();
+        if line
+            .trim_matches(|c: char| c == '\0' || c.is_whitespace())
+            .is_empty()
+        {
             continue;
         }
         if line == "}" {

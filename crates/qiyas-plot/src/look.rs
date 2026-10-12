@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use opencadcodec::tables::normalize_name;
 use opencadcodec::{CadDocument, Handle, LineWeight};
-use qiyas_geom::{find_layer, is_xref_block, XrefDocs};
+use qiyas_geom::{find_layer, is_logical_text, is_xref_block, XrefDocs};
 
 /// LWDEFAULT: what "Default" plots at, in millimetres.
 pub const DEFAULT_LINEWEIGHT_MM: f64 = 0.25;
@@ -19,6 +19,11 @@ pub struct Look {
     pub plot: bool,
     /// Its layer's plot style (STB), "" for none.
     pub style: String,
+    /// The layers (normalised names) it is drawn on or inside of: each reference's of the
+    /// chain and its own as drawn, for a viewport's freezes.
+    pub layers: Vec<String>,
+    /// A text Qiyas wrote (`QIYAS_TEXT`), in reading order.
+    pub logical: bool,
 }
 
 impl Default for Look {
@@ -27,6 +32,8 @@ impl Default for Look {
             weight_mm: DEFAULT_LINEWEIGHT_MM,
             plot: true,
             style: String::new(),
+            layers: Vec::new(),
+            logical: false,
         }
     }
 }
@@ -79,6 +86,7 @@ impl<'a> Looks<'a> {
         let mut xref: Option<&str> = None;
         let mut outer_layer: Option<String> = None;
         let mut outer_weight: Option<f64> = None;
+        let mut layers = Vec::new();
         let drawn = |own: &str, outer: &Option<String>, xref: Option<&str>| match (outer, xref) {
             (Some(o), _) if own == "0" => o.clone(),
             (_, Some(x)) => format!("{x}|{own}"),
@@ -91,6 +99,8 @@ impl<'a> Looks<'a> {
             let e = doc.get_entity(Handle::new(h))?;
             let common = e.common();
             let layer = drawn(&common.layer, &outer_layer, xref);
+            layers.push(normalize_name(&common.layer));
+            layers.push(normalize_name(&layer));
             outer_weight = Some(self.weight(&common.line_weight, &layer, outer_weight));
             outer_layer = Some(layer);
             if let opencadcodec::EntityType::Insert(insert) = e {
@@ -106,10 +116,16 @@ impl<'a> Looks<'a> {
         let common = doc.get_entity(Handle::new(entity))?.common();
         let layer = drawn(&common.layer, &outer_layer, xref);
         let found = find_layer(self.doc, &self.xrefs, &layer);
+        let name = normalize_name(&layer);
+        // AutoCAD never plots Defpoints, whatever its plot flag (an xref's too).
+        let defpoints = name == "DEFPOINTS" || name.ends_with("|DEFPOINTS");
+        layers.push(name);
         Some(Look {
             weight_mm: self.weight(&common.line_weight, &layer, outer_weight),
-            plot: found.is_none_or(|l| l.is_plottable),
+            plot: !defpoints && found.is_none_or(|l| l.is_plottable),
             style: found.map(|l| l.plot_style.clone()).unwrap_or_default(),
+            layers,
+            logical: is_logical_text(common),
         })
     }
 }

@@ -20,8 +20,8 @@ pub use ctb::{aci_of, object_pen, Pen, PlotStyle, StyleEntry, StyleKind, DEFAULT
 pub use look::DEFAULT_LINEWEIGHT_MM;
 pub use page::{paper_catalog, Paper, FIT_MARGIN_MM, PT_PER_MM};
 pub use print::{
-    default_printer, list_printers, parse_default_printer, parse_printers, print_dry_run,
-    print_pdf, print_plan, PrintPlan,
+    default_printer, list_printers, parse_default_printer, parse_printers, plain_path,
+    print_dry_run, print_pdf, print_plan, PrintPlan,
 };
 
 /// What part of the sheet is plotted.
@@ -133,7 +133,9 @@ pub fn default_file_name(session: &Session, sheet: &str) -> Result<String, PlotE
     let clean: String = format!("{stem}-{name}")
         .chars()
         .map(|c| {
-            if c.is_control() || r#"/\:*?"<>|"#.contains(c) {
+            // Characters file names can't hold, and quotes and signs a shell reads (defence in
+            // depth: no name is ever put inside a command).
+            if c.is_control() || r#"/\:*?"<>|’‘‚‛$`"#.contains(c) {
                 '_'
             } else {
                 c
@@ -176,7 +178,7 @@ pub fn output_path(session: &Session, job: &PlotJob) -> Result<PathBuf, PlotErro
     if !real.starts_with(&folder) {
         return Err(outside());
     }
-    Ok(real.join(file))
+    Ok(print::plain_path(&real.join(file)))
 }
 
 /// A PDF in the temporary folder for printing sheet `sheet` (`qiyas-plot/<drawing>-<sheet>.pdf`),

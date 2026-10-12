@@ -494,3 +494,287 @@ fn a_job_reads_and_writes_its_wire_form() {
     let fit: Scale = serde_json::from_value(json!("fit")).unwrap();
     assert_eq!(fit, Scale::Fit);
 }
+
+/// Review Focus 2 again, from a CTB file on disk (written in AutoCAD's layout, its text ending
+/// in a NUL): the walls plot black at 0.5 mm, nothing green.
+#[test]
+fn review_focus_2_from_a_ctb_file() {
+    let (dir, s) = sample();
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/office.ctb");
+    let mut j = job(MODEL);
+    j.area = Area::Window([[-5.0, -5.0], [25.0, 5.0]]);
+    j.scale = Scale::Ratio(1.0, 100.0);
+    j.centre = false;
+    j.style = Some(PlotStyle::load(&path).unwrap());
+    let out = plot_pdf_to(&s, &j, &dir.path().join("file-ctb.pdf")).unwrap();
+    let page = read(&out.path);
+    let at = |p: [f64; 2]| page_of(p, [-5.0, -5.0], 10.0);
+    let strokes = page.strokes();
+    assert!(strokes
+        .iter()
+        .any(|(paint, p, q)| near(*p, at([0.0, 0.0]), 0.05)
+            && near(*q, at([10.0, 0.0]), 0.05)
+            && paint.stroke == [0.0, 0.0, 0.0]
+            && close(paint.width, 1.4173, 0.0001)));
+    assert!(strokes.iter().all(|(p, _, _)| p.stroke != [0.0, 1.0, 0.0]));
+    assert!(!strokes
+        .iter()
+        .any(|(_, p, q)| near(*p, at([1.0, 1.0]), 0.5) && near(*q, at([1.9, 1.0]), 0.5)));
+}
+
+/// Curves are flattened for the paper, not the screen: a 1 m radius at 1:100 (10 mm on paper)
+/// has at least 24 segments a quarter turn, each within 0.02 mm of the circle.
+#[test]
+fn a_1_m_arc_at_1_to_100_has_24_segments_a_quarter() {
+    let (dir, mut s) = sample();
+    s.run(Command::Draw(DrawSpec::Circle {
+        centre: [30.0, 0.0],
+        radius: 1.0,
+    }))
+    .unwrap();
+    let mut j = job(MODEL);
+    j.area = Area::Window([[25.0, -5.0], [35.0, 5.0]]);
+    j.scale = Scale::Ratio(1.0, 100.0);
+    j.centre = false;
+    let out = plot_pdf_to(&s, &j, &dir.path().join("arc.pdf")).unwrap();
+    let page = read(&out.path);
+    let c = page_of([30.0, 0.0], [25.0, -5.0], 10.0);
+    let r = 10.0 * PT_PER_MM;
+    let on = |p: [f32; 2]| close((p[0] - c[0]).hypot(p[1] - c[1]), r, 0.05);
+    let circle: Vec<_> = page
+        .strokes()
+        .into_iter()
+        .filter(|(_, p, q)| on(*p) && on(*q))
+        .collect();
+    let quarter = circle
+        .iter()
+        .filter(|(_, p, q)| {
+            [p, q]
+                .iter()
+                .all(|v| v[0] >= c[0] - 0.01 && v[1] >= c[1] - 0.01)
+        })
+        .count();
+    assert!(quarter >= 24, "{quarter} segments a quarter turn");
+    for (_, p, q) in &circle {
+        let m = [(p[0] + q[0]) / 2.0, (p[1] + q[1]) / 2.0];
+        let off = r - (m[0] - c[0]).hypot(m[1] - c[1]);
+        assert!(off <= 0.02 * PT_PER_MM, "{off} pt off the circle");
+    }
+}
+
+/// A layout whose page setup is in inches: one layout unit is 25.4 mm on the paper at 1:1, and
+/// "layout" is its paper with the origin at the printable area's lower left.
+#[test]
+fn an_inch_layout_plots_one_unit_as_an_inch() {
+    let (dir, mut s) = sample();
+    let layout = s
+        .drawing
+        .sheets()
+        .into_iter()
+        .find(|sh| !sh.is_model)
+        .unwrap();
+    for o in s.drawing.doc.objects.values_mut() {
+        if let opencadcodec::objects::ObjectType::Layout(l) = o {
+            if l.name == layout.name {
+                l.paper_width = 279.4;
+                l.paper_height = 215.9;
+                l.plot_paper_units = 0;
+                l.plot_margin_left = 6.35;
+                l.plot_margin_bottom = 6.35;
+            }
+        }
+    }
+    s.set_sheet(&layout.block).unwrap();
+    s.run(Command::Draw(DrawSpec::Line {
+        a: [1.0, 1.0],
+        b: [2.0, 1.0],
+    }))
+    .unwrap();
+    let mut j = job(&layout.block);
+    j.area = Area::Layout;
+    j.paper = paper("ANSI A");
+    j.scale = Scale::Ratio(1.0, 1.0);
+    j.centre = false;
+    let out = plot_pdf_to(&s, &j, &dir.path().join("inch.pdf")).unwrap();
+    let page = read(&out.path);
+    let inch = 25.4 * PT_PER_MM;
+    let margin = 6.35 * PT_PER_MM;
+    let (a, b) = (
+        [inch + margin, inch + margin],
+        [2.0 * inch + margin, inch + margin],
+    );
+    assert!(
+        page.strokes()
+            .iter()
+            .any(|(_, p, q)| near(*p, a, 0.05) && near(*q, b, 0.05)),
+        "a line from {a:?} to {b:?}"
+    );
+}
+
+/// Arabic stored in visual order (the drawing's "Arabic text is reversed") is not its reading
+/// text: it plots as outlines, never as PDF text with a wrong ToUnicode map. Text Qiyas wrote
+/// (marked logical) stays real text.
+#[test]
+fn reversed_arabic_plots_as_outlines_and_logical_text_stays_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_drawing(&arabic_text_doc(), &dir.path().join("arabic.dxf"));
+    let mut s = Session::open(&path).unwrap();
+    s.arabic_reversed = true;
+    s.run(Command::Text {
+        at: [1.0, 6.0],
+        height: 0.5,
+        rotation: 0.0,
+        value: "مرحبا".to_string(),
+        style: None,
+    })
+    .unwrap();
+    let out = plot_pdf(&s, &job(MODEL)).unwrap();
+    let page = read(&out.path);
+    let mut unicode = String::new();
+    let mut fonts: Vec<String> = page.glyphs.iter().map(|g| g.font.clone()).collect();
+    fonts.sort();
+    fonts.dedup();
+    for name in &fonts {
+        let font = page.font(name);
+        let cmap = String::from_utf8(page.stream(font, b"ToUnicode")).unwrap();
+        for line in cmap
+            .lines()
+            .filter(|l| l.starts_with('<') && l.contains("> <"))
+        {
+            let hex = line.split("> <").nth(1).unwrap().trim_end_matches('>');
+            let units: Vec<u16> = (0..hex.len())
+                .step_by(4)
+                .map(|i| u16::from_str_radix(&hex[i..i + 4], 16).unwrap())
+                .collect();
+            unicode.push_str(&String::from_utf16(&units).unwrap());
+        }
+    }
+    for letter in ['ر', 'ح', 'ب', 'ا'] {
+        assert!(unicode.contains(letter), "{letter} in {unicode}");
+    }
+    for letter in ['خ', 'ط', 'غ', 'ش', 'ع'] {
+        assert!(!unicode.contains(letter), "{letter} in {unicode}");
+    }
+    // The reversed texts (red, on A-WALL) are filled outlines.
+    assert!(page
+        .paints
+        .iter()
+        .any(|p| p.op == "f" && p.fill == [1.0, 0.0, 0.0]));
+}
+
+/// Defpoints never plots, whatever its plot flag: a viewport frame on it is not on the paper,
+/// and a model line on it neither; the rest plots.
+#[test]
+fn defpoints_never_plots() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::open(&write_sample(dir.path(), "dwg")).unwrap();
+    s.run(Command::NewLayer {
+        name: "Defpoints".to_string(),
+    })
+    .unwrap();
+    let wall = s
+        .drawing
+        .doc
+        .entities_in_block(MODEL)
+        .find(|e| matches!(e, EntityType::Line(_)) && e.common().layer == "A-WALL")
+        .map(|e| e.common().handle.value())
+        .unwrap();
+    s.run(Command::SetProperty {
+        target: t(wall),
+        prop: EntityProp::Layer,
+        value: json!("Defpoints"),
+    })
+    .unwrap();
+    let layout = s
+        .drawing
+        .sheets()
+        .into_iter()
+        .find(|sh| !sh.is_model)
+        .unwrap();
+    s.set_sheet(&layout.block).unwrap();
+    s.current.layer = "Defpoints".to_string();
+    s.run(Command::MView {
+        corner1: [20.0, 20.0],
+        corner2: [820.0, 570.0],
+    })
+    .unwrap();
+    let mut j = job(&layout.block);
+    j.paper = paper("ISO A1");
+    j.scale = Scale::Ratio(1.0, 1.0);
+    let out = plot_pdf_to(&s, &j, &dir.path().join("defpoints.pdf")).unwrap();
+    let page = read(&out.path);
+    let strokes = page.strokes();
+    assert!(!strokes.iter().any(|(_, p, q)| {
+        close((q[0] - p[0]).abs(), 800.0 * PT_PER_MM, 0.05) && close(p[1], q[1], 0.01)
+    }));
+    assert!(
+        strokes.iter().all(|(p, _, _)| p.clipped),
+        "only model space inside the frame"
+    );
+    assert!(
+        strokes.iter().any(|(p, _, _)| p.stroke == [1.0, 0.0, 0.0]),
+        "the other walls"
+    );
+    assert!(
+        strokes.iter().any(|(p, _, _)| p.stroke == [0.0, 1.0, 0.0]),
+        "the doors"
+    );
+    // The 10 m wall (now on Defpoints) is not there: no stroke 10 m long at the viewport's scale.
+    let view = s.paper_views()[0].clone();
+    let ten_m = (10.0 * view.scale) as f32 * PT_PER_MM;
+    assert!(!strokes
+        .iter()
+        .any(|(_, p, q)| close((q[0] - p[0]).hypot(q[1] - p[1]), ten_m, 0.05)));
+}
+
+/// Pictures plot inside viewports too (clipped to the frame), at up to 300 dpi; a picture whose
+/// file is gone is left out and `skipped` says which and why.
+#[test]
+fn a_viewport_plots_the_picture_under_it_and_a_missing_one_is_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::open(&write_sample(dir.path(), "dwg")).unwrap();
+    let png = qiyas_core::fixtures::write_png(dir.path(), "pic.png");
+    s.attach_image(&png, [5.0, 5.0], 20.0).unwrap();
+    let layout = s
+        .drawing
+        .sheets()
+        .into_iter()
+        .find(|sh| !sh.is_model)
+        .unwrap();
+    s.set_sheet(&layout.block).unwrap();
+    let Outcome::Added { handles } = s
+        .run(Command::MView {
+            corner1: [20.0, 20.0],
+            corner2: [820.0, 570.0],
+        })
+        .unwrap()
+    else {
+        panic!("a viewport");
+    };
+    s.run(Command::SetProperty {
+        target: t(handles[0]),
+        prop: EntityProp::ViewportScale,
+        value: json!(10.0),
+    })
+    .unwrap();
+    let mut j = job(&layout.block);
+    j.paper = paper("ISO A1");
+    j.scale = Scale::Ratio(1.0, 1.0);
+    let out = plot_pdf_to(&s, &j, &dir.path().join("pic.pdf")).unwrap();
+    assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+    let page = read(&out.path);
+    assert_eq!(page.pictures.len(), 1);
+    let (m, clipped) = page.pictures[0];
+    assert!(clipped, "inside the viewport's clip");
+    // 20 m wide at 1:100: 200 mm on the paper.
+    assert!(close(m[0].hypot(m[1]), 200.0 * PT_PER_MM, 0.05), "{m:?}");
+
+    std::fs::remove_file(&png).unwrap();
+    let out = plot_pdf_to(&s, &j, &dir.path().join("nopic.pdf")).unwrap();
+    assert_eq!(read(&out.path).pictures.len(), 0);
+    assert!(
+        out.skipped.iter().any(|w| w.contains("pic.png")),
+        "{:?}",
+        out.skipped
+    );
+}

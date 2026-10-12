@@ -1,18 +1,21 @@
 //! Draws a sheet into one PDF page as the screen draws it: for a layout, model space inside each
 //! viewport first (clipped to its frame, without the layers it freezes), then the sheet's own
 //! batch: pictures, fills, lines, wipeouts in the paper's white, the wipeouts' frames, text.
+//! Each batch is drawn afresh for the plot, its curves flattened within `PLOT_TOL_MM` on paper.
 
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::Path;
 
 use lopdf::{dictionary, Dictionary, Document, Object, ObjectId, StringFormat};
-use opencadcodec::objects::ObjectType;
-use qiyas_core::{draw_picture, PaperView, Session};
+use opencadcodec::objects::{Layout, ObjectType};
+use opencadcodec::tables::normalize_name;
+use opencadcodec::{EntityType, Handle};
+use qiyas_core::{draw_picture, PaperView, Session, UnderlayImage, BATCH_TOL};
 use qiyas_geom::Xform;
 use qiyas_render::{
-    Batch, LaidText, Range, FILL_BACKGROUND, IMAGE_ADJUSTED, IMAGE_FADED, IMAGE_MONOCHROME,
-    TEXT_BOX,
+    arabic_stored_visually, Batch, LaidText, FILL_BACKGROUND, IMAGE_ADJUSTED, IMAGE_FADED,
+    IMAGE_MONOCHROME, TEXT_BOX,
 };
 
 use crate::content::{matrix, Content};
@@ -23,20 +26,25 @@ use crate::page::{PageMap, PT_PER_MM};
 use crate::{Area, PlotError, PlotJob, PlotOutput, PlotStyle};
 
 const WHITE: [u8; 3] = [255, 255, 255];
-/// Picture resolution on the page, in pixels per inch.
-const PICTURE_DPI: f64 = 200.0;
+/// Picture resolution on the page, in pixels per inch (a raster image never beyond its own).
+const PICTURE_DPI: f64 = 300.0;
+/// The longest side of a plotted picture, in pixels.
+const MAX_PICTURE_PX: f64 = 8192.0;
+/// How far a flattened curve may stray from the true one on the paper, in millimetres: a 1 m
+/// radius at 1:100 (10 mm on paper) gets 25 segments a quarter turn.
+pub const PLOT_TOL_MM: f64 = 0.005;
 
 /// One batch to draw and how.
 struct Layer<'b> {
     batch: &'b Batch,
+    /// The sheet the batch draws (block name), for its pictures.
+    sheet: &'b str,
     /// Batch (drawing) coordinates to page points.
     xf: Xform,
     /// The viewport frame on the page, for model space inside it.
     clip: Option<[[f64; 2]; 4]>,
-    /// `(entity, chain)` of what a viewport's frozen layers hide.
-    hidden: HashSet<(u64, u32)>,
-    /// Draw its pictures (the screen draws none inside viewports yet).
-    pictures: bool,
+    /// The layers (normalised names) the viewport freezes.
+    frozen: HashSet<String>,
 }
 
 /// What the plot draws with an entity, or `None` when it does not plot.
@@ -50,9 +58,12 @@ struct Plotter<'s> {
     pens: HashMap<([u8; 3], String), Pen>,
     fonts: FontSet,
     out: Content,
-    /// Image XObjects by resource name, and the pictures already drawn by picture id.
+    /// Image XObjects by resource name, and the pictures already drawn by handle and
+    /// resolution.
     images: Vec<(String, ObjectId)>,
-    pictures: HashMap<u32, Option<String>>,
+    pictures: HashMap<(u64, u64), Option<String>>,
+    /// The drawing's "Arabic text is reversed" setting.
+    arabic_reversed: bool,
     doc: Document,
     skipped: Vec<String>,
 }
@@ -80,39 +91,69 @@ fn is_empty(batch: &Batch) -> bool {
         && batch.images.is_empty()
 }
 
-/// What a viewport's frozen layers hide in the model batch: every entity a range of which is
-/// not inside the spans the viewport draws.
-fn hidden_by(batch: &Batch, view: &PaperView) -> HashSet<(u64, u32)> {
-    let mut hidden = HashSet::new();
-    let inside = |r: &Range, spans: &[[u32; 2]]| {
-        spans
-            .iter()
-            .any(|[first, count]| r.first >= *first && r.first + r.count <= first + count)
+/// The layers (normalised names) viewport `view` freezes.
+fn frozen_by(session: &Session, view: &PaperView) -> HashSet<String> {
+    let doc = &session.drawing.doc;
+    let Some(EntityType::Viewport(v)) = doc.get_entity(Handle::new(view.handle)) else {
+        return HashSet::new();
     };
-    for (ranges, spans) in [
-        (&batch.ranges, &view.lines),
-        (&batch.fill_ranges, &view.fills),
-    ] {
-        if let Some(spans) = spans {
-            for r in ranges.iter().filter(|r| r.count > 0 && !inside(r, spans)) {
-                hidden.insert((r.entity, r.chain));
-            }
-        }
-    }
-    hidden
+    v.frozen_layers
+        .iter()
+        .filter_map(|h| doc.layers.iter().find(|l| l.handle == *h))
+        .map(|l| normalize_name(&l.name))
+        .collect()
 }
 
-/// The layout's limits (AutoCAD keeps a layout's printable area there), when they have a size.
-fn layout_limits(session: &Session, block: &str) -> Option<[[f64; 2]; 2]> {
+fn layout_of<'s>(session: &'s Session, block: &str) -> Option<&'s Layout> {
     let doc = &session.drawing.doc;
     let record = doc.block_records.get(block)?.handle;
     doc.objects.values().find_map(|o| match o {
-        ObjectType::Layout(l) if l.block_record == record => {
-            let (lo, hi) = (l.min_limits, l.max_limits);
-            (hi.0 > lo.0 && hi.1 > lo.1).then_some([[lo.0, lo.1], [hi.0, hi.1]])
-        }
+        ObjectType::Layout(l) if l.block_record == record => Some(l),
         _ => None,
     })
+}
+
+/// Paper millimetres per layout unit: inches when the layout's page setup (with a paper size)
+/// says so, else millimetres.
+fn layout_mm_per_unit(layout: Option<&Layout>) -> f64 {
+    match layout {
+        Some(l) if l.paper_width > 0.0 && l.paper_height > 0.0 && l.plot_paper_units == 0 => 25.4,
+        _ => 1.0,
+    }
+}
+
+/// A layout's "layout" area in its own units: its whole paper when the page setup gives one
+/// (the layout's origin at the printable area's lower left, inside the margins), else its
+/// limits when they have a size.
+fn layout_area(layout: &Layout, mm_per_unit: f64) -> Option<[[f64; 2]; 2]> {
+    if layout.paper_width > 0.0 && layout.paper_height > 0.0 {
+        let k = 1.0 / mm_per_unit;
+        let (mut w, mut h) = (layout.paper_width * k, layout.paper_height * k);
+        let (mut left, mut bottom) = (layout.plot_margin_left * k, layout.plot_margin_bottom * k);
+        if layout.plot_rotation % 2 == 1 {
+            (w, h) = (h, w);
+            (left, bottom) = (bottom, left);
+        }
+        return Some([[-left, -bottom], [w - left, h - bottom]]);
+    }
+    let (lo, hi) = (layout.min_limits, layout.max_limits);
+    (hi.0 > lo.0 && hi.1 > lo.1).then_some([[lo.0, lo.1], [hi.0, hi.1]])
+}
+
+/// Page points per drawing unit of a map with no shear.
+fn pt_per_unit(xf: &Xform) -> f64 {
+    let m = &xf.m;
+    (m[0][0] * m[1][1] - m[0][1] * m[1][0]).abs().sqrt()
+}
+
+/// The flattening tolerance in drawing units for `pt` page points per drawing unit.
+fn plot_tol(pt: f64) -> f64 {
+    let tol = PLOT_TOL_MM * PT_PER_MM / pt;
+    if tol > 0.0 && tol.is_finite() {
+        tol.max(1e-9)
+    } else {
+        BATCH_TOL
+    }
 }
 
 /// Plots `job` into the PDF at `path` (written beside it, then moved over it).
@@ -123,19 +164,25 @@ pub fn plot(session: &Session, job: &PlotJob, path: &Path) -> Result<PlotOutput,
         .into_iter()
         .find(|s| s.block.eq_ignore_ascii_case(&job.sheet))
         .ok_or_else(|| PlotError::NoSuchSheet(job.sheet.clone()))?;
-    let batch = session.sheet_batch(&sheet.block);
+    // As on screen: for the extents.
+    let screen = session.sheet_batch(&sheet.block);
     let views = if sheet.is_model {
         Vec::new()
     } else {
         session.paper_views_of(&sheet.block)
     };
-    let model = (!views.is_empty()).then(|| session.model_batch());
     let extents = || {
-        if is_empty(&batch) && views.is_empty() {
+        if is_empty(&screen) && views.is_empty() {
             Err(PlotError::Nothing)
         } else {
-            Ok(batch.bounds)
+            Ok(screen.bounds)
         }
+    };
+    let layout = layout_of(session, &sheet.block).filter(|_| !sheet.is_model);
+    let mm_per_unit = if sheet.is_model {
+        session.drawing.units.to_metres() * 1000.0
+    } else {
+        layout_mm_per_unit(layout)
     };
     let area = match job.area {
         Area::Extents => extents()?,
@@ -143,16 +190,10 @@ pub fn plot(session: &Session, job: &PlotJob, path: &Path) -> Result<PlotOutput,
             [a[0].min(b[0]), a[1].min(b[1])],
             [a[0].max(b[0]), a[1].max(b[1])],
         ],
-        Area::Layout if !sheet.is_model => match layout_limits(session, &sheet.block) {
-            Some(limits) => limits,
+        Area::Layout => match layout.and_then(|l| layout_area(l, mm_per_unit)) {
+            Some(area) => area,
             None => extents()?,
         },
-        Area::Layout => extents()?,
-    };
-    let mm_per_unit = if sheet.is_model {
-        session.drawing.units.to_metres() * 1000.0
-    } else {
-        1.0
     };
     let page = PageMap::new(
         &job.paper,
@@ -163,32 +204,44 @@ pub fn plot(session: &Session, job: &PlotJob, path: &Path) -> Result<PlotOutput,
         mm_per_unit,
     )?;
 
-    let mut layers = Vec::new();
-    if let Some(model) = &model {
-        for view in &views {
-            let [lo, hi] = view.rect;
-            let centre = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
-            let xf = Xform::translate(-view.centre[0], -view.centre[1])
-                .then(&Xform::scale(view.scale, view.scale))
-                .then(&Xform::translate(centre[0], centre[1]))
-                .then(&page.xf);
-            let clip = [lo, [hi[0], lo[1]], hi, [lo[0], hi[1]]].map(|p| page.xf.apply(p));
-            layers.push(Layer {
-                batch: model,
-                xf,
-                clip: Some(clip),
-                hidden: hidden_by(model, view),
-                pictures: false,
-            });
+    // Each batch flattened for the paper: the sheet's, and model space's per viewport scale.
+    const MODEL: &str = "*Model_Space";
+    let mut batches: Vec<(u64, Batch)> = Vec::new();
+    let mut batch_for = |sheet: &str, tol: f64| -> usize {
+        let key = tol.to_bits();
+        if sheet != MODEL || !batches.iter().any(|(k, _)| *k == key) {
+            batches.push((key, session.sheet_batch_with_tol(sheet, tol)));
+            return batches.len() - 1;
         }
+        batches
+            .iter()
+            .position(|(k, _)| *k == key)
+            .expect("found above")
+    };
+    let mut plan = Vec::new();
+    for view in &views {
+        let [lo, hi] = view.rect;
+        let centre = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
+        let xf = Xform::translate(-view.centre[0], -view.centre[1])
+            .then(&Xform::scale(view.scale, view.scale))
+            .then(&Xform::translate(centre[0], centre[1]))
+            .then(&page.xf);
+        let clip = [lo, [hi[0], lo[1]], hi, [lo[0], hi[1]]].map(|p| page.xf.apply(p));
+        let at = batch_for(MODEL, plot_tol(pt_per_unit(&xf)));
+        plan.push((at, MODEL, xf, Some(clip), frozen_by(session, view)));
     }
-    layers.push(Layer {
-        batch: &batch,
-        xf: page.xf,
-        clip: None,
-        hidden: HashSet::new(),
-        pictures: true,
-    });
+    let at = batch_for(&sheet.block, plot_tol(pt_per_unit(&page.xf)));
+    plan.push((at, sheet.block.as_str(), page.xf, None, HashSet::new()));
+    let layers: Vec<Layer> = plan
+        .into_iter()
+        .map(|(at, sheet, xf, clip, frozen)| Layer {
+            batch: &batches[at].1,
+            sheet,
+            xf,
+            clip,
+            frozen,
+        })
+        .collect();
 
     let doc = &session.drawing.doc;
     let mut p = Plotter {
@@ -201,12 +254,12 @@ pub fn plot(session: &Session, job: &PlotJob, path: &Path) -> Result<PlotOutput,
         out: Content::default(),
         images: Vec::new(),
         pictures: HashMap::new(),
+        arabic_reversed: session.arabic_reversed,
         doc: Document::with_version("1.5"),
         skipped: Vec::new(),
     };
     if layers.iter().any(|l| l.batch.truncated) {
-        p.skipped
-            .push("Some blocks are too complex to draw: parts of them are left out".into());
+        p.skip("Some blocks are too complex to draw: parts of them are left out".into());
     }
     let bytes = |id: u16| session.font_bytes(id);
     for layer in &layers {
@@ -253,16 +306,37 @@ impl Plotter<'_> {
         self.looks.of(entity, chain_at(batch, chain))
     }
 
+    /// The viewport freezes a layer `entity` (inside `chain`) is drawn on or inside of.
+    fn is_frozen(&mut self, layer: &Layer, entity: u64, chain: u32) -> bool {
+        !layer.frozen.is_empty()
+            && self
+                .look(layer.batch, entity, chain)
+                .layers
+                .iter()
+                .any(|n| layer.frozen.contains(n))
+    }
+
+    /// Arabic stored in visual order (reversed for old CAD fonts, or in presentation forms) that
+    /// Qiyas did not write: its shaped text is not the reading text, so it plots as outlines,
+    /// never as PDF text with a wrong ToUnicode map.
+    fn visual(&mut self, layer: &Layer, text: &LaidText) -> bool {
+        let logical = self.look(layer.batch, text.entity, text.chain).logical;
+        let force = self.arabic_reversed && !logical;
+        text.text
+            .split('\n')
+            .any(|line| arabic_stored_visually(line, force))
+    }
+
     fn prepare_text(&mut self, layer: &Layer, bytes: &FontBytes) {
         for text in &layer.batch.texts {
-            if self.text_pen(layer, text).is_some() {
+            if self.text_pen(layer, text).is_some() && !self.visual(layer, text) {
                 self.fonts.prepare(text, bytes);
             }
         }
     }
 
     fn text_pen(&mut self, layer: &Layer, text: &LaidText) -> Option<Pen> {
-        if layer.hidden.contains(&(text.entity, text.chain)) || text.glyphs.is_empty() {
+        if self.is_frozen(layer, text.entity, text.chain) || text.glyphs.is_empty() {
             return None;
         }
         let look = self.look(layer.batch, text.entity, text.chain);
@@ -278,9 +352,7 @@ impl Plotter<'_> {
             }
             self.out.op("h W n");
         }
-        if layer.pictures {
-            self.pictures(layer);
-        }
+        self.pictures(layer);
         let batch = layer.batch;
         let frames: HashSet<u64> = batch
             .fill_ranges
@@ -310,7 +382,7 @@ impl Plotter<'_> {
         let batch = layer.batch;
         let mut open: Option<[u8; 3]> = None;
         for r in &batch.fill_ranges {
-            if r.count == 0 || layer.hidden.contains(&(r.entity, r.chain)) {
+            if r.count == 0 || self.is_frozen(layer, r.entity, r.chain) {
                 continue;
             }
             let look = self.look(batch, r.entity, r.chain);
@@ -363,7 +435,7 @@ impl Plotter<'_> {
             if r.flags & TEXT_BOX != 0
                 || r.count == 0
                 || frames.contains(&r.entity) != only_frames
-                || layer.hidden.contains(&(r.entity, r.chain))
+                || self.is_frozen(layer, r.entity, r.chain)
             {
                 continue;
             }
@@ -408,7 +480,7 @@ impl Plotter<'_> {
             return;
         };
         let to_page = text.xf.then(&layer.xf);
-        if self.fonts.as_text(text) {
+        if !self.visual(layer, text) && self.fonts.as_text(text) {
             self.out.op("BT");
             self.out.fill(pen.rgb);
             let mut font = None;
@@ -447,26 +519,33 @@ impl Plotter<'_> {
         }
     }
 
-    /// The sheet's pictures (PDF underlays and raster images) at about 200 pixels per inch.
+    /// The pictures (PDF underlays and raster images) on the layer's sheet at 300 pixels per
+    /// inch on the page (a raster image never beyond its own pixels), clipped as the layer is;
+    /// each one left out is noted in `skipped` with why.
     fn pictures(&mut self, layer: &Layer) {
-        let batch = layer.batch;
-        let m = &layer.xf.m;
-        let pt_per_unit = (m[0][0] * m[1][1] - m[0][1] * m[1][0]).abs().sqrt();
-        for quad in &batch.images {
-            let name = match self.pictures.get(&quad.id) {
+        let px = pt_per_unit(&layer.xf) / 72.0 * PICTURE_DPI;
+        let (pictures, problems) = self.session.plot_pictures(layer.sheet, px, MAX_PICTURE_PX);
+        for problem in problems {
+            self.skip(format!("A picture is left out: {problem}"));
+        }
+        for (handle, placement, image) in pictures {
+            let look = self.looks.of(handle, &[]);
+            if !look.plot || look.layers.iter().any(|n| layer.frozen.contains(n)) {
+                continue;
+            }
+            let key = (handle, image.resolution());
+            let name = match self.pictures.get(&key) {
                 Some(name) => name.clone(),
                 None => {
-                    let name = self.picture(quad.id, quad.flags, pt_per_unit);
-                    self.pictures.insert(quad.id, name.clone());
+                    let name = self.picture(&image, placement.flags);
+                    self.pictures.insert(key, name.clone());
                     name
                 }
             };
             let Some(name) = name else {
                 continue;
             };
-            let c = quad.corners;
-            let corner = |k: usize| layer.xf.apply(absolute(batch, c[2 * k], c[2 * k + 1]));
-            let (tl, br, bl) = (corner(0), corner(2), corner(3));
+            let [tl, _, br, bl] = placement.corners.map(|p| layer.xf.apply(p));
             self.out.save();
             self.out.matrix(
                 [
@@ -484,18 +563,21 @@ impl Plotter<'_> {
         }
     }
 
-    /// Draws picture `id` and adds it as an image XObject; its resource name, or `None` (noted
-    /// in `skipped`) when it can't be drawn.
-    fn picture(&mut self, id: u32, flags: u32, pt_per_unit: f64) -> Option<String> {
-        let px = pt_per_unit / 72.0 * PICTURE_DPI;
-        let drawn = self
-            .session
-            .underlay_image(id, px)
-            .and_then(|u| draw_picture(&u, |_| {}));
-        let image = match drawn {
+    /// Notes something left out, once.
+    fn skip(&mut self, why: String) {
+        if !self.skipped.contains(&why) {
+            self.skipped.push(why);
+        }
+    }
+
+    /// Draws `picture` and adds it as an image XObject; its resource name, or `None` (noted in
+    /// `skipped`) when it can't be drawn.
+    fn picture(&mut self, picture: &UnderlayImage, flags: u32) -> Option<String> {
+        let image = match draw_picture(picture, |_| {}) {
             Ok(image) => image,
             Err(e) => {
-                self.skipped.push(format!("A picture is left out: {e}"));
+                let file = picture.path.display();
+                self.skip(format!("A picture is left out: {file}: {e}"));
                 return None;
             }
         };
