@@ -71,6 +71,17 @@ pub fn clip(text: &str) -> String {
     format!("{kept}… ({} more characters)", total - MAX_TEXT)
 }
 
+/// The last `MAX_TEXT` characters of `text` after a `…`, or all of it when it is short enough: for
+/// a request, whose last messages are the ones that matter.
+pub fn clip_tail(text: &str) -> String {
+    let total = text.chars().count();
+    if total <= MAX_TEXT {
+        return text.to_string();
+    }
+    let kept: String = text.chars().skip(total - MAX_TEXT).collect();
+    format!("…{kept}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -99,5 +110,13 @@ mod tests {
         assert_eq!(clip("short"), "short");
         let long = "a".repeat(MAX_TEXT + 5);
         assert!(clip(&long).ends_with("… (5 more characters)"));
+    }
+
+    #[test]
+    fn a_long_text_can_keep_its_tail() {
+        assert_eq!(clip_tail("short"), "short");
+        let long = format!("{}{}", "a".repeat(5), "b".repeat(MAX_TEXT));
+        let tail = clip_tail(&long);
+        assert_eq!(tail, format!("…{}", "b".repeat(MAX_TEXT)));
     }
 }

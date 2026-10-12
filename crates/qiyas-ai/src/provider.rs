@@ -309,7 +309,7 @@ pub(crate) async fn send(
         let answer = scrub(&response.text().await.unwrap_or_default(), secret);
         let request = (400..500)
             .contains(&status)
-            .then(|| scrub(&request_for_log(body), secret));
+            .then(|| request_for_log(body, secret));
         return Err(AiError::Api {
             status,
             message: error_message(&answer),
@@ -321,9 +321,11 @@ pub(crate) async fn send(
 
 /// A request body as the log keeps it: compact JSON, pictures as `<image>`, the tool definitions
 /// as their names and the system prompt as its length (both the same in every request of a
-/// conversation, and long enough to push the messages past the clip), clipped at
-/// `log::MAX_TEXT` characters.
-pub(crate) fn request_for_log(body: &Value) -> String {
+/// conversation, and long enough to push the messages past the clip), `secret` blanked out, and
+/// only then, when it is longer than `log::MAX_TEXT` characters, its last `MAX_TEXT` kept after a
+/// leading `…` (the messages that fail are the last ones; keys sort `messages` first, so the head
+/// would keep the oldest).
+pub(crate) fn request_for_log(body: &Value, secret: &str) -> String {
     fn pictures(v: &mut Value) {
         match v {
             Value::String(s) if s.starts_with("data:image/") => *s = "<image>".into(),
@@ -365,7 +367,7 @@ pub(crate) fn request_for_log(body: &Value) -> String {
             m["content"] = Value::String(system(&m["content"]));
         }
     }
-    crate::log::clip(&v.to_string())
+    crate::log::clip_tail(&scrub(&v.to_string(), secret))
 }
 
 /// `text` with every copy of `secret` blanked out, in case a service echoes the key back.
@@ -476,7 +478,7 @@ mod tests {
             "tools": [{"type": "function", "function": {"name": "find_entities"}}, {"name": "list_layers"}],
             "system": [{"type": "text", "text": "long"}],
         });
-        let text = request_for_log(&body);
+        let text = request_for_log(&body, "");
         assert!(!text.contains("QUJD"), "{text}");
         assert_eq!(text.matches("<image>").count(), 2, "{text}");
         assert!(
@@ -486,8 +488,51 @@ mod tests {
         assert!(!text.contains("You are Mizan"), "{text}");
         assert!(text.contains("<system prompt, 14 characters>"), "{text}");
         assert!(text.contains(r#""tool_call_id":"c1""#), "{text}");
-        let long = json!({"messages": [{"role": "user", "content": "a".repeat(9000)}]});
-        assert!(request_for_log(&long).ends_with("more characters)"));
+    }
+
+    #[test]
+    fn a_long_logged_request_keeps_its_last_characters_after_a_marker() {
+        let mut messages: Vec<Value> = (0..20)
+            .map(|i| json!({"role": "user", "content": format!("early {i} {}", "a".repeat(990))}))
+            .collect();
+        messages.push(
+            json!({"role": "tool", "tool_call_id": "last", "content": "the one that failed"}),
+        );
+        let long = json!({"messages": messages});
+        let text = request_for_log(&long, "");
+        assert_eq!(
+            text.chars().count(),
+            crate::log::MAX_TEXT + 1,
+            "{}",
+            text.len()
+        );
+        assert!(text.starts_with('…'), "{text}");
+        assert!(
+            text.ends_with(
+                r#""content":"the one that failed","role":"tool","tool_call_id":"last"}]}"#
+            ),
+            "{text}"
+        );
+        assert!(!text.contains("early 0 "), "the head is what is cut");
+        // A short one is whole, without the marker.
+        let short = request_for_log(
+            &json!({"messages": [{"role": "user", "content": "hi"}]}),
+            "",
+        );
+        assert!(!short.starts_with('…'), "{short}");
+    }
+
+    #[test]
+    fn the_logged_request_is_scrubbed_before_it_is_cut() {
+        // The key straddles the start of the kept tail: cut first and its end would be left.
+        let key = "sk-secret-key-0123456789";
+        let body = json!({"messages": [{"role": "user", "content": format!("{}{key}{}", "a".repeat(100), "b".repeat(3968))}]});
+        let text = request_for_log(&body, key);
+        assert!(text.starts_with('…'), "{text}");
+        assert!(text.contains("[key hidden]"), "{text}");
+        for part in ["key-0123456789", "0123456789", "sk-secret"] {
+            assert!(!text.contains(part), "{part} left in the log");
+        }
     }
 
     #[test]
