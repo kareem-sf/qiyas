@@ -13,13 +13,20 @@
 //! the count again), and the app's panic hook autosaves every drawing with changes, best effort.
 //!
 //! While a drawing is open the desktop app keeps a lock file beside it, `<file name>.qlock`
-//! (`DrawingLock` as JSON: process id, computer and when it was taken), taken by its watch and
-//! removed when the drawing is closed or Qiyas quits. A lock left on this computer by a process
-//! that has ended means Qiyas closed unexpectedly: `recoverable` then offers the autosave even
-//! when it is older than the drawing (`crashed`). A live process's lock, or another computer's,
-//! is reported (`locked_elsewhere`) and never taken over; the drawing still opens as usual.
-//! `take_lock` cleans a dead lock up when the drawing is opened again, `discard_autosave` when
-//! its autosave is dealt with. Qiyas itself never writes a lock without the app asking.
+//! (`DrawingLock` as JSON: process id, computer and when that process started), taken by its
+//! watch and removed when the drawing is closed or Qiyas quits. A lock on this computer is alive
+//! while its process runs and started when the lock says (a pid taken over by another process
+//! is dead). A dead lock means Qiyas closed unexpectedly: `recoverable` then offers the autosave
+//! even when it is older than the drawing (`crashed`). A live process's lock, or another
+//! computer's, is reported (`locked_elsewhere`), never taken over, and its autosave is never
+//! discarded; the drawing still opens as usual. `recoverable` answers whenever there is an
+//! autosave or such a lock; the window decides what to show.
+//!
+//! When a crashed drawing is opened again (`take_lock`, or an autosave before it) the crash's
+//! autosave is kept aside as a crash copy, `<file name>.sv$.crash-<yyyymmdd-hhmmss>` (when it was
+//! written, UTC) with its project, at most `CRASH_COPIES` of them, and the dead lock goes. The
+//! newest crash copy is offered until it is recovered (its first save deletes it) or discarded.
+//! Qiyas itself never writes a lock without the app asking.
 //!
 //! Recover (opening a damaged file) is an ordinary open: the reader is failsafe already;
 //! `Session::read_report` says what it read and what it dropped, by kind.
@@ -44,9 +51,90 @@ pub fn autosave_path(drawing: &Path) -> PathBuf {
 
 /// The project kept with the autosave of `drawing`: `<file name>.sv$.qiyas`.
 fn autosave_project(drawing: &Path) -> PathBuf {
-    let mut name = autosave_path(drawing).into_os_string();
+    project_of(&autosave_path(drawing))
+}
+
+/// The project kept with the autosave (or crash copy) `autosave`: its name and `.qiyas`.
+fn project_of(autosave: &Path) -> PathBuf {
+    let mut name = autosave.as_os_str().to_owned();
     name.push(".qiyas");
     PathBuf::from(name)
+}
+
+/// Crash copies kept per drawing; the oldest go.
+pub const CRASH_COPIES: usize = 3;
+
+/// What a crash copy's name has after its drawing's.
+const CRASH_TAG: &str = ".sv$.crash-";
+
+/// A crash copy of `drawing`'s autosave written at `saved`:
+/// `<file name>.sv$.crash-<yyyymmdd-hhmmss>`, UTC.
+fn crash_copy_path(drawing: &Path, saved: SystemTime) -> PathBuf {
+    let t = time::OffsetDateTime::from(saved);
+    let mut name = drawing.as_os_str().to_owned();
+    name.push(format!(
+        "{CRASH_TAG}{:04}{:02}{:02}-{:02}{:02}{:02}",
+        t.year(),
+        u8::from(t.month()),
+        t.day(),
+        t.hour(),
+        t.minute(),
+        t.second()
+    ));
+    PathBuf::from(name)
+}
+
+fn is_crash_copy(path: &Path) -> bool {
+    path.file_name()
+        .map(|n| n.to_string_lossy())
+        .is_some_and(|n| n.contains(CRASH_TAG) && !n.ends_with(".qiyas"))
+}
+
+/// The crash copies of `drawing` (not their projects), oldest first.
+fn crash_copies(drawing: &Path) -> Vec<PathBuf> {
+    let (Some(dir), Some(name)) = (drawing.parent(), drawing.file_name()) else {
+        return Vec::new();
+    };
+    let dir = if dir.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        dir
+    };
+    let prefix = format!("{}{CRASH_TAG}", name.to_string_lossy());
+    let mut copies: Vec<PathBuf> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.file_name())
+        .filter(|n| {
+            let n = n.to_string_lossy();
+            n.starts_with(&prefix) && !n.ends_with(".qiyas") && !n.ends_with(".tmp")
+        })
+        .map(|n| drawing.with_file_name(n))
+        .collect();
+    copies.sort();
+    copies
+}
+
+/// Qiyas closed unexpectedly with `drawing` open (its lock is dead) and it is opened again: the
+/// autosave the crash left is kept as a crash copy with its project before anything writes over
+/// it, at most `CRASH_COPIES` of them (the oldest go), and the dead lock goes.
+fn keep_crash_autosave(drawing: &Path) -> Result<(), CoreError> {
+    let autosave = autosave_path(drawing);
+    if let Some(saved) = modified(&autosave) {
+        let copy = crash_copy_path(drawing, saved);
+        std::fs::rename(&autosave, &copy)?;
+        match std::fs::rename(project_of(&autosave), project_of(&copy)) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+            _ => {}
+        }
+        let copies = crash_copies(drawing);
+        for old in &copies[..copies.len().saturating_sub(CRASH_COPIES)] {
+            remove_with_project(old)?;
+        }
+    }
+    remove_if_there(&lock_path(drawing))?;
+    Ok(())
 }
 
 /// A drawing is autosaved after this many changes to it (steps, undos and redos) since it was
@@ -83,27 +171,48 @@ pub enum LockStatus {
     OtherHost,
 }
 
+/// Two readings of one process's start time may differ by this much, in seconds.
+const START_SLACK: u64 = 2;
+
 impl DrawingLock {
-    /// This process's lock, taken now.
+    /// This process's lock.
     fn here() -> DrawingLock {
         DrawingLock {
             pid: std::process::id(),
             host: host_name(),
-            started_at: secs(SystemTime::now()),
+            started_at: own_start(),
         }
     }
 
+    /// What the lock means. Another computer's counts as open there. On this computer its
+    /// process must still run and have started when the lock says; otherwise the pid now belongs
+    /// to another process (after a restart, say) and the lock is dead. Where a start time can't be
+    /// read (Windows), the pid alone decides.
     pub fn status(&self) -> LockStatus {
+        let same_start = |start: u64| start.abs_diff(self.started_at) <= START_SLACK;
         if self.host != host_name() {
             LockStatus::OtherHost
         } else if self.pid == std::process::id() {
-            LockStatus::Mine
-        } else if process_alive(self.pid) {
+            if same_start(own_start()) {
+                LockStatus::Mine
+            } else {
+                LockStatus::Dead
+            }
+        } else if process_alive(self.pid) && process_start(self.pid).is_none_or(same_start) {
             LockStatus::Alive
         } else {
             LockStatus::Dead
         }
     }
+}
+
+/// When this process started, in seconds since 1970; where that can't be read, when it first
+/// asked.
+fn own_start() -> u64 {
+    static START: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *START.get_or_init(|| {
+        process_start(std::process::id()).unwrap_or_else(|| secs(SystemTime::now()))
+    })
 }
 
 /// The lock beside `drawing`, when there is one Qiyas can read (an unreadable one counts as none).
@@ -113,12 +222,14 @@ pub fn read_lock(drawing: &Path) -> Option<DrawingLock> {
 
 /// Locks `drawing` for this process (the desktop app, once it is open): writes the lock file,
 /// whole, unless a running process or another computer has one there (left as it is: false). A
-/// dead or unreadable lock is replaced: stale locks are cleaned up when the drawing is opened again.
+/// dead or unreadable lock is replaced: stale locks are cleaned up when the drawing is opened
+/// again, and a dead one's autosave is kept as a crash copy first.
 pub fn take_lock(drawing: &Path) -> Result<bool, CoreError> {
     match read_lock(drawing).as_ref().map(DrawingLock::status) {
         Some(LockStatus::Alive | LockStatus::OtherHost) => return Ok(false),
         Some(LockStatus::Mine) => return Ok(true),
-        Some(LockStatus::Dead) | None => {}
+        Some(LockStatus::Dead) => keep_crash_autosave(drawing)?,
+        None => {}
     }
     let json = serde_json::to_vec(&DrawingLock::here())
         .map_err(|e| CoreError::Unwritable(e.to_string()))?;
@@ -136,18 +247,96 @@ pub fn release_lock(drawing: &Path) -> Result<(), CoreError> {
 }
 
 /// Whether process `pid` on this computer still runs. A process of another user counts
-/// (`EPERM`); a zombie too, until its parent reaps it.
+/// (`EPERM`); a zombie does not.
 #[cfg(unix)]
 fn process_alive(pid: u32) -> bool {
-    match libc::pid_t::try_from(pid) {
+    let exists = match libc::pid_t::try_from(pid) {
         // SAFETY: signal 0 sends nothing; it only asks whether the process exists. A pid of 0 or
         // less would mean a process group, so those never get here.
-        Ok(pid) if pid > 0 => {
-            let sent = unsafe { libc::kill(pid, 0) };
+        Ok(p) if p > 0 => {
+            let sent = unsafe { libc::kill(p, 0) };
             sent == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
         }
         _ => false,
+    };
+    exists && !zombie(pid)
+}
+
+/// The state letter and start time (seconds since 1970) of process `pid`, from
+/// `/proc/<pid>/stat` (its 3rd and 22nd fields, in clock ticks after boot) and `/proc/stat`'s
+/// boot time.
+#[cfg(target_os = "linux")]
+fn proc_stat(pid: u32) -> Option<(char, u64)> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // The command name, in parentheses, may hold spaces and parentheses itself.
+    let mut fields = stat.rsplit_once(')')?.1.split_whitespace();
+    let state = fields.next()?.chars().next()?;
+    let ticks: u64 = fields.nth(18)?.parse().ok()?;
+    // SAFETY: sysconf only reads a configuration value.
+    let per_second = u64::try_from(unsafe { libc::sysconf(libc::_SC_CLK_TCK) })
+        .ok()
+        .filter(|&t| t > 0)?;
+    let boot: u64 = std::fs::read_to_string("/proc/stat")
+        .ok()?
+        .lines()
+        .find_map(|l| l.strip_prefix("btime "))?
+        .trim()
+        .parse()
+        .ok()?;
+    Some((state, boot + ticks / per_second))
+}
+
+/// A zombie still answers `kill` until its parent reaps it, but it has ended.
+#[cfg(target_os = "linux")]
+fn zombie(pid: u32) -> bool {
+    proc_stat(pid).is_some_and(|(state, _)| matches!(state, 'Z' | 'X'))
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn zombie(_pid: u32) -> bool {
+    false
+}
+
+/// When process `pid` started, in seconds since 1970; `None` when it can't be read.
+#[cfg(target_os = "linux")]
+fn process_start(pid: u32) -> Option<u64> {
+    proc_stat(pid).map(|(_, start)| start)
+}
+
+/// When process `pid` started, from `ps -o etime=` (macOS and other unix; best effort, to the
+/// second, untested here); `None` when `ps` can't tell.
+#[cfg(all(unix, not(target_os = "linux")))]
+fn process_start(pid: u32) -> Option<u64> {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "etime=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    let elapsed = elapsed_secs(String::from_utf8_lossy(&out.stdout).trim())?;
+    secs(SystemTime::now()).checked_sub(elapsed)
+}
+
+/// `ps`'s elapsed time, `[[dd-]hh:]mm:ss`, in seconds.
+#[cfg(any(test, all(unix, not(target_os = "linux"))))]
+fn elapsed_secs(etime: &str) -> Option<u64> {
+    let (days, clock) = match etime.split_once('-') {
+        Some((days, clock)) => (days.parse::<u64>().ok()?, clock),
+        None => (0, etime),
+    };
+    let parts: Vec<&str> = clock.split(':').collect();
+    if !(2..=3).contains(&parts.len()) {
+        return None;
     }
+    let mut total = 0;
+    for part in parts {
+        total = total * 60 + part.parse::<u64>().ok()?;
+    }
+    Some(days * 86_400 + total)
+}
+
+/// Windows (and others): the start time is not read; the pid alone decides.
+#[cfg(not(unix))]
+fn process_start(_pid: u32) -> Option<u64> {
+    None
 }
 
 /// Whether process `pid` still runs, from `tasklist` (std only, no console window). When it
@@ -193,18 +382,21 @@ fn host_name() -> String {
     String::new()
 }
 
-/// An autosave the window offers back.
+/// What the window may offer back for a drawing: an autosave, a crash, or another Qiyas that has
+/// it open.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Recoverable {
-    /// The drawing it is the autosave of.
+    /// The drawing it is about.
     pub drawing: String,
-    pub autosave: String,
+    /// The autosave offered: `<file>.sv$`, or the newest crash copy; `None` when there is only a
+    /// lock.
+    pub autosave: Option<String>,
     /// When it was written, in seconds since 1970.
-    pub saved_at: u64,
+    pub saved_at: Option<u64>,
     /// When the drawing was last written, in seconds since 1970; `None` when it is gone.
     pub drawing_at: Option<u64>,
-    /// Qiyas closed unexpectedly with the drawing open: a lock on this computer whose process
-    /// has ended.
+    /// Qiyas closed unexpectedly with the drawing open: a dead lock on this computer, or the
+    /// autosave offered is a crash copy.
     pub crashed: bool,
     /// The drawing is open in another Qiyas: a running process's lock, or another computer's.
     pub locked_elsewhere: Option<DrawingLock>,
@@ -218,26 +410,62 @@ fn secs(t: SystemTime) -> u64 {
     t.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
-/// The autosave of `drawing` when there is one newer than the drawing (or the drawing is gone),
-/// or Qiyas closed unexpectedly with the drawing open (a dead lock: then whatever its age).
-pub fn recoverable(drawing: &Path) -> Option<Recoverable> {
+/// An autosave of a drawing, as offered.
+struct Offer {
+    path: PathBuf,
+    saved: SystemTime,
+    crash_copy: bool,
+}
+
+/// The autosave offered for `drawing` (`dead`: a dead lock is beside it): its `<file>.sv$` when
+/// that is newer than the drawing, the drawing is gone or Qiyas crashed with it open; else its
+/// newest crash copy; else an older `<file>.sv$`.
+fn offered(drawing: &Path, dead: bool) -> Option<Offer> {
     let autosave = autosave_path(drawing);
-    let saved = modified(&autosave)?;
-    let drawing_at = modified(drawing);
+    let saved = modified(&autosave);
+    let newer = |s: SystemTime| dead || modified(drawing).is_none_or(|d| d < s);
+    if let Some(saved) = saved.filter(|&s| newer(s)) {
+        return Some(Offer {
+            path: autosave,
+            saved,
+            crash_copy: false,
+        });
+    }
+    let copy = crash_copies(drawing).into_iter().rev().find_map(|path| {
+        Some(Offer {
+            saved: modified(&path)?,
+            path,
+            crash_copy: true,
+        })
+    });
+    copy.or_else(|| {
+        saved.map(|saved| Offer {
+            path: autosave,
+            saved,
+            crash_copy: false,
+        })
+    })
+}
+
+/// What there is to say about `drawing` before it opens: the autosave offered (see `offered`),
+/// whether Qiyas crashed with it open, and who else has it open. `None` when there is neither an
+/// autosave nor a lock other than this process's; the window decides what to show.
+pub fn recoverable(drawing: &Path) -> Option<Recoverable> {
     let lock = read_lock(drawing);
     let status = lock.as_ref().map(DrawingLock::status);
-    let crashed = status == Some(LockStatus::Dead);
-    if !crashed && drawing_at.is_some_and(|d| d >= saved) {
+    let dead = status == Some(LockStatus::Dead);
+    let elsewhere = matches!(status, Some(LockStatus::Alive | LockStatus::OtherHost));
+    let offer = offered(drawing, dead);
+    if offer.is_none() && !dead && !elsewhere {
         return None;
     }
     Some(Recoverable {
         drawing: drawing.display().to_string(),
-        autosave: autosave.display().to_string(),
-        saved_at: secs(saved),
-        drawing_at: drawing_at.map(secs),
-        crashed,
-        locked_elsewhere: lock
-            .filter(|_| matches!(status, Some(LockStatus::Alive | LockStatus::OtherHost))),
+        autosave: offer.as_ref().map(|o| o.path.display().to_string()),
+        saved_at: offer.as_ref().map(|o| secs(o.saved)),
+        drawing_at: modified(drawing).map(secs),
+        crashed: dead || offer.as_ref().is_some_and(|o| o.crash_copy),
+        locked_elsewhere: lock.filter(|_| elsewhere),
     })
 }
 
@@ -248,13 +476,55 @@ fn remove_if_there(path: &Path) -> std::io::Result<()> {
     }
 }
 
-/// Deletes the autosave of `drawing` and its project; files already gone are no error. A dead
-/// lock beside the drawing goes too: the crash it told of is dealt with.
-pub fn discard_autosave(drawing: &Path) -> Result<(), CoreError> {
-    for path in [autosave_path(drawing), autosave_project(drawing)] {
-        remove_if_there(&path)?;
+fn remove_with_project(autosave: &Path) -> Result<(), CoreError> {
+    remove_if_there(autosave)?;
+    remove_if_there(&project_of(autosave))?;
+    Ok(())
+}
+
+/// Refuses while another Qiyas has `drawing` open (its autosave is that Qiyas's safety net);
+/// else the lock's status.
+fn refuse_open_elsewhere(drawing: &Path) -> Result<Option<LockStatus>, CoreError> {
+    let lock = read_lock(drawing);
+    let status = lock.as_ref().map(DrawingLock::status);
+    match (lock, status) {
+        (Some(l), Some(LockStatus::Alive | LockStatus::OtherHost)) => {
+            Err(CoreError::InvalidCommand(format!(
+                "{} is open in another Qiyas (process {} on {}): its autosave stays",
+                drawing.display(),
+                l.pid,
+                l.host
+            )))
+        }
+        _ => Ok(status),
     }
-    if read_lock(drawing).is_some_and(|l| l.status() == LockStatus::Dead) {
+}
+
+/// Deletes the autosave of the drawing `path` and its project (a save, Don't Save), never its
+/// crash copies; files already gone are no error. A dead lock beside the drawing goes too: the
+/// crash it told of is dealt with. Refused while another Qiyas has the drawing open. `path` may
+/// also be a crash copy (a recovered drawing's first save): then that copy and its project go.
+pub fn discard_autosave(path: &Path) -> Result<(), CoreError> {
+    if is_crash_copy(path) {
+        return remove_with_project(path);
+    }
+    let status = refuse_open_elsewhere(path)?;
+    remove_with_project(&autosave_path(path))?;
+    if status == Some(LockStatus::Dead) {
+        remove_if_there(&lock_path(path))?;
+    }
+    Ok(())
+}
+
+/// Discard in the recovery dialog: deletes the autosave `recoverable` offers for `drawing` (its
+/// `<file>.sv$`, or its newest crash copy) with its project, and a dead lock beside it. Refused
+/// while another Qiyas has the drawing open.
+pub fn discard_recoverable(drawing: &Path) -> Result<(), CoreError> {
+    let dead = refuse_open_elsewhere(drawing)? == Some(LockStatus::Dead);
+    if let Some(offer) = offered(drawing, dead) {
+        remove_with_project(&offer.path)?;
+    }
+    if dead {
         remove_if_there(&lock_path(drawing))?;
     }
     Ok(())
@@ -430,6 +700,11 @@ impl Session {
         // Counted whether it is written or not: a failing disk is tried again by the window's
         // timer, not after every change.
         self.autosave_revision.set(self.document_revision);
+        // Opened again after a crash, before the app's watch took the lock: what the crash
+        // autosaved is kept aside before this session's autosave takes its place.
+        if read_lock(&self.drawing.path).is_some_and(|l| l.status() == LockStatus::Dead) {
+            keep_crash_autosave(&self.drawing.path)?;
+        }
         let path = autosave_path(&self.drawing.path);
         let bytes = DwgWriter::write_to_vec(&self.drawing.doc)
             .map_err(|e| CoreError::Unwritable(e.to_string()))?;
@@ -438,27 +713,59 @@ impl Session {
         Ok(Some(path))
     }
 
-    /// Opens the autosave of `drawing` as a new drawing with unsaved changes beside it (see the
-    /// module documentation), with the take-off, BOQ and settings its project kept.
+    /// Opens the autosave `recoverable` offers for `drawing` (its `<file>.sv$`, or its newest
+    /// crash copy) as a new drawing with unsaved changes beside it (see the module
+    /// documentation), with the take-off, BOQ and settings its project kept.
     pub fn open_autosave(drawing: &Path) -> Result<Session, CoreError> {
-        let autosave = autosave_path(drawing);
-        if !autosave.exists() {
+        let dead = read_lock(drawing).is_some_and(|l| l.status() == LockStatus::Dead);
+        let Some(offer) = offered(drawing, dead) else {
             return Err(CoreError::InvalidCommand(format!(
                 "{} has no autosave",
                 drawing.display()
             )));
-        }
+        };
         let name = project::file_name(drawing);
-        let mut s = Session::open_with(&autosave, &autosave_project(drawing), &name)?;
+        let mut s = Session::open_with(&offer.path, &project_of(&offer.path), &name)?;
         s.drawing.path = recovered_path(drawing);
         s.mark_unsaved();
-        // Its first save deletes the autosave, so it is not offered again.
-        s.recovered_from = Some(drawing.to_path_buf());
+        // Its first save deletes what it came from (`discard_autosave` of the drawing, or of the
+        // crash copy), so it is not offered again.
+        s.recovered_from = Some(if offer.crash_copy {
+            offer.path
+        } else {
+            drawing.to_path_buf()
+        });
         Ok(s)
     }
 
     /// What the reader made of the drawing's file (Recover's report).
     pub fn read_report(&self) -> ReadReport {
         self.drawing.report.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ps_elapsed_time_reads_minutes_hours_and_days() {
+        assert_eq!(elapsed_secs("05:07"), Some(307));
+        assert_eq!(elapsed_secs("01:02:03"), Some(3723));
+        assert_eq!(elapsed_secs("2-01:02:03"), Some(2 * 86_400 + 3723));
+        assert_eq!(elapsed_secs(""), None);
+        assert_eq!(elapsed_secs("7"), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_process_start_time_is_read_from_proc() {
+        let mine = process_start(std::process::id()).unwrap();
+        let now = secs(SystemTime::now());
+        assert!(mine <= now && now - mine < 600, "{mine} {now}");
+        assert_eq!(own_start(), mine);
+        // Pid 1 started first.
+        assert!(process_start(1).unwrap() <= mine);
+        assert!(!zombie(std::process::id()));
     }
 }

@@ -461,13 +461,26 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
   the app's 1 s watch (`files::start_watch`) autosaves a drawing after every 20 changes to it
   (steps, undos, redos; a save or an autosave starts the count again, `Session::autosave_due`).
 - Lock files (`autosave.rs`, `files::Locks`): while a drawing is open the watch keeps
-  `<file>.qlock` beside it (JSON `pid`, `host`, `started_at`), removed when it is closed, saved
-  under another name, or Qiyas quits (`RunEvent::Exit`). A lock on this computer whose process
-  has ended means Qiyas closed unexpectedly: `recoverable` sets `crashed` and offers the autosave
-  even when it is older than the drawing. A running process's lock, or another computer's, is
-  `locked_elsewhere`: reported only, never taken over, no read-only open. A dead lock is replaced
-  when the drawing is opened again and removed with its autosave (Discard, or the recovered
-  drawing's first save). Windows tells a live process with `tasklist` (untested here).
+  `<file>.qlock` beside it (JSON `pid`, `host`, `started_at`: when that process started),
+  removed on the watch's next beat after it is closed or saved under another name, and when
+  Qiyas quits (`RunEvent::Exit`). The watch reads and writes lock files with none of the app's
+  locks held, and tries a drawing another Qiyas has again every 10 s. A lock on this computer is
+  alive while its pid runs and started when the lock says (Linux `/proc/<pid>/stat`, within 2 s;
+  macOS `ps -o etime=`, best effort; Windows the pid alone through `tasklist`, untested here); a
+  pid taken over by another process, a zombie, or this pid with another start time is dead. A
+  dead lock means Qiyas closed unexpectedly: `recoverable` sets `crashed` and offers the autosave
+  even when it is older. `recoverable` answers whenever there is an autosave or a lock other than
+  this process's (`autosave` and `saved_at` null for a lock alone): the window decides what to
+  show. A running process's lock, or another computer's, is `locked_elsewhere`: never taken over,
+  no read-only open, and Discard (`discard_autosave`, `discard_recoverable`) is refused, so that
+  Qiyas keeps its autosave. A dead lock is replaced when the drawing is opened again.
+- Crash copies: when a crashed drawing is opened again (Later, or any open without Recover) its
+  autosave is moved to `<file>.sv$.crash-<yyyymmdd-hhmmss>` (when written, UTC) with its
+  `.qiyas`, before anything writes a new `.sv$`; at most 3 per drawing (the oldest go).
+  `recoverable` offers the `.sv$` first when it is newer or crashed, else the newest crash copy;
+  Recover opens that copy and its first save deletes it; the dialog's Discard deletes what it
+  offered (IPC `discard_autosave` on a drawing not open here), Don't Save only the open
+  drawing's own `.sv$`.
   `RecoveryDialog` heads a question with "Qiyas closed unexpectedly last time" when any of its
   drawings crashed (those come first, `enqueue`; rows say so only beside newer ones), else "A
   newer autosave exists"; each row gives the autosave's and the drawing's time in the user's

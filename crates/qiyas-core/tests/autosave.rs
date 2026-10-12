@@ -71,7 +71,7 @@ fn autosave_writes_the_drawing_and_its_project_and_recovery_finds_them() {
     s.autosave().unwrap();
 
     let found = recoverable(&path).expect("newer than the drawing");
-    assert_eq!(found.autosave, written.display().to_string());
+    assert_eq!(found.autosave, Some(written.display().to_string()));
     assert_eq!(found.drawing, path.display().to_string());
 
     // Recover: the autosave as a new drawing beside the original, with its take-off.
@@ -95,15 +95,17 @@ fn autosave_writes_the_drawing_and_its_project_and_recovery_finds_them() {
 }
 
 #[test]
-fn an_autosave_older_than_its_drawing_is_not_offered_and_a_save_deletes_it() {
+fn an_autosave_older_than_its_drawing_is_reported_as_older_and_a_save_deletes_it() {
     let dir = tempfile::tempdir().unwrap();
     let path = write_sample(dir.path(), "dwg");
     let mut s = Session::open(&path).unwrap();
     line(&mut s);
     let written = s.autosave().unwrap().unwrap();
-    // The drawing saved after the autosave: nothing to recover.
+    // The drawing saved after the autosave: reported as older, no crash (the window decides).
     age(&written);
-    assert!(recoverable(&path).is_none());
+    let older = recoverable(&path).expect("an autosave is there");
+    assert!(older.saved_at.unwrap() < older.drawing_at.unwrap());
+    assert!(!older.crashed);
 
     // A save deletes the autosave.
     s.save().unwrap();

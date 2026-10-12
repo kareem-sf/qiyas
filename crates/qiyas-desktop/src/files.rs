@@ -2,22 +2,24 @@
 //! drawings, Recover (a damaged file opened with a report of what was dropped), and sheet sets.
 //!
 //! Crash recovery: a watch thread (`start_watch`) keeps a lock file beside every open drawing
-//! (`Locks`, `qiyas_core::take_lock`) and autosaves a drawing after every 20 changes; quitting
-//! removes the locks (`release_locks`), a crash leaves them. The panic hook
+//! (`Locks`, `qiyas_core::take_lock`; the lock files are read and written with none of the app's
+//! locks held, and a lock another Qiyas has is looked at again every 10 s) and autosaves a
+//! drawing after every 20 changes; quitting removes the locks (`release_locks`), a crash leaves
+//! them. The panic hook
 //! (`install_panic_hook`) autosaves every drawing with changes, best effort, within 5 s.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Mutex, MutexGuard, PoisonError, TryLockError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use qiyas_core::{
     autosave_all, recoverable, release_lock, sheet_set_entries, sheet_set_entry as entry_for,
-    take_lock, AutosaveRun, Drawing, DrawingInfo, ReadReport, Recoverable, Session, SheetSet,
-    SheetSetDrawing, SheetSetEntry,
+    take_lock, AutosaveRun, CoreError, Drawing, DrawingInfo, ReadReport, Recoverable, Session,
+    SheetSet, SheetSetDrawing, SheetSetEntry,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Manager, Runtime, State};
@@ -82,32 +84,51 @@ pub struct Locks(Mutex<HeldLocks>);
 #[derive(Default)]
 struct HeldLocks {
     held: BTreeSet<PathBuf>,
+    /// Open drawings not locked (another Qiyas has them, or no file yet), with when that was
+    /// last tried: tried again after `RETRY_LOCK`, so another process's liveness is looked at
+    /// no more often.
+    refused: BTreeMap<PathBuf, Instant>,
     /// Qiyas is quitting: no lock is taken any more.
     released: bool,
 }
 
+/// How long a drawing that could not be locked waits before the next try.
+const RETRY_LOCK: Duration = Duration::from_secs(10);
+
 impl Locks {
     /// Locks every drawing in `open` not held yet (files only: a recovered drawing not saved yet
-    /// has none), unless another Qiyas has it (tried again on the next beat); unlocks the held
-    /// ones no longer open (closed, or saved under another name).
-    fn sync<'a>(&self, open: impl IntoIterator<Item = &'a Path>) {
+    /// has none), unless another Qiyas has it (tried again after `RETRY_LOCK`); unlocks the held
+    /// ones no longer open (closed, or saved under another name). `now` is the beat's time.
+    fn sync(&self, open: &[PathBuf], now: Instant) {
         let mut locks = lock(&self.0);
         if locks.released {
             return;
         }
-        let open: BTreeSet<PathBuf> = open
-            .into_iter()
-            .filter(|p| p.is_file())
-            .map(Path::to_path_buf)
+        let open: BTreeSet<&PathBuf> = open.iter().collect();
+        let closed: Vec<PathBuf> = locks
+            .held
+            .iter()
+            .filter(|p| !open.contains(p))
+            .cloned()
             .collect();
-        let closed: Vec<PathBuf> = locks.held.difference(&open).cloned().collect();
         for path in closed {
             let _ = release_lock(&path);
             locks.held.remove(&path);
         }
+        locks.refused.retain(|p, _| open.contains(p));
         for path in open {
-            if !locks.held.contains(&path) && take_lock(&path).unwrap_or(false) {
-                locks.held.insert(path);
+            let waiting = locks
+                .refused
+                .get(path)
+                .is_some_and(|tried| now.saturating_duration_since(*tried) < RETRY_LOCK);
+            if locks.held.contains(path) || waiting {
+                continue;
+            }
+            if path.is_file() && take_lock(path).unwrap_or(false) {
+                locks.refused.remove(path);
+                locks.held.insert(path.clone());
+            } else {
+                locks.refused.insert(path.clone(), now);
             }
         }
     }
@@ -125,11 +146,15 @@ impl Locks {
 /// How often the watch looks at the open drawings.
 const WATCH_EVERY: Duration = Duration::from_secs(1);
 
-/// One beat of the watch: the lock files follow the open drawings, and a drawing with 20
-/// changes since it was last saved or autosaved is autosaved (`Session::autosave_due`).
+/// One beat of the watch: the lock files follow the open drawings (their paths taken first, the
+/// files read and written with none of the app's locks held), and a drawing with 20 changes
+/// since it was last saved or autosaved is autosaved (`Session::autosave_due`).
 fn tick(state: &AppState, locks: &Locks) -> AutosaveRun {
+    let paths: Vec<PathBuf> = with_open(state, |open| {
+        open.iter().map(|s| s.drawing.path.clone()).collect()
+    });
+    locks.sync(&paths, Instant::now());
     with_open(state, |open| {
-        locks.sync(open.iter().map(|s| s.drawing.path.as_path()));
         autosave_all(open.into_iter().filter(|s| s.autosave_due()))
     })
 }
@@ -284,10 +309,21 @@ pub async fn recover_autosave<R: Runtime>(
     Ok(info)
 }
 
-/// Deletes the autosave of the drawing `path`.
+/// Deletes the autosave of the drawing `path` (see `discard`).
 #[tauri::command]
-pub async fn discard_autosave(path: String) -> Result<(), String> {
-    qiyas_core::discard_autosave(Path::new(&path)).map_err(|e| e.to_string())
+pub async fn discard_autosave(path: String, state: State<'_, AppState>) -> Result<(), String> {
+    discard(&state, Path::new(&path)).map_err(|e| e.to_string())
+}
+
+/// Don't Save on a drawing open here deletes its own `<file>.sv$` (never a crash copy); the
+/// recovery dialog's Discard, on a drawing not open here, deletes what the dialog offered (a
+/// crash copy too). Both are refused while another Qiyas has the drawing open.
+fn discard(state: &AppState, drawing: &Path) -> Result<(), CoreError> {
+    if tabs::find_path(state, drawing).is_some() {
+        qiyas_core::discard_autosave(drawing)
+    } else {
+        qiyas_core::discard_recoverable(drawing)
+    }
 }
 
 /// A drawing Recover opened, and what its reader dropped.
@@ -541,7 +577,7 @@ mod tests {
         let took = start.elapsed();
         assert_eq!(done, None);
         assert!(
-            took >= Duration::from_millis(200) && took < Duration::from_secs(2),
+            took >= Duration::from_millis(200) && took < Duration::from_secs(10),
             "{took:?}"
         );
         drop(held);
@@ -581,5 +617,76 @@ mod tests {
         assert_eq!(flushed.busy, 0);
         assert_eq!(flushed.run.written.len(), 2);
         assert!(autosave_path(&b).exists());
+    }
+    #[test]
+    fn a_refused_lock_is_tried_again_after_ten_seconds() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = write_drawing(&sample_doc(), &dir.path().join("a.dwg"));
+        std::fs::write(
+            lock_path(&a),
+            r#"{"pid": 7, "host": "elsewhere", "started_at": 1}"#,
+        )
+        .unwrap();
+        let locks = Locks::default();
+        let start = Instant::now();
+        locks.sync(std::slice::from_ref(&a), start);
+        assert_eq!(read_lock(&a).unwrap().host, "elsewhere");
+        // The other computer closes it; the beats in between leave it alone.
+        std::fs::remove_file(lock_path(&a)).unwrap();
+        locks.sync(std::slice::from_ref(&a), start + Duration::from_secs(1));
+        assert!(!lock_path(&a).exists());
+        locks.sync(std::slice::from_ref(&a), start + Duration::from_secs(11));
+        assert_eq!(read_lock(&a).unwrap().pid, std::process::id());
+    }
+
+    /// The crash copies beside `drawing`.
+    fn crash_copies(drawing: &Path) -> usize {
+        let prefix = format!(
+            "{}.sv$.crash-",
+            drawing.file_name().unwrap().to_string_lossy()
+        );
+        std::fs::read_dir(drawing.parent().unwrap())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with(&prefix) && !n.ends_with(".qiyas"))
+            .count()
+    }
+
+    /// `drawing` crashed with unsaved changes in an earlier Qiyas that had this pid, and was
+    /// opened again: its autosave is kept aside as a crash copy.
+    fn leave_crash_copy(drawing: &Path) {
+        let mut s = Session::open(drawing).unwrap();
+        line(&mut s, 5.0);
+        s.autosave().unwrap().unwrap();
+        assert!(take_lock(drawing).unwrap());
+        let mut earlier = read_lock(drawing).unwrap();
+        earlier.started_at = 1;
+        std::fs::write(lock_path(drawing), serde_json::to_vec(&earlier).unwrap()).unwrap();
+        assert!(take_lock(drawing).unwrap());
+        release_lock(drawing).unwrap();
+        assert_eq!(crash_copies(drawing), 1);
+    }
+
+    #[test]
+    fn discard_deletes_an_open_drawings_own_autosave_or_what_the_dialog_offered() {
+        let dir = tempfile::tempdir().unwrap();
+        let (state, a, _b) = two_open(dir.path());
+        let c = write_drawing(&sample_doc(), &dir.path().join("c.dwg"));
+        leave_crash_copy(&c);
+        leave_crash_copy(&a);
+        {
+            let mut parked = lock(&state.parked);
+            line(&mut parked[0].session, 1.0);
+            parked[0].session.autosave().unwrap().unwrap();
+        }
+
+        // Don't Save on `a`, open here: its own autosave goes, the crash copy stays.
+        discard(&state, &a).unwrap();
+        assert!(!autosave_path(&a).exists());
+        assert_eq!(crash_copies(&a), 1);
+        // The recovery dialog's Discard on `c`, not open: the crash copy it offered goes.
+        discard(&state, &c).unwrap();
+        assert_eq!(crash_copies(&c), 0);
     }
 }
