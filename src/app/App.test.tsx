@@ -568,7 +568,7 @@ test("the options reach the window: the pick box, the ribbon layout and a shortc
     background_color: "#102030",
     highlight_color: "#ff8800",
     crosshair_color: "#00ff00",
-    shortcuts: { circle: "Ctrl+Shift+O" },
+    shortcuts: { circle: "Ctrl+Shift+O", line: "F5" },
     ribbon: {
       tabs: [{ id: "home", label: "home", groups: [{ id: "file", label: "ribbon.file", buttons: [{ kind: "action", command: "open", label: "open" }] }] }],
     },
@@ -583,7 +583,10 @@ test("the options reach the window: the pick box, the ribbon layout and a shortc
   expect(core.calls).toContain(`pick {"x":10,"y":10,"tol":9}`);
   // The canvas draws with the background and highlight colours (the crosshair's waits).
   expect((canvas.props as unknown as { colours: unknown }).colours).toEqual({ background: "#102030", highlight: "#ff8800" });
-  fireEvent.keyDown(window, { code: "KeyO", key: "O", ctrlKey: true, shiftKey: true });
+  // A key of the user's is the window's only: F5 never reloads it.
+  expect(fireEvent.keyDown(window, { code: "F5", key: "F5" })).toBe(false);
+  await settle();
+  expect(fireEvent.keyDown(window, { code: "KeyO", key: "O", ctrlKey: true, shiftKey: true })).toBe(false);
   await settle();
   expect(document.querySelector<HTMLInputElement>("input[aria-autocomplete]")!.labels![0].textContent).toBe(
     en["draw.prompt.circleCentre"],

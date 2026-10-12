@@ -37,13 +37,17 @@ const TOOL_CODES: Record<string, Tool> = {
  *  shortcuts work the same with an Arabic keyboard layout. `user` (the Options dialog's, command
  *  to key) comes first; a command it gives a key no longer answers its built-in one. */
 export function shortcutFor(e: Keys, user: Record<string, string> = {}): Shortcut | null {
-  const pressed = keyOf(e);
-  if (pressed) {
-    const mine = Object.entries(user).find(([, key]) => normalizeKey(key) === pressed);
-    if (mine) return mine[0] as Shortcut;
-  }
+  const mine = userShortcut(e, user);
+  if (mine) return mine as Shortcut;
   const builtIn = builtInShortcut(e);
   return builtIn !== null && builtIn in user ? null : builtIn;
+}
+
+/** The command the user gave the key pressed, or null. */
+export function userShortcut(e: Keys, user: Record<string, string>): string | null {
+  const pressed = keyOf(e);
+  if (!pressed) return null;
+  return Object.entries(user).find(([, key]) => normalizeKey(key) === pressed)?.[0] ?? null;
 }
 
 function builtInShortcut(e: Keys): Shortcut | null {

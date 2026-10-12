@@ -6,7 +6,7 @@ import { EMPTY_MODEL, pick, redo, undo, type DrawingInfo } from "../api";
 import type { Assistant } from "../ai/useAssistant";
 import { metresPerUnit } from "../shell/AttachPdfDialog";
 import type { Action, Expect, ParseState } from "../tools/commandParser";
-import { shortcutFor } from "../tools/shortcuts";
+import { shortcutFor, userShortcut } from "../tools/shortcuts";
 import type { Point } from "../viewport/camera";
 import { type Measure, type T, typing } from "./shared";
 import type { Annotate } from "./useAnnotate";
@@ -420,6 +420,8 @@ export function useCommandLine({
       // A drawing change is under way: tools wait for the drawing it brings.
       if (switching.current > 0) return;
       if (typing(e)) return;
+      // A key of the user's is the window's only (F5 or Ctrl+R never reload the web view).
+      if (userShortcut(e, options.shortcuts)) e.preventDefault();
       if (action === "osnap" || action === "grid" || action === "ortho" || action === "polar") {
         // F7 and F10 also mean something to the web view; not here.
         e.preventDefault();
