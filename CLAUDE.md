@@ -511,8 +511,12 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
   Standard, ByLayer, ByBlock, Continuous, the current ones, shape files, a kept style's `$n`
   child) and empty groups. "Uses" is read wide: besides the plain fields, every `Handle(n)` and
   quoted name in the objects', header's, dimension styles', linetypes' and complex entities'
-  `Debug` text keeps an entry (`purge::Mentions`; a unit test pins `Handle`'s `Debug` form).
-  A dimension whose block name is `*U0` (the DWG reader's name for a null handle) has none.
+  `Debug` text keeps an entry (`purge::Mentions`; a unit test pins `Handle`'s `Debug` form),
+  and so does every quoted string of hex digits (DXF raw pairs keep handles so). A drawing
+  holding data the codec does not read (unknown or proxy objects, unknown entities) purges
+  layers only: `PurgeReport::limited_reason` says why. A dimension whose block name is `*U0`
+  (the DWG reader's name for a null handle) has none; `purge_for_save` uses the same two
+  predicates (`purge::anonymous_kind`, `purge::no_block`).
 - `Command::Audit { fix }` (`qiyas-core/src/audit.rs`): `Outcome::Audited { report:
   AuditReport }` with `counts` by `AuditKind` and one `AuditItem` per kind and name (count,
   first 100 handles, a plain line, `fixed`): entities whose block is gone, references to
@@ -528,8 +532,8 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
   two commands on one key refused, `settings::shortcut_key` spells a key one way), `ribbon`
   (null = `ribbon::default_ribbon`), `aliases` (no two that differ only in case). The ribbon
   (`qiyas-desktop/src/ribbon.rs`, IPC `get_default_ribbon`) is data: tabs, groups, buttons
-  `{ kind: tool | action | toggle, command, label }` as `Ribbon.tsx` draws them plus Audit and
-  Purge; a saved layout may only use the default's buttons, and one that no longer checks out
+  `{ kind: tool | action | toggle, command, label }` as `Ribbon.tsx` draws them (Home, Measure,
+  Annotate, Insert, View, Manage, Output) plus Audit and Purge; a saved layout may only use the default's buttons, and one that no longer checks out
   falls back to the default on load. The dialogs (Options, Customize, Aliases) are the window's.
 
 ## PDF
