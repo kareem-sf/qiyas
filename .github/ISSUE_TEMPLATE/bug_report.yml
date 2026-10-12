@@ -1,0 +1,71 @@
+name: Bug report
+description: Something in Qiyas does not work as it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. A drawing that shows the problem helps most: attach it below
+        (zip it first, GitHub does not take .dwg or .dxf directly), or a cut-down copy without
+        anything confidential.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected and what Qiyas did instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open the attached drawing
+        2. Run AREA and pick the room
+        3. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: format
+    attributes:
+      label: Drawing format
+      options:
+        - DWG
+        - DXF
+        - PDF (import or underlay)
+        - Excel BOQ
+        - Not about a file
+    validations:
+      required: true
+  - type: input
+    id: dwg-version
+    attributes:
+      label: Drawing version
+      description: The AutoCAD version the drawing was saved as, if you know it (e.g. AutoCAD 2018).
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - macOS (Apple silicon)
+        - macOS (Intel)
+        - Linux (AppImage)
+        - Linux (deb)
+        - Linux (rpm)
+        - Built from source
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Qiyas version
+      description: From Help, About.
+      placeholder: 0.0.1
+    validations:
+      required: true
+  - type: textarea
+    id: files
+    attributes:
+      label: Drawing, screenshots, logs
+      description: Drag the zipped drawing, screenshots or the error text here.

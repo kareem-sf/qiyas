@@ -1,5 +1,9 @@
 # Qiyas (قياس)
 
+[![CI](https://github.com/kareem-sf/qiyas/actions/workflows/ci.yml/badge.svg)](https://github.com/kareem-sf/qiyas/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/kareem-sf/qiyas)](https://github.com/kareem-sf/qiyas/releases/latest)
+[![Licence: Apache-2.0](https://img.shields.io/badge/licence-Apache--2.0-blue)](LICENSE)
+
 Desktop measurement CAD for quantity surveyors, by [QS Mind](https://qsmind.app). Open DWG and
 DXF drawings, measure and edit them, plot to PDF or a printer, run scripts headless, and let the
 AI assistant (Mizan) build and check bills of quantities against the drawing. English and Arabic.
@@ -9,11 +13,29 @@ licences are listed in `LICENSES/THIRD-PARTY.md`. The DWG/DXF reader and the geo
 ([opencadcodec](https://github.com/opencadstudio/opencadcodec),
 [opencadkernel](https://github.com/opencadstudio/opencadkernel)) are MPL-2.0.
 
+## Features
+
+- DWG and DXF (AutoCAD 2000 to 2018) with xrefs, images and PDF underlays; saves back with a `.bak`.
+- Take-off: lengths, areas and counts; import a BOQ from Excel, compare it with the drawing, export.
+- Draw and edit: lines, polylines, arcs, hatches, text, dimensions, tables, blocks, layers, groups,
+  parametric constraints; undo for everything.
+- Plot to PDF or a printer with CTB/STB plot styles.
+- Command scripts in the window, or headless with `qiyas-cli` (convert, run, take-off, batch).
+- Mizan, the AI assistant (Claude or any OpenAI-compatible service), and an MCP server for Claude
+  Desktop and Claude Code.
+- Autosave and crash recovery, automatic updates, English and Arabic.
+
+## Screenshots
+
+Coming with the next release.
+
 ## Install
 
 Download the newest release from [Releases](https://github.com/kareem-sf/qiyas/releases):
-AppImage, deb or rpm on Linux. Installed copies check that page for updates (About, Check for
-updates). Windows and macOS installers are built on those systems with `pnpm bundle`.
+AppImage, deb or rpm on Linux; from the next release on, also the Windows (NSIS, MSI) and macOS
+(Apple silicon, Intel) installers, built by the release workflow. Installed copies check that
+page for updates (About, Check for updates). The installers are not code-signed yet, so Windows
+SmartScreen and macOS Gatekeeper warn on first open.
 
 ## Build
 
@@ -32,3 +54,9 @@ without it the system's Arabic font is used. Drawing text uses Noto Sans and Not
 
 `CLAUDE.md` describes every part of the app and how we work here; `docs/` holds the specs,
 plans, check reports and the decisions carried forward.
+
+## Contribute
+
+Issues and pull requests are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md) and the
+[code of conduct](CODE_OF_CONDUCT.md). Report security problems privately
+([SECURITY.md](SECURITY.md)). Changes are listed in [CHANGELOG.md](CHANGELOG.md).
