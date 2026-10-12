@@ -72,7 +72,13 @@ export type Run =
   | "sheetSet"
   | "recover"
   /** SCRIPT: runs a `.scr` command script. */
-  | "script";
+  | "script"
+  /** The Manage tab's dialogs: OPTIONS, CUI (customize the ribbon), ALIASEDIT, PURGE, AUDIT. */
+  | "options"
+  | "customize"
+  | "aliasEdit"
+  | "purge"
+  | "audit";
 
 export type Action =
   /** An empty line where a command is expected: run the last command again. */
@@ -138,6 +144,11 @@ const RUNS: Partial<Record<CommandName, Run>> = {
   SHEETSET: "sheetSet",
   RECOVER: "recover",
   SCRIPT: "script",
+  OPTIONS: "options",
+  CUI: "customize",
+  ALIASEDIT: "aliasEdit",
+  PURGE: "purge",
+  AUDIT: "audit",
 };
 
 const TOOLS: Partial<Record<CommandName, Tool>> = {

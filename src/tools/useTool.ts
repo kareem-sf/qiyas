@@ -73,9 +73,9 @@ import { constrain, gridRound, NO_TRACK, type Track } from "./tracking";
 /** Two clicks this close in time and on screen are a double click. */
 const DOUBLE_CLICK_MS = 300;
 const DOUBLE_CLICK_PX = 4;
-/** Picking reaches this many CSS pixels around the cursor. */
+/** Picking reaches this many CSS pixels around the cursor, unless the options say otherwise. */
 const PICK_PX = 6;
-/** Object snaps reach this many CSS pixels around the cursor. */
+/** Object snaps reach this many CSS pixels around the cursor, unless the options say otherwise. */
 const SNAP_PX = 10;
 
 export type ToolState = {
@@ -661,8 +661,15 @@ type SnapAsk = { p: Point; tol: number; from: Point | null; wpp: number };
 
 /** Tool state for `tool`, following it as it changes. `ucs` is the user coordinate system ortho,
  *  polar and the grid run along. `drafting` gives the snaps, ortho, polar and
- *  grid snap the point tools place their points with (none while it is null). */
-export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = null, ucs?: Ucs) {
+ *  grid snap the point tools place their points with (none while it is null). `px`: how many CSS
+ *  pixels around the cursor snaps and picks reach (the Options dialog's snap aperture and pick box). */
+export function useTool(
+  tool: Tool,
+  api: ToolApi,
+  drafting: Drafting | null = null,
+  ucs?: Ucs,
+  px: { snap: number; pick: number } = { snap: SNAP_PX, pick: PICK_PX },
+) {
   const [state, dispatch] = useReducer(toolReducer, tool, initialToolState);
   /** The cursor in drawing coordinates as it is, and drawing units per CSS pixel there. */
   const [raw, setRaw] = useState<{ p: Point; wpp: number } | null>(null);
@@ -790,7 +797,7 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
 
   function onMove(world: Point, worldPerPixel: number) {
     setRaw({ p: world, wpp: worldPerPixel });
-    if (snapping) snapper.current.request({ p: world, tol: SNAP_PX * worldPerPixel, from: prev, wpp: worldPerPixel });
+    if (snapping) snapper.current.request({ p: world, tol: px.snap * worldPerPixel, from: prev, wpp: worldPerPixel });
   }
 
   async function onClick(world: Point, screen: Point, worldPerPixel: number, shift = false, ctrl = false) {
@@ -798,7 +805,7 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
     if (snapsNow) {
       let found: Snap | null = null;
       try {
-        if (snapping) found = await api.snap(world[0], world[1], SNAP_PX * worldPerPixel, prev);
+        if (snapping) found = await api.snap(world[0], world[1], px.snap * worldPerPixel, prev);
       } catch (e) {
         api.onError(e);
         return;
@@ -821,7 +828,7 @@ export function useTool(tool: Tool, api: ToolApi, drafting: Drafting | null = nu
     let info: EntityInfo | null = null;
     try {
       if (picksNow) {
-        picked = await api.pick(world[0], world[1], PICK_PX * worldPerPixel);
+        picked = await api.pick(world[0], world[1], px.pick * worldPerPixel);
       }
       if (tool === "count" && picked !== null) info = await api.entityInfo(picked.top);
       // Inside a block, the block names go to the status bar.

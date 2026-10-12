@@ -24,6 +24,7 @@ import { type Commands, useCommands, useToolChoice } from "./useCommands";
 import { useDrafting } from "./useDrafting";
 import { useAutosave, useDrawings, useFileTabs } from "./useDrawings";
 import { useLayers } from "./useLayers";
+import { useOptions } from "./useOptions";
 import { useOverlay } from "./useOverlay";
 import { usePlot } from "./usePlot";
 import { useSelection } from "./useSelection";
@@ -36,6 +37,7 @@ export default function App() {
   const { lang } = useLanguage();
   const [info, setInfo] = useState<DrawingInfo | null>(null);
   const shell = useShell();
+  const options = useOptions();
   const { theme, settingsOpen, setSettingsOpen, commandAliases, setError, setNotice, setSideTab, viewport, run, focusDrawing } =
     shell;
   const { fileTabs, setFileTabs, activeTab, setActiveTab, refreshTabs } = useFileTabs();
@@ -168,6 +170,7 @@ export default function App() {
     },
     drafting,
     info?.ucs,
+    options.px,
   );
   measureRef.current = measure;
   const ai = useAssistantWiring({
@@ -253,6 +256,7 @@ export default function App() {
     takeoffState,
     takeoff,
     plot,
+    options,
   });
   onCommandRef.current = onCommand;
   const selection = useSelection({ info, tool, measure, batch, redraw, runLayerCommand });
@@ -283,6 +287,7 @@ export default function App() {
         drawings={drawings}
         takeoff={takeoff}
         plot={plot}
+        options={options}
       />
       <Dialogs
         info={info}
@@ -296,6 +301,7 @@ export default function App() {
         annotate={annotate}
         drawings={drawings}
         plot={plot}
+        options={options}
       />
       <div className="middle">
         <LeftPanels
@@ -332,7 +338,8 @@ export default function App() {
       )}
       <StatusBar
         cursor={measure.cursor}
-        precision={drafting?.precision ?? 3}
+        // With no drawing open, the Options dialog's decimals.
+        precision={drafting?.precision ?? options.displayPrecision}
         metresPerUnit={info ? metresPerUnit(info.units) : 1}
         snapLabel={measure.snap ? t(`snap.${measure.snap.kind}`) : null}
         drafting={info ? drafting : null}

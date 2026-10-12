@@ -441,3 +441,13 @@ test("the clipboard, viewport, UCS, sheet set and recover commands", () => {
   expect(parse("SCRIPT", cmd)).toEqual({ type: "run", what: "script" });
   expect(parse("scr", cmd)).toEqual({ type: "run", what: "script" });
 });
+
+test("the Manage commands: OPTIONS (OP), CUI, ALIASEDIT, PURGE (PU) and AUDIT", () => {
+  expect(parse("OPTIONS", cmd)).toEqual({ type: "run", what: "options" });
+  expect(parse("op", cmd)).toEqual({ type: "run", what: "options" });
+  expect(parse("CUI", cmd)).toEqual({ type: "run", what: "customize" });
+  expect(parse("aliasedit", cmd)).toEqual({ type: "run", what: "aliasEdit" });
+  expect(parse("PURGE", cmd)).toEqual({ type: "run", what: "purge" });
+  expect(parse("PU", cmd)).toEqual({ type: "run", what: "purge" });
+  expect(parse("Audit", cmd)).toEqual({ type: "run", what: "audit" });
+});

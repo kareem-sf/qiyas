@@ -318,3 +318,73 @@ test("the View tab has the Viewports group: MVIEW, two views, the UCS and sheet 
   fireEvent.click(screen.getByRole("button", { name: "One viewport" }));
   expect(onSplit).toHaveBeenLastCalledWith(false);
 });
+
+test("the Manage tab has Audit, Purge, Options, Customize and Aliases", () => {
+  const handlers = {
+    onAudit: vi.fn(),
+    onPurge: vi.fn(),
+    onOptions: vi.fn(),
+    onCustomize: vi.fn(),
+    onAliases: vi.fn(),
+  };
+  render(<Ribbon {...props} {...handlers} />);
+  fireEvent.click(screen.getByRole("tab", { name: "Manage" }));
+  for (const [name, handler] of [
+    ["Audit…", handlers.onAudit],
+    ["Purge…", handlers.onPurge],
+    ["Options…", handlers.onOptions],
+    ["Customize…", handlers.onCustomize],
+    ["Aliases…", handlers.onAliases],
+  ] as const) {
+    fireEvent.click(screen.getByRole("button", { name }));
+    expect(handler).toHaveBeenCalled();
+  }
+});
+
+test("a saved layout is drawn as it is: its tabs, groups and buttons in their order, the rest gone", () => {
+  const onTool = vi.fn();
+  const onSave = vi.fn();
+  render(
+    <Ribbon
+      {...props}
+      onTool={onTool}
+      onSave={onSave}
+      layout={{
+        tabs: [
+          {
+            id: "view",
+            label: "view",
+            groups: [{ id: "views", label: "ribbon.views", buttons: [{ kind: "tool", command: "zoomWindow", label: "zoomWindow" }] }],
+          },
+          {
+            id: "home",
+            label: "home",
+            groups: [
+              {
+                id: "draw",
+                label: "draw.group",
+                buttons: [
+                  { kind: "tool", command: "circle", label: "draw.circle" },
+                  { kind: "tool", command: "line", label: "draw.line" },
+                ],
+              },
+              { id: "file", label: "ribbon.file", buttons: [{ kind: "action", command: "save", label: "save" }] },
+            ],
+          },
+        ],
+      }}
+    />,
+  );
+  expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["View", "Home"]);
+  // The first tab is on screen.
+  expect(screen.getByRole("button", { name: "Zoom window" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("tab", { name: "Home" }));
+  expect(screen.getAllByRole("group").map((g) => g.getAttribute("aria-label"))).toEqual(["Draw", "File"]);
+  expect(within(screen.getByRole("group", { name: "Draw" })).getAllByRole("button").map((b) => b.textContent)).toEqual([
+    "Circle",
+    "Line",
+  ]);
+  expect(screen.queryByRole("button", { name: "Polyline" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  expect(onSave).toHaveBeenCalled();
+});

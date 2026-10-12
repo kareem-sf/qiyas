@@ -1,0 +1,141 @@
+/** PURGE: a dry run lists, by kind, what nothing in the drawing uses; the kinds ticked are then
+ *  taken out as one undo step, and the dialog says what went. The core refuses while a block is
+ *  edited in place; its message is shown. */
+import { useEffect, useRef, useState } from "react";
+import { PURGE_KINDS, type Command, type Outcome, type PurgeKind, type PurgeReport } from "../api";
+import { useT } from "../i18n";
+
+type Props = {
+  /** Runs a command that changes nothing (the dry run). */
+  look(cmd: Command): Promise<Outcome>;
+  /** Runs a command that changes the drawing (the purge itself), redrawing after it. */
+  apply(cmd: Command): Promise<Outcome>;
+  onClose(): void;
+};
+
+const reportOf = (o: Outcome) => (o.type === "purged" ? o.report : null);
+
+export function PurgeDialog({ look, apply, onClose }: Props) {
+  const t = useT();
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [found, setFound] = useState<PurgeReport | null>(null);
+  const [gone, setGone] = useState<PurgeReport | null>(null);
+  const [ticked, setTicked] = useState<Set<PurgeKind>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialog.current?.showModal();
+    look({ type: "purge", kinds: [...PURGE_KINDS], dry_run: true })
+      .then((o) => {
+        const r = reportOf(o);
+        setFound(r);
+        if (r) setTicked(new Set(PURGE_KINDS.filter((k) => r[k].length > 0 || (k === "groups" && r.group_members > 0))));
+      })
+      .catch((e) => setError(String(e)));
+    return () => opener?.focus();
+  }, []);
+
+  async function purge() {
+    setBusy(true);
+    try {
+      setGone(reportOf(await apply({ type: "purge", kinds: PURGE_KINDS.filter((k) => ticked.has(k)), dry_run: false })));
+      setError(null);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const shown = gone ?? found;
+  const count = (r: PurgeReport, k: PurgeKind) => r[k].length;
+
+  return (
+    <dialog
+      ref={dialog}
+      className="settings purge"
+      aria-labelledby="purge-title"
+      onClose={onClose}
+      onKeyDown={(e) => e.stopPropagation()}
+    >
+      <form
+        method="dialog"
+        onSubmit={(e) => {
+          e.preventDefault();
+          purge();
+        }}
+      >
+        <h2 id="purge-title" className="heading">
+          {t("purge.title")}
+        </h2>
+        {found?.limited_reason && (
+          <p className="status" dir="auto">
+            {found.limited_reason}
+          </p>
+        )}
+        {gone && <p role="status">{t("purge.done", { n: gone.total })}</p>}
+        {!gone && found && found.total === 0 && <p className="status">{t("purge.nothing")}</p>}
+        {shown &&
+          PURGE_KINDS.filter((k) => !gone || count(shown, k) > 0 || (k === "groups" && shown.group_members > 0)).map((k) => {
+            const name = `${t(`purge.kind.${k}`)} (${count(shown, k)})`;
+            const empty = count(shown, k) === 0 && !(k === "groups" && shown.group_members > 0);
+            return (
+              <fieldset key={k}>
+                <legend>
+                  {gone ? (
+                    name
+                  ) : (
+                    <label className="check">
+                      <input
+                        type="checkbox"
+                        disabled={empty}
+                        checked={ticked.has(k)}
+                        onChange={(e) =>
+                          setTicked((s) => {
+                            const next = new Set(s);
+                            if (e.target.checked) next.add(k);
+                            else next.delete(k);
+                            return next;
+                          })
+                        }
+                      />
+                      <span>{name}</span>
+                    </label>
+                  )}
+                </legend>
+                {shown[k].length > 0 && (
+                  <ul className="purge-names">
+                    {shown[k].map((n) => (
+                      <li key={n}>
+                        <bdi>{n}</bdi>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {k === "groups" && shown.group_members > 0 && (
+                  <p className="status">{t("purge.members", { n: shown.group_members })}</p>
+                )}
+              </fieldset>
+            );
+          })}
+        {error && (
+          <p className="error" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="buttons">
+          <button type="button" onClick={() => dialog.current?.close()}>
+            {t(gone ? "purge.close" : "settings.cancel")}
+          </button>
+          {!gone && (
+            <button type="submit" className="primary" disabled={!found || busy || ticked.size === 0}>
+              {t("purge.run")}
+            </button>
+          )}
+        </div>
+      </form>
+    </dialog>
+  );
+}

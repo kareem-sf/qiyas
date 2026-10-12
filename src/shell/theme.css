@@ -1252,6 +1252,55 @@ button.close {
   margin: 0;
   color: var(--muted);
 }
+/* The Manage tab's dialogs: Options, Customize, Aliases, Purge, Audit. */
+.settings.options,
+.settings.customize,
+.settings.audit {
+  width: 580px;
+}
+.manage-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.manage-table th {
+  text-align: start;
+  font-weight: 400;
+  color: var(--muted);
+}
+.manage-table th,
+.manage-table td {
+  padding: 3px 4px;
+  border-bottom: 1px solid var(--rule);
+}
+.manage-table td input,
+.manage-table td select {
+  width: 100%;
+}
+.manage-table td.num {
+  text-align: end;
+}
+.cui-tree,
+.cui-tree ul {
+  margin: 0;
+  padding-inline-start: 18px;
+  list-style: none;
+}
+.cui-tree {
+  padding-inline-start: 0;
+}
+.cui-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.cui-row label.check {
+  flex: 1;
+}
+.purge-names,
+.audit-counts {
+  margin: 0;
+  padding-inline-start: 18px;
+}
 .xref-manager {
   width: 620px;
 }

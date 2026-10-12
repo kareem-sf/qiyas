@@ -16,6 +16,7 @@ import type { Commands, ToolChoice } from "./useCommands";
 import type { DraftingState } from "./useDrafting";
 import type { Drawings } from "./useDrawings";
 import type { Layers } from "./useLayers";
+import type { Options } from "./useOptions";
 import type { Plot } from "./usePlot";
 import type { Shell } from "./useShell";
 import type { Sheets } from "./useSheets";
@@ -58,6 +59,10 @@ type Deps = {
   takeoffState: Pick<TakeoffState, "setInfoCard" | "setSelectedId" | "setBoqCode" | "setAiHighlight" | "setConflictIds">;
   takeoff: Pick<Takeoff, "importBoqFile" | "compareNow">;
   plot: Pick<Plot, "windowPick" | "pickPoint" | "cancelPick" | "openPlot" | "quickPrint" | "printAll" | "openStyles">;
+  options: Pick<
+    Options,
+    "shortcuts" | "setOptionsOpen" | "setCustomizeOpen" | "setAliasesOpen" | "setPurgeOpen" | "setAuditOpen"
+  >;
 };
 
 export function useCommandLine({
@@ -78,6 +83,7 @@ export function useCommandLine({
   takeoffState,
   takeoff,
   plot,
+  options,
 }: Deps) {
   const { run, setError, notice, setNotice, setSideTab, viewport, commandAliases } = shell;
   const { toggleDrafting } = drafting;
@@ -300,6 +306,10 @@ export function useCommandLine({
       runScriptFile();
       return;
     }
+    // The window's own settings need no drawing.
+    if (what === "options") return options.setOptionsOpen(true);
+    if (what === "customize") return options.setCustomizeOpen(true);
+    if (what === "aliasEdit") return options.setAliasesOpen(true);
     if (!info) {
       setError(t("cmd.noDrawing"));
       return;
@@ -331,6 +341,10 @@ export function useCommandLine({
         return setExtractOpen(true);
       case "plot":
         return openPlot();
+      case "purge":
+        return options.setPurgeOpen(true);
+      case "audit":
+        return options.setAuditOpen(true);
       case "quickPrint":
         return quickPrint();
       case "printAll":
@@ -385,7 +399,7 @@ export function useCommandLine({
   // Keyboard: tool letters, Escape, Enter, undo, redo and save. Re-bound each render, so it sees fresh state.
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      const action = shortcutFor(e);
+      const action = shortcutFor(e, options.shortcuts);
       // Ctrl+9 works from the command line too.
       if (action === "commandLine") {
         e.preventDefault();

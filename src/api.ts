@@ -1017,7 +1017,42 @@ export type Command =
   | { type: "mview"; corner1: P; corner2: P }
   /** The user coordinate system (not an undo step): an origin and an x axis, or an entity's. */
   | { type: "ucs"; origin: P; x_axis: P }
-  | { type: "ucs_object"; target: EntityTarget };
+  | { type: "ucs_object"; target: EntityTarget }
+  /** PURGE: what nothing uses, of `kinds` (every kind when empty). A dry run only lists it; the
+   *  real run takes it out as one undo step (refused while a block is edited in place). */
+  | { type: "purge"; kinds: PurgeKind[]; dry_run: boolean }
+  /** AUDIT: what points at something the drawing does not have; `fix` repairs what is safe to,
+   *  as one undo step. */
+  | { type: "audit"; fix: boolean };
+
+/** What a purge looks at (`qiyas_core::purge::PurgeKind`); `styles` are text styles. */
+export const PURGE_KINDS = ["layers", "blocks", "styles", "linetypes", "dimstyles", "groups"] as const;
+export type PurgeKind = (typeof PURGE_KINDS)[number];
+
+/** What a purge took out (or, in a dry run, would take out), by kind, each sorted by name.
+ *  `limited_reason`: why only layers were looked at (the drawing holds data Qiyas can't read). */
+export type PurgeReport = { dry_run: boolean; group_members: number; total: number; limited_reason: string | null } & {
+  [K in PurgeKind]: string[];
+};
+
+/** What an audit line is about (`qiyas_core::audit::AuditKind`); the last two are listed only. */
+export type AuditKind =
+  | "owner_gone"
+  | "missing_block"
+  | "dimension_block_gone"
+  | "table_block_gone"
+  | "group_member_gone"
+  | "missing_layer"
+  | "missing_text_style"
+  | "empty_block"
+  | "unused_layer";
+
+/** One audit line: a kind and the name it is about, how many entities it touches, the first 100
+ *  of them, a plain sentence (English, from the core) and whether the fix repaired it. */
+export type AuditItem = { kind: AuditKind; name: string; count: number; handles: number[]; line: string; fixed: boolean };
+
+/** What an audit found: counts by kind, how many the fix changed, one item per kind and name. */
+export type AuditReport = { fix: boolean; counts: Partial<Record<AuditKind, number>>; repaired: number; items: AuditItem[] };
 
 /** Where find and replace looks: the sheet on screen, or every sheet. */
 export type TextScope = "sheet" | "drawing";
@@ -1063,7 +1098,9 @@ export type Outcome =
   /** An edit in place ended: rows that lost their link, undo steps that left with it. */
   | { type: "block_edit_closed"; name: string; saved: boolean; unlinked: number; dropped: number }
   /** A copy went onto the system clipboard: how many entities. */
-  | { type: "clipboard"; text: string; count: number };
+  | { type: "clipboard"; text: string; count: number }
+  | { type: "purged"; report: PurgeReport }
+  | { type: "audited"; report: AuditReport };
 
 export const runCommand = (cmd: Command) => invoke<Outcome>("run_command", { cmd });
 
@@ -1143,7 +1180,35 @@ export type Settings = {
   tool_palette?: PaletteItem[];
   /** Minutes between autosaves of drawings with unsaved changes; 0 off (5 when left out). */
   autosave_minutes?: number;
+  /** Decimals of values shown where no drawing is open (2 to 4, 3); a drawing's own drafting
+   *  precision wins while it is open. */
+  display_precision?: number;
+  /** Screen pixels around the cursor an object snap is looked for in (1 to 50, 10). */
+  snap_aperture_px?: number;
+  /** Screen pixels around the cursor a click picks in (1 to 50, 6). */
+  pick_box_px?: number;
+  /** "#rrggbb", or null for the theme's. */
+  background_color?: string | null;
+  crosshair_color?: string | null;
+  highlight_color?: string | null;
+  /** The user's keyboard shortcuts, command to key ("Ctrl+Shift+C", "F3", "D"), over the built-in
+   *  ones; no two commands on one key. */
+  shortcuts?: Record<string, string>;
+  /** The user's ribbon; null for the default. */
+  ribbon?: RibbonLayout | null;
 };
+
+/** How the window runs a ribbon button: picks a tool, runs an action, or a checkbox. */
+export type RibbonButtonKind = "tool" | "action" | "toggle";
+/** One ribbon button; `label` is an i18n key (or the user's own text). */
+export type RibbonButton = { kind: RibbonButtonKind; command: string; label: string };
+export type RibbonGroup = { id: string; label: string; buttons: RibbonButton[] };
+export type RibbonTab = { id: string; label: string; groups: RibbonGroup[] };
+/** The ribbon as data (`qiyas_desktop::ribbon`): a saved one may only hold the default's buttons. */
+export type RibbonLayout = { tabs: RibbonTab[] };
+
+/** The ribbon Qiyas ships, for Customize's tree and its "Reset to default". */
+export const getDefaultRibbon = () => invoke<RibbonLayout>("get_default_ribbon");
 
 /** What one autosave round did: the `.sv$` files written, and why others could not be. */
 export type AutosaveRun = { written: string[]; failed: string[] };

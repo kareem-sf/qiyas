@@ -9,6 +9,7 @@ import type { Blocks } from "./useBlocks";
 import type { Commands, ToolChoice } from "./useCommands";
 import type { Drawings } from "./useDrawings";
 import type { Layers } from "./useLayers";
+import type { Options } from "./useOptions";
 import type { Plot } from "./usePlot";
 import type { Shell } from "./useShell";
 import type { Sheets } from "./useSheets";
@@ -30,6 +31,7 @@ type Props = {
   drawings: Drawings;
   takeoff: Takeoff;
   plot: Plot;
+  options: Pick<Options, "ribbon" | "setOptionsOpen" | "setCustomizeOpen" | "setAliasesOpen" | "setPurgeOpen" | "setAuditOpen">;
 };
 
 export function Header({
@@ -47,6 +49,7 @@ export function Header({
   drawings,
   takeoff,
   plot,
+  options,
 }: Props) {
   const t = useT();
   const { lang, setLang } = useLanguage();
@@ -144,6 +147,12 @@ export function Header({
         onSheetSet={() => setSheetSetShown(true)}
         onRecover={recoverFile}
         onRunScript={runScriptFile}
+        onAudit={info ? () => options.setAuditOpen(true) : undefined}
+        onPurge={info ? () => options.setPurgeOpen(true) : undefined}
+        onOptions={() => options.setOptionsOpen(true)}
+        onCustomize={() => options.setCustomizeOpen(true)}
+        onAliases={() => options.setAliasesOpen(true)}
+        layout={options.ribbon}
         arabicReversed={arabicReversed}
         onArabicReversed={info ? chooseArabicReversed : undefined}
         {...(onModel && {

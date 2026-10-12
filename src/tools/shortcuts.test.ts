@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { shortcutFor, type Keys } from "./shortcuts";
+import { keyOf, normalizeKey, shortcutClash, shortcutFor, type Keys } from "./shortcuts";
 
 const keys = (code: string, more: Partial<Keys> = {}): Keys => ({
   code,
@@ -69,4 +69,45 @@ test("Ctrl+C copies to the clipboard and Ctrl+V pastes, Ctrl+Shift+V as a block"
   expect(shortcutFor(keys("KeyV", { ctrlKey: true }))).toBe("pasteclip");
   expect(shortcutFor(keys("KeyV", { ctrlKey: true, shiftKey: true }))).toBe("pasteblock");
   expect(shortcutFor(keys("KeyC", { ctrlKey: true, shiftKey: true }))).toBe("copybase");
+});
+
+test("a shortcut key is spelt one way: modifiers Ctrl, Alt, Shift, Meta, then the key", () => {
+  expect(normalizeKey("shift+ctrl+c")).toBe("Ctrl+Shift+C");
+  expect(normalizeKey(" f3 ")).toBe("F3");
+  expect(normalizeKey("alt+pageup")).toBe("Alt+PageUp");
+  expect(normalizeKey("d")).toBe("D");
+  for (const bad of ["", "Ctrl+", "Ctrl+Ctrl+C", "F25", "F03", "Hyper+C", "CC", "ق"]) expect(normalizeKey(bad)).toBeNull();
+});
+
+test("a key pressed is read by the physical key, whatever the keyboard's language", () => {
+  expect(keyOf(keys("KeyC", { key: "ؤ", ctrlKey: true, shiftKey: true }))).toBe("Ctrl+Shift+C");
+  expect(keyOf(keys("Digit9", { ctrlKey: true }))).toBe("Ctrl+9");
+  expect(keyOf(keys("F3"))).toBe("F3");
+  expect(keyOf(keys("ArrowLeft", { altKey: true }))).toBe("Alt+ArrowLeft");
+  // A modifier alone is not a key yet.
+  expect(keyOf(keys("ShiftLeft", { shiftKey: true }))).toBeNull();
+});
+
+test("two commands on one key clash, the built-in ones counted unless the user moved them", () => {
+  expect(shortcutClash({ purge: "Ctrl+Shift+P", audit: "ctrl+shift+p" })).toEqual({
+    key: "Ctrl+Shift+P",
+    commands: ["purge", "audit"],
+  });
+  // Ctrl+Z is Undo's.
+  expect(shortcutClash({ options: "Ctrl+Z" })).toEqual({ key: "Ctrl+Z", commands: ["undo", "options"] });
+  // Undo moved to Ctrl+U: Ctrl+Z is free.
+  expect(shortcutClash({ undo: "Ctrl+U", options: "Ctrl+Z" })).toBeNull();
+  expect(shortcutClash({ options: "F12" })).toBeNull();
+});
+
+test("the user's shortcuts start their command, and a command moved leaves its built-in key", () => {
+  const mine = { circle: "Ctrl+Shift+O", undo: "Ctrl+U", osnap: "F12" };
+  expect(shortcutFor(keys("KeyO", { ctrlKey: true, shiftKey: true }), mine)).toBe("circle");
+  expect(shortcutFor(keys("KeyU", { ctrlKey: true }), mine)).toBe("undo");
+  expect(shortcutFor(keys("F12"), mine)).toBe("osnap");
+  // Ctrl+Z and F3 are free now.
+  expect(shortcutFor(keys("KeyZ", { ctrlKey: true }), mine)).toBeNull();
+  expect(shortcutFor(keys("F3"), mine)).toBeNull();
+  // The rest as built in.
+  expect(shortcutFor(keys("KeyY", { ctrlKey: true }), mine)).toBe("redo");
 });

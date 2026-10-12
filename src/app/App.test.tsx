@@ -3,7 +3,7 @@
  *  hooks reach each other in the right order with the right state. The core (every IPC call
  *  through `invoke`), the file dialogs and the canvas are faked; `calls` is what reached the
  *  core, in order. */
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { LanguageProvider } from "../i18n";
@@ -24,6 +24,8 @@ const core = vi.hoisted(() => ({
   scriptOpens: false,
   /** While set, run_script waits for it: the script is running. */
   scriptHold: null as Promise<void> | null,
+  /** More of settings.json than the autosave minutes and the tool palette. */
+  settings: {} as Record<string, unknown>,
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -39,7 +41,15 @@ vi.mock("@tauri-apps/api/core", () => ({
       case "paper_views":
         return [];
       case "get_settings":
-        return { autosave_minutes: 5, tool_palette: [{ kind: "command", label: "Divide in 3", value: "DIVIDE 3" }] };
+        return {
+          autosave_minutes: 5,
+          tool_palette: [{ kind: "command", label: "Divide in 3", value: "DIVIDE 3" }],
+          ...core.settings,
+        };
+      case "app_dir":
+        return "/opt/Qiyas";
+      case "get_default_ribbon":
+        return { tabs: [{ id: "home", label: "home", groups: [{ id: "file", label: "ribbon.file", buttons: [{ kind: "action", command: "open", label: "open" }] }] }] };
       case "recoverable_drawings":
         return (args!.paths as string[])
           .filter((p) => core.autosaved.has(p))
@@ -94,8 +104,27 @@ vi.mock("@tauri-apps/api/core", () => ({
         return { path: args!.path, skipped: ["Image a.png", "Image b.png"] };
       case "plot_and_print":
         return `Sent to ${args!.printer}`;
-      case "run_command":
+      case "run_command": {
+        const cmd = args!.cmd as { type: string; dry_run?: boolean; fix?: boolean };
+        if (cmd.type === "purge")
+          return {
+            type: "purged",
+            report: {
+              dry_run: cmd.dry_run,
+              layers: ["OLD"],
+              blocks: [],
+              styles: [],
+              linetypes: [],
+              dimstyles: [],
+              groups: [],
+              group_members: 0,
+              total: 1,
+              limited_reason: null,
+            },
+          };
+        if (cmd.type === "audit") return { type: "audited", report: { fix: cmd.fix, counts: {}, repaired: 0, items: [] } };
         return { type: "added", handles: [7, 8, 9, 10] };
+      }
       default:
         return null;
     }
@@ -168,6 +197,7 @@ beforeEach(() => {
   core.active = 1;
   core.scriptOpens = false;
   core.scriptHold = null;
+  core.settings = {};
 });
 
 afterEach(cleanup);
@@ -473,4 +503,81 @@ test("while a script runs the ribbon and the command line wait, and Stop asks th
   expect(header.hasAttribute("inert")).toBe(false);
   expect(screen.queryByText(en["script.running"].replace("{line}", "1"))).toBeNull();
   expect(screen.getByRole("dialog", { name: en["script.title"].replace("{name}", "long.scr") })).toBeTruthy();
+});
+
+test("the Manage tab and OPTIONS (OP), CUI and ALIASEDIT open their dialogs, with no drawing open", async () => {
+  await mount();
+  for (const [line, title] of [
+    ["OPTIONS", en["options.title"]],
+    ["OP", en["options.title"]],
+    ["CUI", en["cui.title"]],
+    ["ALIASEDIT", en["aliasEdit.title"]],
+  ]) {
+    await typeLine(line);
+    expect(screen.getByRole("heading", { name: title })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: en["settings.cancel"] }));
+    await settle();
+    expect(screen.queryByRole("heading", { name: title })).toBeNull();
+  }
+  fireEvent.click(screen.getByRole("tab", { name: en.manage }));
+  fireEvent.click(screen.getByRole("button", { name: en["options.button"] }));
+  await settle();
+  // Options hands the autosave interval to Settings.
+  fireEvent.click(screen.getByRole("button", { name: en["options.toSettings"] }));
+  await settle();
+  expect(screen.queryByRole("heading", { name: en["options.title"] })).toBeNull();
+  expect(screen.getByRole("heading", { name: en.settings })).toBeTruthy();
+});
+
+test("PURGE (PU) and AUDIT: a dry run first, then one change that the window catches up with", async () => {
+  await mount();
+  await typeLine("PURGE");
+  expect(screen.getByText(en["cmd.noDrawing"])).toBeTruthy();
+  await clickOpen();
+  core.calls.length = 0;
+  await typeLine("PU");
+  expect(core.calls).toEqual([
+    `run_command {"cmd":{"type":"purge","kinds":["layers","blocks","styles","linetypes","dimstyles","groups"],"dry_run":true}}`,
+  ]);
+  core.calls.length = 0;
+  fireEvent.click(screen.getByRole("button", { name: en["purge.run"] }));
+  await settle();
+  // Taken out, redrawn, the layers read again, autosaved.
+  expect(core.calls[0]).toBe(`run_command {"cmd":{"type":"purge","kinds":["layers"],"dry_run":false}}`);
+  expect(core.calls).toContain("render_batch {}");
+  expect(core.calls).toContain("drawing_info null");
+  expect(core.calls.at(-1)).toBe("save_project null");
+  expect(screen.getByText(en["purge.done"].replace("{n}", "1"))).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: en["purge.close"] }));
+  await settle();
+
+  core.calls.length = 0;
+  fireEvent.click(screen.getByRole("tab", { name: en.manage }));
+  fireEvent.click(screen.getByRole("button", { name: en["audit.button"] }));
+  await settle();
+  expect(core.calls).toEqual([`run_command {"cmd":{"type":"audit","fix":false}}`]);
+  expect(screen.getByText(en["audit.clean"])).toBeTruthy();
+});
+
+test("the options reach the window: the pick box, the ribbon layout and a shortcut", async () => {
+  core.settings = {
+    pick_box_px: 9,
+    shortcuts: { circle: "Ctrl+Shift+O" },
+    ribbon: {
+      tabs: [{ id: "home", label: "home", groups: [{ id: "file", label: "ribbon.file", buttons: [{ kind: "action", command: "open", label: "open" }] }] }],
+    },
+  };
+  await mount();
+  const ribbonTabs = within(document.querySelector<HTMLElement>(".ribbon-tabs")!).getAllByRole("tab");
+  expect(ribbonTabs.map((t) => t.textContent)).toEqual([en.home]);
+  await clickOpen();
+  core.calls.length = 0;
+  canvas.props!.onClick([10, 10], [100, 100], 1, false);
+  await settle();
+  expect(core.calls).toContain(`pick {"x":10,"y":10,"tol":9}`);
+  fireEvent.keyDown(window, { code: "KeyO", key: "O", ctrlKey: true, shiftKey: true });
+  await settle();
+  expect(document.querySelector<HTMLInputElement>("input[aria-autocomplete]")!.labels![0].textContent).toBe(
+    en["draw.prompt.circleCentre"],
+  );
 });

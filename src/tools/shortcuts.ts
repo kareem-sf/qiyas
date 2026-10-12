@@ -34,8 +34,19 @@ const TOOL_CODES: Record<string, Tool> = {
 };
 
 /** The shortcut for a key press, or null. Matched on `code` (the physical key), not `key`, so the
- *  shortcuts work the same with an Arabic keyboard layout. */
-export function shortcutFor(e: Keys): Shortcut | null {
+ *  shortcuts work the same with an Arabic keyboard layout. `user` (the Options dialog's, command
+ *  to key) comes first; a command it gives a key no longer answers its built-in one. */
+export function shortcutFor(e: Keys, user: Record<string, string> = {}): Shortcut | null {
+  const pressed = keyOf(e);
+  if (pressed) {
+    const mine = Object.entries(user).find(([, key]) => normalizeKey(key) === pressed);
+    if (mine) return mine[0] as Shortcut;
+  }
+  const builtIn = builtInShortcut(e);
+  return builtIn !== null && builtIn in user ? null : builtIn;
+}
+
+function builtInShortcut(e: Keys): Shortcut | null {
   if (e.altKey || e.metaKey) return null;
   if (e.ctrlKey) {
     if (e.code === "KeyZ") return e.shiftKey ? "redo" : "undo";
@@ -57,4 +68,94 @@ export function shortcutFor(e: Keys): Shortcut | null {
   if (e.code === "Enter" || e.code === "NumpadEnter") return "finish";
   if (e.shiftKey) return null;
   return TOOL_CODES[e.code] ?? null;
+}
+
+/** The keys above as the Options dialog lists them, command and key (`normalizeKey` spelling). */
+export const BUILT_IN_SHORTCUTS: [string, string][] = [
+  ["undo", "Ctrl+Z"],
+  ["redo", "Ctrl+Shift+Z"],
+  ["redo", "Ctrl+Y"],
+  ["save", "Ctrl+S"],
+  ["commandLine", "Ctrl+9"],
+  ["nextTab", "Ctrl+Tab"],
+  ["prevTab", "Ctrl+Shift+Tab"],
+  ["closeTab", "Ctrl+W"],
+  ["copyclip", "Ctrl+C"],
+  ["copybase", "Ctrl+Shift+C"],
+  ["pasteclip", "Ctrl+V"],
+  ["pasteblock", "Ctrl+Shift+V"],
+  ["escape", "Escape"],
+  ["finish", "Enter"],
+  ["osnap", "F3"],
+  ["grid", "F7"],
+  ["ortho", "F8"],
+  ["polar", "F10"],
+  ["distance", "D"],
+  ["area", "A"],
+  ["count", "C"],
+  ["select", "S"],
+];
+
+/** The keys a shortcut may end in besides letters, digits and F1 to F24 (as the core's). */
+const NAMED_KEYS = [
+  "Escape",
+  "Enter",
+  "Tab",
+  "Space",
+  "Backspace",
+  "Delete",
+  "Insert",
+  "Home",
+  "End",
+  "PageUp",
+  "PageDown",
+  "ArrowUp",
+  "ArrowDown",
+  "ArrowLeft",
+  "ArrowRight",
+];
+const MODIFIERS = ["Ctrl", "Alt", "Shift", "Meta"] as const;
+
+/** A key spelt as the core keeps it (`settings::shortcut_key`): modifiers in the order Ctrl, Alt,
+ *  Shift, Meta, each once, then a letter, a digit, F1 to F24 or a named key, in any case; null
+ *  when it is not a key. */
+export function normalizeKey(text: string): string | null {
+  const parts = text.split("+").map((p) => p.trim());
+  const key = parts.pop() ?? "";
+  const held = [false, false, false, false];
+  for (const m of parts) {
+    const i = MODIFIERS.findIndex((n) => n.toLowerCase() === m.toLowerCase());
+    if (i < 0 || held[i]) return null;
+    held[i] = true;
+  }
+  const upper = key.toUpperCase();
+  let name: string | undefined;
+  if (/^[A-Za-z0-9]$/.test(key) || /^F([1-9]|1[0-9]|2[0-4])$/.test(upper)) name = upper;
+  else name = NAMED_KEYS.find((n) => n.toLowerCase() === key.toLowerCase());
+  if (!name) return null;
+  return [...MODIFIERS.filter((_, i) => held[i]), name].join("+");
+}
+
+/** The key a key press makes, by the physical key (so it is the same with an Arabic keyboard
+ *  layout); null for a modifier alone or a key a shortcut can't take. */
+export function keyOf(e: Keys): string | null {
+  const code = e.code === "NumpadEnter" ? "Enter" : e.code;
+  const key = /^Key[A-Z]$/.test(code) ? code.slice(3) : /^Digit[0-9]$/.test(code) ? code.slice(5) : code;
+  const mods = [e.ctrlKey && "Ctrl", e.altKey && "Alt", e.shiftKey && "Shift", e.metaKey && "Meta"].filter(Boolean);
+  return normalizeKey([...mods, key].join("+"));
+}
+
+/** The first key two commands share once the user's shortcuts (command to key) are laid over the
+ *  built-in ones (a command the user gave a key keeps only that one); null when none. */
+export function shortcutClash(user: Record<string, string>): { key: string; commands: [string, string] } | null {
+  const holder = new Map<string, string>();
+  const pairs = [...BUILT_IN_SHORTCUTS.filter(([c]) => !(c in user)), ...Object.entries(user)];
+  for (const [command, text] of pairs) {
+    const key = normalizeKey(text);
+    if (!key) continue;
+    const other = holder.get(key);
+    if (other !== undefined && other !== command) return { key, commands: [other, command] };
+    holder.set(key, command);
+  }
+  return null;
 }

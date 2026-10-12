@@ -6,6 +6,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import {
   blocks as readBlocks,
   calibrate,
+  runCommand,
   drawingBlocks,
   IMAGE_EXTENSIONS,
   imageSize,
@@ -23,10 +24,13 @@ import {
 import type { Assistant } from "../ai/useAssistant";
 import { useT } from "../i18n";
 import { About } from "../shell/About";
+import { AliasEditor } from "../shell/AliasEditor";
+import { AuditDialog } from "../shell/AuditDialog";
 import { AttachImageDialog, defaultImageWidth } from "../shell/AttachImageDialog";
 import { AttachPdfDialog, CalibrateDialog } from "../shell/AttachPdfDialog";
 import { AttDefDialog, AttributeManager, AttributesDialog, CreateBlockDialog } from "../shell/BlockDialogs";
 import { BlockPalette } from "../shell/BlockPalette";
+import { CustomizeUi } from "../shell/CustomizeUi";
 import { DesignCenter } from "../shell/DesignCenter";
 import { DimStylePanel } from "../shell/DimStylePanel";
 import { DraftingSettings } from "../shell/DraftingSettings";
@@ -35,8 +39,10 @@ import { FieldDialog } from "../shell/FieldDialog";
 import { FindReplaceDialog } from "../shell/FindReplaceDialog";
 import { GroupNameDialog, LayerStatesDialog } from "../shell/LayerDialogs";
 import { LayerTranslator } from "../shell/LayerTranslator";
+import { OptionsDialog } from "../shell/OptionsDialog";
 import { PlotDialog } from "../shell/PlotDialog";
 import { PlotStyleEditor } from "../shell/PlotStyleEditor";
+import { PurgeDialog } from "../shell/PurgeDialog";
 import { RecoverReportDialog, RecoveryDialog } from "../shell/RecoveryDialog";
 import { laterOpens } from "../shell/recoveryQueue";
 import { ScriptResultDialog } from "../shell/ScriptResultDialog";
@@ -54,6 +60,7 @@ import type { Blocks } from "./useBlocks";
 import type { DraftingState } from "./useDrafting";
 import type { Drawings } from "./useDrawings";
 import type { Layers } from "./useLayers";
+import type { Options } from "./useOptions";
 import type { Plot } from "./usePlot";
 import type { Shell } from "./useShell";
 import type { Sheets } from "./useSheets";
@@ -70,10 +77,24 @@ type Props = {
   annotate: Annotate;
   drawings: Drawings;
   plot: Plot;
+  options: Options;
 };
 
 /** The dialogs over the drawing (between the top bar and the panels). */
-export function Dialogs({ info, shell, assistant, drafting: draftingState, sheets, layers, attach, blocks, annotate, drawings, plot }: Props) {
+export function Dialogs({
+  info,
+  shell,
+  assistant,
+  drafting: draftingState,
+  sheets,
+  layers,
+  attach,
+  blocks,
+  annotate,
+  drawings,
+  plot,
+  options,
+}: Props) {
   const t = useT();
   const { theme, aboutOpen, setAboutOpen, settingsOpen, setSettingsOpen, loadAliases, run, setNotice, focusDrawing } =
     shell;
@@ -568,6 +589,37 @@ export function Dialogs({ info, shell, assistant, drafting: draftingState, sheet
             setSettingsOpen(false);
             assistant.refreshStatus();
             loadAliases();
+          }}
+        />
+      )}
+      {options.optionsOpen && (
+        <OptionsDialog
+          onSaved={options.takeSettings}
+          onSettings={() => setSettingsOpen(true)}
+          onClose={() => options.setOptionsOpen(false)}
+        />
+      )}
+      {options.customizeOpen && (
+        <CustomizeUi onSaved={options.setRibbon} onClose={() => options.setCustomizeOpen(false)} />
+      )}
+      {options.aliasesOpen && <AliasEditor onSaved={loadAliases} onClose={() => options.setAliasesOpen(false)} />}
+      {options.purgeOpen && info && (
+        <PurgeDialog
+          look={runCommand}
+          apply={runDrawingCommand}
+          onClose={() => {
+            options.setPurgeOpen(false);
+            focusDrawing();
+          }}
+        />
+      )}
+      {options.auditOpen && info && (
+        <AuditDialog
+          look={runCommand}
+          apply={runDrawingCommand}
+          onClose={() => {
+            options.setAuditOpen(false);
+            focusDrawing();
           }}
         />
       )}
