@@ -965,5 +965,10 @@
   "script.ok": "تم",
   "script.error": "فشل",
   "script.close": "إغلاق",
-  "script.blockEdit": "احفظ تحرير البلوك في المكان أو تجاهله أولًا (REFCLOSE)، ثم شغّل السكريبت"
+  "script.blockEdit": "احفظ تحرير البلوك في المكان أو تجاهله أولًا (REFCLOSE)، ثم شغّل السكريبت",
+  "script.notRead": "تعذّرت قراءة السطر {line}؛ لم يُنفَّذ شيء",
+  "script.running": "جارٍ تشغيل السكريبت… (السطر {line})",
+  "script.stop": "إيقاف",
+  "script.busy": "سكريبت قيد التشغيل: انتظره أو أوقفه",
+  "ribbon.scripts": "السكريبتات"
 }

@@ -538,6 +538,7 @@ export function Dialogs({ info, shell, assistant, drafting: draftingState, sheet
 /** The file dialogs after the status bar: an autosave to recover, RECOVER's report, the sheet set
  *  manager. */
 export function FileDialogs({ drawings }: { drawings: Drawings }) {
+  const t = useT();
   const {
     recovery,
     setRecoveries,
@@ -549,6 +550,8 @@ export function FileDialogs({ drawings }: { drawings: Drawings }) {
     setRecoverReport,
     scriptRun,
     setScriptRun,
+    scriptLine,
+    stopRunningScript,
     sheetSetShown,
     setSheetSetShown,
     sheetSetApi,
@@ -577,6 +580,14 @@ export function FileDialogs({ drawings }: { drawings: Drawings }) {
           report={recoverReport.report}
           onClose={() => setRecoverReport(null)}
         />
+      )}
+      {scriptLine !== null && (
+        <div className="script-running" aria-live="polite">
+          {t("script.running", { line: Math.max(scriptLine, 1) })}
+          <button type="button" onClick={stopRunningScript}>
+            {t("script.stop")}
+          </button>
+        </div>
       )}
       {scriptRun && (
         <ScriptResultDialog path={scriptRun.path} result={scriptRun.result} onClose={() => setScriptRun(null)} />

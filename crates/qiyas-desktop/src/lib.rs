@@ -22,6 +22,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(launch::OpenRequests::default())
         .manage(updater::Pending::default())
+        .manage(script::ScriptControl::default())
         // First of the plugins: a second Qiyas hands its files to this one and quits.
         .plugin(launch::single_instance())
         .plugin(tauri_plugin_dialog::init())
@@ -104,6 +105,7 @@ pub fn run() {
             commands::mcp_status,
             ribbon::get_default_ribbon,
             script::run_script,
+            script::stop_script,
             updater::check_update,
             updater::install_update,
             updater::cancel_update,

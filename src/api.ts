@@ -1198,14 +1198,20 @@ export const recoverDrawing = (path: string) =>
  *  failed. */
 export type ScriptLine = { line_no: number; text: string; ok: boolean; message: string };
 
-/** What a script run did: the lines run (the failing one last; a script that doesn't read is its
- *  bad line alone, and nothing ran), whether a drawing, its take-off or the tabs may have changed,
- *  and how long it took. */
-export type ScriptResult = { lines: ScriptLine[]; changed: boolean; took_ms: number };
+/** What a script run did: whether it ran at all (`ran` false: the script didn't read, its bad
+ *  line is the only one), the lines run (the failing one last), whether a drawing, its take-off or
+ *  the tabs may have changed, and how long it took. */
+export type ScriptResult = { ran: boolean; lines: ScriptLine[]; changed: boolean; took_ms: number };
 
 /** SCRIPT: runs the `.scr` command script at `path` on the drawing on screen (its OPEN lines open
  *  tabs). Refused while a block is edited in place. */
 export const runScript = (path: string) => invoke<ScriptResult>("run_script", { path });
+
+/** Stops the running script before its next line (or during its DELAY). */
+export const stopScript = () => invoke<void>("stop_script");
+
+/** Sent with the line number before each script line runs. */
+export const SCRIPT_LINE = "script:line";
 
 /** A sheet set (`.qss`): drawings by path relative to it, and their layouts (none: all). */
 export type SheetSet = { name: string; drawings: { path: string; layouts: string[] }[] };

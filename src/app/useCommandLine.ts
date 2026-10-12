@@ -44,6 +44,7 @@ type Deps = {
     | "openFile"
     | "recoverFile"
     | "runScriptFile"
+    | "scriptLine"
     | "setSheetSetShown"
     | "saveFile"
     | "saveFileAs"
@@ -90,6 +91,7 @@ export function useCommandLine({
     openFile,
     recoverFile,
     runScriptFile,
+    scriptLine,
     setSheetSetShown,
     saveFile,
     saveFileAs,
@@ -172,6 +174,11 @@ export function useCommandLine({
   /** Runs what the command line asks for, through the same handlers as the ribbon and keys. */
   function onCommand(a: Action) {
     setNotice(null);
+    // A running script: nothing else runs until it ends or is stopped.
+    if (scriptLine !== null) {
+      setError(t("script.busy"));
+      return;
+    }
     const needDrawing = () => {
       if (!info) setError(t("cmd.noDrawing"));
       return !info;

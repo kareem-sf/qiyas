@@ -6,16 +6,20 @@
 //! script (never the app), DELAY waits, ECHO writes its text in the log. A drawing the script
 //! changed has its take-off saved beside it before OPEN takes another one on screen, as the
 //! window saves it after every command (the window saves the one on screen after the run).
-//! Refused while a block is edited in place.
+//! Refused while a block is edited in place. OPEN leaves a drawing with an autosave to offer, or
+//! open in another Qiyas, to the window (its recovery question). DELAY waits at most 10 s, and
+//! Stop (`stop_script`) ends the run between steps or during a DELAY; each step is announced as
+//! `script:line` for the window's "Running script" state.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::PoisonError;
 use std::time::{Duration, Instant};
 
 use qiyas_core::script::{self, Action, Context};
 use qiyas_core::{Command, Current, Kind, LayerProp, Outcome, Session, Source};
 use serde::Serialize;
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
 use crate::commands::{new_conversation, remember_recent, with_session};
 use crate::settings::same_file;
@@ -36,9 +40,54 @@ pub struct ScriptLine {
 /// and how long it took.
 #[derive(Serialize, Debug, Clone, PartialEq, Eq)]
 pub struct ScriptResult {
+    /// False when the script didn't read: its bad line is the only one, and nothing ran.
+    pub ran: bool,
     pub lines: Vec<ScriptLine>,
     pub changed: bool,
     pub took_ms: u64,
+}
+
+/// The longest DELAY a script waits in the window.
+pub const DELAY_CAP_MS: u64 = 10_000;
+
+/// Sent with the line number before each step runs.
+pub const SCRIPT_LINE: &str = "script:line";
+
+/// The running script's Stop: set by `stop_script`, read between steps and during a DELAY.
+#[derive(Default)]
+pub struct ScriptControl {
+    pub stop: AtomicBool,
+}
+
+/// Stops the running script before its next step (or during its DELAY).
+#[tauri::command]
+pub async fn stop_script(control: State<'_, ScriptControl>) -> Result<(), String> {
+    control.stop.store(true, Ordering::Relaxed);
+    Ok(())
+}
+
+/// DELAY in the window: `ms`, at most `cap`, in short slices so Stop ends it (an error then).
+fn wait(ms: u64, cap: u64, stop: &AtomicBool) -> Result<String, String> {
+    let goal = Duration::from_millis(ms.min(cap));
+    let start = Instant::now();
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            return Err(format!("stopped after {} ms", start.elapsed().as_millis()));
+        }
+        let left = goal.saturating_sub(start.elapsed());
+        if left.is_zero() {
+            break;
+        }
+        std::thread::sleep(left.min(Duration::from_millis(100)));
+    }
+    Ok(if ms > cap {
+        format!(
+            "waited {cap} ms (DELAY is at most {} s in the window)",
+            cap / 1000
+        )
+    } else {
+        format!("waited {ms} ms")
+    })
 }
 
 /// Runs the script at `path` on the drawing on screen; fails only when the script can't be read
@@ -57,6 +106,8 @@ pub async fn run_script<R: Runtime>(
 fn run_file<R: Runtime>(app: &AppHandle<R>, path: &Path) -> Result<ScriptResult, String> {
     let started = Instant::now();
     let state = app.state::<AppState>();
+    let control = app.state::<ScriptControl>();
+    control.stop.store(false, Ordering::Relaxed);
     let text = std::fs::read_to_string(path)
         .map_err(|e| format!("The script {} could not be read: {e}", path.display()))?;
     let drawing = {
@@ -89,8 +140,12 @@ fn run_file<R: Runtime>(app: &AppHandle<R>, path: &Path) -> Result<ScriptResult,
     };
     let mut lines = Vec::new();
     let mut changed = false;
+    let mut ran = true;
     match script::parse(&text, &cx) {
-        Err(e) => lines.push(line(e.line, false, e.message)),
+        Err(e) => {
+            ran = false;
+            lines.push(line(e.line, false, e.message));
+        }
         Ok(script) => {
             // The drawing on screen has changes of the script's its project file lacks.
             let mut unsaved = false;
@@ -98,6 +153,15 @@ fn run_file<R: Runtime>(app: &AppHandle<R>, path: &Path) -> Result<ScriptResult,
             // before saving over it, a script can't, so SAVE is refused (SAVEAS elsewhere is not).
             let mut repaired = on_screen_repaired(&state);
             for step in &script.steps {
+                if control.stop.load(Ordering::Relaxed) {
+                    lines.push(line(
+                        step.line,
+                        false,
+                        "stopped before this line".to_string(),
+                    ));
+                    break;
+                }
+                let _ = app.emit(SCRIPT_LINE, step.line);
                 if let Action::Quit = step.action {
                     lines.push(line(step.line, true, "quit".to_string()));
                     break;
@@ -117,7 +181,7 @@ fn run_file<R: Runtime>(app: &AppHandle<R>, path: &Path) -> Result<ScriptResult,
                         break;
                     }
                 }
-                match run_step(app, &state, &step.action) {
+                match run_step(app, &state, &step.action, &control.stop) {
                     Ok((message, change)) => {
                         changed |= change;
                         unsaved = match step.action {
@@ -140,6 +204,7 @@ fn run_file<R: Runtime>(app: &AppHandle<R>, path: &Path) -> Result<ScriptResult,
         }
     }
     Ok(ScriptResult {
+        ran,
         lines,
         changed,
         took_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
@@ -173,13 +238,11 @@ fn run_step<R: Runtime>(
     app: &AppHandle<R>,
     state: &AppState,
     action: &Action,
+    stop: &AtomicBool,
 ) -> Result<(String, bool), String> {
     Ok(match action {
         Action::Quit => ("quit".to_string(), false),
-        Action::Delay(ms) => {
-            std::thread::sleep(Duration::from_millis(*ms));
-            (format!("waited {ms} ms"), false)
-        }
+        Action::Delay(ms) => (wait(*ms, DELAY_CAP_MS, stop)?, false),
         Action::Echo(text) => (text.clone(), false),
         Action::Zoom => ("zoom: nothing to do in a script".to_string(), false),
         Action::Open(path) => (open(app, state, path)?, true),
@@ -251,6 +314,23 @@ fn open<R: Runtime>(app: &AppHandle<R>, state: &AppState, path: &Path) -> Result
         tabs::activate(app, state, id)?;
         remember_recent(state, &shown);
         return Ok(format!("showed {shown}, open already"));
+    }
+    // The window asks about these before opening; a script can't, and a SAVE after it would
+    // delete the autosave or write over the other Qiyas's drawing.
+    if let Some(found) = qiyas_core::recoverable(path) {
+        let why = if let Some(lock) = &found.locked_elsewhere {
+            format!(
+                "it is open in another Qiyas (PID {} on {})",
+                lock.pid, lock.host
+            )
+        } else if found.crashed {
+            "Qiyas closed unexpectedly with it open".to_string()
+        } else {
+            "it has an autosave newer than it".to_string()
+        };
+        return Err(format!(
+            "{shown}: {why}; open it from the ribbon first to decide about its autosave"
+        ));
     }
     let session = Session::open(path).map_err(|e| e.to_string())?;
     let problems = read_problems(&session);
@@ -332,11 +412,13 @@ mod tests {
                     crate::commands::undo,
                     crate::commands::pick,
                     crate::tabs::tabs,
-                    super::run_script
+                    super::run_script,
+                    super::stop_script
                 ])
                 .build(mock_context(noop_assets()))
                 .unwrap();
             app.manage(AppState::new(dir.path().join("config")));
+            app.manage(super::ScriptControl::default());
             let webview = WebviewWindowBuilder::new(&app, "main", Default::default())
                 .build()
                 .unwrap();
@@ -550,6 +632,7 @@ mod tests {
             [line(3, "FOO bar", false, "unknown command FOO")]
         );
         assert_eq!(result["changed"], json!(false));
+        assert_eq!(result["ran"], json!(false), "nothing ran");
         assert_eq!(ipc.takeoff_len(), 0);
 
         // A path outside the script's and the drawing's folders: refused before anything runs.
@@ -630,6 +713,97 @@ mod tests {
             "{result}"
         );
         assert!(dir.join("fixed.dxf.bak").exists());
+    }
+
+    #[test]
+    fn open_leaves_a_drawing_with_an_autosave_or_open_elsewhere_to_the_window() {
+        let ipc = Ipc::open();
+        let dir = ipc.dir.path().to_path_buf();
+        std::fs::create_dir(dir.join("sub")).unwrap();
+        let other = qiyas_core::fixtures::write_sample(&dir.join("sub"), "dwg");
+        // An autosave newer than the drawing: the window asks about it first; a script can't.
+        let autosave = qiyas_core::autosave_path(&other);
+        std::fs::write(&autosave, b"autosave").unwrap();
+        let later = std::fs::metadata(&other).unwrap().modified().unwrap()
+            + std::time::Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(&autosave)
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        let result = ipc.run("open.scr", "OPEN sub/sample.dwg\nSAVE\n").unwrap();
+        let got = lines(&result);
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!((got[0].0, got[0].2), (1, false));
+        assert!(
+            got[0].3.contains("open it from the ribbon first"),
+            "{got:?}"
+        );
+        assert!(autosave.exists(), "SAVE never ran, so the autosave stays");
+        assert_eq!(
+            ipc.call("tabs", json!({})).unwrap()["tabs"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+
+        // Open in another Qiyas (another computer's lock): refused too.
+        std::fs::remove_file(&autosave).unwrap();
+        std::fs::write(
+            qiyas_core::lock_path(&other),
+            r#"{"pid": 7, "host": "elsewhere", "started_at": 1}"#,
+        )
+        .unwrap();
+        let result = ipc.run("open.scr", "OPEN sub/sample.dwg\nSAVE\n").unwrap();
+        let got = lines(&result);
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert!(got[0].3.contains("another Qiyas"), "{got:?}");
+        assert!(!dir.join("sub/sample.dwg.bak").exists());
+    }
+
+    #[test]
+    fn delay_is_capped_in_the_window_and_stop_ends_it() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::time::{Duration, Instant};
+        // Capped: a long DELAY waits the cap and says so.
+        let stop = AtomicBool::new(false);
+        let start = Instant::now();
+        let said = super::wait(5_000, 50, &stop).unwrap();
+        assert!(start.elapsed() < Duration::from_secs(2));
+        assert!(said.contains("at most"), "{said}");
+        assert_eq!(super::wait(20, 50, &stop).unwrap(), "waited 20 ms");
+        assert_eq!(super::DELAY_CAP_MS, 10_000);
+
+        // Stop during a DELAY: the run ends on that line, the lines after it never run.
+        let ipc = Ipc::open();
+        let script = ipc.path("long.scr");
+        std::fs::write(&script, "COUNT DOOR\nDELAY 9000\nCOUNT DOOR\n").unwrap();
+        let app = ipc.app.handle().clone();
+        let running = std::thread::spawn(move || super::run_file(&app, &script));
+        std::thread::sleep(Duration::from_millis(300));
+        let start = Instant::now();
+        ipc.call("stop_script", json!({})).unwrap();
+        let result = running.join().unwrap().unwrap();
+        assert!(start.elapsed() < Duration::from_secs(2));
+        let got: Vec<_> = result.lines.iter().map(|l| (l.line_no, l.ok)).collect();
+        assert_eq!(got, [(1, true), (2, false)]);
+        assert!(
+            result.lines[1].message.contains("stopped"),
+            "{:?}",
+            result.lines
+        );
+        assert_eq!(ipc.takeoff_len(), 1);
+        assert!(ipc
+            .app
+            .state::<super::ScriptControl>()
+            .stop
+            .load(Ordering::Relaxed));
+
+        // The next run starts afresh.
+        let result = ipc.run("again.scr", "COUNT DOOR\n").unwrap();
+        assert_eq!(result["lines"][0]["ok"], json!(true));
     }
 
     #[test]

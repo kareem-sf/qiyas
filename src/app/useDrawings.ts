@@ -1,6 +1,7 @@
 /** Drawings as files: the open drawings' tabs, the project autosave switch, and opening, showing,
  *  switching, closing, saving, recovering and exporting them (`useDrawings`). */
 import { useEffect, useRef, useState, type RefObject } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ask, message as messageDialog, open, save } from "@tauri-apps/plugin-dialog";
 import {
@@ -21,6 +22,8 @@ import {
   recoverDrawing,
   runCommand,
   runScript,
+  SCRIPT_LINE,
+  stopScript,
   saveDrawing,
   saveDrawingAs,
   saveProject,
@@ -150,6 +153,9 @@ export function useDrawings({
   const [recoverReport, setRecoverReport] = useState<{ path: string; report: ReadReport } | null>(null);
   /** What the last Run script did, for its dialog. */
   const [scriptRun, setScriptRun] = useState<{ path: string; result: ScriptResult } | null>(null);
+  /** The line the running script is on (0 before its first), null when none runs: the ribbon and
+   *  the command line wait meanwhile, and Stop ends it. */
+  const [scriptLine, setScriptLine] = useState<number | null>(null);
   const [sheetSetShown, setSheetSetShown] = useState(false);
   const [opening, setOpening] = useState(false);
   const [xrefsOpen, setXrefsOpen] = useState(false);
@@ -413,7 +419,15 @@ export function useDrawings({
     await drawingChange(() =>
       run(async () => {
         const before = (await readTabs()).active;
-        const result = await runScript(path);
+        setScriptLine(0);
+        const off = await listen<number>(SCRIPT_LINE, (e) => setScriptLine(e.payload)).catch(() => null);
+        let result: ScriptResult;
+        try {
+          result = await runScript(path);
+        } finally {
+          off?.();
+          setScriptLine(null);
+        }
         setScriptRun({ path, result });
         if (!result.changed) return;
         changed = true;
@@ -631,6 +645,8 @@ export function useDrawings({
     setRecoverReport,
     scriptRun,
     setScriptRun,
+    scriptLine,
+    stopRunningScript: () => stopScript().catch(() => {}),
     sheetSetShown,
     setSheetSetShown,
     xrefsOpen,

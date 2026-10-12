@@ -22,6 +22,7 @@ afterEach(() => {
 });
 
 const failed: ScriptResult = {
+  ran: true,
   lines: [
     { line_no: 2, text: "COUNT DOOR", ok: true, message: "DOOR count = 3 pcs" },
     { line_no: 3, text: "LAYOFF A-WALL A-DOOR", ok: true, message: "layer A-WALL off" },
@@ -49,15 +50,18 @@ test("each line run shows with its mark and what it did; the failing line says w
   expect(rows[0].textContent).toContain("DOOR count = 3 pcs");
   expect(within(rows[3]).getByRole("img", { name: "Failed" })).toBeTruthy();
   expect(rows[3].textContent).toContain("No entity FFFF");
-  // The script's own words read left to right in either language.
-  expect(within(rows[3]).getByText("MEASURE FFFF").getAttribute("dir")).toBe("ltr");
+  // The script's words and the messages take their own direction in either language.
+  expect(within(rows[3]).getByText("MEASURE FFFF").getAttribute("dir")).toBe("auto");
+  expect(within(rows[3]).getByText("No entity FFFF").getAttribute("dir")).toBe("auto");
+  // The file name is isolated inside the title.
+  expect(screen.getByRole("heading").querySelector("bdi")?.textContent).toBe("count.scr");
 
   fireEvent.click(screen.getByRole("button", { name: "Close" }));
   expect(onClose).toHaveBeenCalledOnce();
 });
 
 test("a run that went through says how many lines ran, in Arabic too", () => {
-  const done: ScriptResult = { lines: failed.lines.slice(0, 2), changed: true, took_ms: 40 };
+  const done: ScriptResult = { ran: true, lines: failed.lines.slice(0, 2), changed: true, took_ms: 40 };
   function Arabic() {
     const { setLang } = useLanguage();
     return (
@@ -78,4 +82,20 @@ test("a run that went through says how many lines ran, in Arabic too", () => {
   act(() => fireEvent.click(screen.getByRole("button", { name: "ar" })));
   expect(screen.getByRole("heading").textContent).toBe(ar["script.title"].replace("{name}", "count.scr"));
   expect(screen.getAllByRole("img", { name: ar["script.ok"] })).toHaveLength(2);
+});
+
+test("a script that doesn't read says nothing ran, not where it stopped", () => {
+  const unread: ScriptResult = {
+    ran: false,
+    lines: [{ line_no: 3, text: "FOO bar", ok: false, message: "unknown command FOO" }],
+    changed: false,
+    took_ms: 2,
+  };
+  render(
+    <LanguageProvider>
+      <ScriptResultDialog path="/jobs/bad.scr" result={unread} onClose={() => {}} />
+    </LanguageProvider>,
+  );
+  expect(screen.getByText("Line 3 could not be read; nothing ran · 2 ms")).toBeTruthy();
+  expect(screen.queryByText(/Stopped at line/)).toBeNull();
 });

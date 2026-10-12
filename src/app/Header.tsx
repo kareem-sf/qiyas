@@ -66,11 +66,13 @@ export function Header({
     setSheetSetShown,
     recoverFile,
     runScriptFile,
+    scriptLine,
   } = drawings;
   const { importBoqFile, compareNow, exportConflictsFile } = takeoff;
 
   return (
-    <header className="top">
+    // A running script: the ribbon waits (its Stop is beside the status bar).
+    <header className="top" inert={scriptLine !== null}>
       <Ribbon
         active={tool}
         onTool={chooseTool}

@@ -2261,3 +2261,12 @@ button.close {
 .script-result tr.failed {
   color: var(--warn);
 }
+/* While a script runs: where it is, and Stop. */
+.script-running {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  background: var(--panel);
+  border-top: 1px solid var(--rule);
+}

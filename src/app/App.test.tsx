@@ -21,6 +21,8 @@ const core = vi.hoisted(() => ({
   /** The tab on screen; a script's OPEN puts tab 2 there. */
   active: 1,
   scriptOpens: false,
+  /** While set, run_script waits for it: the script is running. */
+  scriptHold: null as Promise<void> | null,
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -62,8 +64,10 @@ vi.mock("@tauri-apps/api/core", () => ({
       case "tabs":
         return { tabs: [{ id: 1, path: PLAN, title: "plan.dwg", dirty: false }], active: core.active };
       case "run_script":
+        if (core.scriptHold) await core.scriptHold;
         if (core.scriptOpens) core.active = 2;
         return {
+          ran: true,
           lines: [
             { line_no: 1, text: "COUNT DOOR", ok: true, message: "DOOR count = 3 pcs" },
             { line_no: 2, text: "MEASURE FFFF", ok: false, message: "No entity FFFF" },
@@ -149,6 +153,7 @@ beforeEach(() => {
   core.chosen = PLAN;
   core.active = 1;
   core.scriptOpens = false;
+  core.scriptHold = null;
 });
 
 afterEach(cleanup);
@@ -339,4 +344,35 @@ test("Run script (Manage tab, SCRIPT, SCR): a .scr runs on the drawing, its log 
   core.calls.length = 0;
   await typeLine("SCRIPT");
   expect(core.calls.filter((c) => c.startsWith("run_script"))).toEqual([`run_script {"path":"/d/count.scr"}`]);
+});
+
+test("while a script runs the ribbon and the command line wait, and Stop asks the core to stop it", async () => {
+  await mount();
+  await clickOpen();
+  core.chosen = "/d/long.scr";
+  let finish = () => {};
+  core.scriptHold = new Promise<void>((done) => (finish = done));
+
+  fireEvent.click(screen.getByRole("tab", { name: en.manage }));
+  fireEvent.click(screen.getByRole("button", { name: en["script.run"] }));
+  await settle();
+  const header = document.querySelector("header.top")!;
+  expect(header.hasAttribute("inert")).toBe(true);
+  expect(screen.getByText(en["script.running"].replace("{line}", "1"))).toBeTruthy();
+
+  // A command typed meanwhile is refused, not run between the script's lines.
+  core.calls.length = 0;
+  await typeLine("COUNT DOOR");
+  expect(core.calls.filter((c) => c.startsWith("run_command"))).toEqual([]);
+  expect(screen.getByText(en["script.busy"])).toBeTruthy();
+
+  fireEvent.click(screen.getByRole("button", { name: en["script.stop"] }));
+  await settle();
+  expect(core.calls).toContain("stop_script null");
+
+  finish();
+  await settle();
+  expect(header.hasAttribute("inert")).toBe(false);
+  expect(screen.queryByText(en["script.running"].replace("{line}", "1"))).toBeNull();
+  expect(screen.getByRole("dialog", { name: en["script.title"].replace("{name}", "long.scr") })).toBeTruthy();
 });

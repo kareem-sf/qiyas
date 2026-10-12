@@ -965,5 +965,10 @@
   "script.ok": "Done",
   "script.error": "Failed",
   "script.close": "Close",
-  "script.blockEdit": "Save or discard the block edit in place first (REFCLOSE), then run the script"
+  "script.blockEdit": "Save or discard the block edit in place first (REFCLOSE), then run the script",
+  "script.notRead": "Line {line} could not be read; nothing ran",
+  "script.running": "Running script… (line {line})",
+  "script.stop": "Stop",
+  "script.busy": "A script is running: wait for it, or Stop it",
+  "ribbon.scripts": "Scripts"
 }

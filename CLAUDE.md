@@ -756,16 +756,21 @@ their measurements are marked `mcp`).
 - Run script (ribbon Manage tab, Run script…, or `SCRIPT` / `SCR`; `qiyas-desktop/src/script.rs`,
   IPC `run_script { path }`): the grammar and folder rule above, run on the drawing on screen
   (none open: the script must OPEN one), each step as the window does it. OPEN opens a tab (or
-  shows the one open already, with no autosave question) and goes first in recents; SAVE and
+  shows the one open already) and goes first in recents; a drawing with an autosave to offer, a
+  crash, or open in another Qiyas (`qiyas_core::recoverable`) is refused ("open it from the ribbon
+  first to decide about its autosave"), since a SAVE after it would delete that autosave; SAVE and
   SAVEAS save as the app does, but SAVE (or SAVEAS onto its own file) is refused for a drawing the
   failsafe reader repaired on open (`report.dropped`; the window's Save asks first, a script
   can't; after a SAVEAS to a new path it may); each drawing command is one
-  undo step; QUIT ends the script, never the app; DELAY waits off the async runtime; ECHO writes
-  its text in the log. Before OPEN takes another drawing on screen, the take-off of the one the
+  undo step; QUIT ends the script, never the app; DELAY waits off the async runtime, 10 s at most
+  a line (`DELAY_CAP_MS`); ECHO writes its text in the log. While it runs the window says
+  "Running script… (line N)" (`script:line` events) with Stop (`stop_script`, checked between
+  lines and during a DELAY: "stopped"), and the ribbon (`inert`) and the command line wait. Before OPEN takes another drawing on screen, the take-off of the one the
   script changed is saved beside it (the window saves after every command). Refused while a
   block is edited in place (the window says so before asking for the file). The result is
-  `{ lines: [{ line_no, text, ok, message }], changed, took_ms }`: the lines run, the failing
-  one last; a script that doesn't read is its bad line alone and nothing runs. The messages are
+  `{ ran, lines: [{ line_no, text, ok, message }], changed, took_ms }`: the lines run, the failing
+  one last; a script that doesn't read is its bad line alone, `ran` false, and the dialog says
+  "Line N could not be read; nothing ran". The messages are
   the CLI's (`describe` is a copy of the core's private one). `ScriptResultDialog` lists the
   lines with a mark each, where it stopped and the time; then the window shows a drawing an OPEN
   put on screen as a tab switch does, or reads the one on screen again (info, hidden layers,
