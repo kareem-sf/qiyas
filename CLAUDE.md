@@ -535,38 +535,53 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
 ## Plot
 
 - `crates/qiyas-plot` (`plot_pdf(session, &PlotJob)`, lopdf, MIT) writes one sheet to a one-page
-  PDF as the screen draws it, from the session's own batches (`Session::sheet_batch`,
-  `model_batch`): a layout draws model space in each viewport first (clipped to its frame,
-  without the layers it freezes, through `paper_views_of`), then its own batch: pictures, fills
-  as filled paths, lines, wipeouts in the paper's white, their frames, then text.
+  PDF as the screen draws it, each batch drawn afresh for the paper
+  (`Session::sheet_batch_with_tol`, curves within `PLOT_TOL_MM` = 0.005 mm on paper: a 1 m
+  arc at 1:100 gets 25 segments a quarter): a layout draws model space in each viewport first
+  (clipped to its frame, at that viewport's scale, without the layers it freezes, matched by
+  name), then its own batch: pictures, fills as filled paths, lines, wipeouts in the paper's
+  white, their frames, then text.
   `PlotJob { sheet, area: "extents" | {"window": [[x, y], [x, y]]} | "layout", paper: { name,
   w_mm, h_mm }, orientation, scale: "fit" | {"ratio": [num, den]}, centre, style, lineweights,
-  output }`. Model space scales by its units (`Units::to_metres`), a layout's units are taken as
-  millimetres (the codec keeps no plot settings); "layout" is a layout's limits, else its
-  extents. Fit leaves a 5 mm margin; not centred puts the area's lower left at the page's.
+  output }`. Model space scales by its units (`Units::to_metres`); a layout's units are inches
+  when its page setup says so (`plot_paper_units` 0 with a paper size), else millimetres.
+  "layout" is the layout's paper from its page setup (the layout's origin at the printable
+  area's lower left, inside the margins; rotation 90/270 swaps it), else its limits, else its
+  extents; the plot offset is not read. Fit leaves a 5 mm margin; not centred puts the area's
+  lower left at the page's.
   `paper_catalog()`: ISO A0 to A4, ANSI A to E, ARCH A to E1, portrait.
 - Lines are paper millimetres: the plot style's lineweight, else the entity's with `lineweights`
   (ByLayer and ByBlock resolved as inside blocks, Default 0.25 mm), else the thinnest line. White
-  plots black. Layers set not to plot are left out. Arcs are as flattened for the screen
-  (`BATCH_TOL`).
+  plots black. Layers set not to plot are left out, and Defpoints never plots (an xref's
+  either). Linetypes plot continuous, as the screen draws them.
 - Text is real PDF text: each font used becomes an embedded TrueType subset (`subsetter`, Type0,
   Identity-H) with a ToUnicode map from the shaped text (`LaidText::text`, `Session::font_bytes`).
   A text with a glyph that doesn't map back to its characters, or a font that can't be embedded
-  (CFF outlines, restricted), draws as outlines.
-- Pictures (on the sheet on screen only, as the window draws them) are embedded at 200 dpi;
-  those that can't be drawn (PDF support missing, file gone) are listed in `PlotOutput::skipped`.
+  (CFF outlines, restricted), draws as outlines; so does Arabic stored in visual order that Qiyas
+  did not write (`arabic_stored_visually` with "Arabic text is reversed", unless `QIYAS_TEXT`).
+  Its shaped text is not its reading text, so a ToUnicode map would be wrong.
+- Pictures on any sheet and inside viewports (`Session::plot_pictures`; the window draws none
+  there yet) are embedded at 300 dpi on the page, at most 8192 px a side (a raster image never
+  beyond its own pixels, decoded at most 4096); each one left out (file gone, PDF support
+  missing) is in `PlotOutput::skipped` with why.
 - By command a plot goes only in the drawing's folder (`output` a name inside it or a subfolder;
   none: `<drawing>-<sheet>.pdf` beside it), written beside the target then moved over it.
   `plot_pdf_to` writes anywhere: the Save dialog later, and `plot_and_print`'s spool PDF in
-  `<temp>/qiyas-plot/`.
+  `<temp>/qiyas-plot/`. Paths come back without Windows' `\\?\` prefix (`plain_path`).
 - Plot styles (`ctb.rs`): `PlotStyle::{load, save, parse, to_bytes, apply, default_ctb}` read
-  and write CTB and STB files (48-byte header, adler32, lengths, zlib text; plain text read too),
-  keeping keys Qiyas doesn't know. A CTB's pen is the ACI of the drawn colour (exact, else
+  and write CTB and STB files (48-byte header, adler32 of the body, lengths, zlib text with LF
+  lines ending in a NUL the length counts, as AutoCAD writes them; CR LF, plain text and a
+  description not in UTF-8 are read too), keeping keys Qiyas doesn't know. Test fixtures in
+  `crates/qiyas-plot/tests/fixtures/` are written by Qiyas's own writer (`write_fixtures`),
+  never vendor files. A CTB's pen is the ACI of the drawn colour (exact, else
   nearest); an STB's style is the layer's plot style name, else Normal. Screen 0 is "no plot";
   screening fades toward white; grayscale greys.
 - Printing (`print.rs`) hands the PDF to the OS: Linux `lp -d <printer>` (no printer: the PDF
-  viewer through `xdg-open`), macOS `lpr`, Windows the PDF handler's Print or PrintTo verb. Tests
-  only use `print_dry_run` and `print_plan`.
+  viewer through `xdg-open`), macOS `lpr`, Windows the PDF handler's Print or PrintTo verb
+  through a fixed `-EncodedCommand` script that reads the file and printer from
+  `QIYAS_PRINT_FILE` and `QIYAS_PRINT_PRINTER` (`ProcessStartInfo`): no name or path is ever
+  inside a command. Printer names starting with `-` or holding a quote are refused. Tests only
+  use `print_dry_run` and `print_plan`.
 - IPC (`qiyas-desktop/src/plot.rs`): `paper_catalog`, `plot_pdf`, `plot_and_print`,
   `print_pdf`, `list_printers`, `default_printer`, `load_plot_style`, `save_plot_style`. The
   Plot dialog, the plot style editor and the Output tab are the frontend half.
