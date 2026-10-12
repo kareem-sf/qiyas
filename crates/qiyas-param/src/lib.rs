@@ -10,6 +10,6 @@ pub mod expr;
 pub mod model;
 pub mod solver;
 
-pub use expr::{evaluate_all, Expr, ExprError};
+pub use expr::{evaluate_all, evaluate_each, Expr, ExprError};
 pub use model::{Constraint, Curve, CurveId, PointId, Sketch};
 pub use solver::{solve, SolveError, Solved};

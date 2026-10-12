@@ -71,6 +71,9 @@ pub enum ExprError {
     /// The value is no number (a division by 0, the root of a negative number).
     #[error("{0} is not a number (a division by 0?)")]
     NotANumber(String),
+    /// It uses this parameter, which can't be worked out itself.
+    #[error("It uses {0}, which can't be worked out")]
+    Uses(String),
 }
 
 /// True for the names parameters may have: a letter or `_`, then letters, digits or `_`; never
@@ -83,6 +86,12 @@ pub fn is_name(text: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
         && Func::named(text).is_none()
         && !text.eq_ignore_ascii_case("pi")
+}
+
+/// An expression as it is stored: trimmed, with Arabic-Indic and Persian digits and the Arabic
+/// decimal separator in ASCII, so a drawing saved in an older DWG code page keeps it.
+pub fn normalize(text: &str) -> String {
+    ascii_digits(text.trim())
 }
 
 /// Arabic-Indic and Persian digits and the Arabic decimal separator as ASCII.
@@ -375,6 +384,70 @@ pub fn evaluate_all(exprs: &BTreeMap<String, String>) -> Result<BTreeMap<String,
         visit(name, &parsed, &mut values, &mut open, &mut opened)?;
     }
     Ok(values)
+}
+
+/// Every parameter's value, or why it has none, each on its own: one that can't be parsed, uses
+/// a name not in `exprs`, sits in a circle or is no number has an error, and so does every one
+/// using it (`Uses`); the others are worked out as usual.
+pub fn evaluate_each(exprs: &BTreeMap<String, String>) -> BTreeMap<String, Result<f64, ExprError>> {
+    let parsed: BTreeMap<&str, Result<Expr, ExprError>> = exprs
+        .iter()
+        .map(|(name, text)| (name.as_str(), Expr::parse(text)))
+        .collect();
+    let mut out: BTreeMap<String, Result<f64, ExprError>> = BTreeMap::new();
+    let mut open: Vec<String> = Vec::new();
+    fn visit(
+        name: &str,
+        parsed: &BTreeMap<&str, Result<Expr, ExprError>>,
+        out: &mut BTreeMap<String, Result<f64, ExprError>>,
+        open: &mut Vec<String>,
+    ) -> Result<f64, ExprError> {
+        if let Some(done) = out.get(name) {
+            return done.clone();
+        }
+        if let Some(from) = open.iter().position(|n| n == name) {
+            let mut circle = open[from..].to_vec();
+            circle.push(name.to_string());
+            return Err(ExprError::Circular(circle));
+        }
+        open.push(name.to_string());
+        let result = match &parsed[name] {
+            Err(e) => Err(e.clone()),
+            Ok(e) => {
+                let mut failed = None;
+                for used in e.names() {
+                    if !parsed.contains_key(used.as_str()) {
+                        failed = Some(ExprError::Unknown(used));
+                        break;
+                    }
+                    match visit(&used, parsed, out, open) {
+                        Ok(_) => {}
+                        Err(ExprError::Circular(c)) => {
+                            failed = Some(ExprError::Circular(c));
+                            break;
+                        }
+                        Err(_) => {
+                            failed = Some(ExprError::Uses(used));
+                            break;
+                        }
+                    }
+                }
+                match failed {
+                    Some(e) => Err(e),
+                    None => e
+                        .eval(&|n| out.get(n).and_then(|r| r.as_ref().ok().copied()))
+                        .map_err(|_| ExprError::NotANumber(name.to_string())),
+                }
+            }
+        };
+        open.pop();
+        out.insert(name.to_string(), result.clone());
+        result
+    }
+    for name in parsed.keys() {
+        let _ = visit(name, &parsed, &mut out, &mut open);
+    }
+    out
 }
 
 #[cfg(test)]

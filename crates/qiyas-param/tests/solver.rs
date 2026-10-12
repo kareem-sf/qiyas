@@ -249,3 +249,54 @@ fn a_constraint_on_the_wrong_curve_is_refused() {
     s.constrain(Constraint::Horizontal(c));
     assert!(matches!(solve(&mut s, &[]), Err(SolveError::Invalid(_))));
 }
+
+#[test]
+fn a_one_metre_rectangle_far_from_the_origin_solves_as_one_at_the_origin() {
+    // A site grid in millimetres puts details billions of units from the origin.
+    let (x0, y0) = (3.3e9, 1.2e9);
+    let mut s = Sketch::default();
+    let corners = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+    let lines: Vec<usize> = (0..4)
+        .map(|i| {
+            let (a, b) = (corners[i], corners[(i + 1) % 4]);
+            s.line([x0 + a[0], y0 + a[1]], [x0 + b[0] + 0.001, y0 + b[1]])
+        })
+        .collect();
+    for i in 0..4 {
+        let (_, end) = s.line_ends(lines[i]).unwrap();
+        let (start, _) = s.line_ends(lines[(i + 1) % 4]).unwrap();
+        s.constrain(Constraint::Coincident(end, start));
+    }
+    s.constrain(Constraint::Horizontal(lines[0]));
+    s.constrain(Constraint::Horizontal(lines[2]));
+    s.constrain(Constraint::Perpendicular(lines[0], lines[1]));
+    s.constrain(Constraint::Parallel(lines[1], lines[3]));
+    let (a, b) = s.line_ends(lines[0]).unwrap();
+    s.constrain(Constraint::Distance {
+        a,
+        b,
+        axis: Some([1.0, 0.0]),
+        value: 0.25,
+    });
+    s.constrain(Constraint::Fixed(a, [x0, y0]));
+    solve(&mut s, &[]).unwrap();
+    let c = corners_of(&s, &lines);
+    // Within a micrometre (f64 holds about 1e-6 at 3e9).
+    assert!((c[1][0] - c[0][0] - 0.25).abs() < 1e-5, "{c:?}");
+    assert!(
+        (c[3][0] - c[0][0]).abs() < 1e-5,
+        "the left side stays upright: {c:?}"
+    );
+    assert!(
+        (c[0][0] - x0).abs() < 1e-5 && (c[0][1] - y0).abs() < 1e-5,
+        "{c:?}"
+    );
+}
+
+/// Each line's start.
+fn corners_of(s: &Sketch, lines: &[usize]) -> Vec<[f64; 2]> {
+    lines
+        .iter()
+        .map(|&l| s.points[s.line_ends(l).unwrap().0])
+        .collect()
+}

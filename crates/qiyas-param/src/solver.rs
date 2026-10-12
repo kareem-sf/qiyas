@@ -483,7 +483,66 @@ fn root(parent: &mut [usize], mut i: usize) -> usize {
 
 /// Solves `sketch` in place, the points `pinned` held where they are. On failure the sketch is
 /// left as it was.
+///
+/// The work is done on a copy moved to its middle and scaled to about one unit across, so a
+/// detail millimetres wide on a site grid billions of units from the origin solves as well as one
+/// at the origin (finite differences, tolerances). Points the solve leaves where they were are
+/// given back exactly as they came, never rounded through the move and back.
 pub fn solve(sketch: &mut Sketch, pinned: &[PointId]) -> Result<Solved, SolveError> {
+    let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
+    for p in &sketch.points {
+        for k in 0..2 {
+            lo[k] = lo[k].min(p[k]);
+            hi[k] = hi[k].max(p[k]);
+        }
+    }
+    if sketch.points.is_empty() {
+        (lo, hi) = ([0.0; 2], [0.0; 2]);
+    }
+    let centre = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
+    let biggest_radius = sketch.radii.iter().fold(0.0f64, |m, r| m.max(r.abs()));
+    let size = len(sub(hi, lo)).max(biggest_radius);
+    let unit = if size > 0.0 && size.is_finite() {
+        size
+    } else {
+        1.0
+    };
+    let there = |p: [f64; 2]| [(p[0] - centre[0]) / unit, (p[1] - centre[1]) / unit];
+    let mut n = sketch.clone();
+    for p in &mut n.points {
+        *p = there(*p);
+    }
+    for r in &mut n.radii {
+        *r /= unit;
+    }
+    for c in &mut n.constraints {
+        match c {
+            Constraint::Fixed(_, at) => *at = there(*at),
+            Constraint::Distance { value, .. } | Constraint::Radius { value, .. } => *value /= unit,
+            _ => {}
+        }
+    }
+    let before = n.clone();
+    let mut solved = solve_here(&mut n, pinned)?;
+    for (i, p) in sketch.points.iter_mut().enumerate() {
+        if n.points[i] != before.points[i] {
+            *p = [
+                n.points[i][0] * unit + centre[0],
+                n.points[i][1] * unit + centre[1],
+            ];
+        }
+    }
+    for (i, r) in sketch.radii.iter_mut().enumerate() {
+        if n.radii[i] != before.radii[i] {
+            *r = n.radii[i] * unit;
+        }
+    }
+    solved.residual *= unit;
+    Ok(solved)
+}
+
+/// `solve` on a sketch about one unit across round the origin.
+fn solve_here(sketch: &mut Sketch, pinned: &[PointId]) -> Result<Solved, SolveError> {
     let rows = rows(sketch)?;
     let np = sketch.points.len();
     let mut x: Vec<f64> = sketch.points.iter().flat_map(|p| [p[0], p[1]]).collect();

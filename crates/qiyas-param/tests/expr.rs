@@ -77,3 +77,29 @@ fn circular_and_unknown_references_are_refused() {
     let err = evaluate_all(&params(&[("d1", "d9 + 1")])).unwrap_err();
     assert_eq!(err, ExprError::Unknown("d9".into()));
 }
+
+#[test]
+fn each_parameter_is_worked_out_on_its_own_so_one_broken_one_spoils_only_its_users() {
+    use qiyas_param::evaluate_each;
+    let values = evaluate_each(&params(&[
+        ("d1", "2*d2"),
+        ("d2", "d9 + 1"),
+        ("d3", "4"),
+        ("d4", "foo(1)"),
+        ("a", "b"),
+        ("b", "a"),
+        ("d5", "d3 / 2"),
+    ]));
+    assert_eq!(values["d3"], Ok(4.0));
+    assert_eq!(values["d5"], Ok(2.0));
+    assert_eq!(values["d2"], Err(ExprError::Unknown("d9".into())));
+    assert_eq!(values["d1"], Err(ExprError::Uses("d2".into())));
+    assert!(matches!(values["d4"], Err(ExprError::Syntax(_))));
+    assert!(matches!(values["a"], Err(ExprError::Circular(_))));
+    assert!(matches!(values["b"], Err(ExprError::Circular(_))));
+}
+
+#[test]
+fn expressions_are_kept_in_ascii() {
+    assert_eq!(qiyas_param::expr::normalize(" ٦٫٥ * ۲ "), "6.5 * 2");
+}
