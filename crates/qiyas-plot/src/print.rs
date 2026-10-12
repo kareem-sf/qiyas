@@ -193,6 +193,28 @@ pub fn print_pdf(pdf: &Path, printer: Option<&str>) -> Result<String, PlotError>
     Ok(plan.message)
 }
 
+/// Whether printing on `os` (`std::env::consts::OS`) hands the print system its own copy of the
+/// PDF before the command returns: `lp` and `lpr` send the file to CUPS. The PDF viewer (Linux
+/// without a printer) and Windows' PDF handler open the file after Qiyas's command returns.
+pub fn hands_off_a_copy(os: &str, printer: Option<&str>) -> bool {
+    match os {
+        "windows" => false,
+        "macos" => true,
+        _ => printer.is_some(),
+    }
+}
+
+/// Prints the spool PDF `pdf` (`spool_path`) as `print_pdf` does, then removes it when the print
+/// system has its own copy (`hands_off_a_copy`), whether or not the print went; otherwise
+/// `spool_dir` removes it a day later.
+pub fn print_spooled(pdf: &Path, printer: Option<&str>) -> Result<String, PlotError> {
+    let printed = print_pdf(pdf, printer);
+    if hands_off_a_copy(std::env::consts::OS, printer) {
+        let _ = std::fs::remove_file(pdf);
+    }
+    printed
+}
+
 /// Printer names from `lpstat -a`: the first word of each line.
 pub fn parse_printers(lpstat: &str) -> Vec<String> {
     lpstat

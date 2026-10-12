@@ -159,3 +159,47 @@ fn only_an_existing_pdf_is_handed_over_and_printer_names_are_checked() {
         );
     }
 }
+
+/// The spool PDF goes as soon as `lp` or `lpr` has handed the print system its copy; the PDF
+/// viewer and Windows' handler read it after the command returns, so it stays for them.
+#[test]
+fn the_spool_pdf_goes_once_the_print_system_has_its_copy() {
+    assert!(qiyas_plot::hands_off_a_copy("linux", Some("office")));
+    assert!(!qiyas_plot::hands_off_a_copy("linux", None));
+    assert!(qiyas_plot::hands_off_a_copy("macos", None));
+    assert!(!qiyas_plot::hands_off_a_copy("windows", Some("office")));
+}
+
+/// The print spool is the user's own folder: 0700 on Unix (made so again when it was opened
+/// up), never a shared `/tmp/qiyas-plot`; spool PDFs a day old go.
+#[cfg(unix)]
+#[test]
+fn the_print_spool_is_a_private_folder_of_the_users() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let dir = qiyas_plot::spool_dir().unwrap();
+    let name = dir.file_name().unwrap().to_string_lossy().into_owned();
+    assert!(name.starts_with("qiyas-plot-"), "{name}");
+    let meta = std::fs::symlink_metadata(&dir).unwrap();
+    assert!(meta.is_dir());
+    assert_eq!(meta.mode() & 0o777, 0o700);
+
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let old = dir.join(format!("old-{}.pdf", std::process::id()));
+    let new = dir.join(format!("new-{}.pdf", std::process::id()));
+    for f in [&old, &new] {
+        std::fs::write(f, b"%PDF").unwrap();
+    }
+    let two_days = std::time::Duration::from_secs(2 * 24 * 60 * 60);
+    std::fs::File::options()
+        .write(true)
+        .open(&old)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - two_days)
+        .unwrap();
+    assert_eq!(qiyas_plot::spool_dir().unwrap(), dir);
+    let mode = std::fs::metadata(&dir).unwrap().mode() & 0o777;
+    assert_eq!(mode, 0o700);
+    assert!(!old.exists(), "a day old: gone");
+    assert!(new.exists());
+    std::fs::remove_file(&new).unwrap();
+}

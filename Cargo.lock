@@ -4051,6 +4051,7 @@ name = "qiyas-plot"
 version = "0.1.0"
 dependencies = [
  "flate2",
+ "libc",
  "lopdf",
  "opencadcodec",
  "qiyas-core",

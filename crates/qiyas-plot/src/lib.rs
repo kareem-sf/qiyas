@@ -21,8 +21,8 @@ pub use look::DEFAULT_LINEWEIGHT_MM;
 pub use page::{paper_catalog, Paper, FIT_MARGIN_MM, PT_PER_MM};
 pub use plotter::{write_pdf, PlotSnapshot, PLOT_TOL_MM};
 pub use print::{
-    default_printer, list_printers, parse_default_printer, parse_printers, plain_path,
-    print_dry_run, print_pdf, print_plan, PrintPlan,
+    default_printer, hands_off_a_copy, list_printers, parse_default_printer, parse_printers,
+    plain_path, print_dry_run, print_pdf, print_plan, print_spooled, PrintPlan,
 };
 
 /// What part of the sheet is plotted.
@@ -188,10 +188,61 @@ pub fn output_path(session: &Session, job: &PlotJob) -> Result<PathBuf, PlotErro
     Ok(print::plain_path(&real.join(file)))
 }
 
-/// A PDF in the temporary folder for printing sheet `sheet` (`qiyas-plot/<drawing>-<sheet>.pdf`),
-/// its folder made.
+/// A PDF in the user's print spool folder (`spool_dir`) for printing sheet `sheet`
+/// (`<drawing>-<sheet>.pdf`).
 pub fn spool_path(session: &Session, sheet: &str) -> Result<PathBuf, PlotError> {
-    let dir = std::env::temp_dir().join("qiyas-plot");
-    std::fs::create_dir_all(&dir).map_err(|e| PlotError::Write(e.to_string()))?;
-    Ok(dir.join(default_file_name(session, sheet)?))
+    Ok(spool_dir()?.join(default_file_name(session, sheet)?))
+}
+
+/// How long a spool PDF the print system did not take a copy of (the PDF viewer's, Windows')
+/// is kept for its program to read.
+pub const SPOOL_KEEP: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+/// The user's own folder for print spool PDFs, made when missing: `<temp>/qiyas-plot-<uid>`
+/// with mode 0700 on Unix, where the temporary folder is shared (a folder of that name that is
+/// not this user's, or is a link, is refused: another user could read the plots or plant links
+/// there); `<temp>/qiyas-plot` on Windows, whose temporary folder is the user's. Spool PDFs
+/// older than `SPOOL_KEEP` are removed.
+pub fn spool_dir() -> Result<PathBuf, PlotError> {
+    let write = |e: std::io::Error| PlotError::Write(e.to_string());
+    #[cfg(unix)]
+    let dir = {
+        use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+        // SAFETY: getuid has no preconditions and cannot fail.
+        let uid = unsafe { libc::getuid() };
+        let dir = std::env::temp_dir().join(format!("qiyas-plot-{uid}"));
+        match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
+            Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => return Err(write(e)),
+            _ => {}
+        }
+        let meta = std::fs::symlink_metadata(&dir).map_err(write)?;
+        if !meta.is_dir() || meta.uid() != uid {
+            return Err(PlotError::Write(format!(
+                "{} is not this user's own folder: remove it, then print again",
+                dir.display()
+            )));
+        }
+        if meta.mode() & 0o077 != 0 {
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+                .map_err(write)?;
+        }
+        dir
+    };
+    #[cfg(not(unix))]
+    let dir = {
+        let dir = std::env::temp_dir().join("qiyas-plot");
+        std::fs::create_dir_all(&dir).map_err(write)?;
+        dir
+    };
+    let now = std::time::SystemTime::now();
+    for entry in std::fs::read_dir(&dir).map_err(write)?.flatten() {
+        let old = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .is_ok_and(|t| now.duration_since(t).is_ok_and(|age| age > SPOOL_KEEP));
+        if old {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+    Ok(dir)
 }

@@ -68,9 +68,9 @@ fn save_dialog_pdf(path: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-/// Plots `job` to a PDF in the temporary folder and prints it on `printer` (the default one
-/// when none): quick print, and print all one sheet at a time. What happened, for the status
-/// bar.
+/// Plots `job` to a PDF in the user's print spool folder and prints it on `printer` (the
+/// default one when none; the PDF goes once the print system has its copy): quick print, and
+/// print all one sheet at a time. What happened, for the status bar.
 #[tauri::command]
 pub async fn plot_and_print(
     job: PlotJob,
@@ -85,7 +85,7 @@ pub async fn plot_and_print(
     // The PDF is written and printed without the session locked.
     tauri::async_runtime::spawn_blocking(move || {
         let out = qiyas_plot::write_pdf(&snapshot, &path).map_err(|e| e.to_string())?;
-        qiyas_plot::print_pdf(&out.path, printer.as_deref()).map_err(|e| e.to_string())
+        qiyas_plot::print_spooled(&out.path, printer.as_deref()).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
