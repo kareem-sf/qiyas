@@ -9,7 +9,9 @@
 //! Refused while a block is edited in place. OPEN leaves a drawing with an autosave to offer, or
 //! open in another Qiyas, to the window (its recovery question). DELAY waits at most 10 s, and
 //! Stop (`stop_script`) ends the run between steps or during a DELAY; each step is announced as
-//! `script:line` for the window's "Running script" state.
+//! `script:line` for the window's "Running script" state. The run keeps to the tab on screen
+//! when it starts (moved only by OPEN) and stops before a line when another tab has come on
+//! screen.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -152,12 +154,24 @@ fn run_file<R: Runtime>(app: &AppHandle<R>, path: &Path) -> Result<ScriptResult,
             // The drawing on screen is one the failsafe reader repaired on open: the window asks
             // before saving over it, a script can't, so SAVE is refused (SAVEAS elsewhere is not).
             let mut repaired = on_screen_repaired(&state);
+            // The tab the script works on: the one on screen at the start, then the one each
+            // OPEN shows. A tab switch, a closed tab or a file opened from outside meanwhile
+            // would make every later line edit and save another drawing: the run stops.
+            let mut pinned = on_screen_tab(&state);
             for step in &script.steps {
                 if control.stop.load(Ordering::Relaxed) {
                     lines.push(line(
                         step.line,
                         false,
                         "stopped before this line".to_string(),
+                    ));
+                    break;
+                }
+                if on_screen_tab(&state) != pinned {
+                    lines.push(line(
+                        step.line,
+                        false,
+                        "the drawing on screen changed: stopped before this line".to_string(),
                     ));
                     break;
                 }
@@ -188,6 +202,9 @@ fn run_file<R: Runtime>(app: &AppHandle<R>, path: &Path) -> Result<ScriptResult,
                             Action::Open(_) | Action::Save | Action::SaveAs(_) => false,
                             _ => unsaved || change,
                         };
+                        if let Action::Open(_) = step.action {
+                            pinned = on_screen_tab(&state);
+                        }
                         repaired = match step.action {
                             Action::Open(_) => on_screen_repaired(&state),
                             Action::SaveAs(_) => false,
@@ -209,6 +226,15 @@ fn run_file<R: Runtime>(app: &AppHandle<R>, path: &Path) -> Result<ScriptResult,
         changed,
         took_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
     })
+}
+
+/// The id of the tab on screen (none when no drawing is open).
+fn on_screen_tab(state: &AppState) -> Option<u32> {
+    state
+        .tabs
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .active
 }
 
 /// How many records the failsafe reader dropped or repaired reading `session`'s drawing.
@@ -412,6 +438,7 @@ mod tests {
                     crate::commands::undo,
                     crate::commands::pick,
                     crate::tabs::tabs,
+                    crate::tabs::activate_tab,
                     super::run_script,
                     super::stop_script
                 ])
@@ -804,6 +831,67 @@ mod tests {
         // The next run starts afresh.
         let result = ipc.run("again.scr", "COUNT DOOR\n").unwrap();
         assert_eq!(result["lines"][0]["ok"], json!(true));
+    }
+
+    #[test]
+    fn a_script_stops_when_another_tab_comes_on_screen() {
+        use std::time::Duration;
+        let ipc = Ipc::open();
+        let dir = ipc.dir.path().to_path_buf();
+        std::fs::create_dir(dir.join("sub")).unwrap();
+        let other = qiyas_core::fixtures::write_sample(&dir.join("sub"), "dxf");
+        ipc.call("open_drawing", json!({ "path": other })).unwrap();
+        let tabs = ipc.call("tabs", json!({})).unwrap();
+        let first = tabs["tabs"][0]["id"].clone();
+        let second = tabs["tabs"][1]["id"].clone();
+        assert_eq!(tabs["active"], second);
+
+        // The script starts on the second drawing; the first comes on screen during its DELAY.
+        let script = ipc.path("switch.scr");
+        std::fs::write(&script, "DELAY 600\nLAYOFF A-WALL\nSAVE\n").unwrap();
+        let app = ipc.app.handle().clone();
+        let running = std::thread::spawn(move || super::run_file(&app, &script));
+        std::thread::sleep(Duration::from_millis(200));
+        ipc.call("activate_tab", json!({ "id": first })).unwrap();
+        let result = running.join().unwrap().unwrap();
+        let got: Vec<_> = result
+            .lines
+            .iter()
+            .map(|l| (l.line_no, l.ok, l.message.clone()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (1, true, "waited 600 ms".to_string()),
+                (
+                    2,
+                    false,
+                    "the drawing on screen changed: stopped before this line".to_string()
+                ),
+            ]
+        );
+        // Neither drawing was changed or saved.
+        let info = ipc.call("drawing_info", json!({})).unwrap();
+        assert_eq!(info["hidden_layers"], json!([]));
+        assert!(!dir.join("sample.dxf.bak").exists());
+        assert!(!dir.join("sub/sample.dxf.bak").exists());
+
+        // OPEN moves the script to the tab it shows: the lines after it run there.
+        let result = ipc
+            .run("open.scr", "OPEN sub/sample.dxf\nLAYOFF A-WALL\n")
+            .unwrap();
+        assert!(
+            result["lines"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|l| l["ok"] == json!(true)),
+            "{result}"
+        );
+        let tabs = ipc.call("tabs", json!({})).unwrap();
+        assert_eq!(tabs["active"], second);
+        let info = ipc.call("drawing_info", json!({})).unwrap();
+        assert_eq!(info["hidden_layers"], json!(["A-WALL"]));
     }
 
     #[test]
