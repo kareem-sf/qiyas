@@ -80,7 +80,7 @@ type Props = {
   drawings: Drawings;
   plot: Plot;
   options: Options;
-  parametric: Pick<Parametric, "parametersOpen" | "parameters" | "setParameter" | "closeParameters">;
+  parametric: Pick<Parametric, "parametersOpen" | "parameters" | "setParameter" | "closeParameters" | "deleteConstraint">;
 };
 
 /** The dialogs over the drawing (between the top bar and the panels). */
@@ -562,6 +562,7 @@ export function Dialogs({
           parameters={parametric.parameters}
           precision={draftingState.drafting?.precision ?? 3}
           onSet={parametric.setParameter}
+          onDelete={parametric.deleteConstraint}
           onClose={() => {
             parametric.closeParameters();
             focusDrawing();

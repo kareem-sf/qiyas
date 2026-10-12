@@ -1218,5 +1218,8 @@
   "param.added": "أُضيفت قيود: {n}",
   "param.removed": "حُذفت قيود: {n}",
   "cmd.gcOption": "GEOMCONSTRAINT: اكتب بعده C أو COL أو CON أو F أو PAR أو P أو H أو V أو T أو SM أو S أو E",
-  "cmd.dcOption": "DIMCONSTRAINT: اكتب بعده L أو AL أو AN أو R أو D"
+  "cmd.dcOption": "DIMCONSTRAINT: اكتب بعده L أو AL أو AN أو R أو D",
+  "param.delete": "حذف",
+  "param.deleteOf": "حذف {name} وقيده",
+  "param.broken": "لا يمكن حسابه، ومستبعد من الحل: {why}"
 }

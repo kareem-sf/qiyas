@@ -24,10 +24,14 @@ const PARAMS: ParameterInfo[] = [
   { id: 11, name: "ang1", kind: "angular", expression: "30", value: 30, dimension: 42 },
 ];
 
-function open(onSet: (name: string, expression: string) => Promise<void>) {
+function open(
+  onSet: (name: string, expression: string) => Promise<void>,
+  parameters: ParameterInfo[] = PARAMS,
+  onDelete: (id: number) => void = () => {},
+) {
   render(
     <LanguageProvider>
-      <ParametersManager parameters={PARAMS} precision={2} onSet={onSet} onClose={() => {}} />
+      <ParametersManager parameters={parameters} precision={2} onSet={onSet} onDelete={onDelete} onClose={() => {}} />
     </LanguageProvider>,
   );
 }
@@ -57,4 +61,20 @@ test("a refusal (a circle) stays in the dialog", async () => {
   fireEvent.change(field("d2"), { target: { value: "d1 - 1" } });
   fireEvent.blur(field("d2"));
   expect((await screen.findByRole("alert")).textContent).toContain("circle");
+});
+
+test("a parameter that can't be worked out says why and can be set again or deleted", async () => {
+  const onSet = vi.fn(async () => {});
+  const onDelete = vi.fn();
+  const broken: ParameterInfo = { ...PARAMS[0], value: null, error: "There is no parameter named d9" };
+  open(onSet, [broken, PARAMS[1]], onDelete);
+  expect(screen.getByRole("note").textContent).toBe(
+    en["param.broken"].replace("{why}", "There is no parameter named d9"),
+  );
+  expect(screen.getByText("—")).toBeTruthy();
+  fireEvent.change(field("d1"), { target: { value: "5" } });
+  fireEvent.keyDown(field("d1"), { key: "Enter" });
+  await waitFor(() => expect(onSet).toHaveBeenCalledWith("d1", "5"));
+  fireEvent.click(screen.getByRole("button", { name: en["param.deleteOf"].replace("{name}", "d1") }));
+  expect(onDelete).toHaveBeenCalledWith(9);
 });

@@ -189,6 +189,7 @@ export function useCommands({
         }
         if (outcome.unlinked > 0) notes.push(t("edit.unlinked", { n: outcome.unlinked }));
         if (outcome.joined_rows > 1) notes.push(t("edit.joinedRows", { n: outcome.joined_rows }));
+        if (outcome.constraints_removed) notes.push(t("param.removed", { n: outcome.constraints_removed }));
         if (notes.length > 0) setNotice(notes.join(" · "));
       }
     });

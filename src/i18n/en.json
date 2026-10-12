@@ -1218,5 +1218,8 @@
   "param.added": "{n} constraints added",
   "param.removed": "{n} constraints removed",
   "cmd.gcOption": "GEOMCONSTRAINT: type C, COL, CON, F, PAR, P, H, V, T, SM, S or E after it",
-  "cmd.dcOption": "DIMCONSTRAINT: type L, AL, AN, R or D after it"
+  "cmd.dcOption": "DIMCONSTRAINT: type L, AL, AN, R or D after it",
+  "param.delete": "Delete",
+  "param.deleteOf": "Delete {name} and its constraint",
+  "param.broken": "Can't be worked out, left out of solving: {why}"
 }

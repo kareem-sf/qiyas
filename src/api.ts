@@ -1092,6 +1092,9 @@ export type ParameterInfo = {
   expression: string;
   value: number | null;
   dimension: number;
+  /** Why its expression can't be worked out (its constraint is left out of solves until it is
+   *  set again or deleted); null when it can. */
+  error?: string | null;
 };
 
 /** What a purge looks at (`qiyas_core::purge::PurgeKind`); `styles` are text styles. */
@@ -1154,6 +1157,8 @@ export type Outcome =
       left_alone: number;
       unlinked: number;
       joined_rows: number;
+      /** Parametric constraints dropped because the edit reshaped an entity they held. */
+      constraints_removed?: number;
     }
   /** A find and replace: how many replacements, the entities changed, and how many texts were
    *  left as they were (a text can't be left blank or break onto two lines). */

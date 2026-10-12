@@ -9,13 +9,15 @@ type Props = {
   /** The parameter `name` takes `expression`; the drawing is solved again. An error (a circle,
    *  an unknown name, a conflict) stays in the dialog. */
   onSet(name: string, expression: string): Promise<void>;
+  /** Deletes the parameter's constraint (and its Dimension). */
+  onDelete(id: number): void;
   onClose(): void;
 };
 
 /** PARAMETERS: every dimensional constraint's parameter, with its expression (a number or a
  *  formula of others, `2*d2 + 1.5`) and its value now. Enter or leaving a changed expression
  *  sets it; the geometry follows. Lengths are in drawing units, angles in degrees. */
-export function ParametersManager({ parameters, precision, onSet, onClose }: Props) {
+export function ParametersManager({ parameters, precision, onSet, onDelete, onClose }: Props) {
   const t = useT();
   const dialog = useRef<HTMLDialogElement>(null);
   /** Expressions being typed, by name. */
@@ -68,6 +70,9 @@ export function ParametersManager({ parameters, precision, onSet, onClose }: Pro
               <th scope="col">{t("param.name")}</th>
               <th scope="col">{t("param.expression")}</th>
               <th scope="col">{t("param.value")}</th>
+              <th scope="col">
+                <span className="sr-only">{t("param.delete")}</span>
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -101,6 +106,22 @@ export function ParametersManager({ parameters, precision, onSet, onClose }: Pro
                       ? "—"
                       : `${p.value.toFixed(precision)}${p.kind === "angular" ? "°" : ""}`}
                   </bdi>
+                  {p.error && (
+                    <p className="error" role="note">
+                      {t("param.broken", { why: p.error })}
+                    </p>
+                  )}
+                </td>
+                <td>
+                  <button
+                    type="button"
+                    aria-label={t("param.deleteOf", { name: p.name })}
+                    title={t("param.deleteOf", { name: p.name })}
+                    disabled={busy}
+                    onClick={() => onDelete(p.id)}
+                  >
+                    ×
+                  </button>
                 </td>
               </tr>
             ))}
