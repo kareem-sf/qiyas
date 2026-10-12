@@ -3,13 +3,15 @@
 //! every drawing of a folder or a sheet set with a line per drawing.
 //!
 //! It opens drawings as the app does (the failsafe reader, the `.qiyas` project file beside a
-//! drawing when there is one) and writes only what it is asked to: a converted file, a script's
-//! SAVE, SAVEAS and EXPORT, a take-off workbook. It never opens a window and never touches the
-//! app's settings, the keychain, MCP or the AI. Any error is one line on stderr
-//! (`qiyas-cli: ...`) and a non-zero exit: 1, or 2 for a mistake in the arguments.
+//! drawing when there is one) and writes only what it is asked to: a converted drawing (alone,
+//! no project file), a script's SAVE, SAVEAS and EXPORT, a take-off workbook. It never opens a
+//! window and never touches the app's settings, the keychain, MCP, the AI, or the autosaves and
+//! lock files beside drawings. Exit codes: 0 done; 1 an error (one line on stderr,
+//! `qiyas-cli: ...`, a mistake in the arguments too); 2 done, but a drawing opened with problems
+//! the reader repaired (a warning, one line on stderr).
 
 use std::any::Any;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -18,9 +20,9 @@ use std::sync::mpsc;
 
 use clap::error::ErrorKind;
 use clap::{ArgGroup, Parser, Subcommand};
-use opencadcodec::DxfVersion;
-use qiyas_core::script::{self, Context, Host, Run};
-use qiyas_core::{Boq, Command, Outcome, Session, SheetSet, Source};
+use opencadcodec::{DwgWriter, DxfVersion, DxfWriter};
+use qiyas_core::script::{self, Action, Context, Host, Run, Script};
+use qiyas_core::{Boq, Command, Drawing, Outcome, Session, SheetSet, Source};
 use serde::Serialize;
 
 #[derive(Parser)]
@@ -30,7 +32,7 @@ use serde::Serialize;
     about = "Qiyas without a window: convert drawings, run command scripts, take off, batch."
 )]
 struct Cli {
-    /// Print nothing but errors (on stderr).
+    /// Print nothing but errors and warnings (on stderr), and a batch's summary.
     #[arg(long, global = true)]
     quiet: bool,
     /// Print the result as JSON.
@@ -42,8 +44,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Converts a drawing between DWG and DXF, by the output's extension. A Save As: the project
-    /// file comes along beside the output.
+    /// Converts a drawing between DWG and DXF, by the output's extension: the drawing alone, as
+    /// read (no project file, no take-off embedded).
     Convert {
         input: PathBuf,
         output: PathBuf,
@@ -55,6 +57,9 @@ enum Cmd {
     Run {
         script: PathBuf,
         drawing: Option<PathBuf>,
+        /// Let SAVE write over a drawing the reader repaired when it opened it.
+        #[arg(long)]
+        allow_repaired_save: bool,
     },
     /// Counts blocks and exports the drawing's take-off to Excel. Writes nothing else.
     #[command(group(ArgGroup::new("what").args(["counts", "export"]).required(true).multiple(true)))]
@@ -79,6 +84,9 @@ enum Cmd {
         /// Drawings at a time.
         #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u16).range(1..=64))]
         jobs: u16,
+        /// Let SAVE write over a drawing the reader repaired when it opened it.
+        #[arg(long)]
+        allow_repaired_save: bool,
     },
 }
 
@@ -94,6 +102,9 @@ fn parse_version(text: &str) -> Result<DxfVersion, String> {
     })
 }
 
+/// How a command finished without an error: cleanly, or with a warning for stderr (exit 2).
+type Done = Result<Option<String>, String>;
+
 fn main() -> ExitCode {
     // A panic (the reader on a damaged drawing) becomes a one-line error below, not a backtrace.
     std::panic::set_hook(Box::new(|_| {}));
@@ -104,7 +115,7 @@ fn main() -> ExitCode {
         }
         Err(e) => {
             eprintln!("qiyas-cli: {}", usage_error(&e));
-            return ExitCode::from(2);
+            return ExitCode::FAILURE;
         }
     };
     let out = Out {
@@ -112,7 +123,11 @@ fn main() -> ExitCode {
         json: cli.json,
     };
     match catch_unwind(AssertUnwindSafe(|| dispatch(&cli.command, &out))) {
-        Ok(Ok(())) => ExitCode::SUCCESS,
+        Ok(Ok(None)) => ExitCode::SUCCESS,
+        Ok(Ok(Some(warning))) => {
+            eprintln!("qiyas-cli: {warning}");
+            ExitCode::from(2)
+        }
         Ok(Err(message)) => {
             eprintln!("qiyas-cli: {message}");
             ExitCode::FAILURE
@@ -171,14 +186,18 @@ impl Out {
     }
 }
 
-fn dispatch(cmd: &Cmd, out: &Out) -> Result<(), String> {
+fn dispatch(cmd: &Cmd, out: &Out) -> Done {
     match cmd {
         Cmd::Convert {
             input,
             output,
             version,
         } => convert(out, input, output, *version),
-        Cmd::Run { script, drawing } => run(out, script, drawing.as_deref()),
+        Cmd::Run {
+            script,
+            drawing,
+            allow_repaired_save,
+        } => run(out, script, drawing.as_deref(), *allow_repaired_save),
         Cmd::Takeoff {
             drawing,
             counts,
@@ -189,12 +208,22 @@ fn dispatch(cmd: &Cmd, out: &Out) -> Result<(), String> {
             script,
             out: out_dir,
             jobs,
-        } => batch(out, source, script, out_dir.as_deref(), usize::from(*jobs)),
+            allow_repaired_save,
+        } => batch(
+            out,
+            source,
+            script,
+            out_dir.as_deref(),
+            usize::from(*jobs),
+            *allow_repaired_save,
+        ),
     }
 }
 
 /// The Excel and comparison steps of a script, as the desktop does them.
-struct Excel;
+struct Excel {
+    allow_repaired_save: bool,
+}
 
 impl Host for Excel {
     fn export_takeoff(&mut self, session: &Session, path: &Path) -> Result<(), String> {
@@ -220,6 +249,10 @@ impl Host for Excel {
             .map(|conflicts| conflicts.len())
             .map_err(|e| e.to_string())
     }
+
+    fn allow_repaired_save(&self) -> bool {
+        self.allow_repaired_save
+    }
 }
 
 /// `path` opened, or the error naming it.
@@ -228,30 +261,52 @@ fn open(path: &Path) -> Result<Session, String> {
 }
 
 fn read_script(path: &Path) -> Result<String, String> {
-    std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))
+    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    String::from_utf8(bytes).map_err(|_| {
+        format!(
+            "{}: not UTF-8 text: save the script as UTF-8",
+            path.display()
+        )
+    })
 }
 
-fn convert(
-    out: &Out,
-    input: &Path,
-    output: &Path,
-    version: Option<DxfVersion>,
-) -> Result<(), String> {
-    let mut session = open(input)?;
+/// The warning for a drawing the reader repaired: "<path> opened with N problems: check ...".
+fn opened_with(path: &Path, problems: usize, check: &str) -> Option<String> {
+    let s = if problems == 1 { "" } else { "s" };
+    (problems > 0).then(|| {
+        format!(
+            "{} opened with {problems} problem{s}: check {check}",
+            path.display()
+        )
+    })
+}
+
+/// Writes the drawing as the reader read it, in the output's format and the chosen version:
+/// no project file, no take-off embedded, no autosave touched. An output already there is kept
+/// as `<output>.bak`; the new file goes in through a temp file.
+fn convert(out: &Out, input: &Path, output: &Path, version: Option<DxfVersion>) -> Done {
+    let mut drawing = Drawing::open(input).map_err(|e| format!("{}: {e}", input.display()))?;
     if let Some(version) = version {
-        session.drawing.doc.version = version;
+        drawing.doc.version = version;
     }
-    let version = session.drawing.doc.version;
-    session
-        .save_as(output)
-        .map_err(|e| format!("{}: {e}", output.display()))?;
-    let problems = session.drawing.problems.len();
+    let version = drawing.doc.version;
+    let ext = output
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase);
+    let bytes = match ext.as_deref() {
+        Some("dwg") => DwgWriter::write_to_vec(&drawing.doc),
+        Some("dxf") => DxfWriter::new(&drawing.doc).write_to_vec(),
+        _ => return Err(format!("{}: save as .dwg or .dxf", output.display())),
+    }
+    .map_err(|e| format!("{}: {e}", output.display()))?;
+    write_with_backup(output, &bytes).map_err(|e| format!("{}: {e}", output.display()))?;
+    let problems = drawing.problems.len();
     out.text(format!(
-        "converted {} to {} ({}){}",
+        "converted {} to {} ({})",
         input.display(),
         output.display(),
         version.as_str(),
-        problems_note(problems)
     ));
     out.json(&serde_json::json!({
         "input": input,
@@ -259,26 +314,50 @@ fn convert(
         "version": version.as_str(),
         "problems": problems,
     }));
-    Ok(())
+    Ok(opened_with(input, problems, "the converted drawing"))
 }
 
-/// ", N problems reading it" when there were any.
-fn problems_note(problems: usize) -> String {
-    match problems {
-        0 => String::new(),
-        n => format!(", {n} problems reading it"),
+/// `bytes` to `path` through `<path>.tmp`; a file already there is first copied to `<path>.bak`.
+fn write_with_backup(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let with = |suffix: &str| {
+        let mut name = path.as_os_str().to_owned();
+        name.push(suffix);
+        PathBuf::from(name)
+    };
+    let tmp = with(".tmp");
+    let written = std::fs::write(&tmp, bytes).and_then(|()| {
+        if path.is_file() {
+            std::fs::copy(path, with(".bak"))?;
+        }
+        std::fs::rename(&tmp, path)
+    });
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
     }
+    written
 }
 
 #[derive(Serialize)]
 struct RunReport<'a> {
-    /// What the reader had to skip or repair in the drawing given on the command line.
+    /// What the reader had to repair in the drawing given on the command line.
     problems: usize,
     #[serde(flatten)]
     run: &'a Run,
 }
 
-fn run(out: &Out, script_path: &Path, drawing: Option<&Path>) -> Result<(), String> {
+/// The warning line for a run's repaired drawings, if any.
+fn run_warning(warnings: &[String]) -> Option<String> {
+    match warnings {
+        [] => None,
+        [one] => Some(format!("{one}: check the results")),
+        many => Some(format!(
+            "{} drawings opened with problems: check the results",
+            many.len()
+        )),
+    }
+}
+
+fn run(out: &Out, script_path: &Path, drawing: Option<&Path>, allow: bool) -> Done {
     let text = read_script(script_path)?;
     let cx = Context {
         script: script_path,
@@ -288,14 +367,11 @@ fn run(out: &Out, script_path: &Path, drawing: Option<&Path>) -> Result<(), Stri
     let in_script = |e: script::ScriptError| format!("{}: {e}", script_path.display());
     let script = script::parse(&text, &cx).map_err(in_script)?;
     let session = drawing.map(open).transpose()?;
-    let problems = session.as_ref().map_or(0, |s| s.drawing.problems.len());
-    if let (Some(path), true) = (drawing, problems > 0) {
-        out.text(format!(
-            "{}: {problems} problems reading it",
-            path.display()
-        ));
-    }
-    let run = script::run(&script, session, &mut Excel).map_err(in_script)?;
+    let problems = session.as_ref().map_or(0, script::read_problems);
+    let mut host = Excel {
+        allow_repaired_save: allow,
+    };
+    let run = script::run(&script, session, &mut host).map_err(in_script)?;
     for step in &run.steps {
         out.text(format!("line {}: {}", step.line, step.text));
     }
@@ -303,16 +379,12 @@ fn run(out: &Out, script_path: &Path, drawing: Option<&Path>) -> Result<(), Stri
         problems,
         run: &run,
     });
-    Ok(())
+    Ok(run_warning(&run.warnings))
 }
 
-fn takeoff(
-    out: &Out,
-    drawing: &Path,
-    blocks: &[String],
-    export: Option<&Path>,
-) -> Result<(), String> {
+fn takeoff(out: &Out, drawing: &Path, blocks: &[String], export: Option<&Path>) -> Done {
     let mut session = open(drawing)?;
+    let problems = script::read_problems(&session);
     let mut counts = BTreeMap::new();
     for name in blocks {
         let outcome = session
@@ -327,18 +399,20 @@ fn takeoff(
         }
     }
     if let Some(path) = export {
-        Excel
-            .export_takeoff(&session, path)
+        let mut host = Excel {
+            allow_repaired_save: false,
+        };
+        host.export_takeoff(&session, path)
             .map_err(|e| format!("{}: {e}", path.display()))?;
         out.text(format!("exported {}", path.display()));
     }
     out.json(&serde_json::json!({
         "drawing": drawing,
-        "problems": session.drawing.problems.len(),
+        "problems": problems,
         "counts": counts,
         "export": export,
     }));
-    Ok(())
+    Ok(opened_with(drawing, problems, "its counts"))
 }
 
 /// One drawing of a batch: whether its script ran, with how many problems reading it, its block
@@ -346,7 +420,7 @@ fn takeoff(
 #[derive(Serialize)]
 struct FileReport {
     path: PathBuf,
-    /// "ok", "warning" (it ran, but the reader had problems with the drawing) or "error".
+    /// "ok", "warning" (it ran, but the reader repaired the drawing) or "error".
     status: &'static str,
     problems: usize,
     counts: BTreeMap<String, f64>,
@@ -361,12 +435,22 @@ impl FileReport {
         }
         let mut line = format!("{path} {}", self.status);
         if self.problems > 0 {
-            line.push_str(&format!(" ({} problems reading it)", self.problems));
+            line.push_str(&format!(" ({})", script::problems_reading(self.problems)));
         }
         for (name, count) in &self.counts {
             line.push_str(&format!(" {name}={count}"));
         }
         line
+    }
+
+    fn failed(path: &Path, error: String) -> FileReport {
+        FileReport {
+            path: path.to_path_buf(),
+            status: "error",
+            problems: 0,
+            counts: BTreeMap::new(),
+            error: Some(error),
+        }
     }
 }
 
@@ -416,25 +500,101 @@ fn drawings_of(source: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(files)
 }
 
+/// The files `script` writes when run on `drawing`: SAVEAS and EXPORT paths, the drawing SAVE
+/// writes over, a JSON `write_block`'s path; up to QUIT.
+fn written_by(script: &Script, drawing: &Path) -> Vec<PathBuf> {
+    let mut current = drawing
+        .canonicalize()
+        .unwrap_or_else(|_| drawing.to_path_buf());
+    let mut written = Vec::new();
+    for step in &script.steps {
+        match &step.action {
+            Action::Quit => break,
+            Action::Open(path) => current = path.clone(),
+            Action::SaveAs(path) => {
+                written.push(path.clone());
+                current = path.clone();
+            }
+            Action::Save => written.push(current.clone()),
+            Action::Export(path) => written.push(path.clone()),
+            Action::Command(Command::WriteBlock { path, .. }) => written.push(PathBuf::from(path)),
+            _ => {}
+        }
+    }
+    written.sort();
+    written.dedup();
+    written
+}
+
+/// Each drawing's script, read for it, or why it can't run: a bad line, or a file it would write
+/// that another drawing of the batch writes too (both refused, never one over the other).
+fn prepare(files: &[PathBuf], scripts: Vec<Result<Script, String>>) -> Vec<Result<Script, String>> {
+    let mut writers: HashMap<PathBuf, Vec<usize>> = HashMap::new();
+    for (i, script) in scripts.iter().enumerate() {
+        if let Ok(script) = script {
+            for path in written_by(script, &files[i]) {
+                writers.entry(path).or_default().push(i);
+            }
+        }
+    }
+    let mut collisions: BTreeMap<usize, Vec<String>> = BTreeMap::new();
+    for (path, who) in &writers {
+        if who.len() < 2 {
+            continue;
+        }
+        for &i in who {
+            let others: Vec<String> = who
+                .iter()
+                .filter(|&&j| j != i)
+                .map(|&j| files[j].display().to_string())
+                .collect();
+            collisions.entry(i).or_default().push(format!(
+                "output {} collides with {}",
+                path.display(),
+                others.join(", ")
+            ));
+        }
+    }
+    scripts
+        .into_iter()
+        .enumerate()
+        .map(|(i, script)| match collisions.remove(&i) {
+            Some(mut why) => {
+                why.sort();
+                Err(why.join("; "))
+            }
+            None => script,
+        })
+        .collect()
+}
+
 fn batch(
     out: &Out,
     source: &Path,
     script_path: &Path,
     out_dir: Option<&Path>,
     jobs: usize,
-) -> Result<(), String> {
+    allow: bool,
+) -> Done {
     let files = drawings_of(source)?;
     let text = read_script(script_path)?;
+    let parse = |file: &Path| {
+        script::parse(
+            &text,
+            &Context {
+                script: script_path,
+                drawing: Some(file),
+                out_dir,
+            },
+        )
+    };
     // A bad script fails before any drawing is touched.
-    script::parse(
-        &text,
-        &Context {
-            script: script_path,
-            drawing: Some(&files[0]),
-            out_dir,
-        },
-    )
-    .map_err(|e| format!("{}: {e}", script_path.display()))?;
+    parse(&files[0]).map_err(|e| format!("{}: {e}", script_path.display()))?;
+    let scripts = files
+        .iter()
+        .map(|f| parse(f).map_err(|e| e.to_string()))
+        .collect();
+    let scripts = prepare(&files, scripts);
     if let Some(dir) = out_dir {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
@@ -447,14 +607,17 @@ fn batch(
     std::thread::scope(|scope| {
         for _ in 0..jobs.min(files.len()) {
             let tx = tx.clone();
-            let (next, files, text) = (&next, &files, &text);
+            let (next, files, scripts) = (&next, &files, &scripts);
             std::thread::Builder::new()
                 // The reader recurses on nested blocks: room for deep drawings.
                 .stack_size(16 << 20)
                 .spawn_scoped(scope, move || loop {
                     let i = next.fetch_add(1, Ordering::Relaxed);
                     let Some(file) = files.get(i) else { break };
-                    let report = run_one(file, text, script_path, out_dir);
+                    let report = match &scripts[i] {
+                        Ok(script) => run_one(file, script, allow),
+                        Err(why) => FileReport::failed(file, why.clone()),
+                    };
                     if tx.send((i, report)).is_err() {
                         break;
                     }
@@ -475,9 +638,12 @@ fn batch(
     let count = |status: &str| reports.iter().filter(|r| r.status == status).count();
     let (ok, warnings, failed) = (count("ok"), count("warning"), count("error"));
     let total = reports.len();
-    out.text(format!(
-        "{total} drawings: {ok} ok, {warnings} with warnings, {failed} failed"
-    ));
+    let summary = format!("{total} drawings: {ok} ok, {warnings} with warnings, {failed} failed");
+    if out.quiet {
+        println!("{summary}");
+    } else {
+        out.text(summary);
+    }
     out.json(&BatchReport {
         files: reports,
         total,
@@ -485,42 +651,40 @@ fn batch(
         warnings,
         failed,
     });
-    match failed {
-        0 => Ok(()),
-        n => Err(format!("{n} of {total} drawings failed")),
+    match (failed, warnings) {
+        (0, 0) => Ok(None),
+        (0, w) => Ok(Some(format!(
+            "{w} of {total} drawings opened with problems: check their counts"
+        ))),
+        (f, _) => Err(format!("{f} of {total} drawings failed")),
     }
 }
 
 /// Runs the script on one drawing of a batch; a panic (the reader on a damaged file) is that
 /// drawing's error, not the batch's end.
-fn run_one(file: &Path, text: &str, script_path: &Path, out_dir: Option<&Path>) -> FileReport {
+fn run_one(file: &Path, script: &Script, allow: bool) -> FileReport {
     let result = catch_unwind(AssertUnwindSafe(|| {
-        let cx = Context {
-            script: script_path,
-            drawing: Some(file),
-            out_dir,
-        };
-        let script = script::parse(text, &cx).map_err(|e| e.to_string())?;
         let session = Session::open(file).map_err(|e| e.to_string())?;
-        let problems = session.drawing.problems.len();
-        let run = script::run(&script, Some(session), &mut Excel).map_err(|e| e.to_string())?;
-        Ok((problems, run.counts))
+        let problems = script::read_problems(&session);
+        let mut host = Excel {
+            allow_repaired_save: allow,
+        };
+        let run = script::run(script, Some(session), &mut host).map_err(|e| e.to_string())?;
+        Ok((problems, run))
     }))
     .unwrap_or_else(|panic| Err(format!("crashed: {}", panic_text(&*panic))));
     match result {
-        Ok((problems, counts)) => FileReport {
+        Ok((problems, run)) => FileReport {
             path: file.to_path_buf(),
-            status: if problems > 0 { "warning" } else { "ok" },
+            status: if run.warnings.is_empty() {
+                "ok"
+            } else {
+                "warning"
+            },
             problems,
-            counts,
+            counts: run.counts,
             error: None,
         },
-        Err(error) => FileReport {
-            path: file.to_path_buf(),
-            status: "error",
-            problems: 0,
-            counts: BTreeMap::new(),
-            error: Some(error),
-        },
+        Err(error) => FileReport::failed(file, error),
     }
 }

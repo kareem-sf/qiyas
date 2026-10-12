@@ -93,10 +93,20 @@ fn ok(out: Output) -> String {
     stdout(&out)
 }
 
-/// The run failed (exit 1, or 2 for a usage error) with one line on stderr; that line.
+/// The run failed (exit 1) with one line on stderr; that line.
 fn failed(out: Output) -> String {
+    one_line(out, 1)
+}
+
+/// The run finished with warnings (exit 2: a drawing opened with problems) and said so in one
+/// line on stderr; that line.
+fn warned(out: Output) -> String {
+    one_line(out, 2)
+}
+
+fn one_line(out: Output, code: i32) -> String {
     assert!(
-        matches!(out.status.code(), Some(1 | 2)),
+        out.status.code() == Some(code),
         "exit {:?}\nstdout: {}\nstderr: {}",
         out.status.code(),
         stdout(&out),
@@ -160,9 +170,8 @@ fn convert_goes_dwg_to_dxf_and_back_in_a_chosen_version() {
     assert_eq!(text.lines().count(), 1, "{text}");
     assert!(text.contains("plan.dxf"), "{text}");
     assert_eq!(counts(&dxf), [3.0, 5.0, 6.0]);
-    // A Save As: the project file comes beside the new file (`plan.qiyas`, the stem's); the
-    // drawing read is not written.
-    assert!(dir.path().join("plan.qiyas").exists());
+    // A conversion is not a project: no project file comes beside the output.
+    assert!(!dir.path().join("plan.qiyas").exists());
     assert!(!dir.path().join("plan.dwg.bak").exists());
 
     let old = dir.path().join("old.dwg");
@@ -173,10 +182,47 @@ fn convert_goes_dwg_to_dxf_and_back_in_a_chosen_version() {
     let session = Session::open(&old).unwrap();
     assert_eq!(session.drawing.doc.version, DxfVersion::AC1018);
     assert_eq!(counts(&old), [3.0, 5.0, 6.0]);
+    assert!(!dir.path().join("old.qiyas").exists());
 
     assert_eq!(ok(cli(&["--quiet", "convert", s(&old), s(&dxf)])), "");
     // Written over: the old file is kept as .bak, as the app does.
     assert!(dir.path().join("plan.dxf.bak").exists());
+}
+
+#[test]
+fn convert_writes_the_drawing_only_and_never_the_project() {
+    let dir = tempfile::tempdir().unwrap();
+    let dwg = write_plan(dir.path(), "plan.dwg");
+    // The drawing's own project file, with a take-off the QS made.
+    let mut session = Session::open(&dwg).unwrap();
+    session
+        .run(qiyas_core::Command::MeasureDistance {
+            points: vec![[0.0, 0.0], [3.0, 4.0]],
+        })
+        .unwrap();
+    let project = session.save_project().unwrap();
+    drop(session);
+    let before = std::fs::read(&project).unwrap();
+
+    // plan.dxf would share plan.qiyas: it is not rewritten for it.
+    ok(cli(&["convert", s(&dwg), s(&dir.path().join("plan.dxf"))]));
+    assert_eq!(std::fs::read(&project).unwrap(), before);
+    // Another folder gets the drawing alone: no project (its take-off, BOQ and rates) beside it.
+    let other = dir.path().join("for-consultant");
+    std::fs::create_dir_all(&other).unwrap();
+    ok(cli(&["convert", s(&dwg), s(&other.join("plan.dxf"))]));
+    let names: Vec<String> = std::fs::read_dir(&other)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, ["plan.dxf"]);
+    // Nor is the take-off embedded: the converted drawing has no QIYAS-* layers.
+    let converted = Session::open(&other.join("plan.dxf")).unwrap();
+    assert!(converted.takeoff.items.is_empty());
+    assert!(converted
+        .layers()
+        .iter()
+        .all(|l| !l.name.starts_with("QIYAS")));
 }
 
 #[test]
@@ -229,7 +275,8 @@ fn run_drives_a_script_on_a_drawing_and_writes_only_its_export() {
     let script = dir.path().join("count.scr");
     std::fs::write(
         &script,
-        "; count the three blocks\nCOUNT DOOR\nCOUNT WINDOW\nCOUNT COLUMN\nEXPORT {name}.xlsx\nQUIT\nCOUNT DOOR\n",
+        // Saved by Notepad as "UTF-8 with BOM".
+        "\u{feff}; count the three blocks\nCOUNT DOOR\nCOUNT WINDOW\nCOUNT COLUMN\nEXPORT {name}.xlsx\nQUIT\nCOUNT DOOR\n",
     )
     .unwrap();
     let text = ok(cli(&["run", s(&script), s(&dwg)]));
@@ -379,8 +426,9 @@ fn takeoff_counts_blocks_and_exports_without_writing_the_project() {
     failed(cli(&["takeoff", s(&dwg)]));
 }
 
-/// The script of Review Focus 3: count three blocks, export the take-off, quit.
-const COUNT_SCRIPT: &str = "COUNT DOOR\nCOUNT WINDOW\nCOUNT COLUMN\nEXPORT {name}.xlsx\nQUIT\n";
+/// The script of Review Focus 3: count three blocks, export the take-off (a bare EXPORT:
+/// `{name}.{ext}.xlsx`), quit.
+const COUNT_SCRIPT: &str = "COUNT DOOR\nCOUNT WINDOW\nCOUNT COLUMN\nEXPORT\nQUIT\n";
 
 #[test]
 fn batch_of_fifty_drawings_skips_the_corrupt_one_and_fails_the_exit_code() {
@@ -443,8 +491,8 @@ fn batch_of_fifty_drawings_skips_the_corrupt_one_and_fails_the_exit_code() {
     assert_eq!(lines[50], "50 drawings: 49 ok, 0 with warnings, 1 failed");
     let workbooks = std::fs::read_dir(&out).unwrap().count();
     assert_eq!(workbooks, 49, "every good drawing has its Excel");
-    assert!(!out.join("plan-17.xlsx").exists());
-    assert_eq!(rows(&out.join("plan-50.xlsx")).len(), 3);
+    assert!(!out.join("plan-17.dwg.xlsx").exists());
+    assert_eq!(rows(&out.join("plan-50.dwg.xlsx")).len(), 3);
     // Nothing written beside the drawings.
     assert_eq!(std::fs::read_dir(&plans).unwrap().count(), 52);
 
@@ -471,7 +519,7 @@ fn batch_of_fifty_drawings_skips_the_corrupt_one_and_fails_the_exit_code() {
         .contains("can't be opened"));
     assert_eq!(files[0]["status"], "ok");
     assert_eq!(files[0]["counts"]["WINDOW"], 5.0);
-    // --quiet: nothing on stdout, the failure still on stderr.
+    // --quiet: only the summary on stdout, the failure still on stderr.
     let run = cli(&[
         "batch",
         s(&plans),
@@ -481,8 +529,62 @@ fn batch_of_fifty_drawings_skips_the_corrupt_one_and_fails_the_exit_code() {
         s(&out),
         "--quiet",
     ]);
-    assert_eq!(stdout(&run), "");
+    assert_eq!(
+        stdout(&run),
+        "50 drawings: 49 ok, 0 with warnings, 1 failed\n"
+    );
     failed(run);
+}
+
+/// The test plan in AC1018 written into `dir` damaged at 64 places in turn (128 bytes of junk
+/// each, `d00.dwg` to `d63.dwg`); the undamaged bytes.
+fn damaged_copies(dir: &Path) -> Vec<u8> {
+    std::fs::create_dir_all(dir).unwrap();
+    let bytes = plan_bytes(DxfVersion::AC1018);
+    let step = bytes.len() / 64;
+    for k in 0..64 {
+        let mut damaged = bytes.clone();
+        let at = k * step;
+        for (i, b) in damaged[at..at + 128].iter_mut().enumerate() {
+            *b = (i as u8).wrapping_mul(37) ^ 0xA5;
+        }
+        std::fs::write(dir.join(format!("d{k:02}.dwg")), damaged).unwrap();
+    }
+    bytes
+}
+
+/// Damaged copies the failsafe reader opens with problems (a warning), alone in `dir`.
+fn repaired_copies(dir: &Path, scratch: &Path) -> Vec<PathBuf> {
+    let sweep = scratch.join("sweep");
+    damaged_copies(&sweep);
+    let script = scratch.join("sweep.scr");
+    std::fs::write(&script, COUNT_SCRIPT).unwrap();
+    let out = scratch.join("sweep-out");
+    let run = cli(&[
+        "batch",
+        s(&sweep),
+        "--script",
+        s(&script),
+        "--out",
+        s(&out),
+        "--json",
+    ]);
+    let v = json(&stdout(&run));
+    std::fs::create_dir_all(dir).unwrap();
+    let copies: Vec<PathBuf> = v["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["status"] == "warning")
+        .map(|f| {
+            let from = Path::new(f["path"].as_str().unwrap());
+            let to = dir.join(from.file_name().unwrap());
+            std::fs::copy(from, &to).unwrap();
+            to
+        })
+        .collect();
+    assert!(!copies.is_empty(), "some damaged copies open with problems");
+    copies
 }
 
 #[test]
@@ -493,17 +595,7 @@ fn batch_reports_damaged_drawings_without_stopping() {
     // line of the report and the batch goes on.
     let dir = tempfile::tempdir().unwrap();
     let plans = dir.path().join("plans");
-    std::fs::create_dir_all(&plans).unwrap();
-    let bytes = plan_bytes(DxfVersion::AC1018);
-    let step = bytes.len() / 64;
-    for k in 0..64 {
-        let mut damaged = bytes.clone();
-        let at = k * step;
-        for (i, b) in damaged[at..at + 128].iter_mut().enumerate() {
-            *b = (i as u8).wrapping_mul(37) ^ 0xA5;
-        }
-        std::fs::write(plans.join(format!("d{k:02}.dwg")), damaged).unwrap();
-    }
+    let bytes = damaged_copies(&plans);
     let mut junk = bytes.clone();
     junk[..6].copy_from_slice(b"JUNK!!");
     std::fs::write(plans.join("junk.dwg"), junk).unwrap();
@@ -536,11 +628,9 @@ fn batch_reports_damaged_drawings_without_stopping() {
     assert!(!warned.is_empty(), "some copies open with problems");
     for f in &warned {
         assert!(f["problems"].as_u64().unwrap() > 0);
-        let name = Path::new(f["path"].as_str().unwrap()).file_stem().unwrap();
-        assert!(
-            out.join(name).with_extension("xlsx").exists(),
-            "the script ran on {f}"
-        );
+        let name = Path::new(f["path"].as_str().unwrap()).file_name().unwrap();
+        let xlsx = out.join(format!("{}.xlsx", name.to_string_lossy()));
+        assert!(xlsx.exists(), "the script ran on {f}");
     }
     let crashed = files
         .iter()
@@ -585,8 +675,8 @@ fn batch_runs_a_sheet_sets_drawings_and_refuses_a_bad_script_up_front() {
     assert!(lines[1].contains("a.dwg ok "), "{text}");
     assert!(lines[2].contains("gone.dwg error "), "{text}");
     // Without --out the workbooks go to the script's folder.
-    assert!(dir.path().join("a.xlsx").exists() && dir.path().join("b.xlsx").exists());
-    assert!(!dir.path().join("c.xlsx").exists());
+    assert!(dir.path().join("a.dwg.xlsx").exists() && dir.path().join("b.dwg.xlsx").exists());
+    assert!(!dir.path().join("c.dwg.xlsx").exists());
 
     // A bad script is refused before any drawing is touched.
     std::fs::write(&script, "COUNT DOOR\nEXPORT {name}.xlsx\nBOGUS\n").unwrap();
@@ -611,4 +701,198 @@ fn batch_runs_a_sheet_sets_drawings_and_refuses_a_bad_script_up_front() {
     std::fs::create_dir_all(&empty).unwrap();
     let err = failed(cli(&["batch", s(&empty), "--script", s(&script)]));
     assert!(err.contains("no drawings"), "{err}");
+}
+
+/// A lock beside `drawing` from a process of this computer that has ended: Qiyas crashed.
+fn dead_lock(drawing: &Path) {
+    assert!(qiyas_core::take_lock(drawing).unwrap());
+    let mut lock = qiyas_core::read_lock(drawing).unwrap();
+    let mut child = Command::new("true").spawn().unwrap();
+    lock.pid = child.id();
+    child.wait().unwrap();
+    std::fs::write(
+        qiyas_core::lock_path(drawing),
+        serde_json::to_vec(&lock).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        qiyas_core::read_lock(drawing).unwrap().status(),
+        qiyas_core::LockStatus::Dead
+    );
+}
+
+/// The app's autosave and its project beside `drawing` (work newer than the file).
+fn autosave(drawing: &Path) -> [PathBuf; 2] {
+    let sv = qiyas_core::autosave_path(drawing);
+    let mut project = sv.clone().into_os_string();
+    project.push(".qiyas");
+    std::fs::write(&sv, b"newer work").unwrap();
+    std::fs::write(&project, b"{}").unwrap();
+    [sv, PathBuf::from(project)]
+}
+
+#[test]
+fn the_apps_autosaves_and_locks_survive_every_headless_save() {
+    let dir = tempfile::tempdir().unwrap();
+    let dwg = write_plan(dir.path(), "plan.dwg");
+    let dxf = dir.path().join("plan.dxf");
+    let copy = dir.path().join("copy.dwg");
+    let mut kept: Vec<PathBuf> = [&dwg, &dxf, &copy]
+        .into_iter()
+        .flat_map(|d| autosave(d))
+        .collect();
+    dead_lock(&dwg);
+    kept.push(qiyas_core::lock_path(&dwg));
+
+    ok(cli(&["convert", s(&dwg), s(&dxf)]));
+    let script = dir.path().join("save.scr");
+    std::fs::write(&script, "COUNT DOOR\nSAVE\nSAVEAS copy.dwg\n").unwrap();
+    ok(cli(&["run", s(&script), s(&dwg)]));
+    std::fs::write(&script, "COUNT DOOR\nSAVE\n").unwrap();
+    let text = ok(cli(&["batch", s(dir.path()), "--script", s(&script)]));
+    assert!(
+        text.ends_with("3 drawings: 3 ok, 0 with warnings, 0 failed\n"),
+        "{text}"
+    );
+    assert!(dir.path().join("plan.dwg.bak").exists() && dir.path().join("copy.dwg.bak").exists());
+    for path in kept {
+        assert!(path.exists(), "{} is the app's: left alone", path.display());
+    }
+}
+
+#[test]
+fn batch_refuses_outputs_that_collide_before_running_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let plans = dir.path().join("plans");
+    std::fs::create_dir_all(&plans).unwrap();
+    let dwg = write_plan(&plans, "plan.dwg");
+    ok(cli(&["convert", s(&dwg), s(&plans.join("plan.dxf"))]));
+    write_plan(&plans, "other.dwg");
+    let script = dir.path().join("x.scr");
+    let out = dir.path().join("out");
+    let batch = |text: &str| {
+        std::fs::write(&script, text).unwrap();
+        cli(&[
+            "batch",
+            s(&plans),
+            "--script",
+            s(&script),
+            "--out",
+            s(&out),
+            "--jobs",
+            "2",
+        ])
+    };
+
+    // plan.dwg and plan.dxf would both write out/plan.xlsx: both refused, the others run.
+    let run = batch("COUNT DOOR\nEXPORT {name}.xlsx\n");
+    let text = stdout(&run);
+    assert_eq!(failed(run), "qiyas-cli: 2 of 3 drawings failed");
+    let lines: Vec<&str> = text.lines().collect();
+    assert!(lines[0].contains("other.dwg ok "), "{text}");
+    for (line, other) in [(lines[1], "plan.dxf"), (lines[2], "plan.dwg")] {
+        assert!(line.contains(" error output "), "{line}");
+        assert!(
+            line.contains("plan.xlsx collides with ") && line.ends_with(other),
+            "{line}"
+        );
+    }
+    assert!(!out.join("plan.xlsx").exists(), "neither ran");
+    assert!(out.join("other.xlsx").exists());
+
+    // One workbook for every drawing: all refused, nothing written.
+    let run = batch("COUNT DOOR\nEXPORT summary.xlsx\n");
+    let text = stdout(&run);
+    assert_eq!(failed(run), "qiyas-cli: 3 of 3 drawings failed");
+    assert_eq!(text.matches("collides with").count(), 3, "{text}");
+    assert!(!out.join("summary.xlsx").exists());
+
+    // The default export name keeps the extension: no collision.
+    let run = batch("COUNT DOOR\nEXPORT\n");
+    ok(run);
+    for name in ["plan.dwg.xlsx", "plan.dxf.xlsx", "other.dwg.xlsx"] {
+        assert_eq!(rows(&out.join(name)).len(), 1, "{name}");
+    }
+}
+
+#[test]
+fn drawings_opened_with_problems_warn_with_exit_2_and_are_not_saved_over() {
+    let dir = tempfile::tempdir().unwrap();
+    let warn = dir.path().join("warn");
+    let copies = repaired_copies(&warn, dir.path());
+    let n = copies.len();
+    let script = dir.path().join("count.scr");
+    std::fs::write(&script, COUNT_SCRIPT).unwrap();
+    let out = dir.path().join("out");
+
+    // Each is a warning with its counts; warnings only: exit 2, one line on stderr.
+    let run = cli(&["batch", s(&warn), "--script", s(&script), "--out", s(&out)]);
+    let text = stdout(&run);
+    let err = warned(run);
+    assert_eq!(
+        err,
+        format!("qiyas-cli: {n} of {n} drawings opened with problems: check their counts")
+    );
+    for line in text.lines().take(n) {
+        assert!(
+            line.contains(" warning (") && line.contains("reading it) "),
+            "{line}"
+        );
+        assert!(line.contains("DOOR="), "with its counts: {line}");
+    }
+    // --quiet still prints the summary.
+    let run = cli(&[
+        "batch",
+        s(&warn),
+        "--script",
+        s(&script),
+        "--out",
+        s(&out),
+        "--quiet",
+    ]);
+    assert_eq!(
+        stdout(&run),
+        format!("{n} drawings: 0 ok, {n} with warnings, 0 failed\n")
+    );
+    warned(run);
+    // The single-drawing commands warn the same way.
+    let one = &copies[0];
+    assert!(warned(cli(&["run", s(&script), s(one)])).contains("opened with"));
+    let err = warned(cli(&["takeoff", s(one), "--count", "DOOR"]));
+    assert!(err.contains("opened with"), "{err}");
+    let err = warned(cli(&["convert", s(one), s(&dir.path().join("fixed.dxf"))]));
+    assert!(err.contains("opened with"), "{err}");
+
+    // SAVE would put what the reader made of each over the original and its .bak: refused.
+    let before: Vec<Vec<u8>> = copies.iter().map(|c| std::fs::read(c).unwrap()).collect();
+    std::fs::write(&script, "COUNT DOOR\nSAVE\n").unwrap();
+    let run = cli(&["batch", s(&warn), "--script", s(&script)]);
+    let text = stdout(&run);
+    assert_eq!(
+        failed(run),
+        format!("qiyas-cli: {n} of {n} drawings failed")
+    );
+    assert_eq!(
+        text.matches("line 2: the drawing was repaired on open; use SAVEAS")
+            .count(),
+        n,
+        "{text}"
+    );
+    for (copy, bytes) in copies.iter().zip(&before) {
+        assert_eq!(&std::fs::read(copy).unwrap(), bytes, "{}", copy.display());
+        assert!(!Path::new(&format!("{}.bak", copy.display())).exists());
+    }
+    // Unless asked for.
+    let run = cli(&[
+        "batch",
+        s(&warn),
+        "--script",
+        s(&script),
+        "--allow-repaired-save",
+    ]);
+    let text = stdout(&run);
+    assert!(!text.contains("repaired on open"), "{text}");
+    assert!(copies
+        .iter()
+        .any(|c| Path::new(&format!("{}.bak", c.display())).exists()));
 }
