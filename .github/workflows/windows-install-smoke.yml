@@ -1,0 +1,102 @@
+# Throwaway check on this branch only: installs the published Windows installer on a clean
+# GitHub Windows machine, starts Qiyas, takes screenshots, checks the update feed, uninstalls.
+name: Windows install smoke
+on:
+  push:
+    branches: [test/windows-install-smoke]
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      BASE: https://github.com/kareem-sf/qiyas/releases/download/v0.0.1
+      FEED: https://github.com/kareem-sf/qiyas/releases/latest/download/latest.json
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Download the published installer
+        run: |
+          New-Item -ItemType Directory out | Out-Null
+          curl.exe -fsSL -o setup.exe "$env:BASE/Qiyas_0.0.1_x64-setup.exe"
+          curl.exe -fsSL -o setup.exe.sig "$env:BASE/Qiyas_0.0.1_x64-setup.exe.sig"
+          curl.exe -fsSL -o latest.json "$env:FEED"
+          "size=$((Get-Item setup.exe).Length) sha256=$((Get-FileHash setup.exe -Algorithm SHA256).Hash)" | Tee-Object out/installer.txt
+          Get-AuthenticodeSignature setup.exe | Format-List Status, StatusMessage | Out-String | Tee-Object -Append out/installer.txt
+      - name: Update feed points at this installer
+        run: |
+          $feed = Get-Content latest.json -Raw | ConvertFrom-Json
+          "feed version: $($feed.version)"
+          $w = $feed.platforms.'windows-x86_64'
+          if (-not $w) { throw "no windows-x86_64 entry in latest.json" }
+          "feed url: $($w.url)"
+          curl.exe -fsSL -H "Accept: application/octet-stream" -o fromfeed.exe $w.url
+          $a = (Get-FileHash setup.exe -Algorithm SHA256).Hash; $b = (Get-FileHash fromfeed.exe -Algorithm SHA256).Hash
+          if ($a -ne $b) { throw "the feed's Windows file differs from the published setup.exe" }
+          $sig = (Get-Content setup.exe.sig -Raw).Trim()
+          if ($w.signature.Trim() -ne $sig) { throw "the feed's signature differs from the .sig asset" }
+          "feed ok: same file, same signature" | Tee-Object out/feed.txt
+      - name: Silent install
+        run: |
+          $p = Start-Process -FilePath .\setup.exe -ArgumentList '/S' -Wait -PassThru
+          "installer exit code: $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) { throw "installer failed" }
+          $keys = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+          $entry = Get-ItemProperty $keys -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like 'Qiyas*' } | Select-Object -First 1
+          if (-not $entry) { throw "Qiyas is not in Add/Remove Programs" }
+          $entry | Format-List DisplayName, DisplayVersion, Publisher, InstallLocation, UninstallString | Out-String | Tee-Object out/install.txt
+          $dir = $entry.InstallLocation.Trim('"')
+          Get-ChildItem $dir -Recurse -File | Select-Object @{n='file';e={$_.FullName.Substring($dir.Length)}}, Length | Format-Table -AutoSize | Out-String -Width 200 | Tee-Object -Append out/install.txt
+          $exe = Get-ChildItem $dir -Filter *.exe | Where-Object { $_.Name -notlike 'unins*' -and $_.Name -notlike '*mcp*' -and $_.Name -notlike '*cli*' } | Select-Object -First 1
+          if (-not $exe) { throw "no app exe in $dir" }
+          "APP_EXE=$($exe.FullName)" >> $env:GITHUB_ENV
+          "APP_DIR=$dir" >> $env:GITHUB_ENV
+          "UNINSTALL=$($entry.UninstallString)" >> $env:GITHUB_ENV
+          "shortcuts:"; Get-ChildItem "$env:APPDATA\Microsoft\Windows\Start Menu\Programs","$env:ProgramData\Microsoft\Windows\Start Menu\Programs","$env:USERPROFILE\Desktop","$env:PUBLIC\Desktop" -Recurse -Filter 'Qiyas*' -ErrorAction SilentlyContinue | ForEach-Object FullName
+      - name: Start Qiyas, then open the sample drawing
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          function Shot($name) {
+            $b = [System.Windows.Forms.SystemInformation]::VirtualScreen
+            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($b.Left, $b.Top, 0, 0, $bmp.Size)
+            $bmp.Save("out/$name.png"); $g.Dispose(); $bmp.Dispose()
+          }
+          function Run($label, $appArgs) {
+            if ($appArgs) { $p = Start-Process -FilePath $env:APP_EXE -ArgumentList $appArgs -PassThru } else { $p = Start-Process -FilePath $env:APP_EXE -PassThru }
+            Start-Sleep -Seconds 40
+            $p.Refresh()
+            try { Shot $label } catch { "screenshot failed: $_" }
+            if ($p.HasExited) { throw "$label: Qiyas exited by itself with code $($p.ExitCode)" }
+            $line = "$label: running after 40 s, window title '$($p.MainWindowTitle)', memory $([int]($p.WorkingSet64/1MB)) MB, webview processes $(@(Get-Process msedgewebview2 -ErrorAction SilentlyContinue).Count)"
+            $line | Tee-Object -Append out/run.txt
+            if (-not $p.MainWindowTitle) { throw "$label: Qiyas has no window" }
+            Stop-Process -Id $p.Id -Force; Start-Sleep -Seconds 3
+            Get-Process msedgewebview2 -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          }
+          Run 'start' $null
+          $dwg = (Resolve-Path samples\test-plan.dwg).Path
+          Run 'open-drawing' "`"$dwg`""
+      - name: App logs and crash reports
+        if: always()
+        run: |
+          Get-ChildItem "$env:APPDATA\com.qsmind.qiyas","$env:LOCALAPPDATA\com.qsmind.qiyas" -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in '.log','.json','.txt' -and $_.Length -lt 200kb } | ForEach-Object { "--- $($_.FullName)"; Get-Content $_.FullName -TotalCount 60 } | Out-String | Tee-Object out/app-files.txt
+          Get-WinEvent -FilterHashtable @{LogName='Application'; Level=2; StartTime=(Get-Date).AddMinutes(-15)} -ErrorAction SilentlyContinue | Where-Object { $_.Message -match 'iyas' } | Format-List TimeCreated, ProviderName, Message | Out-String | Tee-Object out/crashes.txt
+      - name: Silent uninstall
+        run: |
+          $u = $env:UNINSTALL.Trim('"')
+          Start-Process -FilePath $u -ArgumentList '/S' -Wait
+          Start-Sleep -Seconds 10
+          if (Test-Path $env:APP_EXE) { throw "the app exe is still there after uninstall" }
+          "uninstall ok" | Tee-Object out/uninstall.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-install-smoke
+          path: out/
