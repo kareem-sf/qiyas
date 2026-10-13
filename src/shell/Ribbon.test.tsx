@@ -533,27 +533,31 @@ test("in Arabic the ribbon reads right to left: the same order from the start ed
 // The rule `selector { … }` at the top level of theme.css.
 const rule = (selector: string) => css.match(new RegExp(`\\n${selector.replace(/[.+]/g, "\\$&")} \\{([^}]*)\\}`))![1];
 
-test("the tabs' row scrolls sideways and keeps room for the preferences instead of lying under them", () => {
+test("the tabs' row scrolls sideways and stops short of the preferences instead of lying under them", () => {
   // The quick-access buttons never wrap and never shrink.
   expect(rule(".quick-access button")).toContain("white-space: nowrap");
   expect(rule(".ribbon-tabs > \\*")).toContain("flex-shrink: 0");
-  // The row scrolls (thin bar) and its end padding is the overlay's width, from one variable the
-  // overlay reads too, so they stay in step.
+  // The row scrolls (thin bar) and its end margin is the overlay's width, from one variable the
+  // overlay reads too, so they stay in step. A margin, not padding: padding is only reached at
+  // the end of the scroll, so the tabs lay under the overlay until then.
   const row = rule(".ribbon-tabs");
   expect(row).toContain("overflow-x: auto");
   expect(row).toContain("scrollbar-width: thin");
-  expect(row).toMatch(/padding-inline-end: calc\(var\(--prefs-width\) \+ \d+px\)/);
+  expect(row).toContain("margin-inline-end: var(--prefs-width)");
+  expect(row).not.toContain("padding-inline-end");
+  // The reserve is at least the overlay's real width: about 335px without its words, 460px with.
+  expect(Number(css.match(/:root \{\s*--prefs-width: (\d+)px/)![1])).toBeGreaterThanOrEqual(460);
   expect(rule(".prefs")).toContain("min-width: var(--prefs-width)");
   expect(css).toMatch(/\.ribbon-tabs::-webkit-scrollbar \{\s*height: 6px/);
-  // Both breakpoints moved up by the quick-access bar: words dropped under 1420px (and the
-  // variable shrinks with them), the prefs on their own row under 1020px.
-  const narrow = css.match(/@media \(max-width: 1420px\) \{([\s\S]*?)\n\}/)![1];
-  expect(narrow).toMatch(/--prefs-width: 2\d\dpx/);
+  // Words dropped under 1500px (and the variable shrinks with them), the prefs on their own row
+  // under 1020px.
+  const narrow = css.match(/@media \(max-width: 1500px\) \{([\s\S]*?)\n\}/)![1];
+  expect(Number(narrow.match(/--prefs-width: (\d+)px/)![1])).toBeGreaterThanOrEqual(335);
   expect(narrow).toContain("display: none");
   const stacked = css.match(/@media \(max-width: 1020px\) \{([\s\S]*?)\n\}/)![1];
   expect(stacked).toContain("position: static");
-  expect(stacked).toMatch(/\.ribbon-tabs \{\s*padding-inline-end: \d+px/);
-  expect(css).not.toMatch(/max-width: (1100|700)px/);
+  expect(stacked).toMatch(/\.ribbon-tabs \{\s*margin-inline-end: 0/);
+  expect(css).not.toMatch(/max-width: (1100|700|1420)px/);
   // Logical sides only, so Arabic mirrors the row and the overlay.
   for (const r of [row, rule(".prefs"), stacked]) expect(r).not.toMatch(/\b(left|right)\b/);
 });

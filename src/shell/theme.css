@@ -144,19 +144,19 @@ button[aria-pressed="true"] {
 }
 
 /* Ribbon: the tabs' row (app name, quick-access bar, tabs), then the panel of the tab chosen.
-   The preferences float over the row's end, so the row keeps that much free (`--prefs-width`,
-   the overlay's width with its words, narrower without) and scrolls sideways before the tabs
-   would slide under them. Its drop-down menus are placed `fixed`, so the scrolling does not
-   clip them. */
+   The preferences float over the header's end, so the row stops that far short of it (a margin
+   of `--prefs-width`, the overlay's width with its words, narrower without) and scrolls
+   sideways inside what is left: a tab can never lie under them. Its drop-down menus are placed
+   `fixed`, so the scrolling does not clip them. */
 :root {
-  --prefs-width: 340px;
+  --prefs-width: 470px;
 }
 .ribbon-tabs {
   display: flex;
   align-items: center;
   gap: 2px;
   padding: 6px 10px 0;
-  padding-inline-end: calc(var(--prefs-width) + 10px);
+  margin-inline-end: var(--prefs-width);
   overflow-x: auto;
   scrollbar-width: thin;
 }
@@ -293,14 +293,16 @@ button[aria-pressed="true"] {
   color: var(--fg);
   padding: 2px 8px;
 }
-/* Narrow windows: the prefs sit over the ribbon tabs' row, which is about 320px longer than it
-   was with the quick-access bar (app name, bar and eight tabs: about 1,020px), so drop their
-   words (the groups keep their aria-labels) under 1420px, and give them a row of their own
-   under 1020px. A media query cannot read a variable: when the quick-access bar grows, move
-   both widths with it. */
-@media (max-width: 1420px) {
+/* Narrow windows: the prefs sit beside the ribbon tabs' row (app name, quick-access bar and
+   eight tabs: about 1,020px), so drop their words (the groups keep their aria-labels) under
+   1500px, where the row and the worded prefs no longer fit side by side, and give them a row of
+   their own under 1020px. `--prefs-width` is the overlay's real width (about 335px without its
+   words, measured on Windows 11 at 1024px, about 460px with them) and a little spare. A media
+   query cannot read a variable: when the quick-access bar or the prefs grow, move the widths
+   with them. */
+@media (max-width: 1500px) {
   :root {
-    --prefs-width: 210px;
+    --prefs-width: 345px;
   }
   .prefs [role="group"] span {
     display: none;
@@ -308,7 +310,7 @@ button[aria-pressed="true"] {
 }
 @media (max-width: 1020px) {
   .ribbon-tabs {
-    padding-inline-end: 10px;
+    margin-inline-end: 0;
   }
   .prefs {
     position: static;
