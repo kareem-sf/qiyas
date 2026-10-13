@@ -79,7 +79,7 @@
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNBMERGNTY1MjlCRThGOEQKUldTTmo3NHBaZlVOT2wvMkl2ZmsvOWNhL3V6ZHBFblpkdFlSRWUySW4za0F3dm5RclpDN24vUlMK",
-      "endpoints": ["https://github.com/kareem-sf/qiyas/releases/latest/download/latest.json"]
+      "endpoints": ["https://github.com/qs-mind/qiyas/releases/latest/download/latest.json"]
     }
   }
 }

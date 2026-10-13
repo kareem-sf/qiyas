@@ -1,6 +1,6 @@
 # Qiyas
 
-Qiyas (قياس) is a desktop measurement CAD for quantity surveyors, part of QS Mind. It opens DWG and DXF drawings, lets the QS measure and edit, and uses AI to build and check BOQs against the drawing. Public repo (`kareem-sf/qiyas`, Apache-2.0, `LICENSE`). Stack: Tauri 2, React, TypeScript, Vite, Rust.
+Qiyas (قياس) is a desktop measurement CAD for quantity surveyors, part of QS Mind. It opens DWG and DXF drawings, lets the QS measure and edit, and uses AI to build and check BOQs against the drawing. Public repo (`qs-mind/qiyas`, Apache-2.0, `LICENSE`). Stack: Tauri 2, React, TypeScript, Vite, Rust.
 
 ## Layout
 
@@ -999,7 +999,7 @@ their measurements are marked `mcp`).
   `linux-x86_64-deb`, `linux-x86_64-rpm`, `windows-x86_64-nsis`, `windows-x86_64-msi`,
   `darwin-aarch64-app`, `darwin-x86_64-app`). Its address is `plugins.updater.endpoints` in `tauri.conf.json` and the
   signing public key `plugins.updater.pubkey`. Both are set (the feed is the `latest.json` asset of the newest GitHub release,
-  `https://github.com/kareem-sf/qiyas/releases/latest/download/latest.json`); a
+  `https://github.com/qs-mind/qiyas/releases/latest/download/latest.json`); a
   `REPLACE-ME` placeholder in either (or a feed that is not `https://`) makes every check refused (`updates_not_configured`, and the
   About box says "Updates are not set up in this build yet"), never a silent failure.
 - About box: Check for updates, then Install and restart (download with its progress, signature
@@ -1028,13 +1028,13 @@ their measurements are marked `mcp`).
   tag ruleset lets only the repository admin create, move or delete `v*` tags). `prepare`
   refuses: versions that differ between the three files or from the tag, a tag whose commit is
   not on `origin/main`, a tag whose release is already published, a missing CHANGELOG section,
-  and (in `kareem-sf/qiyas`) missing signing secrets. Then it builds Linux (ubuntu-22.04:
+  and (in `qs-mind/qiyas`) missing signing secrets. Then it builds Linux (ubuntu-22.04:
   AppImage, deb, rpm), Windows (NSIS, MSI) and macOS (macos-latest: aarch64; macos-15-intel:
   x86_64, the Intel image after macos-13 was retired) with `tauri-apps/tauri-action`, signs them
   for the updater and uploads the bundles, their `.sig` files and `latest.json` (NSIS preferred
   for Windows) to a DRAFT release `Qiyas <version>`. The `feed` job checks `latest.json` has all
   seven platform keys, each signed, each url an asset of that draft: tauri-action v1 writes API
-  asset urls (`https://api.github.com/repos/kareem-sf/qiyas/releases/assets/<id>`), which the
+  asset urls (`https://api.github.com/repos/qs-mind/qiyas/releases/assets/<id>`), which the
   updater downloads with `Accept: application/octet-stream` (GitHub redirects to the file;
   unauthenticated, 60 requests an hour per IP address). Then a human reviews the draft on
   GitHub and clicks Publish: only a published release is what `releases/latest/download/latest.json`
@@ -1052,7 +1052,7 @@ their measurements are marked `mcp`).
   bundle:signed` (the password never typed or in shell history) adds `tauri.updater.conf.json`
   (`createUpdaterArtifacts`), so each bundle gets a `.sig` beside it. Then `scripts/release-feed.sh
   ["notes"]` writes `target/release/bundle/latest.json` from the `.sig` files (download address
-  `https://github.com/kareem-sf/qiyas/releases/download/v<version>/`). Publish a GitHub release
+  `https://github.com/qs-mind/qiyas/releases/download/v<version>/`). Publish a GitHub release
   tagged `v<version>` with the bundles, their `.sig` files and `latest.json` as assets
   (`gh release create v<version> target/release/bundle/{appimage,deb,rpm}/* target/release/bundle/latest.json`);
   the newest release must always carry a `latest.json`. Plain

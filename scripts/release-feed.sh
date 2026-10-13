@@ -3,7 +3,7 @@
 # (`pnpm bundle:signed` leaves a `.sig` beside each one). Usage:
 #   scripts/release-feed.sh [notes]
 # Releases live on GitHub: the bundles, their .sig files and latest.json are the assets of the
-# release tagged v<version> (https://github.com/kareem-sf/qiyas/releases/download/v<version>/<file>);
+# release tagged v<version> (https://github.com/qs-mind/qiyas/releases/download/v<version>/<file>);
 # the app reads the feed at .../releases/latest/download/latest.json (tauri.conf.json,
 # plugins.updater.endpoints), so the newest release must always carry a latest.json.
 set -euo pipefail
@@ -11,7 +11,7 @@ cd "$(dirname "$0")/.."
 version=$(python3 -c 'import json;print(json.load(open("crates/qiyas-desktop/tauri.conf.json"))["version"])')
 notes=${1:-"Qiyas $version"}
 bundle=target/release/bundle
-base="https://github.com/kareem-sf/qiyas/releases/download/v$version"
+base="https://github.com/qs-mind/qiyas/releases/download/v$version"
 python3 - "$version" "$notes" "$bundle" "$base" <<'PY'
 import glob, json, os, sys, datetime
 version, notes, bundle, base = sys.argv[1:]

@@ -13,7 +13,7 @@ from GitHub releases (the About button in the header, Check for updates).
 ## Reporting a vulnerability
 
 Please do not open a public issue. Report it privately through GitHub:
-[Security, Report a vulnerability](https://github.com/kareem-sf/qiyas/security/advisories/new).
+[Security, Report a vulnerability](https://github.com/qs-mind/qiyas/security/advisories/new).
 Say what is affected, how to reproduce it (a drawing or script that triggers it helps) and what
 an attacker could do with it.
 
