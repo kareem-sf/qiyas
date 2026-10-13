@@ -1,7 +1,7 @@
 # Qiyas (قياس)
 
-[![CI](https://github.com/kareem-sf/qiyas/actions/workflows/ci.yml/badge.svg)](https://github.com/kareem-sf/qiyas/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/kareem-sf/qiyas)](https://github.com/kareem-sf/qiyas/releases/latest)
+[![CI](https://github.com/qs-mind/qiyas/actions/workflows/ci.yml/badge.svg)](https://github.com/qs-mind/qiyas/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/qs-mind/qiyas)](https://github.com/qs-mind/qiyas/releases/latest)
 [![Licence: Apache-2.0](https://img.shields.io/badge/licence-Apache--2.0-blue)](LICENSE)
 
 Desktop measurement CAD for quantity surveyors, by [QS Mind](https://qsmind.app). Open DWG and
@@ -31,9 +31,9 @@ Coming with the next release.
 
 ## Install
 
-Download the newest release from [Releases](https://github.com/kareem-sf/qiyas/releases):
-AppImage, deb or rpm on Linux; from the next release on, also the Windows (NSIS, MSI) and macOS
-(Apple silicon, Intel) installers, built by the release workflow. Installed copies check that
+Download the newest release from [Releases](https://github.com/qs-mind/qiyas/releases):
+AppImage, deb or rpm on Linux, `setup.exe` or MSI on Windows, the `.dmg` on macOS (Apple silicon
+or Intel), all built by the release workflow. Installed copies check that
 page for updates (About, Check for updates). The installers are not code-signed yet, so Windows
 SmartScreen and macOS Gatekeeper warn on first open; on a Mac, if Qiyas is reported as
 "damaged", open it once from System Settings, Privacy & Security, Open Anyway (or run

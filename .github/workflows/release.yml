@@ -9,11 +9,11 @@
 #      and Intel), signs them for the in-app updater and uploads them, their .sig files and
 #      latest.json to a DRAFT release.
 #   3. A human reviews the draft on GitHub and clicks Publish. Only then does
-#      https://github.com/kareem-sf/qiyas/releases/latest/download/latest.json (the app's update
+#      https://github.com/qs-mind/qiyas/releases/latest/download/latest.json (the app's update
 #      feed) point at it.
 #
 # Signing uses the secrets TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD of the
-# environment `release`, which only v* tags can use. In kareem-sf/qiyas a tag without them fails;
+# environment `release`, which only v* tags can use. In qs-mind/qiyas a tag without them fails;
 # in a fork it builds unsigned bundles (no .sig, no latest.json) into a draft marked prerelease.
 #
 # Build a tag again (its release still a draft): run the workflow from the tag itself,
@@ -29,7 +29,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to build again, e.g. v0.0.2 (choose that tag in "Use workflow from"; its release must still be a draft). Empty: dry run.'
+        description: 'Tag to build again, e.g. v0.0.1 (choose that tag in "Use workflow from"; its release must still be a draft). Empty: dry run.'
         required: false
         default: ''
   pull_request:
@@ -122,7 +122,7 @@ jobs:
           signed=false
           if [[ -n "$tag" && "$HAS_KEY" == "true" && "$HAS_PASSWORD" == "true" ]]; then
             signed=true
-          elif [[ -n "$tag" && "$GITHUB_REPOSITORY" == "kareem-sf/qiyas" ]]; then
+          elif [[ -n "$tag" && "$GITHUB_REPOSITORY" == "qs-mind/qiyas" ]]; then
             # An unsigned release, once published, would be "latest" without a latest.json and
             # break every installed copy's update check.
             echo "::error::The signing secrets are missing from the environment 'release': add TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD (CLAUDE.md, Updates and installers), then build the tag again."

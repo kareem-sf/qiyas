@@ -110,7 +110,7 @@ Qiyas joins `brand/` as `brand/qiyas/`: mark, small mark, lockups in English ("Q
 
 ## Repo and workflow
 
-- New private repo `kareem-sf/qiyas`, cloned to `qiyas/` in this workspace. Added to `repos.txt` and the apps table in the workspace `CLAUDE.md`. Its own `CLAUDE.md` carries these rules.
+- New private repo `qs-mind/qiyas`, cloned to `qiyas/` in this workspace. Added to `repos.txt` and the apps table in the workspace `CLAUDE.md`. Its own `CLAUDE.md` carries these rules.
 - No CI. `scripts/check.sh` runs everything locally before any push. No push, no release, without the founder's local check and yes.
 - Tests: Rust unit tests per command and per comparison rule, on synthetic drawings written with `opencadcodec` (the way Quantix's `qx-dwg sample` does). Golden numbers for a set of synthetic take-offs. Vitest on pure TypeScript (viewport maths, panel state). Real customer drawings stay outside the repo in a local folder for manual checks.
 - Licences shipped: opencadcodec and opencadkernel (MPL-2.0, notices kept), pdfium (Apache-2.0), fonts (Instrument Sans OFL; Thmanyah never in the repo, loaded from the user's machine or bundled only in private builds under the licence).

@@ -14,7 +14,7 @@
 
 - Desktop only. No web build, no CI workflows. Local check is `scripts/check.sh`.
 - Window title and product name: `Qiyas`. Arabic name: `قياس`. Bundle identifier: `com.qsmind.qiyas`.
-- Repo `qiyas/` is its own git repo (private, `kareem-sf/qiyas`). Commit inside it. Never push without the founder's yes.
+- Repo `qiyas/` is its own git repo (private, `qs-mind/qiyas`). Commit inside it. Never push without the founder's yes.
 - Only MPL-2.0, Apache-2.0, MIT, BSD or OFL dependencies. No code copied from Open CAD Studio (GPL).
 - Thmanyah font files are never committed. `scripts/fonts.sh` copies them from `~/Downloads/Thmanyah-Font-Family/thmanyah typeface` into the git-ignored `src/fonts/thmanyah/`. Instrument Sans (OFL) is committed.
 - English text says "Qiyas" and "QS Mind"; Arabic text says "قياس" and "كيو إس مايند". Arabic uses Thmanyah Sans; headings use `font-feature-settings: "swsh"`.
@@ -78,7 +78,7 @@ Expected: a window titled "Qiyas" opens showing the text "Qiyas".
 
 - [ ] **Step 6: Register the app in the workspace**
 
-Append `qiyas https://github.com/kareem-sf/qiyas.git` to `repos.txt`. Add a row to the apps table in the workspace `CLAUDE.md`: `qiyas/` | Desktop measurement CAD: open DWG and DXF, measure and edit, AI builds and checks BOQs | Private | Tauri, React, Rust.
+Append `qiyas https://github.com/qs-mind/qiyas.git` to `repos.txt`. Add a row to the apps table in the workspace `CLAUDE.md`: `qiyas/` | Desktop measurement CAD: open DWG and DXF, measure and edit, AI builds and checks BOQs | Private | Tauri, React, Rust.
 
 - [ ] **Step 7: Commit (two repos)**
 

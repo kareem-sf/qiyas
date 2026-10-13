@@ -7,22 +7,6 @@ section below, so add the section before pushing the tag.
 
 ## [Unreleased]
 
-### Added
-
-- Continuous integration on GitHub: `scripts/check.sh` on Linux and a release build on Linux,
-  Windows and macOS for every pull request and push to `main`.
-- Releases from a pushed tag: installers for Linux (AppImage, deb, rpm), Windows (NSIS, MSI) and
-  macOS (Apple silicon and Intel), signed for the in-app updater, in a draft release with
-  `latest.json`.
-- Contributing guide, code of conduct, security policy, issue and pull request templates.
-
-### Fixed
-
-- In windows narrower than about 1,500 px the language and theme buttons no longer cover the
-  ribbon's last tabs (Manage, Output).
-- The crates and the package declare their licence, Apache-2.0; 0.0.1's installers said
-  "UNLICENSED" in their package metadata.
-
 ## [0.0.1] - 2026-10-12
 
 First public release.
@@ -42,7 +26,12 @@ First public release.
 - Mizan, the built-in AI assistant (Claude or any OpenAI-compatible service), and an MCP server
   for Claude Desktop and Claude Code.
 - English and Arabic.
-- Linux installers: AppImage, deb and rpm, each with a signature for the updater.
+- Installers for Linux (AppImage, deb, rpm), Windows (setup.exe, MSI) and macOS (Apple silicon
+  and Intel), each with a signature for the updater.
 
-[Unreleased]: https://github.com/kareem-sf/qiyas/compare/v0.0.1...HEAD
-[0.0.1]: https://github.com/kareem-sf/qiyas/releases/tag/v0.0.1
+Rebuilt on 2026-10-13 under the same version: the Windows and macOS installers were added, the
+language and theme buttons no longer cover the ribbon's last tabs in a narrow window, and the
+installers' metadata says Apache-2.0 (it said "UNLICENSED").
+
+[Unreleased]: https://github.com/qs-mind/qiyas/compare/v0.0.1...HEAD
+[0.0.1]: https://github.com/qs-mind/qiyas/releases/tag/v0.0.1
