@@ -73,10 +73,10 @@ jobs:
             Start-Sleep -Seconds 40
             $p.Refresh()
             try { Shot $label } catch { "screenshot failed: $_" }
-            if ($p.HasExited) { throw "$label: Qiyas exited by itself with code $($p.ExitCode)" }
-            $line = "$label: running after 40 s, window title '$($p.MainWindowTitle)', memory $([int]($p.WorkingSet64/1MB)) MB, webview processes $(@(Get-Process msedgewebview2 -ErrorAction SilentlyContinue).Count)"
+            if ($p.HasExited) { throw "${label}: Qiyas exited by itself with code $($p.ExitCode)" }
+            $line = "${label}: running after 40 s, window title '$($p.MainWindowTitle)', memory $([int]($p.WorkingSet64/1MB)) MB, webview processes $(@(Get-Process msedgewebview2 -ErrorAction SilentlyContinue).Count)"
             $line | Tee-Object -Append out/run.txt
-            if (-not $p.MainWindowTitle) { throw "$label: Qiyas has no window" }
+            if (-not $p.MainWindowTitle) { throw "${label}: Qiyas has no window" }
             Stop-Process -Id $p.Id -Force; Start-Sleep -Seconds 3
             Get-Process msedgewebview2 -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
           }
