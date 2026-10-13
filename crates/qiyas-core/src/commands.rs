@@ -299,6 +299,17 @@ pub enum Command {
         #[serde(default)]
         whole_word: bool,
     },
+    /// A revision cloud around the polygon `points` with the comment `text` beside it, both on
+    /// the layer COMMENTS (see `crate::comment`); `arc_len` None works the arcs out from the
+    /// outline. One undo step, `Outcome::Added` (the cloud, then its label).
+    Comment {
+        points: Vec<[f64; 2]>,
+        text: String,
+        #[serde(default)]
+        arc_len: Option<f64>,
+    },
+    /// The comment clouds of every sheet: `Outcome::Comments`. Not an undo step.
+    ListComments,
     /// Adds the dimensions `DimSpec` describes on the current layer in the current dimension
     /// style, each with its `*D` block: one undo step, `Outcome::Added` (see `crate::dimension`).
     Dimension(DimSpec),
@@ -742,7 +753,8 @@ impl Command {
             | Command::Ucs { .. }
             | Command::UcsObject { .. }
             | Command::ListConstraints
-            | Command::ListParameters => None,
+            | Command::ListParameters
+            | Command::ListComments => None,
             Command::SetBoq { .. } | Command::SetBoqTolerance { .. } => Some(Part::Boq),
             Command::SetConflicts { .. } | Command::ResolveConflict { .. } => Some(Part::Conflicts),
             // Entities only.
@@ -757,6 +769,8 @@ impl Command {
             // A dimension's block, its list of entities, the text mark's application, the
             // header's annotation scale and dimension style.
             Command::FindReplace { .. }
+            // The comment layer and the comment and text marks' applications.
+            | Command::Comment { .. }
             | Command::Dimension(_)
             | Command::DimEdit { .. }
             | Command::DimBreak { .. }
@@ -975,6 +989,10 @@ pub enum Outcome {
     /// The constraints added (or removed), by id.
     Constrained {
         ids: Vec<u32>,
+    },
+    /// The comment clouds of every sheet.
+    Comments {
+        comments: Vec<crate::CommentInfo>,
     },
     /// The constraints of the sheet on screen.
     Constraints {
@@ -1310,6 +1328,19 @@ impl Session {
                 let finder = Finder::new(&find, match_case, whole_word)?;
                 let (count, matches) = self.find_text(&finder, scope);
                 return Ok(Outcome::Found { count, matches });
+            }
+            Command::Comment {
+                points,
+                text,
+                arc_len,
+            } => {
+                let handles = self.add_comment(points, &text, arc_len)?;
+                return Ok(Outcome::Added { handles });
+            }
+            Command::ListComments => {
+                return Ok(Outcome::Comments {
+                    comments: self.list_comments(),
+                });
             }
             Command::Dimension(spec) => {
                 let handles = self.add_dimensions(spec)?;

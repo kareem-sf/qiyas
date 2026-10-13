@@ -529,6 +529,18 @@ export function Dialogs({
           }}
         />
       )}
+      {dimText?.kind === "comment" && (
+        <TextDialog
+          heading="dim.text.comment"
+          value=""
+          multiline
+          onSubmit={(d) => runText({ type: "comment", points: dimText.points, text: d.value })}
+          onClose={() => {
+            setDimText(null);
+            focusDrawing();
+          }}
+        />
+      )}
       {newTableAt && (
         <NewTableDialog
           textHeight={currentTextHeight}

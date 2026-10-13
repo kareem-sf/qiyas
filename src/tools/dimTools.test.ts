@@ -4,6 +4,7 @@ import type { Point } from "../viewport/camera";
 import {
   dimOptions,
   dimPicks,
+  dimPreview,
   dimReducer,
   initialDimState,
   takesDimNumber,
@@ -141,5 +142,23 @@ describe("leaders and tolerances", () => {
     expect(feed(initialDimState("tolerance"), [pt([1, 2])]).requests).toEqual([{ kind: "tolerance", at: [1, 2] }]);
     expect(toleranceFrame("p", "0.5", ["A"])).toBe("{\\Fgdt;p}%%v0.5%%v%%vA%%v%%v");
     expect(toleranceFrame("", "0.1", [])).toBe("%%v0.1%%v%%v%%v%%v");
+  });
+});
+
+describe("comment cloud", () => {
+  it("asks for the comment once Enter closes a ring of 3 corners or more", () => {
+    const early = feed(initialDimState("commentCloud"), [pt([0, 0]), pt([4, 0]), finish]);
+    expect(early.requests).toEqual([]);
+    expect(early.s.hint).toBe("dim.prompt.comment1");
+    const { requests, s } = feed(initialDimState("commentCloud"), [pt([0, 0]), pt([4, 0]), pt([4, 3]), finish]);
+    expect(requests).toEqual([{ kind: "comment", points: [[0, 0], [4, 0], [4, 3]] }]);
+    // Ready for the next one.
+    expect(s.points).toEqual([]);
+    expect(s.hint).toBe("dim.prompt.comment0");
+  });
+
+  it("previews the ring closed back to its first corner", () => {
+    const { s } = feed(initialDimState("commentCloud"), [pt([0, 0]), pt([4, 0])]);
+    expect(Array.from(dimPreview(s, [4, 3]))).toEqual([0, 0, 4, 0, 4, 0, 4, 3, 4, 3, 0, 0]);
   });
 });

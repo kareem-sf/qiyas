@@ -20,7 +20,7 @@ qiyas/
     qiyas-boq       Excel in and out (calamine to read, rust_xlsxwriter to write)
     qiyas-pdf       PDF import as vectors and text, PDF underlay pages
     qiyas-plot      plot a sheet to PDF, plot styles (CTB/STB), print through the OS
-    qiyas-ai        the 32 AI tools over the command bus, the agent loop, the Claude and
+    qiyas-ai        the 36 AI tools over the command bus, the agent loop, the Claude and
                     OpenAI-compatible clients, the MCP server
     qiyas-mcp       the stdio bridge Claude Desktop and Claude Code start (bundled beside the app)
     qiyas-cli       the command line without a window: convert, run a script, take off, batch
@@ -288,7 +288,22 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
   text below the line; `entity_info` shows `%%c`/`%%d` as their signs.
 - Annotate tab (Dimensions, Leaders, Dimension style…); command line DLI, DAL, DAN, DRA, DDI, DAR,
   DOR, DBA, DCO, QDIM, DED (T text, F flip, M move), DIMBREAK, DIMSPACE, DIMJOGLINE, LE, MLD, TOL,
-  D (DIMSTYLE). Not AI tools yet.
+  D (DIMSTYLE). Mizan draws them too: `add_dimension` (every `DimSpec` kind, handles for the
+  picked entities) and `set_annotation_scale`.
+
+## Comment clouds
+
+- `qiyas-core/src/comment.rs`: `Command::Comment { points, text, arc_len }` draws a revision cloud
+  round the polygon and an MText label beside its top right corner (2.5 mm at the annotation
+  scale, at least an 80th of the sheet), both on layer `COMMENTS` (red, made when missing,
+  ByLayer), one undo step. Both carry `QIYAS_COMMENT` xdata: the cloud `1`, an id and the text as
+  typed; the label `2` and the same id (a string, so a copy finds its own label).
+  `ListComments` (`Outcome::Comments`) lists every sheet's clouds with the label's text (edited
+  like any MText), else the cloud's.
+- Window: COMMENT (`commentCloud` in `dimTools.ts`: click the corners, Enter, type the comment);
+  the side panel's Comments tab (`useComments`, `CommentsPanel`) lists them and shows one on a
+  click. No ribbon button yet (the ribbon layout is being redone). Mizan: `add_comment`,
+  `list_comments`.
 
 ## Parametric
 
