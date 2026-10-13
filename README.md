@@ -32,8 +32,8 @@ Coming with the next release.
 ## Install
 
 Download the newest release from [Releases](https://github.com/qs-mind/qiyas/releases):
-AppImage, deb or rpm on Linux; from the next release on, also the Windows (NSIS, MSI) and macOS
-(Apple silicon, Intel) installers, built by the release workflow. Installed copies check that
+AppImage, deb or rpm on Linux, `setup.exe` or MSI on Windows, the `.dmg` on macOS (Apple silicon
+or Intel), all built by the release workflow. Installed copies check that
 page for updates (About, Check for updates). The installers are not code-signed yet, so Windows
 SmartScreen and macOS Gatekeeper warn on first open; on a Mac, if Qiyas is reported as
 "damaged", open it once from System Settings, Privacy & Security, Open Anyway (or run
