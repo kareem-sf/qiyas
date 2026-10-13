@@ -641,10 +641,11 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
   recents arrow), Save, Save as, Undo and Redo are not in the data: they are the quick-access bar
   on the tabs' row after the app name (`QUICK_ACCESS` in `ribbonLayout.ts`; logical sides, so
   Arabic mirrors it), always shown, buttons `nowrap`, a `role="toolbar"` with one tab stop and
-  arrow/Home/End movement (`useToolbarRoving`). The tabs' row scrolls sideways and keeps
-  `--prefs-width` free at its end for the preferences overlay (`theme.css`; the same variable
-  sizes the overlay); the prefs drop their words under 1420 px and take their own row under
-  1020 px (move both with the quick-access bar's width). The Open recents menu is placed on the
+  arrow/Home/End movement (`useToolbarRoving`). The tabs' row scrolls sideways and stops
+  `--prefs-width` short of the header's end (a margin, so no tab lies under the preferences
+  overlay; `theme.css`; the variable is the overlay's real width, 470 px with its words, 345 px
+  without); the prefs drop their words under 1500 px and take their own row under
+  1020 px (move the widths with the quick-access bar's and the prefs' width). The Open recents menu is placed on the
   window like Views. The dialogs (Options, Customize, Aliases) are the window's.
 - The window's half (`src/app/useOptions.ts`, read at start and after a dialog saves; Manage tab,
   Drawing group Audit…, Purge… and Recover…, Setup group Options…, Customize…, Aliases…): PURGE (`PU`)

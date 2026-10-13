@@ -18,6 +18,8 @@ section below, so add the section before pushing the tag.
 
 ### Fixed
 
+- In windows narrower than about 1,500 px the language and theme buttons no longer cover the
+  ribbon's last tabs (Manage, Output).
 - The crates and the package declare their licence, Apache-2.0; 0.0.1's installers said
   "UNLICENSED" in their package metadata.
 
