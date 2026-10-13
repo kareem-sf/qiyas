@@ -14,8 +14,8 @@ jobs:
       run:
         shell: pwsh
     env:
-      BASE: https://github.com/kareem-sf/qiyas/releases/download/v0.0.1
-      FEED: https://github.com/kareem-sf/qiyas/releases/latest/download/latest.json
+      BASE: https://github.com/qs-mind/qiyas/releases/download/v0.0.1
+      FEED: https://github.com/qs-mind/qiyas/releases/latest/download/latest.json
     steps:
       - uses: actions/checkout@v4
         with:
