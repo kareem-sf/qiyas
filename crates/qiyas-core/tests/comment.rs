@@ -148,3 +148,69 @@ fn comments_survive_a_save_in_dwg_and_dxf() {
         assert!(comments[0].label.is_some(), "{ext}");
     }
 }
+
+#[test]
+fn a_copied_comment_keeps_its_own_label() {
+    let (_dir, mut s) = session("dxf");
+    let handles = comment(&mut s, "Original");
+    let targets = handles
+        .iter()
+        .map(|&handle| Target {
+            handle,
+            chain: Vec::new(),
+        })
+        .collect();
+    let text = match s
+        .run(Command::CopyToClipboard {
+            targets,
+            base: Some([0.0, 0.0]),
+        })
+        .unwrap()
+    {
+        Outcome::Clipboard { text, .. } => text,
+        other => panic!("{other:?}"),
+    };
+    let copy = match s
+        .run(Command::PasteFromClipboard {
+            at: [10000.0, 0.0],
+            text: Some(text),
+            as_block: false,
+            height: None,
+        })
+        .unwrap()
+    {
+        Outcome::Added { handles } => handles,
+        other => panic!("{other:?}"),
+    };
+    let copy_label = copy
+        .iter()
+        .copied()
+        .find(|h| {
+            matches!(
+                s.drawing.doc.get_entity(Handle::new(*h)),
+                Some(EntityType::MText(_))
+            )
+        })
+        .unwrap();
+    s.run(Command::EditText {
+        target: Target {
+            handle: copy_label,
+            chain: Vec::new(),
+        },
+        value: "The copy".to_string(),
+        tag: None,
+    })
+    .unwrap();
+    let comments = list(&mut s);
+    assert_eq!(comments.len(), 2);
+    let original = comments.iter().find(|c| c.handle == handles[0]).unwrap();
+    let copied = comments.iter().find(|c| c.handle != handles[0]).unwrap();
+    assert_eq!(
+        (original.label, original.text.as_str()),
+        (Some(handles[1]), "Original")
+    );
+    assert_eq!(
+        (copied.label, copied.text.as_str()),
+        (Some(copy_label), "The copy")
+    );
+}

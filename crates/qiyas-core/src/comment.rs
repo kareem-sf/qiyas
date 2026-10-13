@@ -158,7 +158,7 @@ impl Session {
     pub fn list_comments(&self) -> Vec<CommentInfo> {
         let mut out = Vec::new();
         for sheet in self.drawing.sheets() {
-            let mut labels: Vec<(String, u64, String)> = Vec::new();
+            let mut labels: Vec<Option<Label>> = Vec::new();
             let mut clouds = Vec::new();
             for e in self.drawing.entities_in(&sheet.block) {
                 let Some((kind, id, kept)) = comment_part(e.common()) else {
@@ -166,7 +166,10 @@ impl Session {
                 };
                 let h = e.common().handle.value();
                 match (kind, e) {
-                    (LABEL, EntityType::MText(t)) => labels.push((id, h, plain_text(&t.value))),
+                    (LABEL, EntityType::MText(t)) => {
+                        let at = [t.insertion_point.x, t.insertion_point.y];
+                        labels.push(Some((id, h, plain_text(&t.value), at)));
+                    }
                     (CLOUD, EntityType::LwPolyline(p)) => {
                         let corners: Vec<[f64; 2]> = p
                             .vertices
@@ -179,10 +182,21 @@ impl Session {
                 }
             }
             for (id, handle, kept, bounds) in clouds {
-                let label = labels.iter().find(|(l, _, _)| *l == id);
+                // A copy keeps the id, so each cloud takes the nearest unused label with its id
+                // to where its label goes (its top right corner).
+                let corner = [bounds[1][0], bounds[1][1]];
+                let near = |at: &[f64; 2]| (at[0] - corner[0]).hypot(at[1] - corner[1]);
+                let label = labels
+                    .iter_mut()
+                    .filter(|l| l.as_ref().is_some_and(|l| l.0 == id))
+                    .min_by(|a, b| {
+                        let (a, b) = (a.as_ref().unwrap(), b.as_ref().unwrap());
+                        near(&a.3).total_cmp(&near(&b.3))
+                    })
+                    .and_then(Option::take);
                 out.push(CommentInfo {
-                    label: label.map(|l| l.1),
-                    text: label.map_or(kept, |l| l.2.clone()),
+                    label: label.as_ref().map(|l| l.1),
+                    text: label.map_or(kept, |l| l.2),
                     id,
                     handle,
                     sheet: sheet.block.clone(),
@@ -193,3 +207,6 @@ impl Session {
         out
     }
 }
+
+/// A comment's label as `list_comments` reads it: its id, handle, plain text and position.
+type Label = (String, u64, String, [f64; 2]);
