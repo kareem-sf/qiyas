@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { AttachMode, Units } from "../api";
 import { useT } from "../i18n";
+import { SegmentedChoice } from "../ui/Segmented";
 import type { Picture } from "../viewport/batch";
 import type { Point } from "../viewport/camera";
 import { DotLoader } from "./DotLoader";
@@ -347,24 +348,15 @@ export function AttachPdfDialog(props: Props) {
         </div>
         <fieldset>
           <legend className="heading">{t("attachPdf.mode")}</legend>
-          <label className="check">
-            <input
-              type="radio"
-              name="attach-mode"
-              checked={mode === "underlay"}
-              onChange={() => setMode("underlay")}
-            />
-            <span>{t("attachPdf.underlay")}</span>
-          </label>
-          <label className="check">
-            <input
-              type="radio"
-              name="attach-mode"
-              checked={mode === "import"}
-              onChange={() => setMode("import")}
-            />
-            <span>{t("attachPdf.import")}</span>
-          </label>
+          <SegmentedChoice<AttachMode>
+            label={t("attachPdf.mode")}
+            value={mode}
+            onChange={setMode}
+            segments={[
+              { value: "underlay", label: t("attachPdf.underlay") },
+              { value: "import", label: t("attachPdf.import") },
+            ]}
+          />
         </fieldset>
         {busy && (
           <label>

@@ -1,10 +1,11 @@
-import { useEffect, useRef } from "react";
+import { Popover } from "@base-ui/react/popover";
+import { useRef } from "react";
 import type { Drafting, Ucs } from "../api";
 import { useT } from "../i18n";
 import type { DraftingToggle } from "../tools/shortcuts";
 import { isWorld, toUcs } from "../tools/ucs";
+import { SegmentedToggles } from "../ui/Segmented";
 import { DotLoader, type DotPattern } from "./DotLoader";
-import { useMenu } from "./useMenu";
 
 type Props = {
   cursor: [number, number] | null;
@@ -62,17 +63,7 @@ export function StatusBar({
     const xy = `${metres(x)}, ${metres(y)} ${t("qty.m")}`;
     return ucs && !isWorld(ucs) ? `${t("status.ucs")} ${xy}` : xy;
   };
-  const { open, setOpen, ref } = useMenu<HTMLSpanElement>();
-  const button = useRef<HTMLButtonElement>(null);
   const list = useRef<HTMLUListElement>(null);
-  // The list takes the focus when it opens, so the keyboard can scroll it.
-  useEffect(() => {
-    if (open) list.current?.focus();
-  }, [open]);
-  // Nothing to list any more (another drawing): close it.
-  useEffect(() => {
-    if (problems.length === 0) setOpen(false);
-  }, [problems.length, setOpen]);
   return (
     <footer className="status">
       <span className="message" role="status" aria-live="polite">
@@ -81,50 +72,38 @@ export function StatusBar({
       </span>
       {snapLabel && <span className="snap-kind">{snapLabel}</span>}
       {problems.length > 0 && (
-        <span
-          className="problems"
-          ref={ref}
-          onKeyDown={(e) => {
-            if (e.key !== "Escape" || !open) return;
-            e.stopPropagation();
-            setOpen(false);
-            button.current?.focus();
-          }}
-        >
-          <button
-            type="button"
-            className="warn"
-            ref={button}
-            aria-haspopup="true"
-            aria-expanded={open}
-            onClick={() => setOpen(!open)}
-          >
-            {t("recovered", { n: problems.length })}
-          </button>
-          {open && (
-            <ul className="problem-list" ref={list} tabIndex={-1} aria-label={t("problems")}>
-              {problems.map((p, i) => (
-                <li key={i}>{p}</li>
-              ))}
-            </ul>
-          )}
-        </span>
+        // A popover: it takes the focus (so the keyboard can scroll the list), Escape closes it and
+        // gives the focus back to the button, and so does a click outside.
+        <Popover.Root modal={false}>
+          <Popover.Trigger className="warn problems-trigger">{t("recovered", { n: problems.length })}</Popover.Trigger>
+          <Popover.Portal>
+            <Popover.Positioner className="problems-pos" side="top" align="end" sideOffset={6} collisionPadding={8}>
+              <Popover.Popup className="problems-card" initialFocus={list}>
+                <ul className="problem-list" ref={list} tabIndex={-1} aria-label={t("problems")}>
+                  {problems.map((p, i) => (
+                    <li key={i}>{p}</li>
+                  ))}
+                </ul>
+              </Popover.Popup>
+            </Popover.Positioner>
+          </Popover.Portal>
+        </Popover.Root>
       )}
       {unitsWarning && <span className="warn">{t("unitsUnknown")}</span>}
       {units && <span>{units}</span>}
-      <span className="drafting" role="group" aria-label={t("drafting")}>
-        {TOGGLES.map(({ toggle, key, on }) => (
-          <button
-            key={toggle}
-            type="button"
-            aria-pressed={drafting ? on(drafting) : false}
-            disabled={!drafting || !onToggle}
-            title={`${t(`drafting.${toggle}Title`)} (${key})`}
-            onClick={() => onToggle?.(toggle)}
-          >
-            {t(`status.${toggle}`)}
-          </button>
-        ))}
+      <span className="drafting">
+        <SegmentedToggles
+          label={t("drafting")}
+          className="drafting-toggles"
+          segments={TOGGLES.map(({ toggle, key }) => ({
+            value: toggle,
+            label: t(`status.${toggle}`),
+            title: `${t(`drafting.${toggle}Title`)} (${key})`,
+            disabled: !drafting || !onToggle,
+          }))}
+          on={drafting ? TOGGLES.filter(({ on }) => on(drafting)).map(({ toggle }) => toggle) : []}
+          onToggle={(toggle) => onToggle?.(toggle)}
+        />
         <button
           type="button"
           className="gear"
