@@ -1,61 +1,50 @@
 import type { ReactNode } from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
+import "./markdown.css";
 
-/** `**bold**` and `code` inside a line, as text nodes only. */
-function inline(text: string): ReactNode[] {
-  return text.split(/(\*\*[^*\n]+\*\*|`[^`\n]+`)/g).map((part, i) => {
-    if (part.length > 4 && part.startsWith("**") && part.endsWith("**")) {
-      return <strong key={i}>{part.slice(2, -2)}</strong>;
-    }
-    if (part.length > 2 && part.startsWith("`") && part.endsWith("`")) {
-      return <code key={i}>{part.slice(1, -1)}</code>;
-    }
-    return part;
-  });
+/** Links never navigate the window: Mizan's answers show where a link points, as text. */
+function Link({ href, children }: { href?: string; children?: ReactNode }) {
+  return (
+    <span className="md-link" title={href}>
+      {children}
+    </span>
+  );
 }
 
-/** Markdown-lite: paragraphs (blank lines between), `-` bullets, bold and inline code. Never HTML. */
+/** Wide tables scroll inside their own box, never the whole thread. */
+function Table({ children }: { children?: ReactNode }) {
+  return (
+    <div className="md-table" role="region" tabIndex={0}>
+      <table>{children}</table>
+    </div>
+  );
+}
+
+const components: Components = {
+  a: ({ href, children }) => <Link href={href}>{children}</Link>,
+  table: ({ children }) => <Table>{children}</Table>,
+  // Headings in a chat answer are section titles, not page titles: one quiet size.
+  h1: ({ children }) => <h4 dir="auto">{children}</h4>,
+  h2: ({ children }) => <h4 dir="auto">{children}</h4>,
+  h3: ({ children }) => <h4 dir="auto">{children}</h4>,
+  h4: ({ children }) => <h4 dir="auto">{children}</h4>,
+  h5: ({ children }) => <h4 dir="auto">{children}</h4>,
+  h6: ({ children }) => <h4 dir="auto">{children}</h4>,
+  p: ({ children }) => <p dir="auto">{children}</p>,
+  ul: ({ children }) => <ul dir="auto">{children}</ul>,
+  ol: ({ children }) => <ol dir="auto">{children}</ol>,
+  img: ({ alt }) => <span className="md-link">{alt}</span>,
+};
+
+/** Mizan's answers as GitHub-flavoured Markdown: headings, lists (nested), tables, rules, quotes,
+ *  code. Raw HTML in the text stays text, never markup, and links never navigate. */
 export function Markdown({ text }: { text: string }) {
-  const blocks: ReactNode[] = [];
-  let para: string[] = [];
-  let bullets: string[] = [];
-  const flush = () => {
-    if (para.length > 0) {
-      const lines = para;
-      blocks.push(
-        <p key={blocks.length} dir="auto">
-          {lines.map((l, i) => (
-            <span key={i}>
-              {i > 0 && <br />}
-              {inline(l)}
-            </span>
-          ))}
-        </p>,
-      );
-    }
-    if (bullets.length > 0) {
-      blocks.push(
-        <ul key={blocks.length} dir="auto">
-          {bullets.map((b, i) => (
-            <li key={i}>{inline(b)}</li>
-          ))}
-        </ul>,
-      );
-    }
-    para = [];
-    bullets = [];
-  };
-  for (const line of text.split("\n")) {
-    const bullet = /^\s*[-*]\s+(.*)$/.exec(line);
-    if (bullet) {
-      if (para.length > 0) flush();
-      bullets.push(bullet[1]);
-    } else if (!line.trim()) {
-      flush();
-    } else {
-      if (bullets.length > 0) flush();
-      para.push(line);
-    }
-  }
-  flush();
-  return <>{blocks}</>;
+  return (
+    <div className="md">
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+        {text}
+      </ReactMarkdown>
+    </div>
+  );
 }

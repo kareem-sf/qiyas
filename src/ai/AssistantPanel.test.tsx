@@ -50,7 +50,7 @@ test("empty state offers three examples; one fills the box", () => {
   expect((screen.getByText("Clear") as HTMLButtonElement).disabled).toBe(true);
 });
 
-test("a transcript shows messages, Markdown-lite and a tool card with Show and Undo", () => {
+test("a transcript shows messages, Markdown and a tool card with Show and Undo", () => {
   const { onShow, onUndo } = setup({
     items: [
       { kind: "user", text: "Measure the wall" },
@@ -62,7 +62,7 @@ test("a transcript shows messages, Markdown-lite and a tool card with Show and U
   expect(screen.getByText("now").tagName).toBe("STRONG");
   expect(screen.getByText("ai").tagName).toBe("CODE");
   // Markup in the model's text stays text.
-  expect(screen.getByText("two <b>x</b>")).toBeTruthy();
+  expect(screen.getByText(/two/).textContent).toBe("two <b>x</b>");
   expect(document.querySelector(".msg b")).toBeNull();
   expect(screen.getByText("Measure area")).toBeTruthy();
   expect(screen.getByText("12.000 m2: wall")).toBeTruthy();
@@ -227,4 +227,34 @@ test("scrolling back to the bottom by hand takes the button away; sending a mess
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "Thanks" } });
   fireEvent.click(screen.getByRole("button", { name: "Send" }));
   expect(box.scrollTop).toBe(1300);
+});
+
+test("Mizan's answers render headings, rules, nested lists and tables, and links never navigate", () => {
+  const text = [
+    "### Drawing analysis",
+    "The plan is in **metres**.",
+    "",
+    "---",
+    "",
+    "- **Columns:**",
+    "  - 6 columns",
+    "",
+    "| Type | Value |",
+    "|:---|---:|",
+    "| Linear | 12.00 m |",
+    "",
+    "See [the docs](https://example.com).",
+  ].join("\n");
+  setup({ items: [{ kind: "assistant", text, finished: true }] });
+  const md = document.querySelector(".md")!;
+  expect(md.querySelector("h4")?.textContent).toBe("Drawing analysis");
+  expect(md.textContent).not.toContain("###");
+  expect(md.querySelector("hr")).toBeTruthy();
+  expect(md.querySelector("ul ul li")?.textContent).toBe("6 columns");
+  const table = md.querySelector(".md-table table")!;
+  expect([...table.querySelectorAll("th")].map((c) => c.textContent)).toEqual(["Type", "Value"]);
+  expect(table.querySelector("td:last-child")?.textContent).toBe("12.00 m");
+  expect(md.textContent).not.toContain("|");
+  expect(md.querySelector("a")).toBeNull();
+  expect(md.querySelector(".md-link")?.getAttribute("title")).toBe("https://example.com");
 });
