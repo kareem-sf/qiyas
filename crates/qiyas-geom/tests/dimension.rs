@@ -319,3 +319,46 @@ fn a_dimension_own_dimpost_overrides_its_styles_and_keeps_the_other_overrides() 
     clear_dimpost(&mut bare);
     assert!(bare.extended_data.is_empty());
 }
+
+#[test]
+fn dstyle_overrides_are_read_as_code_value_pairs() {
+    use opencadcodec::xdata::{ExtendedDataRecord, XDataValue};
+    use qiyas_geom::{clear_dimpost, dimpost, dimscale, dimtxt, set_dimpost};
+
+    // As AutoCAD writes them: DIMTAD (271) first, whose value 3 is the code of DIMPOST.
+    let mut doc = doc();
+    let (_, dim) = linear(&mut doc, None);
+    let EntityType::Dimension(mut d) = dim else {
+        panic!("a dimension")
+    };
+    let mut record = ExtendedDataRecord::new("ACAD");
+    for v in [
+        XDataValue::String("DSTYLE".to_string()),
+        XDataValue::ControlString("{".to_string()),
+        XDataValue::Integer16(271),
+        XDataValue::Integer16(3),
+        XDataValue::Integer16(3),
+        XDataValue::String("<> ft".to_string()),
+        XDataValue::Integer16(40),
+        XDataValue::Real(50.0),
+        XDataValue::Integer16(140),
+        XDataValue::Real(2.5),
+        XDataValue::ControlString("}".to_string()),
+    ] {
+        record.add_value(v);
+    }
+    d.base_mut().common.extended_data.upsert_record(record);
+    let common = &d.base().common;
+    assert_eq!(dimpost(common).as_deref(), Some("<> ft"));
+    assert_eq!(dimscale(common), Some(50.0));
+    assert_eq!(dimtxt(common), Some(2.5));
+    // An override with no DIMPOST among them has none, whatever a value looks like.
+    let mut other = d.base().common.clone();
+    clear_dimpost(&mut other);
+    assert_eq!(dimpost(&other), None);
+    assert_eq!(dimscale(&other), Some(50.0));
+    // Setting it keeps DIMTAD where it was.
+    set_dimpost(&mut other, "<> m");
+    assert_eq!(dimpost(&other).as_deref(), Some("<> m"));
+    assert_eq!(dimtxt(&other), Some(2.5));
+}

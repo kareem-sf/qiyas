@@ -1372,3 +1372,37 @@ fn the_style_wire_format_takes_show_units_and_defaults_it_on() {
     let json = serde_json::to_value(fields).unwrap();
     assert_eq!(json["show_units"], true);
 }
+
+#[test]
+fn an_autocad_suffix_after_other_overrides_is_still_theirs() {
+    use opencadcodec::xdata::{ExtendedDataRecord, XDataValue};
+    let (_dir, mut s, h) = dimensioned_in(6, "dimtad.dxf");
+    // DIMTAD 3 first (its value 3 is also DIMPOST's code), then AutoCAD's own suffix.
+    let mut record = ExtendedDataRecord::new("ACAD");
+    for v in [
+        XDataValue::String("DSTYLE".to_string()),
+        XDataValue::ControlString("{".to_string()),
+        XDataValue::Integer16(271),
+        XDataValue::Integer16(3),
+        XDataValue::Integer16(3),
+        XDataValue::String("<> ft".to_string()),
+        XDataValue::ControlString("}".to_string()),
+    ] {
+        record.add_value(v);
+    }
+    if let Some(EntityType::Dimension(d)) = s.drawing.doc.get_entity_mut(Handle::new(h)) {
+        d.base_mut().common.extended_data.upsert_record(record);
+    }
+    for show in [false, true] {
+        let mut f = fields(3);
+        f.show_units = show;
+        s.run(Command::SetDimStyle {
+            name: "Standard".to_string(),
+            fields: f,
+            current: false,
+        })
+        .unwrap();
+        assert_eq!(own_post(&s, h).as_deref(), Some("<> ft"), "show {show}");
+        assert_eq!(text_of(&s, h), "10.000 ft", "show {show}");
+    }
+}

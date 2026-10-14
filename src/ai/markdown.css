@@ -111,8 +111,9 @@
 .md td code {
   white-space: nowrap;
 }
+/* Markdown's right-aligned column is a number column: right in both languages. */
 .md [align="right"] {
-  text-align: end;
+  text-align: right;
 }
 .md [align="center"] {
   text-align: center;

@@ -115,7 +115,9 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   kept on this computer), not `react-resizable-panels`.
 - Dependencies (all MIT; `tslib`, 0BSD, comes with them, text in `LICENSES/tslib-0BSD.txt`):
   `@base-ui/react`, `@tanstack/react-table`, `@tanstack/react-virtual` (3.14.13: the newest that passes
-  pnpm's release-age gate), `@headless-tree/core` and `/react`, `cmdk`, `sonner`.
+  pnpm's release-age gate), `@headless-tree/core` and `/react`, `cmdk`, `sonner`, and
+  `react-markdown` with `remark-gfm` (Mizan's answers as Markdown, `ai/Markdown.tsx`; licences in
+  `LICENSES/THIRD-PARTY.md`).
 
 ## Global constraints
 

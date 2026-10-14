@@ -160,28 +160,50 @@ pub fn dimtxt(common: &EntityCommon) -> Option<f64> {
     dstyle_value(common, DIMTXT_CODE)
 }
 
-/// The positive number the `DSTYLE` override `code` gives, if any.
-fn dstyle_value(common: &EntityCommon, code: i16) -> Option<f64> {
-    let values = &common.extended_data.get_record(ACAD)?.values;
-    let at = values
+/// The `(group code, value)` overrides of the `ACAD` `DSTYLE` of `common`, in order. Each is a
+/// 1070 code followed by its value, so a code is read only where one starts: a value that is
+/// itself a small integer (DIMTAD's 1070) is never taken for a code.
+fn dstyle_pairs(common: &EntityCommon) -> Vec<(i16, XDataValue)> {
+    let mut pairs = Vec::new();
+    let Some(record) = common.extended_data.get_record(ACAD) else {
+        return pairs;
+    };
+    let values = &record.values;
+    let Some(at) = values
         .iter()
-        .position(|v| matches!(v, XDataValue::String(s) if s.eq_ignore_ascii_case("DSTYLE")))?;
+        .position(|v| matches!(v, XDataValue::String(s) if s.eq_ignore_ascii_case("DSTYLE")))
+    else {
+        return pairs;
+    };
     let mut rest = values[at + 1..].iter();
     while let Some(v) = rest.next() {
         match v {
             XDataValue::ControlString(s) if s == "}" => break,
-            XDataValue::Integer16(c) if *c == code => {
-                return match rest.next() {
-                    Some(
-                        XDataValue::Real(r) | XDataValue::Distance(r) | XDataValue::ScaleFactor(r),
-                    ) if r.is_finite() && *r > 0.0 => Some(*r),
-                    _ => None,
+            XDataValue::Integer16(c) => {
+                if let Some(value) = rest.next() {
+                    pairs.push((*c, value.clone()));
                 }
             }
             _ => {}
         }
     }
-    None
+    pairs
+}
+
+/// The positive number the `DSTYLE` override `code` gives, if any.
+fn dstyle_value(common: &EntityCommon, code: i16) -> Option<f64> {
+    match dstyle_pairs(common)
+        .into_iter()
+        .find(|(c, _)| *c == code)?
+        .1
+    {
+        XDataValue::Real(r) | XDataValue::Distance(r) | XDataValue::ScaleFactor(r)
+            if r.is_finite() && r > 0.0 =>
+        {
+            Some(r)
+        }
+        _ => None,
+    }
 }
 
 /// Gives an annotation its own DIMSCALE (an `ACAD` `DSTYLE` override, as AutoCAD writes one),
@@ -209,24 +231,14 @@ pub fn set_dimtxt(common: &mut EntityCommon, height: f64) {
 /// The DIMPOST a dimension overrides its style's with (`ACAD` `DSTYLE` xdata, group 3), if any;
 /// an empty one means no suffix.
 pub fn dimpost(common: &EntityCommon) -> Option<String> {
-    let values = &common.extended_data.get_record(ACAD)?.values;
-    let at = values
-        .iter()
-        .position(|v| matches!(v, XDataValue::String(s) if s.eq_ignore_ascii_case("DSTYLE")))?;
-    let mut rest = values[at + 1..].iter();
-    while let Some(v) = rest.next() {
-        match v {
-            XDataValue::ControlString(s) if s == "}" => break,
-            XDataValue::Integer16(c) if *c == DIMPOST_CODE => {
-                return match rest.next() {
-                    Some(XDataValue::String(s)) => Some(s.clone()),
-                    _ => None,
-                }
-            }
-            _ => {}
-        }
+    match dstyle_pairs(common)
+        .into_iter()
+        .find(|(c, _)| *c == DIMPOST_CODE)?
+        .1
+    {
+        XDataValue::String(s) => Some(s),
+        _ => None,
     }
-    None
 }
 
 /// Gives a dimension its own DIMPOST (`<>` stands for the number; text without it is a suffix),
@@ -247,25 +259,7 @@ pub fn clear_dimpost(common: &mut EntityCommon) {
 /// Sets (or, with `None`, drops) the `DSTYLE` override `code`, keeping the others; a `DSTYLE`
 /// left without any override is dropped.
 fn set_dstyle(common: &mut EntityCommon, code: i16, value: Option<XDataValue>) {
-    let mut pairs: Vec<(i16, XDataValue)> = Vec::new();
-    if let Some(record) = common.extended_data.get_record(ACAD) {
-        let values = &record.values;
-        let at = values
-            .iter()
-            .position(|v| matches!(v, XDataValue::String(s) if s.eq_ignore_ascii_case("DSTYLE")));
-        let mut rest = values[at.map_or(values.len(), |a| a + 1)..].iter();
-        while let Some(v) = rest.next() {
-            match v {
-                XDataValue::ControlString(s) if s == "}" => break,
-                XDataValue::Integer16(c) => {
-                    if let Some(value) = rest.next() {
-                        pairs.push((*c, value.clone()));
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
+    let mut pairs = dstyle_pairs(common);
     pairs.retain(|(c, _)| *c != code);
     pairs.extend(value.map(|v| (code, v)));
     if pairs.is_empty() {
