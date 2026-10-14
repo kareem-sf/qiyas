@@ -271,6 +271,21 @@ pub struct EntityInfo {
     /// centre.
     pub viewport_scale: Option<f64>,
     pub viewport_centre: Option<[f64; 2]>,
+    /// A line's or an arc's start and end points, in world coordinates (drawing units).
+    pub start: Option<[f64; 2]>,
+    pub end: Option<[f64; 2]>,
+    /// A circle's, an arc's or an ellipse's centre, in world coordinates.
+    pub centre: Option<[f64; 2]>,
+    /// An arc's start and end angles in degrees, 0 up to 360, counter-clockwise in the world. An
+    /// arc whose ends meet is a full turn (see `qiyas_geom::snap_shapes`).
+    pub start_angle: Option<f64>,
+    pub end_angle: Option<f64>,
+    /// How many vertices a polyline has.
+    pub vertex_count: Option<usize>,
+    /// Where a text, an MText or a block reference is inserted, in world coordinates.
+    pub position: Option<[f64; 2]>,
+    /// A hatch's pattern name (SOLID for a solid fill).
+    pub pattern: Option<String>,
 }
 
 /// An entity found by handle and chain, with what places it in the world.
@@ -1105,16 +1120,69 @@ impl Session {
                 .collect(),
             _ => Vec::new(),
         };
-        let radius = match entity {
-            EntityType::Circle(_) | EntityType::Arc(_) => {
-                snap_shapes(located.doc, entity, &located.xf, MEASURE_TOL)
-                    .first()
-                    .and_then(|shape| match shape.pieces.first() {
-                        Some(Curve::Circle(c)) => Some(c.radius),
-                        Some(Curve::Arc(a)) => Some(a.radius),
-                        _ => None,
-                    })
+        // The exact curve of a line, circle, arc or ellipse, placed in the world.
+        let piece = match entity {
+            EntityType::Line(_)
+            | EntityType::Circle(_)
+            | EntityType::Arc(_)
+            | EntityType::Ellipse(_) => snap_shapes(located.doc, entity, &located.xf, MEASURE_TOL)
+                .into_iter()
+                .next()
+                .and_then(|shape| shape.pieces.into_iter().next()),
+            _ => None,
+        };
+        let radius = match &piece {
+            Some(Curve::Circle(c)) => Some(c.radius),
+            Some(Curve::Arc(a)) => Some(a.radius),
+            _ => None,
+        };
+        let (start, end) = match &piece {
+            Some(Curve::Line(l)) => (Some(l.start), Some(l.end)),
+            Some(Curve::Arc(a)) => {
+                let at = |t: f64| {
+                    [
+                        a.centre[0] + a.radius * t.cos(),
+                        a.centre[1] + a.radius * t.sin(),
+                    ]
+                };
+                (Some(at(a.start_angle)), Some(at(a.end_angle)))
             }
+            _ => (None, None),
+        };
+        let centre = match &piece {
+            Some(Curve::Circle(c)) => Some(c.centre),
+            Some(Curve::Arc(a)) => Some(a.centre),
+            Some(Curve::Ellipse(e)) => Some(e.ellipse.centre),
+            _ => None,
+        };
+        let degrees = |t: f64| t.to_degrees().rem_euclid(360.0);
+        let (start_angle, end_angle) = match &piece {
+            Some(Curve::Arc(a)) => (Some(degrees(a.start_angle)), Some(degrees(a.end_angle))),
+            _ => (None, None),
+        };
+        let vertex_count = match entity {
+            EntityType::LwPolyline(p) => Some(p.vertices.len()),
+            EntityType::Polyline2D(p) => Some(p.vertices.len()),
+            EntityType::Polyline3D(p) => Some(p.vertices.len()),
+            EntityType::Polyline(p) => Some(p.vertices.len()),
+            _ => None,
+        };
+        let position = match entity {
+            EntityType::Insert(_) => crate::commands::insert_point(&located),
+            EntityType::Text(t) => {
+                Some(located.xf.apply([t.insertion_point.x, t.insertion_point.y]))
+            }
+            EntityType::MText(t) => {
+                Some(located.xf.apply([t.insertion_point.x, t.insertion_point.y]))
+            }
+            _ => None,
+        };
+        let pattern = match entity {
+            EntityType::Hatch(h) => Some(if h.is_solid {
+                "SOLID".to_string()
+            } else {
+                h.pattern.name.clone()
+            }),
             _ => None,
         };
         let rotation = match entity {
@@ -1181,6 +1249,14 @@ impl Session {
             scale,
             viewport_scale,
             viewport_centre,
+            start,
+            end,
+            centre,
+            start_angle,
+            end_angle,
+            vertex_count,
+            position,
+            pattern,
         })
     }
 

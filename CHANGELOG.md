@@ -37,6 +37,16 @@ First public release.
   under More. Every button is an icon with a tooltip (its name, what it does, its command line
   alias); a group shows its main buttons and puts the others behind a "⋯" button as the window
   narrows, so the panel does not scroll. The header's buttons share one size scale.
+- The Properties palette under Layers works like AutoCAD's: General (type, layer, colour, linetype,
+  lineweight, handle) and Geometry with every value of what you picked, in metres, square metres
+  and degrees to the drawing's precision. A line shows its start, end, delta, length and angle; a
+  polyline its vertices, closed flag, length or perimeter, area and width; an arc its centre,
+  radius, angles, total angle, length and chord; a circle its centre, radius, diameter,
+  circumference and area; text its insertion, height, rotation and contents; a block reference its
+  name, insertion, scale, rotation and attributes; a hatch its pattern and area; a dimension its
+  measured value and text. Click a value to copy it. Sections fold, and stay folded. Pick several
+  entities (Shift, a box, a group) to see how many, of which kinds, the total length and area and
+  the layer, colour and linetype they share.
 - Installers for Linux (AppImage, deb, rpm), Windows (setup.exe, MSI) and macOS (Apple silicon
   and Intel), each with a signature for the updater.
 - A quieter, thinner interface on headless libraries (Base UI, TanStack Table and Virtual, Headless

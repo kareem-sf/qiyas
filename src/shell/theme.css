@@ -2928,6 +2928,64 @@ span.grid-sort {
 .properties dd .swatch + input {
   width: calc(100% - 16px);
 }
+/* Sections, as in AutoCAD's palette: a thin rule and a small folding title; a value copies on click. */
+.properties .prop-section {
+  border-top: 1px solid var(--rule);
+  margin-top: 6px;
+}
+.properties .prop-section:first-child {
+  border-top: 0;
+  margin-top: 0;
+}
+.properties .prop-section h3 {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.properties .prop-section h3 button {
+  width: 100%;
+  padding: 3px 0;
+  border-radius: 0;
+  text-align: start;
+  font-size: inherit;
+  font-weight: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+}
+.properties .prop-section h3 button::before {
+  content: "▾ ";
+}
+.properties .prop-section h3 button[aria-expanded="false"]::before {
+  content: "▸ ";
+}
+:root[dir="rtl"] .properties .prop-section h3 button[aria-expanded="false"]::before {
+  content: "◂ ";
+}
+.properties .prop-section dl {
+  margin-top: 0;
+}
+.properties dd button.value {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  text-align: start;
+  font-variant-numeric: inherit;
+  overflow-wrap: anywhere;
+  cursor: copy;
+  user-select: text;
+}
+.properties dd button.value:hover {
+  background: var(--hover);
+}
+.properties dd button.value[data-copied] {
+  background: var(--accent-soft);
+}
 /* LAYSTATE's states and LAYTRANS's mapping table. */
 .layer-states {
   list-style: none;

@@ -195,9 +195,23 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   ME, ID, Z E/W/IN/OUT, LAYOFF, U…), typed points `x,y`, `@dx,dy`, `@d<angle` in drawing units,
   Arabic digits accepted. Extra aliases: `aliases` in `settings.json`, edited in ALIASEDIT. Typing
   a command lists the matches in a cmdk list above the line (see the UI kit).
-- Properties palette under Layers: what the Select tool picked (colour as drawn, linetype,
-  weight, attributes, values in metres); a drawing's own entity is edited there (see Layers,
-  groups and properties).
+- Properties palette under Layers: what the Select tool picked, in AutoCAD's folding sections
+  (`PropertiesPanel.tsx`, `propertiesGeometry.ts`; folded ones kept in `qiyas.properties.folded`):
+  General (handle, type, layer, colour as drawn, linetype, weight, sheet, block path, xref),
+  Geometry (read-only rows from `EntityInfo`, in metres, m² and degrees with the drafting
+  precision; a click copies the number without its unit; the values that were editable stay
+  fields: radius, closed, width, text, height, rotation, scale, viewport scale and centre) and
+  Attributes. Per kind: line start, end, delta, length, angle; polyline vertices, closed,
+  length or perimeter, area, width; arc centre, radius, start, end and total angle, length,
+  chord; circle centre, radius, diameter, circumference, area; ellipse centre, length, area;
+  spline length; hatch pattern, area; text and MText insertion, height, rotation, contents,
+  style; block reference name, insertion, scale, rotation; dimension measured, text, height,
+  style. Two or more picked (the select tool's whole selection set, `Measure.picks`, each read
+  with `entityInfo`: `useSelection.pickedMany`) show a Selection section (count, kinds, total
+  length and area, summed in drawing units; dimensions and block references are left out of the
+  sums, but a hatch and its boundary both count) and the General fields they share ("Varies"
+  otherwise), read-only. A drawing's own entity is edited there (see Layers, groups and
+  properties).
 - The batch also carries fill triangles (section 12, `u32` colour each, bit 24 =
   `FILL_BACKGROUND`) and their ranges (13), only when there are fills; GL draws fills under the
   lines, then wipeouts in the background colour over all lines (they hide line work under them,
@@ -545,7 +559,12 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   height is a `DSTYLE` DIMTXT override (`qiyas_geom::set_dimtxt`, before DIMSCALE) and its block
   is drawn again; a table's sets every cell; a change of shape runs `follow_edit`; rows on an
   entity take its new layer. `EntityInfo` has `rotation`, `closed`, `global_width`, `scale`, and
-  a dimension's text `height`.
+  a dimension's text `height`; for the palette's Geometry section (all optional, world
+  coordinates and drawing units, an entity inside blocks as its references place it): `start`
+  and `end` (line, arc), `centre` (circle, arc, ellipse), `start_angle` and `end_angle` (arc,
+  degrees 0 to 360; ends that meet are a full turn), `vertex_count` (polylines), `position` (the
+  insertion point of a text, MText or block reference) and `pattern` (a hatch; SOLID for a solid
+  fill). Tests: `qiyas-core/tests/entity_geometry.rs`.
 - Window: the Layers panel (a tree; see the UI kit) opens a layer's properties under its row (on, frozen, locked, plot,
   colour, linetype, lineweight, rename, delete), adds layers, and opens Layer states… (LAYSTATE,
   LAS) and Translate layers… (LAYTRANS, `LayerTranslator`); the properties palette edits the

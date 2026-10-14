@@ -33,7 +33,7 @@ const door: EntityInfo = {
 
 /** The panel's label and value pairs, attributes apart. */
 const rows = () =>
-  [...document.querySelectorAll(".properties > div > dl > div:not(.attributes)")].map((d) => [
+  [...document.querySelectorAll(".properties .prop-section:not(.attributes) dl > div")].map((d) => [
     d.querySelector("dt")!.textContent,
     d.querySelector("dd")!.textContent,
   ]);
@@ -47,12 +47,12 @@ test("a block reference shows its handle, colour, weight and attributes", () => 
     ["Colour", "ACI 4"],
     ["Linetype", "ByLayer"],
     ["Lineweight", "0.35 mm"],
-    ["Block", "DOOR"],
     ["Sheet", "Model"],
+    ["Block", "DOOR"],
   ]);
   const swatch = document.querySelector(".properties .swatch") as HTMLElement;
   expect(swatch.style.background).toBe("rgb(0, 255, 255)");
-  const attributes = [...document.querySelectorAll(".attributes dd dl > div")].map((d) => d.textContent);
+  const attributes = [...document.querySelectorAll(".attributes dl > div")].map((d) => d.textContent);
   expect(attributes).toEqual(["MARKD1", "FIRE60 min"]);
 });
 
@@ -254,4 +254,99 @@ test("asking to reveal it opens a folded palette and takes the focus", () => {
   rerender(<PropertiesPanel entity={door} units="metres" precision={3} sheet="Model" reveal={1} />);
   expect(title.getAttribute("aria-expanded")).toBe("true");
   expect(document.activeElement).toBe(title);
+});
+
+const wallLine: EntityInfo = {
+  ...door,
+  kind: "Line",
+  block_name: null,
+  attributes: [],
+  layer: "A-WALL",
+  layer_short: "A-WALL",
+  start: [0, 0],
+  end: [3000, 4000],
+  length: 5000,
+};
+
+test("a line shows General and Geometry sections with metres and degrees", () => {
+  render(<PropertiesPanel entity={wallLine} units="millimetres" precision={3} sheet="Model" />);
+  expect([...document.querySelectorAll(".prop-section h3 button")].map((b) => b.textContent)).toEqual([
+    "General",
+    "Geometry",
+  ]);
+  const got = Object.fromEntries(rows());
+  expect(got["Start X"]).toBe("0.000 m");
+  expect(got["End Y"]).toBe("4.000 m");
+  expect(got["Delta X"]).toBe("3.000 m");
+  expect(got.Length).toBe("5.000 m");
+  expect(got.Angle).toBe("53.130°");
+});
+
+test("a section folds, and stays folded the next time", () => {
+  localStorage.clear();
+  const { unmount } = render(<PropertiesPanel entity={wallLine} units="metres" precision={3} sheet="Model" />);
+  const geometry = screen.getByRole("button", { name: "Geometry" });
+  expect(geometry.getAttribute("aria-expanded")).toBe("true");
+  fireEvent.click(geometry);
+  expect(geometry.getAttribute("aria-expanded")).toBe("false");
+  expect(Object.fromEntries(rows()).Length).toBeUndefined();
+  expect(Object.fromEntries(rows()).Layer).toBe("A-WALL");
+  unmount();
+  render(<PropertiesPanel entity={wallLine} units="metres" precision={3} sheet="Model" />);
+  expect(screen.getByRole("button", { name: "Geometry" }).getAttribute("aria-expanded")).toBe("false");
+  fireEvent.click(screen.getByRole("button", { name: "Geometry" }));
+  expect(Object.fromEntries(rows()).Length).toBe("5000.000 m");
+  localStorage.clear();
+});
+
+test("clicking a value copies the number without its unit", async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+  render(<PropertiesPanel entity={wallLine} units="metres" precision={2} sheet="Model" />);
+  const length = screen.getByText("5000.00 m");
+  fireEvent.click(length);
+  expect(writeText).toHaveBeenCalledWith("5000.00");
+  expect(await screen.findByTitle("Copied")).toBeTruthy();
+});
+
+test("a polyline's closed flag and width stay editable beside the read-only vertices and perimeter", () => {
+  const onSet = vi.fn();
+  const room: EntityInfo = {
+    ...door,
+    kind: "LwPolyline",
+    block_name: null,
+    attributes: [],
+    vertex_count: 4,
+    closed: true,
+    global_width: 0,
+    length: 14,
+    area: 12,
+  };
+  render(<PropertiesPanel entity={room} units="metres" precision={3} sheet="Model" {...editing} onSet={onSet} />);
+  const got = Object.fromEntries(rows());
+  expect(got.Vertices).toBe("4");
+  expect(got.Perimeter).toBe("14.000 m");
+  expect(got.Area).toBe("12.000 m²");
+  fireEvent.click(field("Closed"));
+  expect(onSet).toHaveBeenLastCalledWith("closed", false);
+});
+
+test("several entities show the count, the sums and what they share", () => {
+  const wall = (length: number): EntityInfo => ({ ...wallLine, length });
+  const room: EntityInfo = { ...wallLine, kind: "LwPolyline", length: 14, area: 12, layer: "A-ROOM", layer_short: "A-ROOM" };
+  render(<PropertiesPanel entity={null} many={[wall(10), wall(5), room]} units="metres" precision={2} sheet="Model" />);
+  expect([...document.querySelectorAll(".prop-section h3 button")].map((b) => b.textContent)).toEqual([
+    "Selection",
+    "General",
+  ]);
+  const got = Object.fromEntries(rows());
+  expect(got.Selected).toBe("3");
+  expect(got.Types).toBe("Line ×2, LwPolyline ×1");
+  expect(got["Total length"]).toBe("29.00 m");
+  expect(got["Total area"]).toBe("12.00 m²");
+  // The layers differ, the colour does not.
+  expect(got.Layer).toBe("Varies");
+  expect(got.Colour).toBe("ACI 4");
+  expect(got.Handle).toBeUndefined();
+  expect(document.querySelector(".properties input, .properties select")).toBeNull();
 });

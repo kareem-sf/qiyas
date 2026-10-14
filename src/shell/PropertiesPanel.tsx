@@ -4,6 +4,7 @@ import { useT } from "../i18n";
 import { normalizeDigits } from "../tools/commandParser";
 import { metresPerUnit } from "./AttachPdfDialog";
 import { LINEWEIGHTS, weightLabel } from "./lineweights";
+import { geometryRows, selectionRows, summarise, type GeoRow } from "./propertiesGeometry";
 
 type Props = {
   /** The entity picked with the select tool; null when none is. */
@@ -11,6 +12,9 @@ type Props = {
   units: Units;
   /** Decimals of lengths and areas. */
   precision: number;
+  /** Two or more entities picked together (selection set or a box): the palette shows how many,
+   *  the sums of their length and area and the General fields they share, read-only. */
+  many?: EntityInfo[] | null;
   /** The name of the sheet in view. */
   sheet: string;
   /** The drawing's own layers and linetypes, for the editable fields. */
@@ -72,14 +76,91 @@ function Choice({ label, value, names, onPick }: { label: string; value: string;
   );
 }
 
-/** The picked entity's properties: handle, type, layer, colour, linetype, lineweight, size in
- *  metres, block and attributes, text, where it sits. A drawing's own entity at the top of the
+const FOLDED = "qiyas.properties.folded";
+
+/** The sections the user folded, remembered on this computer. */
+function storedFolded(): string[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(FOLDED) ?? "[]");
+    return Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** A read-only value: selectable text that a click copies (the number, without its unit). */
+function Value({ row }: { row: GeoRow }) {
+  const t = useT();
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(row.copy);
+    } catch {
+      return; // The text stays selectable.
+    }
+    setCopied(true);
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => setCopied(false), 1200);
+  }
+  return (
+    <button
+      type="button"
+      className="value"
+      data-copied={copied || undefined}
+      title={t(copied ? "props.copied" : "props.copy")}
+      onClick={copy}
+    >
+      {row.text}
+    </button>
+  );
+}
+
+/** A fold-able block of rows, like AutoCAD's Properties sections. */
+function Section({
+  id,
+  title,
+  folded,
+  onFold,
+  className = "",
+  children,
+}: {
+  id: string;
+  title: string;
+  folded: boolean;
+  onFold(): void;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className={`prop-section ${className}`.trim()}>
+      <h3>
+        <button type="button" aria-expanded={!folded} aria-controls={id} onClick={onFold}>
+          {title}
+        </button>
+      </h3>
+      {!folded && <div id={id}>{children}</div>}
+    </div>
+  );
+}
+
+type Row = [label: string, value: ReactNode, text?: boolean];
+type SectionData = { id: string; title: string; rows: Row[]; className?: string };
+
+/** The picked entity's properties in AutoCAD's sections: General (handle, type, layer, colour,
+ *  linetype, lineweight, sheet, where it sits) and Geometry (`propertiesGeometry`: ends, centre,
+ *  radius, angles, length, area, vertices, insertion, pattern, text... in metres, square metres and
+ *  degrees with the drafting precision, a click copies a value), then Attributes. Several entities
+ *  picked together (`many`) show Selection (how many, of which kinds, the sums of length and area)
+ *  and the General fields they share. Sections fold, remembered. A drawing's own entity at the top of the
  *  sheet is edited in place (`onSet`): its layer, colour, linetype, lineweight, and as it has them
  *  its text, text height and rotation, radius, closed flag, global width, scale and rotation.
  *  With nothing picked it edits what new entities are drawn with (`onSetCurrent`).
  *  Collapsible; memoised, as the app re-renders on every pointer move. */
 export const PropertiesPanel = memo(function PropertiesPanel({
   entity,
+  many = null,
   units,
   precision,
   sheet,
@@ -94,14 +175,23 @@ export const PropertiesPanel = memo(function PropertiesPanel({
   const id = useId();
   const [open, setOpen] = useState(true);
   const title = useRef<HTMLButtonElement>(null);
+  const [folded, setFolded] = useState(storedFolded);
+  const fold = (id: string) =>
+    setFolded((was) => {
+      const next = was.includes(id) ? was.filter((x) => x !== id) : [...was, id];
+      try {
+        localStorage.setItem(FOLDED, JSON.stringify(next));
+      } catch {
+        // Not remembered; the section is folded for this session.
+      }
+      return next;
+    });
   useEffect(() => {
     if (reveal === 0) return;
     setOpen(true);
     title.current?.focus();
   }, [reveal]);
   const m = metresPerUnit(units);
-  const metres = (v: number) => `${(v * m).toFixed(precision)} ${t("qty.m")}`;
-  const square = (v: number) => `${(v * m * m).toFixed(precision)} ${t("qty.m2")}`;
   /** "ByLayer", "ByBlock", "Default" and "None" in the window's language. */
   const byName = (v: string) =>
     ({ ByLayer: t("props.byLayer"), ByBlock: t("props.byBlock"), None: t("props.noColor") })[v] ?? v;
@@ -110,9 +200,14 @@ export const PropertiesPanel = memo(function PropertiesPanel({
   // Fields start again from the core's value when the entity or its values change.
   const key = entity ? JSON.stringify(entity) : current ? JSON.stringify(current) : "";
 
-  const rows: [string, ReactNode, boolean?][] = [];
+  const multiple = many && many.length >= 2 ? many : null;
+  const general: Row[] = [];
+  const geometry: Row[] = [];
+  const selected: Row[] = [];
+  const attributes = !multiple && entity ? entity.attributes : [];
   /** A row; `text` rows read in their own direction, the rest left to right. */
-  const row = (label: string, value: ReactNode, text = false) => rows.push([label, value, text]);
+  const into = (list: Row[]) => (label: string, value: ReactNode, text = false) => list.push([label, value, text]);
+  const row = into(general);
   const types = ["ByLayer", "ByBlock", ...linetypes];
   const weights = [-1, -2, -3, ...LINEWEIGHTS];
   const weightSelect = (value: number, onPick: (w: number) => void) => (
@@ -145,98 +240,121 @@ export const PropertiesPanel = memo(function PropertiesPanel({
       }}
     />
   );
+  const swatch = (rgb: [number, number, number]) => (
+    <span className="swatch" style={{ background: `rgb(${rgb.join(",")})` }} />
+  );
+  /** The Geometry rows of `entity`: a value that is edited today becomes its field, the rest are
+   *  read-only values that a click copies. */
+  const geometryOf = (e: EntityInfo, edit: boolean) => {
+    const put = into(geometry);
+    for (const r of geometryRows(e, units, precision, t)) {
+      const textual = e.kind === "Text" || e.kind === "MText";
+      const field: [string, ReactNode, boolean?] | null = !edit
+        ? null
+        : r.key === "radius" && e.radius !== null
+          ? ["props.radiusM", lengthField("props.radiusM", e.radius, "radius")]
+          : r.key === "closed" && e.closed != null
+            ? [
+                "props.closed",
+                <input
+                  type="checkbox"
+                  aria-label={t("props.closed")}
+                  checked={e.closed}
+                  onChange={(ev) => onSet?.("closed", ev.currentTarget.checked)}
+                />,
+              ]
+            : r.key === "width" && e.global_width != null
+              ? ["props.widthM", lengthField("props.widthM", e.global_width, "global_width")]
+              : r.key === "scale" && e.kind === "Insert" && e.scale != null
+                ? ["props.scale", numberField("props.scale", e.scale, "insert_scale")]
+                : r.key === "rotation" && e.rotation != null
+                  ? [
+                      "props.rotationDeg",
+                      numberField("props.rotationDeg", e.rotation, e.kind === "Insert" ? "insert_rotation" : "text_rotation"),
+                    ]
+                  : r.key === "height" && e.height !== null
+                    ? ["props.heightM", lengthField("props.heightM", e.height, "text_height")]
+                    : r.key === "text" && textual
+                      ? [
+                          "props.text",
+                          <Field label={t("props.text")} dir="auto" value={e.plain_text ?? e.text ?? ""} onCommit={(v) => onSet?.("text", v)} />,
+                          true,
+                        ]
+                      : r.key === "viewportScale" && e.viewport_scale != null
+                        ? ["props.viewportScale", numberField("props.viewportScale", e.viewport_scale, "viewport_scale")]
+                        : r.key === "viewportCentre" && e.viewport_centre
+                          ? [
+                              "props.viewportCentre",
+                              <Field
+                                label={t("props.viewportCentre")}
+                                value={`${Number(e.viewport_centre[0].toFixed(6))}, ${Number(e.viewport_centre[1].toFixed(6))}`}
+                                onCommit={(s) => {
+                                  const parts = normalizeDigits(s).split(",").map(typedNumber);
+                                  if (parts.length === 2 && parts[0] !== null && parts[1] !== null) {
+                                    onSet?.("viewport_centre", [parts[0], parts[1]]);
+                                  }
+                                }}
+                              />,
+                            ]
+                          : null;
+      if (field) put(...field);
+      else put(r.label, <Value row={r} />, r.prose);
+    }
+  };
 
-  if (entity && editable && onSet) {
-    const textual = entity.kind === "Text" || entity.kind === "MText";
+  if (multiple) {
+    const sum = summarise(multiple);
+    const varies = t("props.varies");
+    into(general)(
+      "props.layer",
+      sum.layerShort === null ? (
+        varies
+      ) : (
+        <span title={sum.layer ?? undefined}>{sum.layerShort}</span>
+      ),
+      true,
+    );
+    row(
+      "props.color",
+      sum.color === null ? (
+        varies
+      ) : (
+        <>
+          {sum.colorRgb && swatch(sum.colorRgb)}
+          {byName(sum.color)}
+        </>
+      ),
+    );
+    row("props.linetype", sum.linetype === null ? varies : byName(sum.linetype), true);
+    row("props.lineweight", sum.lineweight === null ? varies : weight(sum.lineweight));
+    row("props.sheet", sheet, true);
+    for (const r of selectionRows(sum, units, precision, t)) into(selected)(r.label, <Value row={r} />, r.prose);
+  } else if (entity && editable && onSet) {
     row("props.handle", entity.handle.toString(16).toUpperCase());
     row("props.kind", entity.kind);
     row("props.layer", <Choice label={t("props.layer")} value={entity.layer} names={layers} onPick={(v) => onSet("layer", v)} />);
     row(
       "props.color",
       <>
-        <span className="swatch" style={{ background: `rgb(${entity.color_rgb.join(",")})` }} />
+        {swatch(entity.color_rgb)}
         <Field label={t("props.color")} value={entity.color} onCommit={(v) => v.trim() && onSet("color", v.trim())} />
       </>,
     );
     row("props.linetype", <Choice label={t("props.linetype")} value={entity.linetype} names={types} onPick={(v) => onSet("linetype", v)} />);
     row("props.lineweight", weightSelect(entity.lineweight, (w) => onSet("lineweight", w)));
-    if (entity.length !== null) row("props.length", metres(entity.length));
-    if (entity.area !== null) row("props.area", square(entity.area));
-    if (entity.radius !== null) row("props.radiusM", lengthField("props.radiusM", entity.radius, "radius"));
-    if (entity.closed !== null && entity.closed !== undefined) {
-      row(
-        "props.closed",
-        <input
-          type="checkbox"
-          aria-label={t("props.closed")}
-          checked={entity.closed}
-          onChange={(e) => onSet("closed", e.currentTarget.checked)}
-        />,
-      );
-    }
-    if (entity.global_width !== null && entity.global_width !== undefined) {
-      row("props.widthM", lengthField("props.widthM", entity.global_width, "global_width"));
-    }
-    if (entity.block_name) row("props.block", entity.block_name, true);
-    if (entity.kind === "Insert" && entity.scale !== null && entity.scale !== undefined) {
-      row("props.scale", numberField("props.scale", entity.scale, "insert_scale"));
-    }
-    if (entity.viewport_scale !== null && entity.viewport_scale !== undefined) {
-      row("props.viewportScale", numberField("props.viewportScale", entity.viewport_scale, "viewport_scale"));
-    }
-    if (entity.viewport_centre) {
-      const [x, y] = entity.viewport_centre;
-      row(
-        "props.viewportCentre",
-        <Field
-          label={t("props.viewportCentre")}
-          value={`${Number(x.toFixed(6))}, ${Number(y.toFixed(6))}`}
-          onCommit={(s) => {
-            const parts = normalizeDigits(s).split(",").map(typedNumber);
-            if (parts.length === 2 && parts[0] !== null && parts[1] !== null) {
-              onSet("viewport_centre", [parts[0], parts[1]]);
-            }
-          }}
-        />,
-      );
-    }
-    if (textual && entity.text !== null) {
-      row("props.text", <Field label={t("props.text")} dir="auto" value={entity.plain_text ?? entity.text} onCommit={(v) => onSet("text", v)} />, true);
-    } else if (entity.text !== null) {
-      row("props.text", entity.text, true);
-    }
-    if (entity.height !== null) row("props.heightM", lengthField("props.heightM", entity.height, "text_height"));
-    if (entity.rotation !== null && entity.rotation !== undefined) {
-      row(
-        "props.rotationDeg",
-        numberField("props.rotationDeg", entity.rotation, entity.kind === "Insert" ? "insert_rotation" : "text_rotation"),
-      );
-    }
-    if (entity.style) row("props.style", entity.style, true);
     row("props.sheet", sheet, true);
+    geometryOf(entity, true);
   } else if (entity) {
     row("props.handle", entity.handle.toString(16).toUpperCase());
     row("props.kind", entity.kind);
     row("props.layer", <span title={entity.layer}>{entity.layer_short}</span>, true);
-    row(
-      "props.color",
-      <>
-        <span className="swatch" style={{ background: `rgb(${entity.color_rgb.join(",")})` }} />
-        {byName(entity.color)}
-      </>,
-    );
+    row("props.color", <>{swatch(entity.color_rgb)}{byName(entity.color)}</>);
     row("props.linetype", byName(entity.linetype), true);
     row("props.lineweight", weight(entity.lineweight));
-    if (entity.length !== null) row("props.length", metres(entity.length));
-    if (entity.area !== null) row("props.area", square(entity.area));
-    if (entity.radius !== null) row("props.radius", metres(entity.radius));
-    if (entity.block_name) row("props.block", entity.block_name, true);
-    if (entity.text !== null) row("props.text", entity.text, true);
-    if (entity.height !== null) row("props.height", metres(entity.height));
-    if (entity.style) row("props.style", entity.style, true);
     if (entity.block_path.length > 0) row("props.path", entity.block_path.join(" › "), true);
     if (entity.xref) row("props.xref", entity.xref, true);
     row("props.sheet", sheet, true);
+    geometryOf(entity, false);
   } else if (current && onSetCurrent) {
     const set = (change: Partial<Current>) => onSetCurrent({ ...current, ...change });
     row("props.layer", <Choice label={t("props.layer")} value={current.layer} names={layers} onPick={(layer) => set({ layer })} />);
@@ -244,6 +362,13 @@ export const PropertiesPanel = memo(function PropertiesPanel({
     row("props.linetype", <Choice label={t("props.linetype")} value={current.linetype} names={types} onPick={(linetype) => set({ linetype })} />);
     row("props.lineweight", weightSelect(current.lineweight, (lineweight) => set({ lineweight })));
   }
+
+  const sections: SectionData[] = [
+    { id: "selection", title: "props.section.selection", rows: selected },
+    { id: "general", title: "props.section.general", rows: general },
+    { id: "geometry", title: "props.section.geometry", rows: geometry },
+  ].filter((section) => section.rows.length > 0);
+  const empty = sections.length === 0 && attributes.length === 0;
 
   return (
     <section className="properties" aria-labelledby={`${id}-title`}>
@@ -260,33 +385,42 @@ export const PropertiesPanel = memo(function PropertiesPanel({
       </h2>
       {open && (
         <div id={`${id}-body`}>
-          {!entity && rows.length > 0 && <p className="muted">{t("props.current")}</p>}
-          {!entity && rows.length === 0 ? (
+          {!entity && !multiple && !empty && <p className="muted">{t("props.current")}</p>}
+          {!entity && !multiple && empty ? (
             <p className="muted">{t("props.none")}</p>
           ) : (
-            <dl key={key}>
-              {rows.map(([label, value, text]) => (
-                <div key={label}>
-                  <dt>{t(label)}</dt>
-                  <dd dir={text ? "auto" : "ltr"}>{value}</dd>
-                </div>
+            <div key={key}>
+              {sections.map((section) => (
+                <Section key={section.id} id={`${id}-${section.id}`} title={t(section.title)} folded={folded.includes(section.id)} onFold={() => fold(section.id)}>
+                  <dl>
+                    {section.rows.map(([label, value, text]) => (
+                      <div key={label}>
+                        <dt>{t(label)}</dt>
+                        <dd dir={text ? "auto" : "ltr"}>{value}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </Section>
               ))}
-              {entity && entity.attributes.length > 0 && (
-                <div className="attributes">
-                  <dt>{t("props.attributes")}</dt>
-                  <dd>
-                    <dl>
-                      {entity.attributes.map(([tag, value], i) => (
-                        <div key={i}>
-                          <dt dir="auto">{tag}</dt>
-                          <dd dir="auto">{value}</dd>
-                        </div>
-                      ))}
-                    </dl>
-                  </dd>
-                </div>
+              {attributes.length > 0 && (
+                <Section
+                  id={`${id}-attributes`}
+                  className="attributes"
+                  title={t("props.attributes")}
+                  folded={folded.includes("attributes")}
+                  onFold={() => fold("attributes")}
+                >
+                  <dl>
+                    {attributes.map(([tag, value], i) => (
+                      <div key={i}>
+                        <dt dir="auto">{tag}</dt>
+                        <dd dir="auto">{value}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </Section>
               )}
-            </dl>
+            </div>
           )}
         </div>
       )}

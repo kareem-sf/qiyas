@@ -19,7 +19,7 @@ type Deps = Pick<Sheets, "batch" | "redraw"> &
   Pick<Layers, "runLayerCommand"> & {
     info: DrawingInfo | null;
     tool: Tool;
-    measure: Pick<Measure, "highlighted">;
+    measure: Pick<Measure, "highlighted" | "picks">;
   };
 
 export function useSelection({ info, tool, measure, batch, redraw, runLayerCommand }: Deps) {
@@ -29,6 +29,9 @@ export function useSelection({ info, tool, measure, batch, redraw, runLayerComma
   );
   /** What the select tool picked, for the properties palette. */
   const [pickedInfo, setPickedInfo] = useState<EntityInfo | null>(null);
+  /** Two or more entities picked together with the select tool (a Shift click, a box, a group),
+   *  each one's info; null otherwise. */
+  const [pickedMany, setPickedMany] = useState<EntityInfo[] | null>(null);
 
   /** The palette's edit of the picked entity (a drawing's own, at the top of the sheet). */
   const setPickedProperty = useCallback(
@@ -81,7 +84,32 @@ export function useSelection({ info, tool, measure, batch, redraw, runLayerComma
     };
   }, [pickedKey, batch]);
 
-  return { imageChosen, setImageChosen, pickedInfo, setPickedProperty, setChosenDisplay };
+  // The whole selection set when it holds two or more: every entity is read, so the palette's
+  // sums add up everything picked (one that cannot be read leaves none, never a short sum).
+  const picks = measure.picks;
+  const picksKey = picks.length >= 2 ? picks.join(",") : null;
+  useEffect(() => {
+    if (picksKey === null) {
+      setPickedMany(null);
+      return;
+    }
+    let gone = false;
+    const read = async () => {
+      const found: EntityInfo[] = [];
+      for (let i = 0; i < picks.length; i += 64) {
+        found.push(...(await Promise.all(picks.slice(i, i + 64).map((h) => entityInfo(h, [])))));
+      }
+      return found;
+    };
+    read()
+      .then((found) => !gone && setPickedMany(found))
+      .catch(() => !gone && setPickedMany(null));
+    return () => {
+      gone = true;
+    };
+  }, [picksKey, batch]);
+
+  return { imageChosen, setImageChosen, pickedInfo, pickedMany, setPickedProperty, setChosenDisplay };
 }
 
 export type Selection = ReturnType<typeof useSelection>;

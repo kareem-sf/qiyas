@@ -695,6 +695,9 @@ const placesPoints = (tool: Tool) =>
 /** The tools that snap: those that place points, and `idPoint`. */
 const snaps = (tool: Tool) => placesPoints(tool) || tool === "idPoint";
 
+/** The same empty list each render, so memoised readers see no change. */
+const NO_PICKS: number[] = [];
+
 type SnapAsk = { p: Point; tol: number; from: Point | null; wpp: number };
 
 /** Tool state for `tool`, following it as it changes. `ucs` is the user coordinate system ortho,
@@ -995,6 +998,9 @@ export function useTool(
           : param
             ? constraintHighlight(param)
             : state.selection.filter((h) => !state.selected || h !== state.selected.picked.top),
+    /** The select tool's whole selection set (top-level handles): the properties palette sums
+     *  it when two or more are picked. */
+    picks: tool === "select" ? state.selection : NO_PICKS,
     /** Dimensions and tables the modify tool just left out: say how many. */
     skipped,
     /** The drawing changed: keep only the selected handles `present`. */

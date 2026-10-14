@@ -247,6 +247,20 @@ export type EntityInfo = {
   viewport_centre?: P | null;
 };
 
+  /** A line's or an arc's end points, a circle's, arc's or ellipse's centre, in world
+   *  coordinates and drawing units. */
+  start?: P | null;
+  end?: P | null;
+  centre?: P | null;
+  /** An arc's start and end angles in degrees (0 up to 360, counter-clockwise). */
+  start_angle?: number | null;
+  end_angle?: number | null;
+  /** A polyline's vertices. */
+  vertex_count?: number | null;
+  /** Where a text, an MText or a block reference is inserted, in world coordinates. */
+  position?: P | null;
+  /** A hatch's pattern name ("SOLID" for a solid fill). */
+  pattern?: string | null;
 /** A table's cells for the table editor (`qiyas_core::TableInfo`). */
 export type TableInfo = {
   /** Each cell's text as read (formatting codes gone), row by row. */

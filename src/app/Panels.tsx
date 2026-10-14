@@ -75,7 +75,7 @@ export function LeftPanels({ info, sheetShown, theme, drafting, sheets, layers, 
     ownLayers,
     setCurrentState,
   } = layers;
-  const { pickedInfo, setPickedProperty } = selection;
+  const { pickedInfo, pickedMany, setPickedProperty } = selection;
   const sheetName = sheetShown?.name ?? sheet;
 
   return (
@@ -102,6 +102,7 @@ export function LeftPanels({ info, sheetShown, theme, drafting, sheets, layers, 
       />
       <PropertiesPanel
         entity={pickedInfo}
+        many={pickedMany}
         units={info?.units ?? "metres"}
         precision={drafting?.precision ?? 3}
         sheet={sheetName}
