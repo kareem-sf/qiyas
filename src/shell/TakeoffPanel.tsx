@@ -142,7 +142,7 @@ export const TakeoffPanel = memo(function TakeoffPanel({
       {
         id: "layer",
         header: t("layer"),
-        size: 78,
+        size: 70,
         minSize: 48,
         sortValue: (m) => shortLayerName(m.layer),
         cell: (m) => <bdi>{shortLayerName(m.layer)}</bdi>,

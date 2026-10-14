@@ -35,7 +35,7 @@ export type GridColumn<Row extends object> = {
   id: string;
   /** The column's title (text: it names the column for the screen reader and the resize edge). */
   header: string;
-  /** The width in pixels it starts at; a column that `grow`s never goes narrower than it. */
+  /** The width in pixels it starts at; a column that `grow`s gives way down to its `minSize`. */
   size: number;
   /** The narrowest the user can drag it to. */
   minSize?: number;
@@ -204,16 +204,18 @@ export function DataGrid<Row extends object>(props: GridProps<Row>) {
     observeElementRect: observeRect,
   });
 
-  // The columns' widths: the one that grows takes what is left (`1fr`) and never less than its own.
+  // The columns' widths: the one that grows takes what is left (`1fr`); in a narrow panel it gives
+  // way down to its `minSize` before the grid scrolls sideways.
   const headers = table.getHeaderGroups()[0]?.headers ?? [];
   const byId = new Map(columns.map((c) => [c.id, c]));
+  const floor = (h: (typeof headers)[number]) => {
+    const c = byId.get(h.column.id);
+    return c?.grow ? Math.min(h.getSize(), c.minSize ?? h.getSize()) : h.getSize();
+  };
   const template = headers
-    .map((h) => {
-      const size = h.getSize();
-      return byId.get(h.column.id)?.grow ? `minmax(${size}px, 1fr)` : `${size}px`;
-    })
+    .map((h) => (byId.get(h.column.id)?.grow ? `minmax(${floor(h)}px, 1fr)` : `${h.getSize()}px`))
     .join(" ");
-  const total = headers.reduce((sum, h) => sum + h.getSize(), 0);
+  const total = headers.reduce((sum, h) => sum + floor(h), 0);
   const style = { "--cols": template, minWidth: total } as CSSProperties;
 
   // Rows by the keyboard: the arrows, Home and End move between them, even those scrolled out of

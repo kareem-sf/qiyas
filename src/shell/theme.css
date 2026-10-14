@@ -1222,6 +1222,10 @@ span.grid-sort {
   touch-action: none;
   outline: none;
 }
+/* The last column's edge stays inside the grid, or it alone would make the grid scroll sideways. */
+.grid-th:last-child .grid-edge {
+  inset-inline-end: 0;
+}
 .grid-edge::after {
   content: "";
   position: absolute;
