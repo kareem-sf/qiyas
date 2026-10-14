@@ -44,3 +44,12 @@ test("the cursor shows in the UCS, marked as such", () => {
   );
   expect(container.querySelector(".cursor")?.textContent).toBe("UCS 1.00, 0.00 m");
 });
+
+test("while something waits the dots sit beside the message, which keeps its text", () => {
+  const { container, rerender } = render(<StatusBar {...props} message="Opening…" waiting="scan" problems={[]} />);
+  const message = container.querySelector(".message") as HTMLElement;
+  expect(message.textContent).toBe("Opening…");
+  expect(message.querySelector(".dot-loader.dot-scan")?.getAttribute("aria-hidden")).toBe("true");
+  rerender(<StatusBar {...props} message="a.dwg" problems={[]} />);
+  expect(container.querySelector(".dot-loader")).toBeNull();
+});

@@ -73,9 +73,12 @@ test("an update found is installed only on a click; the download shows its progr
   expect(screen.getByText("Plotting to PDF.")).toBeTruthy();
   expect(api.installUpdate).not.toHaveBeenCalled();
 
+  expect(screen.getByRole("button", { name: "Install and restart" }).querySelector(".dot-loader")).toBeNull();
   await click("Install and restart");
   expect(api.installUpdate).toHaveBeenCalledTimes(1);
   expect(screen.getByRole("button", { name: "Downloading…" })).toBeTruthy();
+  // The dots wait beside the text (hidden from assistive technology: the name stays the text).
+  expect(screen.getByRole("button", { name: "Downloading…" }).querySelector(".dot-loader")).toBeTruthy();
   await send("update:progress", { downloaded: 45, total: 100 });
   expect(screen.getByRole("button", { name: "Downloading… 45%" })).toBeTruthy();
   await send("update:progress", { downloaded: 3_500_000, total: null });
@@ -86,6 +89,7 @@ test("an update found is installed only on a click; the download shows its progr
   // Installing: neither the button nor Close can be pressed, and Escape is ignored.
   await send("update:installing");
   expect((screen.getByRole("button", { name: "Installing…" }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.getByRole("button", { name: "Installing…" }).querySelector(".dot-spiral")).toBeTruthy();
   expect((screen.getByRole("button", { name: "Close" }) as HTMLButtonElement).disabled).toBe(true);
   const escape = new Event("cancel", { cancelable: true });
   screen.getByRole("dialog", { hidden: true }).dispatchEvent(escape);

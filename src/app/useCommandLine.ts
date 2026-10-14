@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { EMPTY_MODEL, pick, redo, undo, type DrawingInfo } from "../api";
 import type { Assistant } from "../ai/useAssistant";
 import { metresPerUnit } from "../shell/AttachPdfDialog";
+import type { DotPattern } from "../shell/DotLoader";
 import type { Action, Expect, ParseState } from "../tools/commandParser";
 import { shortcutFor, userShortcut } from "../tools/shortcuts";
 import type { Point } from "../viewport/camera";
@@ -57,7 +58,10 @@ type Deps = {
     | "closeFileTab"
     | "cycleTabs"
   >;
-  takeoffState: Pick<TakeoffState, "setInfoCard" | "setSelectedId" | "setBoqCode" | "setAiHighlight" | "setConflictIds">;
+  takeoffState: Pick<
+    TakeoffState,
+    "setInfoCard" | "setSelectedId" | "setBoqCode" | "setAiHighlight" | "setConflictIds" | "comparing"
+  >;
   takeoff: Pick<Takeoff, "importBoqFile" | "compareNow">;
   plot: Pick<Plot, "windowPick" | "pickPoint" | "cancelPick" | "openPlot" | "quickPrint" | "printAll" | "openStyles">;
   options: Pick<
@@ -113,7 +117,7 @@ export function useCommandLine({
     closeFileTab,
     cycleTabs,
   } = drawings;
-  const { setInfoCard, setSelectedId, setBoqCode, setAiHighlight, setConflictIds } = takeoffState;
+  const { setInfoCard, setSelectedId, setBoqCode, setAiHighlight, setConflictIds, comparing } = takeoffState;
   const { importBoqFile, compareNow } = takeoff;
   const { windowPick, pickPoint, cancelPick, openPlot, quickPrint, printAll, openStyles } = plot;
   /** The command line shows (Ctrl+9), its input, and whether to focus it once shown. */
@@ -537,6 +541,8 @@ export function useCommandLine({
   const promptShown = commandLineOn && promptKey === measure.hint;
   const message = opening
     ? t("opening")
+    : comparing
+      ? t("compare.running")
     : windowPick
       ? t(windowPick.first ? "plot.pickSecond" : "plot.pickFirst")
     : pending
@@ -563,5 +569,17 @@ export function useCommandLine({
             : fileName
           : t("noDrawing")));
 
-  return { commandLineOn, commandInput, onCommand, clickDrawing, commandState, prompt, message };
+  // What the status bar waits for, as the dots to show beside the message: the same order as the
+  // message above, so the dots never stand beside a text about something else.
+  const waiting: DotPattern | null = opening
+    ? "scan"
+    : comparing
+      ? "chase"
+      : windowPick || pending
+        ? null
+        : renderProgress !== null && !attachOpen
+          ? "pulse"
+          : null;
+
+  return { commandLineOn, commandInput, onCommand, clickDrawing, commandState, prompt, message, waiting };
 }

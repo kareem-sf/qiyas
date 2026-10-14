@@ -33,6 +33,7 @@ import { BlockPalette } from "../shell/BlockPalette";
 import { CustomizeUi } from "../shell/CustomizeUi";
 import { DesignCenter } from "../shell/DesignCenter";
 import { DimStylePanel } from "../shell/DimStylePanel";
+import { DotLoader } from "../shell/DotLoader";
 import { DraftingSettings } from "../shell/DraftingSettings";
 import { ExtractDialog } from "../shell/ExtractDialog";
 import { FieldDialog } from "../shell/FieldDialog";
@@ -703,6 +704,7 @@ export function FileDialogs({ drawings }: { drawings: Drawings }) {
       )}
       {scriptLine !== null && (
         <div className="script-running" aria-live="polite">
+          <DotLoader pattern="chase" />
           {t("script.running", { line: Math.max(scriptLine, 1) })}
           <button type="button" onClick={stopRunningScript}>
             {t("script.stop")}

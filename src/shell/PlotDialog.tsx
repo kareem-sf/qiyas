@@ -4,6 +4,7 @@ import { useT } from "../i18n";
 import type { Batch } from "../viewport/batch";
 import type { Point } from "../viewport/camera";
 import { metresPerUnit } from "./AttachPdfDialog";
+import { DotLoader } from "./DotLoader";
 
 /** What a sheet plots with, kept per drawing and sheet (`usePlot`). */
 export type PageSetup = {
@@ -601,7 +602,12 @@ export function PlotDialog(props: Props) {
             </button>
           </div>
         </div>
-        {busy && <p className="status">{t("plot.plotting")}</p>}
+        {busy && (
+          <p className="status">
+            <DotLoader pattern="chase" />
+            {t("plot.plotting")}
+          </p>
+        )}
         {error && (
           <p className="error" role="alert" dir="auto">
             {error}

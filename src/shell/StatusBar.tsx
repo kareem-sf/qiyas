@@ -3,6 +3,7 @@ import type { Drafting, Ucs } from "../api";
 import { useT } from "../i18n";
 import type { DraftingToggle } from "../tools/shortcuts";
 import { isWorld, toUcs } from "../tools/ucs";
+import { DotLoader, type DotPattern } from "./DotLoader";
 import { useMenu } from "./useMenu";
 
 type Props = {
@@ -12,6 +13,9 @@ type Props = {
   /** The drawing's reading problems, one line each; a button with their count opens the list. */
   problems: string[];
   message: string;
+  /** The motion to show beside the message while something waits (opening, comparing, a picture
+   *  drawing); null or absent for none. The message keeps saying what it is. */
+  waiting?: DotPattern | null;
   /** Decimals of the cursor position. */
   precision?: number;
   /** Metres per drawing unit: the cursor is shown in metres. */
@@ -42,6 +46,7 @@ export function StatusBar({
   unitsWarning,
   problems,
   message,
+  waiting = null,
   precision = 3,
   metresPerUnit = 1,
   snapLabel = null,
@@ -71,6 +76,7 @@ export function StatusBar({
   return (
     <footer className="status">
       <span className="message" role="status" aria-live="polite">
+        {waiting && <DotLoader pattern={waiting} />}
         {message}
       </span>
       {snapLabel && <span className="snap-kind">{snapLabel}</span>}

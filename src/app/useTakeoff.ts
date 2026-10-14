@@ -38,6 +38,8 @@ export function useTakeoffState(switchGen: RefObject<number>) {
   const [conflicts, setConflicts] = useState<Conflict[]>([]);
   /** A comparison ran for this drawing, so no conflicts means none were found. */
   const [compared, setCompared] = useState(false);
+  /** A comparison is running (the status bar says so). */
+  const [comparing, setComparing] = useState(false);
   /** The measurements a conflict's Show pointed at. */
   const [conflictIds, setConflictIds] = useState<string[]>([]);
   /** Entities the assistant pointed at (Show on a tool card, or a zoom it asked for). */
@@ -93,6 +95,8 @@ export function useTakeoffState(switchGen: RefObject<number>) {
     setConflicts,
     compared,
     setCompared,
+    comparing,
+    setComparing,
     conflictIds,
     setConflictIds,
     aiHighlight,
@@ -141,6 +145,7 @@ export function useTakeoff({
     setBoqCode,
     setConflicts,
     setCompared,
+    setComparing,
     conflictIds,
     setConflictIds,
     setAiHighlight,
@@ -172,8 +177,14 @@ export function useTakeoff({
   async function compareNow() {
     if (!info) return;
     let changed = false;
+    setComparing(true);
     await run(async () => {
-      const found = await compare();
+      let found: Conflict[];
+      try {
+        found = await compare();
+      } finally {
+        setComparing(false);
+      }
       changed = true;
       setConflicts(found);
       setCompared(true);
