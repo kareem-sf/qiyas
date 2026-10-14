@@ -17,6 +17,10 @@
   --accent: var(--face-deep);
   --accent-soft: rgb(201 166 224 / 0.35);
   --warn: #9a5b00;
+  /* The grid's hovered and current rows on the panel colour, as solid colours (its row buttons sit
+     on top and must not show what is under them). */
+  --row-hover: #e4e1da;
+  --row-current: #e4d5e5;
   color-scheme: light;
 }
 
@@ -30,6 +34,8 @@
   --accent: var(--face-light);
   --accent-soft: rgb(110 74 158 / 0.45);
   --warn: #e9b35f;
+  --row-hover: #292a2d;
+  --row-current: #3e2e56;
   color-scheme: dark;
 }
 
@@ -45,6 +51,8 @@
     --accent: var(--face-light);
     --accent-soft: rgb(110 74 158 / 0.45);
     --warn: #e9b35f;
+    --row-hover: #292a2d;
+    --row-current: #3e2e56;
     color-scheme: dark;
   }
 }
@@ -1016,6 +1024,242 @@ button.close {
   height: 13px;
 }
 
+/* Data grid (`ui/DataGrid.tsx`): the take-off, the BOQ and the conflicts. The header sticks to the
+   top of the scrolling box; rows are placed by the virtualiser, so only those in view exist. Every
+   row is the same grid of columns (`--cols`), the one that grows taking the room left over. */
+.grid {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  font-size: 12px;
+  background: var(--panel);
+  scrollbar-width: thin;
+}
+.grid-inner {
+  position: relative;
+  width: 100%;
+}
+.grid-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: var(--cols);
+  background: var(--panel);
+  border-bottom: 1px solid var(--rule);
+}
+.grid-th {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  height: 26px;
+  padding: 0 6px;
+  color: var(--muted);
+  font-weight: 500;
+}
+.grid-th.end {
+  justify-content: flex-end;
+}
+.grid-sort {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+span.grid-sort {
+  cursor: default;
+}
+.grid-sort > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.grid-sort:hover:not(:disabled) {
+  background: none;
+  color: var(--fg);
+}
+/* The sort arrow sits just past the title, out of the flow: a title never gives up its letters to it. */
+.grid-arrow {
+  position: absolute;
+  top: 50%;
+  inset-inline-end: -11px;
+  margin-top: -4.5px;
+  width: 9px;
+  height: 9px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0;
+  transition:
+    opacity 120ms ease,
+    transform 160ms ease;
+}
+.grid-sort:hover .grid-arrow {
+  opacity: 0.5;
+}
+.grid-arrow.asc,
+.grid-arrow.desc {
+  color: var(--accent);
+  opacity: 1;
+}
+.grid-arrow.desc {
+  transform: rotate(180deg);
+}
+:root[dir="rtl"] .grid-arrow {
+  /* A box that does not mirror: a rotation is the same both ways. */
+  inset-inline-end: -11px;
+}
+/* The edge you drag to resize: a hairline on the column's end, wider to hit than to see. */
+.grid-edge {
+  position: absolute;
+  inset-block: 3px;
+  inset-inline-end: -4px;
+  z-index: 3;
+  width: 9px;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+.grid-edge::after {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 4px;
+  width: 1px;
+  background: var(--rule);
+  transition: background-color 120ms ease;
+}
+.grid-edge:hover::after,
+.grid-edge:focus-visible::after,
+.grid-resizing .grid-edge:active::after {
+  width: 2px;
+  background: var(--accent);
+}
+.grid-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+.grid-body {
+  position: relative;
+}
+.grid-row {
+  position: absolute;
+  top: 0;
+  inset-inline: 0;
+  display: grid;
+  grid-template-columns: var(--cols);
+  align-items: center;
+  background: var(--panel);
+  outline: none;
+}
+.grid-row.clickable {
+  cursor: pointer;
+}
+.grid-row:hover {
+  background: var(--row-hover);
+}
+.grid-row[aria-current] {
+  background: var(--row-current);
+}
+.grid-row:focus-visible {
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+.grid-row[aria-disabled="true"] {
+  cursor: default;
+}
+.grid-cell {
+  min-width: 0;
+  padding: 0 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 26px;
+}
+.grid-cell.end {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+.grid-cell.muted {
+  color: var(--muted);
+}
+.grid-section {
+  background: var(--panel);
+}
+.grid-section:hover {
+  background: var(--panel);
+}
+.grid-sectionname {
+  grid-column: 1 / -1;
+  min-width: 0;
+  padding: 0 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 26px;
+}
+/* A cell that wraps (a long sentence): two lines at most, the full text in its tooltip. */
+.grid-cell.wrap {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.3;
+}
+.grid-count {
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+/* The row's buttons: out of sight until the row is hovered, focused or the current one. They sit
+   over the end of the row, on its own colour, so no column is spent on them. */
+.grid-actions {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 0;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding-inline: 8px 4px;
+  background: var(--panel);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.grid-row:hover .grid-actions {
+  background: var(--row-hover);
+}
+.grid-row[aria-current] .grid-actions {
+  background: var(--row-current);
+}
+.grid-row:hover .grid-actions,
+.grid-row:focus-within .grid-actions,
+.grid-row[aria-current] .grid-actions {
+  opacity: 1;
+}
+.grid-section .grid-actions {
+  display: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .grid-arrow,
+  .grid-actions {
+    transition: none;
+  }
+}
+
 /* Take-off panel: beside the drawing, on the side opposite the layers. */
 .takeoff {
   position: relative;
@@ -1035,68 +1279,20 @@ button.close {
   padding: 0 10px 8px;
   color: var(--muted);
 }
-.takeoff-rows {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 0 4px;
-}
-.takeoff table {
-  width: 100%;
-  table-layout: fixed;
-  border-collapse: collapse;
-  font-size: 12px;
-}
-.takeoff th {
-  font-weight: 500;
-  color: var(--muted);
-  text-align: start;
-}
-.takeoff th:nth-child(1) {
-  width: 30%;
-}
-.takeoff th:nth-child(2) {
-  width: 18%;
-}
-.takeoff th:nth-child(3) {
-  width: 10%;
-}
-.takeoff th:nth-child(4) {
-  width: 14%;
-}
-.takeoff th:nth-child(6) {
-  width: 72px;
-}
-.takeoff :is(th, td) {
-  padding: 1px 4px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.takeoff tbody tr {
-  cursor: pointer;
-}
-.takeoff tbody tr:hover {
-  background: var(--hover);
-}
-.takeoff tbody tr[aria-current="true"] {
-  background: var(--accent-soft);
-}
-.takeoff .num {
-  text-align: end;
-  font-variant-numeric: tabular-nums;
-}
 .takeoff .desc {
   display: flex;
   align-items: center;
   gap: 2px;
+  min-width: 0;
 }
 .takeoff .desc button {
   flex: 1;
   min-width: 0;
-  padding: 2px 0;
+  padding: 0;
   border: 0;
+  line-height: 26px;
   text-align: start;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -1112,10 +1308,6 @@ button.close {
   border: 1px solid var(--accent);
   border-radius: 4px;
   padding: 1px 4px;
-}
-.takeoff .actions {
-  display: flex;
-  justify-content: flex-end;
 }
 :is(.takeoff, .boq) .muted {
   color: var(--muted);
@@ -1225,77 +1417,6 @@ button.close {
 .boq .boq-search {
   margin: 0 10px 6px;
 }
-.boq-rows {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  padding: 0 4px;
-}
-.boq table {
-  width: 100%;
-  min-width: 580px;
-  table-layout: fixed;
-  border-collapse: collapse;
-  font-size: 12px;
-}
-.boq th {
-  font-weight: 500;
-  color: var(--muted);
-  text-align: start;
-}
-.boq thead th {
-  position: sticky;
-  top: 0;
-  background: var(--panel);
-}
-.boq thead th:nth-child(1) {
-  width: 52px;
-}
-.boq thead th:nth-child(3) {
-  width: 40px;
-}
-.boq thead th:nth-child(4) {
-  width: 72px;
-}
-.boq thead th:nth-child(5) {
-  width: 104px;
-}
-.boq thead th:nth-child(6) {
-  width: 72px;
-}
-.boq thead th:nth-child(7) {
-  width: 44px;
-}
-.boq thead th:nth-child(8) {
-  width: 76px;
-}
-.boq :is(th, td) {
-  padding: 1px 4px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.boq tr.section th {
-  padding-top: 6px;
-  color: var(--fg);
-  font-weight: 700;
-}
-:root[dir="rtl"] .boq tr.section th {
-  font-feature-settings: "swsh";
-}
-.boq tbody tr:not(.section, [aria-disabled="true"]) {
-  cursor: pointer;
-}
-.boq tbody tr:not(.section, [aria-disabled="true"]):hover {
-  background: var(--hover);
-}
-.boq tbody tr[aria-current="true"] {
-  background: var(--accent-soft);
-}
-.boq .num {
-  text-align: end;
-  font-variant-numeric: tabular-nums;
-}
 .boq .measured {
   display: inline-flex;
   align-items: center;
@@ -1309,7 +1430,7 @@ button.close {
 .boq .diff-none {
   color: var(--muted);
 }
-.boq .tol input {
+.boq .grid-cell input {
   width: 100%;
   font: inherit;
   color: inherit;
@@ -1418,126 +1539,80 @@ button.close {
   color: var(--muted);
 }
 .tab-count {
-  min-width: 18px;
-  padding: 0 5px;
-  font-size: 11px;
-  line-height: 16px;
+  min-width: 16px;
+  padding: 0 4px;
+  font-size: 10.5px;
+  line-height: 15px;
   text-align: center;
   color: var(--fg);
   background: var(--accent-soft);
   border-radius: 999px;
 }
-.conflicts-rows {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 0 10px 10px;
+/* A conflict row: a thin mark on its start edge while it is open (the warning colour), muted once
+   resolved or ignored. */
+.grid-row.conflict::before {
+  content: "";
+  position: absolute;
+  inset-block: 5px;
+  inset-inline-start: 0;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--warn);
 }
-.conflicts h3.group {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  margin: 0;
-  padding: 6px 0 4px;
-  font-size: 12px;
-  font-weight: 700;
-  background: var(--panel);
+.grid-row.conflict.done::before {
+  background: var(--rule);
 }
-:root[dir="rtl"] .conflicts h3.group {
-  font-feature-settings: "swsh";
-}
-.conflicts ul {
-  list-style: none;
-  margin: 0 0 6px;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.conflict {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 2px 8px;
-  padding: 6px 8px;
-  background: var(--bg);
-  border: 1px solid var(--rule);
-  border-inline-start: 3px solid var(--warn);
-  border-radius: 6px;
-  font-size: 12px;
-}
-.conflict.done {
-  border-inline-start-color: var(--rule);
-}
-.conflict.done :is(.reason, .meta) {
+.conflict.done .grid-cell {
   color: var(--muted);
 }
-.conflict p {
-  margin: 0;
-}
-.conflict .meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px 10px;
-  margin-top: 2px;
-  color: var(--muted);
-}
-.conflict .code {
+.conflict .grid-cell.code {
   font-weight: 500;
-  color: var(--fg);
 }
-.conflict.done .code {
-  color: inherit;
-}
-.conflict .numbers {
+.conflict .grid-cell.numbers {
   font-variant-numeric: tabular-nums;
 }
-.conflict .row-actions {
-  display: flex;
-  align-items: flex-start;
-  gap: 4px;
-}
-.conflict .row-actions button {
-  padding: 1px 8px;
-  border-color: var(--rule);
-}
 .conflict select {
+  max-width: 100%;
   font: inherit;
   color: inherit;
   background: var(--bg);
   border: 1px solid var(--rule);
   border-radius: 6px;
-  padding: 1px 4px;
+  padding: 0 2px;
 }
-.conflict .note {
-  grid-column: 1 / -1;
-  display: flex;
-}
-.conflict .note button {
-  flex: 1;
+.conflict .grid-cell button {
+  display: block;
+  width: 100%;
   min-width: 0;
-  padding: 1px 0;
+  padding: 0;
   border: 0;
+  line-height: 26px;
   text-align: start;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.conflict .note button:hover {
+.conflict .grid-cell button:hover {
   background: none;
   text-decoration: underline;
 }
-.conflict .note .muted {
+.conflict .grid-cell button.muted {
   color: var(--muted);
 }
-.conflict .note input {
-  flex: 1;
+.conflict .grid-cell input {
+  width: 100%;
   min-width: 0;
   font: inherit;
   color: inherit;
   background: var(--bg);
   border: 1px solid var(--accent);
   border-radius: 4px;
-  padding: 1px 4px;
+  padding: 0 4px;
+}
+.conflict .grid-actions button {
+  padding: 1px 8px;
+  line-height: 18px;
+  border-color: var(--rule);
 }
 .warn-icon svg {
   width: 14px;
@@ -1936,8 +2011,8 @@ button.close {
   isolation: isolate;
   display: flex;
   flex-wrap: nowrap;
-  gap: 2px;
-  padding: 6px 8px 0;
+  gap: 0;
+  padding: 6px 6px 0;
   overflow: hidden;
   border-bottom: 1px solid var(--rule);
 }
@@ -1945,11 +2020,11 @@ button.close {
   flex: none;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   height: 28px;
-  padding: 0 9px;
+  padding: 0 8px;
   border-radius: 6px 6px 0 0;
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--muted);
   white-space: nowrap;
   transition: color 150ms ease;

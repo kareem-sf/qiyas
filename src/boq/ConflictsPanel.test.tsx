@@ -48,8 +48,8 @@ function renderPanel(more: Partial<Parameters<typeof ConflictsPanel>[0]> = {}) {
   return props;
 }
 
-const groups = () =>
-  screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent);
+/** The section heads of the grid: the kinds, each with its count. */
+const groups = () => screen.getAllByRole("rowheader").map((h) => h.textContent);
 const reasons = () => [...document.querySelectorAll(".reason")].map((p) => p.textContent);
 
 test("rows are grouped by kind, in kind order, with their counts and details", () => {
@@ -61,16 +61,16 @@ test("rows are grouped by kind, in kind order, with their counts and details", (
     "Door D1: schedule 4, plan 3",
     "Linked in m2, BOQ in m",
   ]);
-  const walls = screen.getByText("Walls: BOQ 16, measured 10").closest("li")!;
+  const walls = screen.getByText("Walls: BOQ 16, measured 10").closest<HTMLElement>('[role="row"]')!;
   expect(within(walls).getByTitle("Expected → found").textContent).toBe("16.000 → 10.000 m");
   expect(within(walls).getByText("A.1")).toBeTruthy();
   expect(within(walls).getByText("Model")).toBeTruthy();
   expect(within(walls).getByRole("button", { name: "Check the GF plan" })).toBeTruthy();
-  const doors = screen.getByText("Door D1: schedule 4, plan 3").closest("li")!;
+  const doors = screen.getByText("Door D1: schedule 4, plan 3").closest<HTMLElement>('[role="row"]')!;
   expect(within(doors).getByTitle("Expected → found").textContent).toBe("4 → 3 pcs");
   expect(within(doors).getByText("GF Plan, Schedules")).toBeTruthy();
   // Resolved and ignored rows are muted.
-  const plaster = screen.getByText("Plaster: BOQ 12, measured 14").closest("li")!;
+  const plaster = screen.getByText("Plaster: BOQ 12, measured 14").closest<HTMLElement>('[role="row"]')!;
   expect(plaster.className).toContain("done");
   expect(walls.className).not.toContain("done");
 
@@ -84,8 +84,8 @@ test("rows are grouped by kind, in kind order, with their counts and details", (
 
 test("the status filter hides resolved ones; kind chips filter and count", () => {
   renderPanel();
-  const status = screen.getByRole("group", { name: "Status" });
-  fireEvent.click(within(status).getByRole("button", { name: "Open" }));
+  const status = screen.getByRole("radiogroup", { name: "Status" });
+  fireEvent.click(within(status).getByRole("radio", { name: "Open" }));
   expect(reasons()).not.toContain("Plaster: BOQ 12, measured 14");
   expect(groups()).toEqual(["Quantity mismatch 1", "Schedule vs plan 1", "Unit doubt 1"]);
 
@@ -100,16 +100,16 @@ test("the status filter hides resolved ones; kind chips filter and count", () =>
   expect(reasons()).toEqual(["Linked in m2, BOQ in m"]);
 
   // Ignored: nothing matches; the chips stay.
-  fireEvent.click(within(status).getByRole("button", { name: "Ignored" }));
+  fireEvent.click(within(status).getByRole("radio", { name: "Ignored" }));
   expect(screen.getByText("No conflicts match the filter")).toBeTruthy();
   fireEvent.click(within(kinds).getByRole("button", { name: "All 0" }));
-  fireEvent.click(within(status).getByRole("button", { name: "Resolved" }));
+  fireEvent.click(within(status).getByRole("radio", { name: "Resolved" }));
   expect(reasons()).toEqual(["Plaster: BOQ 12, measured 14"]);
 });
 
 test("changing the status keeps the note; editing the note keeps the status", () => {
   const props = renderPanel();
-  const walls = screen.getByText("Walls: BOQ 16, measured 10").closest("li")!;
+  const walls = screen.getByText("Walls: BOQ 16, measured 10").closest<HTMLElement>('[role="row"]')!;
   fireEvent.change(within(walls).getByRole("combobox", { name: "Status" }), {
     target: { value: "ignored" },
   });
@@ -120,7 +120,7 @@ test("changing the status keeps the note; editing the note keeps the status", ()
     note: "Check the GF plan",
   });
 
-  const plaster = screen.getByText("Plaster: BOQ 12, measured 14").closest("li")!;
+  const plaster = screen.getByText("Plaster: BOQ 12, measured 14").closest<HTMLElement>('[role="row"]')!;
   fireEvent.click(within(plaster).getByRole("button", { name: "Note…" }));
   const input = within(plaster).getByRole("textbox", { name: "Note…" });
   fireEvent.change(input, { target: { value: "  Site measured  " } });
@@ -165,4 +165,35 @@ test("empty states: no BOQ, not compared, none found", () => {
 test("a hint under the toolbar says to link or name measurements", () => {
   renderPanel();
   expect(screen.getByText("Link or name your measurements to find gaps")).toBeTruthy();
+});
+
+test("a click on a conflict's row shows it, like its Show button; one with nothing to show is not clickable", () => {
+  const nothing = conflict("c9", "unit_doubt", "Nothing to point at");
+  const props = renderPanel({ conflicts: [...conflicts, nothing] });
+  const walls = screen.getByText("Walls: BOQ 16, measured 10").closest<HTMLElement>('[role="row"]')!;
+  fireEvent.click(walls);
+  expect(props.onShow).toHaveBeenCalledWith(conflicts[1]);
+  const empty = screen.getByText("Nothing to point at").closest<HTMLElement>('[role="row"]')!;
+  expect(empty.getAttribute("aria-disabled")).toBe("true");
+  fireEvent.click(empty);
+  expect(props.onShow).toHaveBeenCalledTimes(1);
+  expect((within(empty).getByRole("button", { name: "Show" }) as HTMLButtonElement).disabled).toBe(true);
+  // Working in the status or the note is not a click on the row.
+  fireEvent.click(within(walls).getByRole("combobox", { name: "Status" }));
+  fireEvent.click(within(walls).getByRole("button", { name: "Check the GF plan" }));
+  expect(props.onShow).toHaveBeenCalledTimes(1);
+});
+
+test("the columns sort inside each kind", () => {
+  renderPanel();
+  const reasonsNow = () => [...document.querySelectorAll(".reason")].map((p) => p.textContent);
+  fireEvent.click(within(screen.getByRole("columnheader", { name: /What/ })).getByRole("button"));
+  // Ascending by reason: Plaster before Walls, the kinds in their order.
+  expect(reasonsNow()).toEqual([
+    "Plaster: BOQ 12, measured 14",
+    "Walls: BOQ 16, measured 10",
+    "Door D1: schedule 4, plan 3",
+    "Linked in m2, BOQ in m",
+  ]);
+  expect(groups()).toEqual(["Quantity mismatch 2", "Schedule vs plan 1", "Unit doubt 1"]);
 });

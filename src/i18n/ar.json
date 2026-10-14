@@ -1391,5 +1391,9 @@
   "tip.undo": "تراجع عن آخر تغيير.",
   "tip.redo": "أعد التغيير الذي تراجعت عنه.",
   "panels.moreTabs": "تبويبات أخرى",
-  "canvas.menu": "أوامر الرسم"
+  "canvas.menu": "أوامر الرسم",
+  "grid.resize": "تغيير عرض العمود {name}",
+  "conflicts.reason": "المشكلة",
+  "conflicts.sheets": "اللوحات",
+  "conflicts.noteColumn": "ملاحظة"
 }

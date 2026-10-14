@@ -1,6 +1,8 @@
-import { memo, useRef, useState, type ReactNode } from "react";
+import { memo, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Command, Conflict, ConflictKind } from "../api";
 import { useLanguage, useT } from "../i18n";
+import { DataGrid, type GridColumn } from "../ui/DataGrid";
+import { SegmentedChoice } from "../ui/Segmented";
 import { qty, unitLabel } from "./boqMath";
 import {
   KINDS,
@@ -13,6 +15,8 @@ import {
 } from "./conflictsMath";
 
 export type ResolveCommand = Extract<Command, { type: "resolve_conflict" }>;
+
+const conflictKey = (c: Conflict) => c.id;
 
 type Props = {
   conflicts: Conflict[];
@@ -85,49 +89,69 @@ export const ConflictsPanel = memo(function ConflictsPanel({
     empty = <p className="empty">{t("conflicts.noMatch")}</p>;
   }
 
-  const chip = (value: ConflictKind | null, label: string, n: number) => (
-    <button
-      key={value ?? "all"}
-      type="button"
-      aria-pressed={kind === value}
-      onClick={() => setKind(kind === value || value === null ? null : value)}
-    >
-      {label} <span className="n">{n}</span>
-    </button>
-  );
+  /** What a row can show on the drawing: a measurement, a BOQ item or a sheet. */
+  const showable = (c: Conflict) => c.measurements.length > 0 || !!c.boq_code || c.sheets.length > 0;
+  /** The rows in the order of the kinds, so the grid's sections come in that order. */
+  const rows = useMemo(() => groupByKind(shown).flatMap((g) => g.conflicts), [shown]);
+  const kindName = (c: Conflict) => t(`conflictKind.${c.kind}`);
 
-  const row = (c: Conflict) => {
-    const numbers = c.expected !== null || c.found !== null;
-    return (
-      <li key={c.id} className={c.status === "open" ? "conflict" : "conflict done"}>
-        <div className="what">
-          <p className="reason" dir="auto">
-            {reasonIn(c, lang)}
-          </p>
-          <p className="meta">
-            {c.boq_code && <span className="code">{c.boq_code}</span>}
-            {numbers && (
-              <span className="numbers" title={t("conflicts.expectedFound")}>
-                <bdi>{c.expected === null ? "—" : qty(c.expected, c.unit)}</bdi> {arrow}{" "}
-                <bdi>{c.found === null ? "—" : qty(c.found, c.unit)}</bdi>
-                {c.unit && <> {unitLabel(t, c.unit)}</>}
-              </span>
-            )}
-            {c.sheets.length > 0 && (
-              <span className="sheets" dir="auto">
-                {c.sheets.join(", ")}
-              </span>
-            )}
-          </p>
-        </div>
-        <div className="row-actions">
-          <button
-            type="button"
-            disabled={c.measurements.length === 0 && !c.boq_code && c.sheets.length === 0}
-            onClick={() => onShow(c)}
-          >
-            {t("conflicts.show")}
-          </button>
+  const columns = useMemo<GridColumn<Conflict>[]>(
+    () => [
+      {
+        id: "reason",
+        header: t("conflicts.reason"),
+        size: 160,
+        minSize: 80,
+        grow: true,
+        wrap: true,
+        sortValue: (c) => reasonIn(c, lang),
+        cell: (c) => <span dir="auto">{reasonIn(c, lang)}</span>,
+        title: (c) => reasonIn(c, lang),
+        cellClass: () => "reason",
+      },
+      {
+        id: "code",
+        header: t("boq.code"),
+        size: 52,
+        sortValue: (c) => c.boq_code,
+        cell: (c) => c.boq_code || "—",
+        title: (c) => c.boq_code || undefined,
+        cellClass: (c) => (c.boq_code ? "code" : "muted"),
+      },
+      {
+        id: "numbers",
+        header: t("conflicts.expectedFound"),
+        size: 156,
+        align: "end",
+        sortValue: (c) => c.expected,
+        cell: (c) =>
+          c.expected !== null || c.found !== null ? (
+            <>
+              <bdi>{c.expected === null ? "—" : qty(c.expected, c.unit)}</bdi> {arrow}{" "}
+              <bdi>{c.found === null ? "—" : qty(c.found, c.unit)}</bdi>
+              {c.unit && <> {unitLabel(t, c.unit)}</>}
+            </>
+          ) : null,
+        title: (c) => (c.expected !== null || c.found !== null ? t("conflicts.expectedFound") : undefined),
+        cellClass: () => "numbers",
+      },
+      {
+        id: "sheets",
+        header: t("conflicts.sheets"),
+        size: 64,
+        minSize: 48,
+        sortValue: (c) => c.sheets.join(", "),
+        cell: (c) => <span dir="auto">{c.sheets.join(", ")}</span>,
+        title: (c) => (c.sheets.length > 0 ? c.sheets.join(", ") : undefined),
+        cellClass: () => "muted",
+      },
+      {
+        id: "status",
+        header: t("conflicts.status"),
+        size: 96,
+        sortValue: (c) => STATUSES.indexOf(c.status),
+        isolate: true,
+        cell: (c) => (
           <select
             aria-label={t("conflicts.status")}
             value={c.status}
@@ -146,9 +170,19 @@ export const ConflictsPanel = memo(function ConflictsPanel({
               </option>
             ))}
           </select>
-        </div>
-        <div className="note">
-          {editing === c.id ? (
+        ),
+      },
+      {
+        id: "note",
+        header: t("conflicts.noteColumn"),
+        size: 96,
+        minSize: 60,
+        grow: true,
+        sortValue: (c) => c.note,
+        isolate: true,
+        title: (c) => c.note || undefined,
+        cell: (c) =>
+          editing === c.id ? (
             <input
               type="text"
               dir="auto"
@@ -176,11 +210,24 @@ export const ConflictsPanel = memo(function ConflictsPanel({
             >
               {c.note || t("conflicts.note")}
             </button>
-          )}
-        </div>
-      </li>
-    );
-  };
+          ),
+      },
+    ],
+    // A cell shows the note being typed; the rest changes with the language and the callbacks.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [t, lang, editing, draft, onResolve],
+  );
+
+  const chip = (value: ConflictKind | null, label: string, n: number) => (
+    <button
+      key={value ?? "all"}
+      type="button"
+      aria-pressed={kind === value}
+      onClick={() => setKind(kind === value || value === null ? null : value)}
+    >
+      {label} <span className="n">{n}</span>
+    </button>
+  );
 
   return (
     <aside className="conflicts">
@@ -200,13 +247,15 @@ export const ConflictsPanel = memo(function ConflictsPanel({
       <p className="conflicts-hint">{t("conflicts.hint")}</p>
       {conflicts.length > 0 && (
         <div className="conflicts-filters">
-          <div className="segmented" role="group" aria-label={t("conflicts.status")}>
-            {(["all", ...STATUSES] as StatusFilter[]).map((s) => (
-              <button key={s} type="button" aria-pressed={status === s} onClick={() => setStatus(s)}>
-                {t(s === "all" ? "conflicts.all" : `conflictStatus.${s}`)}
-              </button>
-            ))}
-          </div>
+          <SegmentedChoice<StatusFilter>
+            label={t("conflicts.status")}
+            value={status}
+            onChange={setStatus}
+            segments={(["all", ...STATUSES] as StatusFilter[]).map((s) => ({
+              value: s,
+              label: t(s === "all" ? "conflicts.all" : `conflictStatus.${s}`),
+            }))}
+          />
           <div className="chips" role="group" aria-label={t("conflicts.kind")}>
             {chip(null, t("conflicts.all"), byStatus.length)}
             {KINDS.filter((k) => present[k] > 0).map((k) => chip(k, t(`conflictKind.${k}`), counts[k]))}
@@ -214,16 +263,24 @@ export const ConflictsPanel = memo(function ConflictsPanel({
         </div>
       )}
       {empty ?? (
-        <div className="conflicts-rows">
-          {groupByKind(shown).map((g) => (
-            <section key={g.kind} aria-label={t(`conflictKind.${g.kind}`)}>
-              <h3 className="group">
-                {t(`conflictKind.${g.kind}`)} <span className="n">{g.conflicts.length}</span>
-              </h3>
-              <ul>{g.conflicts.map(row)}</ul>
-            </section>
-          ))}
-        </div>
+        <DataGrid
+          label={t("conflicts")}
+          columns={columns}
+          rows={rows}
+          rowKey={conflictKey}
+          section={kindName}
+          sectionCount
+          storageKey="conflicts"
+          rowHeight={40}
+          onRowClick={onShow}
+          isDisabled={(c) => !showable(c)}
+          rowClass={(c) => (c.status === "open" ? "conflict" : "conflict done")}
+          actions={(c) => (
+            <button type="button" disabled={!showable(c)} onClick={() => onShow(c)}>
+              {t("conflicts.show")}
+            </button>
+          )}
+        />
       )}
     </aside>
   );

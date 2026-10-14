@@ -39,7 +39,8 @@ function renderPanel(more: Partial<Parameters<typeof BoqPanel>[0]> = {}) {
   return props;
 }
 
-const bodyRows = () => within(screen.getAllByRole("rowgroup")[1]).getAllByRole("row");
+/** The grid's rows under its header: the section heads and the items. */
+const bodyRows = () => screen.getAllByRole("row").slice(1);
 
 test("lists items under their section headers, with the skipped rows notice", () => {
   renderPanel();
@@ -51,7 +52,9 @@ test("lists items under their section headers, with the skipped rows notice", ()
     "Joinery",
     expect.stringContaining("B.1"),
   ]);
-  expect(within(rows[0]).getByRole("columnheader").getAttribute("scope")).toBe("colgroup");
+  // A section head is one cell across the row.
+  expect(within(rows[0]).getByRole("rowheader").textContent).toBe("Masonry");
+  expect(within(rows[0]).queryAllByRole("cell")).toHaveLength(0);
   expect(screen.getByRole("status").textContent).toBe("Skipped rows: 2");
   expect(screen.getByText("boq.xlsx")).toBeTruthy();
 });
@@ -145,4 +148,34 @@ test("an item without a code can't be selected", () => {
   fireEvent.click(within(first).getAllByRole("cell")[1]);
   expect(props.onSelect).not.toHaveBeenCalled();
   expect(bodyRows()[2].getAttribute("aria-disabled")).toBeNull();
+});
+
+test("a click on a title sorts the items inside their sections; the sections keep their order", () => {
+  renderPanel();
+  const title = () => within(screen.getByRole("columnheader", { name: /Difference/ })).getByRole("button");
+  // The largest difference first (numbers start with the largest): A.1 is +20 %, A.2 within 5 %.
+  fireEvent.click(title());
+  expect(bodyRows().map((r) => r.textContent?.slice(0, 7))).toEqual([
+    "Masonry",
+    expect.stringContaining("A.1"),
+    expect.stringContaining("A.2"),
+    "Joinery",
+    expect.stringContaining("B.1"),
+  ]);
+  fireEvent.click(title());
+  expect(bodyRows().map((r) => r.textContent?.slice(0, 7))).toEqual([
+    "Masonry",
+    expect.stringContaining("A.2"),
+    expect.stringContaining("A.1"),
+    "Joinery",
+    expect.stringContaining("B.1"),
+  ]);
+  expect(screen.getByRole("columnheader", { name: /Difference/ }).getAttribute("aria-sort")).toBe("ascending");
+});
+
+test("the description's full text is its tooltip, and the numbers are in tabular figures at the end", () => {
+  renderPanel();
+  const cells = within(bodyRows()[1]).getAllByRole("cell");
+  expect(cells[1].getAttribute("title")).toBe("Block walls 200 mm");
+  for (const i of [3, 4, 5, 6, 7]) expect(cells[i].className).toContain("end");
 });

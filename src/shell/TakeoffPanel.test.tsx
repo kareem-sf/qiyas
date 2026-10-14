@@ -7,6 +7,9 @@ import { TakeoffPanel } from "./TakeoffPanel";
 
 afterEach(cleanup);
 
+/** The grid's rows under its header. */
+const bodyRows = () => screen.getAllByRole("row").slice(1);
+
 const item = (id: string, description: string, shown: number, more: Partial<Measurement> = {}): Measurement => ({
   id,
   kind: "length",
@@ -48,8 +51,7 @@ test("takeoff panel lists items and totals", () => {
     />,
   );
 
-  const [, body] = screen.getAllByRole("rowgroup");
-  const rows = within(body).getAllByRole("row");
+  const rows = bodyRows();
   expect(rows).toHaveLength(2);
   expect(rows[0].textContent).toContain("10.000");
   expect(rows[0].getAttribute("aria-current")).toBe("true");
@@ -88,8 +90,7 @@ test("counts show as whole numbers", () => {
       onLink={() => {}}
     />,
   );
-  const [, body] = screen.getAllByRole("rowgroup");
-  const [row] = within(body).getAllByRole("row");
+  const [row] = bodyRows();
   expect(row.textContent).toContain("3pcs");
   expect(row.textContent).not.toContain("3.000");
   const [area, count] = within(screen.getByRole("list", { name: "Totals" })).getAllByRole("listitem");
@@ -109,8 +110,7 @@ test("the BOQ column and the link picker", () => {
   const items = [item("a", "Wall run", 10, { boq_code: "A.1" }), item("b", "Kerb", 5)];
   const props = { items, totals: [], selectedId: null, onSelect() {}, onRemove() {}, onRename() {} };
   const { rerender } = render(<TakeoffPanel {...props} boq={null} onLink={onLink} />);
-  const [, body] = screen.getAllByRole("rowgroup");
-  const rows = within(body).getAllByRole("row");
+  const rows = bodyRows();
   expect(within(rows[0]).getByText("A.1")).toBeTruthy();
   expect(within(rows[1]).getByText("—")).toBeTruthy();
   const button = within(rows[1]).getByRole("button", { name: "Import a BOQ first" }) as HTMLButtonElement;
@@ -172,5 +172,5 @@ test("the layer column shows a bound xref's layer by its own name, the full name
   );
   const shown = screen.getByText("A-WALL");
   expect(shown.tagName).toBe("BDI");
-  expect(shown.closest("td")!.getAttribute("title")).toBe("01-IVORY$0$A-WALL");
+  expect(shown.closest('[role="cell"]')!.getAttribute("title")).toBe("01-IVORY$0$A-WALL");
 });

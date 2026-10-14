@@ -1,6 +1,7 @@
-import { memo, useRef, useState, type ReactNode } from "react";
+import { memo, useMemo, useRef, useState } from "react";
 import type { Boq, BoqItem, Measurement } from "../api";
 import { useT } from "../i18n";
+import { DataGrid, type GridColumn } from "../ui/DataGrid";
 import {
   DEFAULT_TOLERANCE,
   difference,
@@ -9,6 +10,7 @@ import {
   qty,
   unitLabel,
   type Difference,
+  type Measured,
 } from "./boqMath";
 
 type Props = {
@@ -37,10 +39,16 @@ function percentText({ percent }: Difference) {
   return `${p > 0 ? "+" : ""}${p.toFixed(1)} %`;
 }
 
+/** An item with what the take-off measured for it, worked out once for the grid. */
+type Line = { item: BoqItem; i: number; measured: Measured; diff: Difference };
+
+const lineKey = (l: Line) => String(l.i);
+const lineSection = (l: Line) => l.item.section;
+
 /** The imported BOQ against the take-off: per item its quantity, what the linked measurements add
  *  up to, and the difference coloured by the item's tolerance. Click a row to show its
- *  measurements; double click the tolerance to change it. Memoised: the app re-renders on every
- *  pointer move. */
+ *  measurements; double click the tolerance to change it; click a column's title to sort by it
+ *  (inside each section). Memoised: the app re-renders on every pointer move. */
 export const BoqPanel = memo(function BoqPanel({
   boq,
   takeoff,
@@ -65,6 +73,138 @@ export const BoqPanel = memo(function BoqPanel({
     setEditing(null);
   }
 
+  const lines = useMemo<Line[]>(
+    () =>
+      (boq?.items ?? [])
+        .map((item, i) => ({ item, i }))
+        .filter(({ item }) => matches(item, query))
+        .map(({ item, i }) => {
+          const measured = measuredFor(item, takeoff);
+          return { item, i, measured, diff: difference(item, measured.sum) };
+        }),
+    [boq, takeoff, query],
+  );
+
+  /** What the measured cell says: the sum in the item's unit, then the sums in other units. */
+  const shownOf = ({ item, measured }: Line) => {
+    const others = measured.other.map((o) => `${qty(o.sum, o.unit)} ${unitLabel(t, o.unit)}`);
+    const sum = measured.sum === null ? [] : [qty(measured.sum, item.unit)];
+    return [...sum, ...others].join(" · ");
+  };
+
+  const columns = useMemo<GridColumn<Line>[]>(
+    () => [
+      {
+        id: "code",
+        header: t("boq.code"),
+        size: 54,
+        sortValue: (l) => l.item.code,
+        cell: (l) => l.item.code,
+        title: (l) => l.item.code,
+      },
+      {
+        id: "description",
+        header: t("description"),
+        size: 130,
+        minSize: 80,
+        grow: true,
+        sortValue: (l) => l.item.description,
+        cell: (l) => <span dir="auto">{l.item.description}</span>,
+        title: (l) => l.item.description,
+      },
+      {
+        id: "unit",
+        header: t("unit"),
+        size: 40,
+        sortValue: (l) => unitLabel(t, l.item.unit),
+        cell: (l) => unitLabel(t, l.item.unit),
+      },
+      {
+        id: "quantity",
+        header: t("boq.quantity"),
+        size: 72,
+        align: "end",
+        sortValue: (l) => l.item.quantity,
+        cell: (l) => qty(l.item.quantity, l.item.unit),
+      },
+      {
+        id: "measured",
+        header: t("boq.measured"),
+        size: 84,
+        align: "end",
+        sortValue: (l) => l.measured.sum,
+        cell: (l) => (
+          <span className="measured">
+            {l.measured.other.length > 0 && (
+              <span className="warn-icon" role="img" aria-label={t("boq.unitMismatch")} title={t("boq.unitMismatch")}>
+                {WARN}
+              </span>
+            )}
+            <span dir="ltr">{shownOf(l) || "—"}</span>
+          </span>
+        ),
+        title: (l) => shownOf(l) || undefined,
+        cellClass: (l) => (l.measured.links.length === 0 ? "muted" : undefined),
+      },
+      {
+        id: "difference",
+        header: t("boq.difference"),
+        size: 74,
+        align: "end",
+        sortValue: (l) => l.diff.percent,
+        cell: (l) => <span dir="ltr">{percentText(l.diff)}</span>,
+        cellClass: (l) => `diff-${l.diff.status}`,
+      },
+      {
+        id: "links",
+        header: t("boq.links"),
+        size: 44,
+        align: "end",
+        sortValue: (l) => l.measured.links.length,
+        cell: (l) => l.measured.links.length,
+      },
+      {
+        id: "tolerance",
+        header: t("boq.tolerance"),
+        size: 72,
+        align: "end",
+        sortValue: (l) => l.item.tolerance ?? DEFAULT_TOLERANCE,
+        // Editing the tolerance doesn't select the row (and zoom) as well.
+        isolate: true,
+        onDoubleClick: (l) => {
+          setDraft(l.item.tolerance === null ? "" : String(l.item.tolerance));
+          setEditing(l.i);
+        },
+        cell: (l) =>
+          editing === l.i ? (
+            <input
+              type="number"
+              min={0}
+              step="any"
+              aria-label={t("boq.tolerance")}
+              placeholder={String(DEFAULT_TOLERANCE)}
+              value={draft}
+              autoFocus
+              onChange={(e) => setDraft(e.target.value)}
+              onClick={(e) => e.stopPropagation()}
+              onBlur={() => endEdit(l.item)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") cancelled.current = true;
+                if (e.key === "Enter" || e.key === "Escape") e.currentTarget.blur();
+              }}
+            />
+          ) : (
+            <span dir="ltr" className={l.item.tolerance === null ? "muted" : undefined}>
+              {l.item.tolerance ?? DEFAULT_TOLERANCE} %
+            </span>
+          ),
+      },
+    ],
+    // The tolerance cell shows the field being edited; the others only change with the language.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [t, editing, draft],
+  );
+
   const importButton = (
     <button type="button" className="boq-import" disabled={!onImport} onClick={onImport}>
       {t("importBoq")}
@@ -80,96 +220,6 @@ export const BoqPanel = memo(function BoqPanel({
         </div>
         <p className="empty">{t("boq.empty")}</p>
       </aside>
-    );
-  }
-
-  const found = boq.items.map((item, i) => ({ item, i })).filter(({ item }) => matches(item, query));
-  const rows: ReactNode[] = [];
-  let section = "";
-  for (const { item, i } of found) {
-    if (item.section !== section && item.section !== "") {
-      rows.push(
-        <tr key={`s${i}`} className="section">
-          <th colSpan={8} scope="colgroup" title={item.section}>
-            {item.section}
-          </th>
-        </tr>,
-      );
-    }
-    section = item.section;
-    const measured = measuredFor(item, takeoff);
-    const diff = difference(item, measured.sum);
-    const others = measured.other.map((o) => `${qty(o.sum, o.unit)} ${unitLabel(t, o.unit)}`);
-    const sum = measured.sum === null ? [] : [qty(measured.sum, item.unit)];
-    const shown = [...sum, ...others].join(" · ");
-    // An item without a code can't be linked, so there is nothing to show for it.
-    const linkable = item.code !== "";
-    rows.push(
-      <tr
-        key={i}
-        aria-current={(linkable && item.code === selectedCode) || undefined}
-        aria-disabled={!linkable || undefined}
-        onClick={linkable ? () => onSelect(item.code) : undefined}
-      >
-        <td title={item.code}>{item.code}</td>
-        <td title={item.description} dir="auto">
-          {item.description}
-        </td>
-        <td>{unitLabel(t, item.unit)}</td>
-        <td className="num">{qty(item.quantity, item.unit)}</td>
-        <td className={`num${measured.links.length === 0 ? " muted" : ""}`} title={shown || undefined}>
-          <span className="measured">
-            {measured.other.length > 0 && (
-              <span
-                className="warn-icon"
-                role="img"
-                aria-label={t("boq.unitMismatch")}
-                title={t("boq.unitMismatch")}
-              >
-                {WARN}
-              </span>
-            )}
-            <span dir="ltr">{shown || "—"}</span>
-          </span>
-        </td>
-        <td className={`num diff-${diff.status}`}>
-          <span dir="ltr">{percentText(diff)}</span>
-        </td>
-        <td className="num">{measured.links.length}</td>
-        <td
-          className="num tol"
-          // Editing the tolerance doesn't select the row (and zoom) as well.
-          onClick={(e) => e.stopPropagation()}
-          onDoubleClick={(e) => {
-            e.stopPropagation();
-            setDraft(item.tolerance === null ? "" : String(item.tolerance));
-            setEditing(i);
-          }}
-        >
-          {editing === i ? (
-            <input
-              type="number"
-              min={0}
-              step="any"
-              aria-label={t("boq.tolerance")}
-              placeholder={String(DEFAULT_TOLERANCE)}
-              value={draft}
-              autoFocus
-              onChange={(e) => setDraft(e.target.value)}
-              onClick={(e) => e.stopPropagation()}
-              onBlur={() => endEdit(item)}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") cancelled.current = true;
-                if (e.key === "Enter" || e.key === "Escape") e.currentTarget.blur();
-              }}
-            />
-          ) : (
-            <span dir="ltr" className={item.tolerance === null ? "muted" : undefined}>
-              {item.tolerance ?? DEFAULT_TOLERANCE} %
-            </span>
-          )}
-        </td>
-      </tr>,
     );
   }
 
@@ -195,24 +245,22 @@ export const BoqPanel = memo(function BoqPanel({
         value={query}
         onChange={(e) => setQuery(e.target.value)}
       />
-      <div className="boq-rows">
-        <table>
-          <thead>
-            <tr>
-              <th>{t("boq.code")}</th>
-              <th>{t("description")}</th>
-              <th>{t("unit")}</th>
-              <th className="num">{t("boq.quantity")}</th>
-              <th className="num">{t("boq.measured")}</th>
-              <th className="num">{t("boq.difference")}</th>
-              <th className="num">{t("boq.links")}</th>
-              <th className="num">{t("boq.tolerance")}</th>
-            </tr>
-          </thead>
-          <tbody>{rows}</tbody>
-        </table>
-        {found.length === 0 && <p className="empty">{t("boq.noMatch")}</p>}
-      </div>
+      {lines.length === 0 ? (
+        <p className="empty">{t("boq.noMatch")}</p>
+      ) : (
+        <DataGrid
+          label={t("boq")}
+          columns={columns}
+          rows={lines}
+          rowKey={lineKey}
+          section={lineSection}
+          storageKey="boq"
+          // An item without a code can't be linked, so there is nothing to show for it.
+          onRowClick={(l) => onSelect(l.item.code)}
+          isDisabled={(l) => l.item.code === ""}
+          isCurrent={(l) => l.item.code !== "" && l.item.code === selectedCode}
+        />
+      )}
     </aside>
   );
 });
