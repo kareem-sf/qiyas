@@ -1852,7 +1852,7 @@ button.close {
    motion, which sets a negative delay so the pattern is already running on the first frame. The grid
    follows the text direction, so sweeps and spirals mirror in Arabic. */
 .dot-loader {
-  --dm-dot: calc(var(--font-base) * 0.16);
+  --dm-dot: calc(var(--font-base) * 0.22);
   --dm-gap: calc(var(--font-base) * 0.12);
   --dm-dur: 1.2s;
   display: inline-grid;
@@ -1863,8 +1863,8 @@ button.close {
   color: var(--accent);
 }
 .dot-loader.dot-md {
-  --dm-dot: calc(var(--font-base) * 0.2);
-  --dm-gap: calc(var(--font-base) * 0.15);
+  --dm-dot: calc(var(--font-base) * 0.28);
+  --dm-gap: calc(var(--font-base) * 0.16);
   grid-template-columns: repeat(5, var(--dm-dot));
 }
 .dot-loader.dot-spiral {
