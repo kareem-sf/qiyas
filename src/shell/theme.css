@@ -501,14 +501,11 @@ body {
 .panel-handle.dragging::after {
   opacity: 1;
 }
+/* Folded: a 3 px strip at the window's edge, its grip just beside it over the drawing. */
 .panel-handle.folded {
-  width: 26px;
-  background: var(--panel);
-  border-inline: 1px solid var(--rule);
+  width: 3px;
+  background: var(--rule);
   cursor: pointer;
-}
-.panel-handle.folded:hover {
-  background: var(--hover);
 }
 .panel-handle.folded::after {
   display: none;
@@ -516,10 +513,10 @@ body {
 .panel-grip {
   position: absolute;
   top: 50%;
-  inset-inline-start: 50%;
-  width: 22px;
-  height: 22px;
-  margin: -11px 0 0 -11px;
+  left: 50%;
+  width: 16px;
+  height: 16px;
+  transform: translate(-50%, -50%) scale(0.85);
   display: grid;
   place-items: center;
   padding: 0;
@@ -530,20 +527,38 @@ body {
   box-shadow: 0 1px 3px rgb(14 15 18 / 0.12);
   cursor: pointer;
   opacity: 0;
-  transform: scale(0.85);
   transition:
     opacity 120ms ease,
     transform 120ms ease;
 }
-:root[dir="rtl"] .panel-grip {
-  margin: -11px -11px 0 0;
-}
 .panel-handle:hover .panel-grip,
 .panel-handle:focus-visible .panel-grip,
-.panel-handle.folded .panel-grip,
 .panel-grip:focus-visible {
   opacity: 1;
-  transform: none;
+  transform: translate(-50%, -50%);
+}
+.panel-handle.folded .panel-grip {
+  opacity: 0.7;
+  transform: translateY(-50%);
+}
+.panel-handle.folded:hover .panel-grip {
+  opacity: 1;
+}
+/* The folded grip sits beside its strip, over the drawing. */
+.panel-handle.at-left.folded .panel-grip {
+  left: 7px;
+}
+.panel-handle.at-right.folded .panel-grip {
+  left: auto;
+  right: 7px;
+}
+:root[dir="rtl"] .panel-handle.at-left.folded .panel-grip {
+  left: auto;
+  right: 7px;
+}
+:root[dir="rtl"] .panel-handle.at-right.folded .panel-grip {
+  right: auto;
+  left: 7px;
 }
 .panel-handle.dragging .panel-grip {
   opacity: 0;
@@ -553,8 +568,8 @@ body {
   border-color: var(--accent);
 }
 .panel-grip svg {
-  width: 12px;
-  height: 12px;
+  width: 10px;
+  height: 10px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.6;
