@@ -1402,5 +1402,6 @@
   "notices.label": "Notices",
   "attachPdf.drawing": "Drawing the page…",
   "pdf.drawingLabel": "Drawing the PDF page…",
-  "about.downloadingLabel": "Downloading the update…"
+  "about.downloadingLabel": "Downloading the update…",
+  "ai.jumpLatest": "Jump to latest"
 }

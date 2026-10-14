@@ -1402,5 +1402,6 @@
   "notices.label": "الإشعارات",
   "attachPdf.drawing": "جارٍ رسم الصفحة…",
   "pdf.drawingLabel": "جارٍ رسم صفحة PDF…",
-  "about.downloadingLabel": "جارٍ تنزيل التحديث…"
+  "about.downloadingLabel": "جارٍ تنزيل التحديث…",
+  "ai.jumpLatest": "الانتقال إلى الأحدث"
 }

@@ -6,6 +6,7 @@ import { Markdown } from "./Markdown";
 import { startNewOffered, TOO_LONG, undoableCard, type Item, type ToolCardItem } from "./messages";
 import { ToolCard } from "./ToolCard";
 import type { Assistant } from "./useAssistant";
+import { useStickToBottom } from "./useStickToBottom";
 
 type Props = {
   assistant: Pick<
@@ -25,7 +26,6 @@ export const AssistantPanel = memo(function AssistantPanel({ assistant, onShow, 
   const t = useT();
   const { transcript, busy, error, status } = assistant;
   const [draft, setDraft] = useState("");
-  const log = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLTextAreaElement>(null);
 
   // The agent log, in place of the conversation while it is shown.
@@ -45,14 +45,15 @@ export const AssistantPanel = memo(function AssistantPanel({ assistant, onShow, 
     logText.current?.scrollTo?.({ top: logText.current.scrollHeight });
   }, [agentLog]);
 
-  // Keep the newest message in view.
-  useEffect(() => {
-    log.current?.scrollTo?.({ top: log.current.scrollHeight });
-  }, [transcript, busy, showLog]);
+  // The newest message stays in view while the reader is at the bottom; scrolled up, they are left
+  // where they are and a button offers the way back.
+  const thread = useStickToBottom([transcript, busy]);
 
   async function submit() {
     const text = draft.trim();
     if (!text || busy) return;
+    // What the reader sends is what they want to see next to.
+    thread.jump(false);
     if (await assistant.send(text)) setDraft("");
   }
 
@@ -181,7 +182,8 @@ export const AssistantPanel = memo(function AssistantPanel({ assistant, onShow, 
           </pre>
         </div>
       ) : (
-        <div className="assistant-log" ref={log}>
+        <div className="assistant-thread">
+        <div className="assistant-log" ref={thread.ref} onScroll={thread.onScroll}>
           {empty ? (
             <div className="assistant-empty">
               <p>{t("ai.emptyTitle")}</p>
@@ -215,6 +217,15 @@ export const AssistantPanel = memo(function AssistantPanel({ assistant, onShow, 
               {t("ai.newConversation")}
             </button>
           )}
+        </div>
+        {thread.away && (
+          <button type="button" className="jump-latest" onClick={() => thread.jump()}>
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M8 3v9M4.5 8.5L8 12l3.5-3.5" />
+            </svg>
+            {t("ai.jumpLatest")}
+          </button>
+        )}
         </div>
       )}
       {error && (

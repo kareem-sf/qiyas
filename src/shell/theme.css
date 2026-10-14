@@ -2412,6 +2412,40 @@ span.grid-sort {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* The thread and the button that jumps to its end, over its bottom edge. */
+.assistant-thread {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.jump-latest {
+  position: absolute;
+  inset-inline: 0;
+  inset-block-end: 8px;
+  margin-inline: auto;
+  width: max-content;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 12px 3px 10px;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  box-shadow: 0 2px 10px rgb(14 15 18 / 0.14);
+  font-size: 12px;
+}
+.jump-latest svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
 .assistant-log {
   flex: 1;
   min-height: 0;

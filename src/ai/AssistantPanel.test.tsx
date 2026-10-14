@@ -145,3 +145,83 @@ test("an empty log says so", async () => {
   fireEvent.click(screen.getByText("Log"));
   await waitFor(() => expect(screen.getByText("Nothing in the log yet. Send Mizan a message.")).toBeTruthy());
 });
+
+/** The assistant the panel is given, with what a test changes. */
+const assistant = (over: Partial<{ transcript: Transcript; send: () => Promise<boolean> }> = {}) => ({
+  transcript: EMPTY,
+  busy: false,
+  error: null,
+  status: { provider: "mock", model: "mock", has_key: true, busy: false, message_count: 0 },
+  send: vi.fn().mockResolvedValue(true),
+  cancel: vi.fn(),
+  clear: vi.fn(),
+  ...over,
+});
+
+/** The log's box has no layout in jsdom: give it a height and a scroll position to read and move. */
+function layout(el: HTMLElement, box: { scrollHeight: number; clientHeight: number; scrollTop: number }) {
+  Object.defineProperty(el, "scrollHeight", { configurable: true, get: () => box.scrollHeight });
+  Object.defineProperty(el, "clientHeight", { configurable: true, get: () => box.clientHeight });
+  Object.defineProperty(el, "scrollTop", { configurable: true, get: () => box.scrollTop, set: (v) => (box.scrollTop = v) });
+  el.scrollTo = vi.fn((arg: ScrollToOptions | number) => {
+    box.scrollTop = typeof arg === "number" ? arg : (arg.top ?? 0);
+  }) as unknown as typeof el.scrollTo;
+}
+
+test("the thread follows the newest message while the reader is at the bottom; scrolled up it leaves them, and a button jumps to the latest", () => {
+  const box = { scrollHeight: 1000, clientHeight: 400, scrollTop: 0 };
+  const first = { items: [{ kind: "user" as const, text: "How much tiling?" }] };
+  const { rerender } = render(<AssistantPanel assistant={assistant({ transcript: first })} onShow={() => {}} onUndo={() => {}} onSettings={() => {}} />);
+  const log = document.querySelector<HTMLElement>(".assistant-log")!;
+  layout(log, box);
+
+  // At the bottom: a message that arrives scrolls into view, and no button is offered.
+  box.scrollTop = 600;
+  fireEvent.scroll(log);
+  box.scrollHeight = 1200;
+  const second = { items: [...first.items, { kind: "assistant" as const, text: "About 75 m2.", finished: false }] };
+  rerender(<AssistantPanel assistant={assistant({ transcript: second })} onShow={() => {}} onUndo={() => {}} onSettings={() => {}} />);
+  expect(box.scrollTop).toBe(1200);
+  expect(screen.queryByRole("button", { name: "Jump to latest" })).toBeNull();
+
+  // The reader scrolls up to re-read: what arrives next does not move them, a button says there is more.
+  box.scrollTop = 100;
+  fireEvent.scroll(log);
+  box.scrollHeight = 1500;
+  const third = { items: [...second.items, { kind: "user" as const, text: "And the BOQ?" }] };
+  rerender(<AssistantPanel assistant={assistant({ transcript: third })} onShow={() => {}} onUndo={() => {}} onSettings={() => {}} />);
+  expect(box.scrollTop).toBe(100);
+  fireEvent.click(screen.getByRole("button", { name: "Jump to latest" }));
+  expect(box.scrollTop).toBe(1500);
+  expect(screen.queryByRole("button", { name: "Jump to latest" })).toBeNull();
+
+  // Following again: the next one scrolls into view.
+  box.scrollHeight = 1700;
+  rerender(<AssistantPanel assistant={assistant({ transcript: { items: [...third.items, { kind: "assistant", text: "Done.", finished: true }] } })} onShow={() => {}} onUndo={() => {}} onSettings={() => {}} />);
+  expect(box.scrollTop).toBe(1700);
+});
+
+test("scrolling back to the bottom by hand takes the button away; sending a message follows it", () => {
+  const box = { scrollHeight: 1000, clientHeight: 400, scrollTop: 600 };
+  const items = [{ kind: "user" as const, text: "Hi" }];
+  const props = { onShow() {}, onUndo() {}, onSettings() {} };
+  const send = vi.fn(async () => true);
+  const { rerender } = render(<AssistantPanel assistant={assistant({ transcript: { items }, send })} {...props} />);
+  const log = document.querySelector<HTMLElement>(".assistant-log")!;
+  layout(log, box);
+  box.scrollTop = 50;
+  fireEvent.scroll(log);
+  box.scrollHeight = 1300;
+  rerender(<AssistantPanel assistant={assistant({ transcript: { items: [...items, { kind: "assistant", text: "Hello", finished: true }] }, send })} {...props} />);
+  expect(screen.getByRole("button", { name: "Jump to latest" })).toBeTruthy();
+  // Near enough to the bottom (within a line or two) is the bottom.
+  box.scrollTop = 880;
+  fireEvent.scroll(log);
+  expect(screen.queryByRole("button", { name: "Jump to latest" })).toBeNull();
+  // The reader scrolls up again and then sends: the thread goes to the bottom to show it.
+  box.scrollTop = 0;
+  fireEvent.scroll(log);
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "Thanks" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  expect(box.scrollTop).toBe(1300);
+});
