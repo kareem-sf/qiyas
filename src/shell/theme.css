@@ -423,6 +423,31 @@ body {
   width: var(--rb-std-icon);
   height: var(--rb-std-icon);
 }
+/* The drawing's right-click menu: one column, the command line alias as a small chip at the end. */
+.canvas-menu {
+  grid-auto-flow: row;
+  min-width: 190px;
+}
+.canvas-menu .rb-item {
+  justify-content: space-between;
+}
+.rb-item kbd,
+.cmd-item kbd {
+  margin-inline-start: 18px;
+  padding: 0 5px;
+  font: inherit;
+  font-size: 11px;
+  line-height: 16px;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+}
+.menu-rule {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--rule);
+}
 .rb-item.on,
 .rb-item.on[data-highlighted] {
   background: var(--accent-soft);
@@ -1579,6 +1604,42 @@ button.close {
 }
 .settings::backdrop {
   background: rgb(14 15 18 / 0.5);
+}
+/* The Base UI dialog (`ui/ModalDialog.tsx`): the same box as the native ones above, centred by
+   hand, over a backdrop that fades in. */
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgb(14 15 18 / 0.5);
+  transition: opacity 140ms ease;
+}
+.dialog-backdrop[data-starting-style],
+.dialog-backdrop[data-ending-style] {
+  opacity: 0;
+}
+.dialog-popup {
+  position: fixed;
+  z-index: 51;
+  top: 50%;
+  left: 50%;
+  translate: -50% -50%;
+  max-width: calc(100vw - 24px);
+  overflow-y: auto;
+  transition:
+    opacity 140ms ease,
+    scale 140ms ease;
+}
+.dialog-popup[data-starting-style],
+.dialog-popup[data-ending-style] {
+  opacity: 0;
+  scale: 0.98;
+}
+@media (prefers-reduced-motion: reduce) {
+  .dialog-backdrop,
+  .dialog-popup {
+    transition: none;
+  }
 }
 .settings form {
   display: flex;

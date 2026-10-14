@@ -40,6 +40,8 @@ export default function App() {
   const { lang } = useLanguage();
   const [info, setInfo] = useState<DrawingInfo | null>(null);
   const panels = usePanelRails();
+  /** Counts up when the canvas menu's Properties asks for the palette (it may be folded away). */
+  const [revealProperties, setRevealProperties] = useState(0);
   const shell = useShell();
   // The BOQ and conflicts tabs want a wider right panel: their width is kept apart.
   const rightSlot = shell.sideTab === "boq" || shell.sideTab === "conflicts" ? "rightWide" : "right";
@@ -336,6 +338,7 @@ export default function App() {
           sheets={sheets}
           layers={layers}
           selection={selection}
+          revealProperties={revealProperties}
         />
         <PanelHandle
           side="left"
@@ -364,6 +367,11 @@ export default function App() {
           selection={selection}
           colours={options.colours}
           parametric={parametric}
+          chooseTool={chooseTool}
+          onProperties={() => {
+            panels.setFolded("left", false);
+            setRevealProperties((n) => n + 1);
+          }}
         />
         <PanelHandle
           side="right"

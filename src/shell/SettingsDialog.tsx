@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   appDir,
   deleteApiKey,
@@ -15,6 +15,7 @@ import {
 } from "../api";
 import { normalizeDigits } from "../tools/commandParser";
 import { useT } from "../i18n";
+import { ModalDialog } from "../ui/ModalDialog";
 
 const MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1", "claude-haiku-4-5"];
 
@@ -40,7 +41,6 @@ export function mcpSnippets(dir: string, token: string) {
 /** Settings: the AI provider, model, effort and API key, and the MCP server for outside AI apps. */
 export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const t = useT();
-  const dialog = useRef<HTMLDialogElement>(null);
   const [draft, setDraft] = useState<Settings | null>(null);
   const [dir, setDir] = useState("");
   /** A key is in the keychain for the chosen provider. */
@@ -54,9 +54,6 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [mcp, setMcp] = useState<McpStatus | null>(null);
 
   useEffect(() => {
-    // A modal dialog moves focus inside; give it back to the button that opened it on close.
-    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    dialog.current?.showModal();
     getSettings()
       .then(setDraft)
       .catch((e) => setError(String(e)));
@@ -66,7 +63,6 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     mcpStatus()
       .then(setMcp)
       .catch(() => setMcp(null));
-    return () => opener?.focus();
   }, []);
 
   const provider = draft?.provider;
@@ -97,7 +93,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     try {
       await setSettings(next);
       if (key.trim()) await setApiKey(draft.provider, key);
-      dialog.current?.close();
+      onClose();
     } catch (e) {
       setError(String(e));
     }
@@ -126,14 +122,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const snippets = draft ? mcpSnippets(dir, draft.mcp_token) : null;
 
   return (
-    <dialog
-      ref={dialog}
-      className="settings"
-      aria-labelledby="settings-title"
-      onClose={onClose}
-      // Keys typed here are not shortcuts for the drawing behind (Escape still closes the dialog).
-      onKeyDown={(e) => e.stopPropagation()}
-    >
+    <ModalDialog labelledBy="settings-title" onClose={onClose}>
       <form
         method="dialog"
         onSubmit={(e) => {
@@ -287,7 +276,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           </p>
         )}
         <div className="buttons">
-          <button type="button" onClick={() => dialog.current?.close()}>
+          <button type="button" onClick={onClose}>
             {t("settings.cancel")}
           </button>
           <button type="submit" className="primary" disabled={!draft}>
@@ -295,6 +284,6 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           </button>
         </div>
       </form>
-    </dialog>
+    </ModalDialog>
   );
 }

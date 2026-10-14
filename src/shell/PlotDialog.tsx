@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Paper, PlotJob, PlotScale, PlotStyle, Sheet, Units } from "../api";
 import { useT } from "../i18n";
+import { ModalDialog } from "../ui/ModalDialog";
 import type { Batch } from "../viewport/batch";
 import type { Point } from "../viewport/camera";
 import { metresPerUnit } from "./AttachPdfDialog";
@@ -274,9 +275,6 @@ type Props = {
 export function PlotDialog(props: Props) {
   const { sheet, picked, picking } = props;
   const t = useT();
-  const dialog = useRef<HTMLDialogElement>(null);
-  /** Set while the dialog closes to let the user click in the drawing. */
-  const stepping = useRef(false);
   /** The area pictures drawn while the dialog is open, by area. */
   const pictures = useRef(new Map<string, HTMLCanvasElement | null>());
   const [setup, setSetup] = useState<PageSetup>(props.setup);
@@ -294,12 +292,6 @@ export function PlotDialog(props: Props) {
   const [styleBusy, setStyleBusy] = useState(props.stylePath !== null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    dialog.current?.showModal();
-    return () => opener?.focus();
-  }, []);
 
   useEffect(() => {
     let live = true;
@@ -340,18 +332,6 @@ export function PlotDialog(props: Props) {
       live = false;
     };
   }, []);
-
-  // Out of the way while the user clicks in the drawing; back with the window after.
-  useEffect(() => {
-    const d = dialog.current;
-    if (!d) return;
-    if (picking && d.open) {
-      stepping.current = true;
-      d.close();
-    } else if (!picking && !d.open) {
-      d.showModal();
-    }
-  }, [picking]);
 
   useEffect(() => {
     if (picked) setSetup((s) => ({ ...s, area: "window", window: normalized(picked) }));
@@ -412,7 +392,7 @@ export function PlotDialog(props: Props) {
         await props.onPrint(job, printTo || null);
       }
       props.onKeep(chosen, stylePath);
-      dialog.current?.close();
+      props.onClose();
     } catch (e) {
       setError(String(e));
     } finally {
@@ -425,23 +405,16 @@ export function PlotDialog(props: Props) {
     : t("plot.noWindow");
 
   return (
-    <dialog
-      ref={dialog}
-      className="settings plot-dialog"
+    // Out of the way (hidden, its state kept) while the user clicks in the drawing, and back after.
+    // Escape while plotting would lose what the plot says when it ends.
+    <ModalDialog
+      className="plot-dialog"
       style={{ width: 560 }}
-      aria-labelledby="plot-title"
-      onClose={() => {
-        if (stepping.current) {
-          stepping.current = false;
-          return;
-        }
-        props.onClose();
-      }}
-      onKeyDown={(e) => e.stopPropagation()}
-      // Escape while plotting would lose what the plot says when it ends.
-      onCancel={(e) => {
-        if (busy) e.preventDefault();
-      }}
+      labelledBy="plot-title"
+      open={!picking}
+      keepMounted
+      dismissible={!busy}
+      onClose={props.onClose}
     >
       <form
         method="dialog"
@@ -614,7 +587,7 @@ export function PlotDialog(props: Props) {
           </p>
         )}
         <div className="buttons">
-          <button type="button" disabled={busy} onClick={() => dialog.current?.close()}>
+          <button type="button" disabled={busy} onClick={props.onClose}>
             {t("plot.cancel")}
           </button>
           <button type="submit" className="primary" disabled={!ready}>
@@ -622,7 +595,7 @@ export function PlotDialog(props: Props) {
           </button>
         </div>
       </form>
-    </dialog>
+    </ModalDialog>
   );
 }
 

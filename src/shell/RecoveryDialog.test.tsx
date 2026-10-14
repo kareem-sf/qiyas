@@ -204,9 +204,10 @@ test("Later waits while Recover or Discard is working (a click or Escape)", asyn
   fireEvent.click(screen.getByRole("button", { name: "Recover" }));
   const later = screen.getByRole("button", { name: "Later" }) as HTMLButtonElement;
   await waitFor(() => expect(later.disabled).toBe(true));
-  const escape = new Event("cancel", { cancelable: true });
-  screen.getByRole("dialog").dispatchEvent(escape);
-  expect(escape.defaultPrevented).toBe(true);
+  // Escape does nothing while it works.
+  fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+  expect(onClose).not.toHaveBeenCalled();
+  expect(screen.getByRole("dialog")).toBeTruthy();
   act(() => finish());
   await waitFor(() => expect(later.disabled).toBe(false));
   expect(onClose).not.toHaveBeenCalled();
@@ -339,4 +340,15 @@ test("Recover's report lists what the reader dropped, by kind", () => {
   expect(text).toContain("28");
   const rows = screen.getAllByRole("row");
   expect(rows.map((r) => r.textContent)).toContain("LINE3");
+});
+
+test("Escape is Later when nothing is working", () => {
+  const onClose = vi.fn();
+  render(
+    <LanguageProvider>
+      <RecoveryDialog items={items.slice(0, 1)} onRecover={noop} onDiscard={noop} onOpen={noop} onClose={onClose} />
+    </LanguageProvider>,
+  );
+  fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+  expect(onClose).toHaveBeenCalledTimes(1);
 });

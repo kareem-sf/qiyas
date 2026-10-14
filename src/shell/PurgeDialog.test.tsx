@@ -78,3 +78,31 @@ test("nothing to purge says so; a core error is shown", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Purge" }));
   expect((await screen.findByRole("alert")).textContent).toBe("No drawing is open");
 });
+
+test("Escape closes the dialog and the keys typed in it are not the drawing's shortcuts", async () => {
+  const look = vi.fn(async (_: Command) => purged(report()));
+  const onClose = vi.fn();
+  const window = vi.fn();
+  document.addEventListener("keydown", window);
+  try {
+    render(<PurgeDialog look={look} apply={vi.fn()} onClose={onClose} />);
+    await screen.findByRole("group", { name: "Blocks (2)" });
+    const dialog = screen.getByRole("dialog", { name: "Purge" });
+    fireEvent.keyDown(dialog, { key: "l" });
+    expect(window).not.toHaveBeenCalled();
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  } finally {
+    document.removeEventListener("keydown", window);
+  }
+});
+
+test("a click outside the dialog does not close it", async () => {
+  const onClose = vi.fn();
+  render(<PurgeDialog look={async () => purged(report())} apply={vi.fn()} onClose={onClose} />);
+  await screen.findByRole("group", { name: "Blocks (2)" });
+  fireEvent.pointerDown(document.body);
+  fireEvent.mouseDown(document.body);
+  fireEvent.click(document.body);
+  expect(onClose).not.toHaveBeenCalled();
+});

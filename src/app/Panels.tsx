@@ -25,6 +25,7 @@ import type { Target } from "../viewport/batch";
 import type { Point } from "../viewport/camera";
 import type { CanvasColours } from "../viewport/colours";
 import type { Theme } from "../viewport/gl";
+import { CanvasMenu } from "../viewport/CanvasMenu";
 import { SplitPane } from "../viewport/SplitPane";
 import { Viewport } from "../viewport/Viewport";
 import { type Measure, NO_VIEWPORTS } from "./shared";
@@ -51,10 +52,12 @@ type LeftProps = {
   sheets: Pick<Sheets, "hidden" | "sheet">;
   layers: Layers;
   selection: Selection;
+  /** Counts up when the canvas menu asks to see the properties palette. */
+  revealProperties: number;
 };
 
 /** The layers panel and, under it, the properties palette. */
-export function LeftPanels({ info, sheetShown, theme, drafting, sheets, layers, selection }: LeftProps) {
+export function LeftPanels({ info, sheetShown, theme, drafting, sheets, layers, selection, revealProperties }: LeftProps) {
   const { hidden, sheet } = sheets;
   const {
     layersBusy,
@@ -107,6 +110,7 @@ export function LeftPanels({ info, sheetShown, theme, drafting, sheets, layers, 
         onSet={info && pickedInfo ? setPickedProperty : undefined}
         current={info?.current}
         onSetCurrent={info ? setCurrentState : undefined}
+        reveal={revealProperties}
       />
     </div>
   );
@@ -133,6 +137,9 @@ type WorkProps = {
   /** The Options dialog's background and highlight colours (null: the theme's). */
   colours: CanvasColours;
   parametric: Pick<Parametric, "constraints" | "deleteConstraint" | "hoverConstraint" | "barHidden" | "setBarHidden">;
+  /** The right-click menu: a tool chosen, the properties palette shown. */
+  chooseTool(tool: Tool): void;
+  onProperties(): void;
 };
 
 /** The drawing: the edit in place's bar, the file tabs, the canvas (with the along prompt, the
@@ -157,6 +164,8 @@ export function WorkArea({
   selection,
   colours,
   parametric,
+  chooseTool,
+  onProperties,
 }: WorkProps) {
   const { theme, error, setError, run, focusDrawing, viewport, viewportBox } = shell;
   const {
@@ -195,7 +204,17 @@ export function WorkArea({
         onClose={(id) => closeFileTab(id)}
       />
       <div className="views">
-        <div className="viewport" ref={viewportBox} tabIndex={0}>
+        <CanvasMenu
+          box={<div className="viewport" ref={viewportBox} tabIndex={0} />}
+          hasDrawing={info !== null}
+          onTool={chooseTool}
+          onProperties={onProperties}
+          onZoomExtents={() => {
+            viewport.current?.fitExtents();
+            focusDrawing();
+          }}
+          aliases={shell.commandAliases}
+        >
           <Viewport
             ref={viewport}
             batch={batch}
@@ -266,7 +285,7 @@ export function WorkArea({
               onClose={() => setImageChosen(null)}
             />
           )}
-        </div>
+        </CanvasMenu>
         {split && info && (
           <SplitPane
             sheets={info.sheets}

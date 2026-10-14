@@ -1,4 +1,4 @@
-import { memo, useId, useState, type KeyboardEvent, type ReactNode } from "react";
+import { memo, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { Current, EntityInfo, EntityProp, Units } from "../api";
 import { useT } from "../i18n";
 import { normalizeDigits } from "../tools/commandParser";
@@ -23,6 +23,9 @@ type Props = {
   /** With nothing picked: what new entities are drawn with, and changing it. */
   current?: Current;
   onSetCurrent?(current: Current): void;
+  /** Counts up when something asks to see the palette (the canvas menu's Properties): it opens,
+   *  if it was folded, and takes the focus. */
+  reveal?: number;
 };
 
 /** A number typed in the window's digits (Arabic ones too); null when it is none. */
@@ -85,10 +88,17 @@ export const PropertiesPanel = memo(function PropertiesPanel({
   onSet,
   current,
   onSetCurrent,
+  reveal = 0,
 }: Props) {
   const t = useT();
   const id = useId();
   const [open, setOpen] = useState(true);
+  const title = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (reveal === 0) return;
+    setOpen(true);
+    title.current?.focus();
+  }, [reveal]);
   const m = metresPerUnit(units);
   const metres = (v: number) => `${(v * m).toFixed(precision)} ${t("qty.m")}`;
   const square = (v: number) => `${(v * m * m).toFixed(precision)} ${t("qty.m2")}`;
@@ -240,6 +250,7 @@ export const PropertiesPanel = memo(function PropertiesPanel({
       <h2 className="heading" id={`${id}-title`}>
         <button
           type="button"
+          ref={title}
           aria-expanded={open}
           aria-controls={`${id}-body`}
           onClick={() => setOpen((o) => !o)}

@@ -2,9 +2,10 @@
  *  blocks and unused layers), by kind and name; Fix makes the safe repairs as one undo step and
  *  says how many. The window opens neither while a block is edited in place (`useOptions`); an
  *  error from the core is shown. */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import type { AuditKind, AuditReport, Command, Outcome } from "../api";
 import { useT } from "../i18n";
+import { ModalDialog } from "../ui/ModalDialog";
 
 type Props = {
   /** Runs a command that changes nothing (the audit). */
@@ -23,18 +24,14 @@ const reportOf = (o: Outcome) => (o.type === "audited" ? o.report : null);
 
 export function AuditDialog({ look, apply, onClose }: Props) {
   const t = useT();
-  const dialog = useRef<HTMLDialogElement>(null);
   const [report, setReport] = useState<AuditReport | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    dialog.current?.showModal();
     look({ type: "audit", fix: false })
       .then((o) => setReport(reportOf(o)))
       .catch((e) => setError(String(e)));
-    return () => opener?.focus();
   }, []);
 
   async function fix() {
@@ -53,13 +50,7 @@ export function AuditDialog({ look, apply, onClose }: Props) {
   const counts = report ? (Object.entries(report.counts) as [AuditKind, number][]).filter(([, n]) => n > 0) : [];
 
   return (
-    <dialog
-      ref={dialog}
-      className="settings audit"
-      aria-labelledby="audit-title"
-      onClose={onClose}
-      onKeyDown={(e) => e.stopPropagation()}
-    >
+    <ModalDialog className="audit" labelledBy="audit-title" onClose={onClose}>
       <form
         method="dialog"
         onSubmit={(e) => {
@@ -111,7 +102,7 @@ export function AuditDialog({ look, apply, onClose }: Props) {
           </p>
         )}
         <div className="buttons">
-          <button type="button" onClick={() => dialog.current?.close()}>
+          <button type="button" onClick={onClose}>
             {t("purge.close")}
           </button>
           {canFix && (
@@ -121,6 +112,6 @@ export function AuditDialog({ look, apply, onClose }: Props) {
           )}
         </div>
       </form>
-    </dialog>
+    </ModalDialog>
   );
 }

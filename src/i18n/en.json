@@ -1390,5 +1390,6 @@
   "tip.saveAs": "Save the drawing under another name or format.",
   "tip.undo": "Take back the last change.",
   "tip.redo": "Bring back the change just undone.",
-  "panels.moreTabs": "More tabs"
+  "panels.moreTabs": "More tabs",
+  "canvas.menu": "Drawing commands"
 }

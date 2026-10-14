@@ -244,3 +244,14 @@ test("a paper-space viewport's scale and centre are edited in place", () => {
   enter("View centre (x, y)", "20");
   expect(onSet).not.toHaveBeenCalled();
 });
+
+test("asking to reveal it opens a folded palette and takes the focus", () => {
+  const { rerender } = render(<PropertiesPanel entity={door} units="metres" precision={3} sheet="Model" reveal={0} />);
+  const title = screen.getByRole("button", { name: "Properties" });
+  fireEvent.click(title);
+  expect(title.getAttribute("aria-expanded")).toBe("false");
+  // The canvas menu's Properties counts the request up.
+  rerender(<PropertiesPanel entity={door} units="metres" precision={3} sheet="Model" reveal={1} />);
+  expect(title.getAttribute("aria-expanded")).toBe("true");
+  expect(document.activeElement).toBe(title);
+});

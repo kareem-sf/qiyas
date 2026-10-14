@@ -461,10 +461,10 @@ test("while plotting, a second click starts nothing and Escape doesn't close the
   fireEvent.click(plotButton());
   await screen.findByText("Plotting…");
   expect(props.choosePdf).toHaveBeenCalledTimes(1);
-  const dialog = document.querySelector("dialog")!;
-  const cancel = new Event("cancel", { cancelable: true });
-  dialog.dispatchEvent(cancel);
-  expect(cancel.defaultPrevented).toBe(true);
+  // Escape is ignored while it plots: the dialog is still there and was not asked to close.
+  fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+  expect(props.onClose).not.toHaveBeenCalled();
+  expect(screen.getByRole("dialog")).toBeTruthy();
   finish();
   await waitFor(() => expect(props.onClose).toHaveBeenCalled());
   expect(props.onPlotPdf).toHaveBeenCalledTimes(1);

@@ -1,9 +1,10 @@
 /** PURGE: a dry run lists, by kind, what nothing in the drawing uses; the kinds ticked are then
  *  taken out as one undo step, and the dialog says what went. The window does not open it while a
  *  block is edited in place (`useOptions`); an error from the core is shown. */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { PURGE_KINDS, type Command, type Outcome, type PurgeKind, type PurgeReport } from "../api";
 import { useT } from "../i18n";
+import { ModalDialog } from "../ui/ModalDialog";
 
 type Props = {
   /** Runs a command that changes nothing (the dry run). */
@@ -17,7 +18,6 @@ const reportOf = (o: Outcome) => (o.type === "purged" ? o.report : null);
 
 export function PurgeDialog({ look, apply, onClose }: Props) {
   const t = useT();
-  const dialog = useRef<HTMLDialogElement>(null);
   const [found, setFound] = useState<PurgeReport | null>(null);
   const [gone, setGone] = useState<PurgeReport | null>(null);
   const [ticked, setTicked] = useState<Set<PurgeKind>>(new Set());
@@ -25,8 +25,6 @@ export function PurgeDialog({ look, apply, onClose }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    dialog.current?.showModal();
     look({ type: "purge", kinds: [...PURGE_KINDS], dry_run: true })
       .then((o) => {
         const r = reportOf(o);
@@ -34,7 +32,6 @@ export function PurgeDialog({ look, apply, onClose }: Props) {
         if (r) setTicked(new Set(PURGE_KINDS.filter((k) => r[k].length > 0 || (k === "groups" && r.group_members > 0))));
       })
       .catch((e) => setError(String(e)));
-    return () => opener?.focus();
   }, []);
 
   async function purge() {
@@ -53,13 +50,7 @@ export function PurgeDialog({ look, apply, onClose }: Props) {
   const count = (r: PurgeReport, k: PurgeKind) => r[k].length;
 
   return (
-    <dialog
-      ref={dialog}
-      className="settings purge"
-      aria-labelledby="purge-title"
-      onClose={onClose}
-      onKeyDown={(e) => e.stopPropagation()}
-    >
+    <ModalDialog className="purge" labelledBy="purge-title" onClose={onClose}>
       <form
         method="dialog"
         onSubmit={(e) => {
@@ -126,7 +117,7 @@ export function PurgeDialog({ look, apply, onClose }: Props) {
           </p>
         )}
         <div className="buttons">
-          <button type="button" onClick={() => dialog.current?.close()}>
+          <button type="button" onClick={onClose}>
             {t(gone ? "purge.close" : "settings.cancel")}
           </button>
           {!gone && (
@@ -136,6 +127,6 @@ export function PurgeDialog({ look, apply, onClose }: Props) {
           )}
         </div>
       </form>
-    </dialog>
+    </ModalDialog>
   );
 }

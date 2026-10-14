@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { ReadReport, Recoverable } from "../api";
 import { useLanguage, useT } from "../i18n";
+import { ModalDialog } from "../ui/ModalDialog";
 import { localTime, refusedBy } from "./recoveryQueue";
 
 /** The file name and the folder of `path`. */
@@ -15,17 +16,6 @@ function fill(text: string, vars: Record<string, string | number>): ReactNode[] 
   return text
     .split(/\{(\w+)\}/)
     .map((part, i) => (i % 2 === 1 ? <bdi key={i}>{vars[part] ?? `{${part}}`}</bdi> : part));
-}
-
-/** Shows the modal dialog once mounted, and gives the focus back when it goes. */
-function useModal() {
-  const dialog = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
-    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    dialog.current?.showModal();
-    return () => opener?.focus();
-  }, []);
-  return dialog;
 }
 
 type Props = {
@@ -51,7 +41,6 @@ type Props = {
 export function RecoveryDialog({ items, onRecover, onDiscard, onOpen, onClose }: Props) {
   const t = useT();
   const { lang } = useLanguage();
-  const dialog = useModal();
   const crashedRow = (i: Recoverable) => i.crashed && i.autosave != null;
   const crashed = items.some(crashedRow);
   /** Something to recover or discard beside older copies. */
@@ -84,15 +73,8 @@ export function RecoveryDialog({ items, onRecover, onDiscard, onOpen, onClose }:
   }
 
   return (
-    <dialog
-      ref={dialog}
-      className="settings recovery"
-      aria-labelledby="recovery-title"
-      onClose={onClose}
-      // Escape waits, as Later does, while Recover or Discard is working.
-      onCancel={(e) => busy && e.preventDefault()}
-      onKeyDown={(e) => e.stopPropagation()}
-    >
+    // Escape waits, as Later does, while Recover or Discard is working.
+    <ModalDialog className="recovery" labelledBy="recovery-title" dismissible={!busy} onClose={onClose}>
       <h2 id="recovery-title" className="heading">
         {t(heading)}
       </h2>
@@ -180,11 +162,11 @@ export function RecoveryDialog({ items, onRecover, onDiscard, onOpen, onClose }:
         </p>
       )}
       <div className="actions">
-        <button type="button" disabled={busy} onClick={() => dialog.current?.close()}>
+        <button type="button" disabled={busy} onClick={onClose}>
           {t("recovery.later")}
         </button>
       </div>
-    </dialog>
+    </ModalDialog>
   );
 }
 
@@ -199,16 +181,9 @@ export function RecoverReportDialog({
   onClose(): void;
 }) {
   const t = useT();
-  const dialog = useModal();
   const [name] = split(path);
   return (
-    <dialog
-      ref={dialog}
-      className="settings recovery"
-      aria-labelledby="recover-report-title"
-      onClose={onClose}
-      onKeyDown={(e) => e.stopPropagation()}
-    >
+    <ModalDialog className="recovery" labelledBy="recover-report-title" onClose={onClose}>
       <h2 id="recover-report-title" className="heading">
         {t("recover.title", { name })}
       </h2>
@@ -241,10 +216,10 @@ export function RecoverReportDialog({
         </table>
       )}
       <div className="actions">
-        <button type="button" onClick={() => dialog.current?.close()}>
+        <button type="button" onClick={onClose}>
           {t("recover.close")}
         </button>
       </div>
-    </dialog>
+    </ModalDialog>
   );
 }
