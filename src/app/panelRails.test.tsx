@@ -129,17 +129,17 @@ test("dragging a panel nearly shut folds it; dragging a folded one open unfolds 
 
 test("widths stay between each panel's narrowest and widest, and are kept on this computer", () => {
   const first = renderHook(() => usePanelRails());
-  expect(first.result.current.width).toEqual({ left: PANEL_WIDTH.left.initial, right: PANEL_WIDTH.right.initial });
+  expect(first.result.current.width).toEqual({ left: 220, right: 340, rightWide: 620 });
   act(() => first.result.current.resize("left", 10));
   act(() => first.result.current.resize("right", 5000));
-  expect(first.result.current.width).toEqual({ left: PANEL_WIDTH.left.min, right: PANEL_WIDTH.right.max });
+  expect(first.result.current.width).toMatchObject({ left: PANEL_WIDTH.left.min, right: PANEL_WIDTH.right.max });
   act(() => first.result.current.resize("left", 300.4));
   first.unmount();
   const second = renderHook(() => usePanelRails());
-  expect(second.result.current.width).toEqual({ left: 300, right: PANEL_WIDTH.right.max });
+  expect(second.result.current.width).toEqual({ left: 300, right: PANEL_WIDTH.right.max, rightWide: 620 });
   localStorage.setItem("qiyas.panels.width", '{"left":"wide","right":null}');
   const third = renderHook(() => usePanelRails());
-  expect(third.result.current.width).toEqual({ left: PANEL_WIDTH.left.initial, right: PANEL_WIDTH.right.initial });
+  expect(third.result.current.width).toEqual({ left: 220, right: 340, rightWide: 620 });
 });
 
 test("each side has its own labels, in English and in Arabic", () => {
@@ -166,4 +166,63 @@ test("each side has its own labels, in English and in Arabic", () => {
     ["hide.left", "show.left", "hide.right", "show.right", "resize.left", "resize.right"].map((k) => s[`panels.${k}` as keyof typeof s]);
   expect(new Set(labels(ar)).size).toBe(6);
   expect(labels(ar)).not.toEqual(labels(en));
+});
+
+test("folded, only the arrow that widens opens the panel, in English and in Arabic", () => {
+  for (const [dir, widen, narrow] of [
+    ["ltr", "ArrowRight", "ArrowLeft"],
+    ["rtl", "ArrowLeft", "ArrowRight"],
+  ] as const) {
+    document.documentElement.dir = dir;
+    const onFold = vi.fn();
+    const onResize = vi.fn();
+    const { unmount } = render(
+      <PanelHandle side="left" hidden width={300} onToggle={() => {}} onFold={onFold} onResize={onResize} />,
+    );
+    const sep = screen.getByRole("separator");
+    fireEvent.keyDown(sep, { key: narrow });
+    expect(onFold, dir).not.toHaveBeenCalled();
+    fireEvent.keyDown(sep, { key: widen });
+    expect(onFold, dir).toHaveBeenCalledWith(false);
+    expect(onResize, dir).toHaveBeenCalledWith(PANEL_WIDTH.left.min);
+    unmount();
+  }
+  document.documentElement.dir = "ltr";
+});
+
+test("in Arabic the left panel is on the right: dragging its handle left widens it", () => {
+  document.documentElement.dir = "rtl";
+  const { props } = handle();
+  const sep = screen.getByRole("separator");
+  fireEvent.pointerDown(sep, { button: 0, clientX: 900, pointerId: 1 });
+  fireEvent.pointerMove(sep, { clientX: 850, pointerId: 1 });
+  expect(props.onResize).toHaveBeenLastCalledWith(270);
+  document.documentElement.dir = "ltr";
+});
+
+test("a click on a folded panel's strip opens it; a drag does not count as a click", () => {
+  const onToggle = vi.fn();
+  render(<PanelHandle side="left" hidden width={220} onToggle={onToggle} onFold={() => {}} onResize={() => {}} />);
+  const sep = screen.getByRole("separator");
+  fireEvent.pointerDown(sep, { button: 0, clientX: 5, pointerId: 1 });
+  fireEvent.pointerUp(sep, { clientX: 5, pointerId: 1 });
+  expect(onToggle).toHaveBeenCalledTimes(1);
+  fireEvent.pointerDown(sep, { button: 0, clientX: 5, pointerId: 2 });
+  fireEvent.pointerMove(sep, { clientX: 300, pointerId: 2 });
+  fireEvent.pointerUp(sep, { clientX: 300, pointerId: 2 });
+  expect(onToggle).toHaveBeenCalledTimes(1);
+});
+
+test("the wide tabs keep their own width with the same handle", () => {
+  const { result } = renderHook(() => usePanelRails());
+  act(() => result.current.resize("rightWide", 700));
+  expect(result.current.width).toEqual({ left: 220, right: 340, rightWide: 700 });
+  const onResize = vi.fn();
+  render(<PanelHandle side="right" slot="rightWide" hidden={false} width={700} onToggle={() => {}} onFold={() => {}} onResize={onResize} />);
+  const sep = screen.getByRole("separator");
+  expect(sep.getAttribute("aria-valuenow")).toBe("700");
+  expect(sep.getAttribute("aria-valuemax")).toBe(String(PANEL_WIDTH.rightWide.max));
+  fireEvent.pointerDown(sep, { button: 0, clientX: 500, pointerId: 1 });
+  fireEvent.pointerMove(sep, { clientX: 450, pointerId: 1 });
+  expect(onResize).toHaveBeenLastCalledWith(750);
 });

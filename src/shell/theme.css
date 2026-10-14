@@ -502,10 +502,13 @@ body {
   opacity: 1;
 }
 .panel-handle.folded {
-  width: 10px;
+  width: 26px;
   background: var(--panel);
   border-inline: 1px solid var(--rule);
   cursor: pointer;
+}
+.panel-handle.folded:hover {
+  background: var(--hover);
 }
 .panel-handle.folded::after {
   display: none;
@@ -1790,9 +1793,7 @@ button.close {
   overflow-y: auto;
   background: var(--panel);
 }
-.side.wide {
-  width: max(var(--side-w, 340px), 620px);
-}
+
 .side-tabs {
   display: flex;
   gap: 2px;

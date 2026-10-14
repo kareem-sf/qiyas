@@ -41,6 +41,8 @@ export default function App() {
   const [info, setInfo] = useState<DrawingInfo | null>(null);
   const panels = usePanelRails();
   const shell = useShell();
+  // The BOQ and conflicts tabs want a wider right panel: their width is kept apart.
+  const rightSlot = shell.sideTab === "boq" || shell.sideTab === "conflicts" ? "rightWide" : "right";
   const options = useOptions({ t, info, setError: shell.setError });
   const { theme, settingsOpen, setSettingsOpen, commandAliases, setError, setNotice, setSideTab, viewport, run, focusDrawing } =
     shell;
@@ -324,7 +326,7 @@ export default function App() {
       />
       <div
         className={`middle${panels.hidden.left ? " left-off" : ""}${panels.hidden.right ? " right-off" : ""}`}
-        style={{ "--left-w": `${panels.width.left}px`, "--side-w": `${panels.width.right}px` } as CSSProperties}
+        style={{ "--left-w": `${panels.width.left}px`, "--side-w": `${panels.width[rightSlot]}px` } as CSSProperties}
       >
         <LeftPanels
           info={info}
@@ -365,11 +367,12 @@ export default function App() {
         />
         <PanelHandle
           side="right"
+          slot={rightSlot}
           hidden={panels.hidden.right}
-          width={panels.width.right}
+          width={panels.width[rightSlot]}
           onToggle={() => panels.toggle("right")}
           onFold={(folded) => panels.setFolded("right", folded)}
-          onResize={(w) => panels.resize("right", w)}
+          onResize={(w) => panels.resize(rightSlot, w)}
         />
         <SidePanel
           info={info}

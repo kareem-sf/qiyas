@@ -6,21 +6,26 @@ import { useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { useT } from "../i18n";
 
 export type PanelSide = "left" | "right";
+/** What a width is kept for: each panel, and the right panel on its wide tabs (BOQ, conflicts). */
+export type WidthSlot = PanelSide | "rightWide";
 
 const KEY = "qiyas.panels.hidden";
 const WIDTH_KEY = "qiyas.panels.width";
 
 /** Each panel's width in CSS pixels: the default, the narrowest and the widest it can be. */
-export const PANEL_WIDTH: Record<PanelSide, { initial: number; min: number; max: number }> = {
+export const PANEL_WIDTH: Record<WidthSlot, { initial: number; min: number; max: number }> = {
   left: { initial: 220, min: 180, max: 480 },
   right: { initial: 340, min: 260, max: 760 },
+  rightWide: { initial: 620, min: 260, max: 1000 },
 };
 /** A drag that leaves less than this much of a panel folds it. */
 const FOLD_BELOW = 0.6;
 /** One arrow key press. */
 const STEP = 16;
 
-const clampWidth = (side: PanelSide, w: number) => Math.round(Math.min(PANEL_WIDTH[side].max, Math.max(PANEL_WIDTH[side].min, w)));
+const clampWidth = (slot: WidthSlot, w: number) => Math.round(Math.min(PANEL_WIDTH[slot].max, Math.max(PANEL_WIDTH[slot].min, w)));
+const SLOTS: WidthSlot[] = ["left", "right", "rightWide"];
+const initialWidths = () => Object.fromEntries(SLOTS.map((k) => [k, PANEL_WIDTH[k].initial])) as Record<WidthSlot, number>;
 
 function storedHidden(): Record<PanelSide, boolean> {
   try {
@@ -32,14 +37,14 @@ function storedHidden(): Record<PanelSide, boolean> {
   }
 }
 
-function storedWidth(): Record<PanelSide, number> {
-  const width = (side: PanelSide, v: unknown) =>
-    typeof v === "number" && Number.isFinite(v) ? clampWidth(side, v) : PANEL_WIDTH[side].initial;
+function storedWidth(): Record<WidthSlot, number> {
+  const width = (slot: WidthSlot, v: unknown) =>
+    typeof v === "number" && Number.isFinite(v) ? clampWidth(slot, v) : PANEL_WIDTH[slot].initial;
   try {
     const raw = JSON.parse(localStorage.getItem(WIDTH_KEY) ?? "{}") ?? {};
-    return { left: width("left", raw.left), right: width("right", raw.right) };
+    return Object.fromEntries(SLOTS.map((k) => [k, width(k, raw[k])])) as Record<WidthSlot, number>;
   } catch {
-    return { left: PANEL_WIDTH.left.initial, right: PANEL_WIDTH.right.initial };
+    return initialWidths();
   }
 }
 
@@ -65,9 +70,9 @@ export function usePanelRails() {
       return next;
     });
   const toggle = (side: PanelSide) => setFolded(side);
-  const resize = (side: PanelSide, w: number) =>
+  const resize = (slot: WidthSlot, w: number) =>
     setWidth((was) => {
-      const next = { ...was, [side]: clampWidth(side, w) };
+      const next = { ...was, [slot]: clampWidth(slot, w) };
       keep(WIDTH_KEY, next);
       return next;
     });
@@ -76,6 +81,8 @@ export function usePanelRails() {
 
 type HandleProps = {
   side: PanelSide;
+  /** Whose limits the width keeps to; the side's own by default. */
+  slot?: WidthSlot;
   hidden: boolean;
   width: number;
   onToggle(): void;
@@ -84,9 +91,10 @@ type HandleProps = {
 };
 
 /** The handle between a side panel and the drawing. */
-export function PanelHandle({ side, hidden, width, onToggle, onFold, onResize }: HandleProps) {
+export function PanelHandle({ side, slot = side, hidden, width, onToggle, onFold, onResize }: HandleProps) {
   const t = useT();
-  const drag = useRef<{ x: number; width: number; rtl: boolean } | null>(null);
+  const limits = PANEL_WIDTH[slot];
+  const drag = useRef<{ x: number; width: number; rtl: boolean; moved: boolean } | null>(null);
   const [dragging, setDragging] = useState(false);
   const label = t(`panels.${hidden ? "show" : "hide"}.${side}`);
 
@@ -99,14 +107,17 @@ export function PanelHandle({ side, hidden, width, onToggle, onFold, onResize }:
     e.preventDefault();
     e.currentTarget.setPointerCapture?.(e.pointerId);
     const rtl = getComputedStyle(e.currentTarget).direction === "rtl";
-    drag.current = { x: e.clientX, width: hidden ? 0 : width, rtl };
+    drag.current = { x: e.clientX, width: hidden ? 0 : width, rtl, moved: false };
     setDragging(true);
   }
   function onPointerMove(e: PointerEvent<HTMLDivElement>) {
     const d = drag.current;
     if (!d) return;
+    // A few pixels of jitter is still a click.
+    if (!d.moved && Math.abs(e.clientX - d.x) < 3) return;
+    d.moved = true;
     const w = d.width + grow(e.clientX - d.x, d.rtl);
-    if (w < PANEL_WIDTH[side].min * FOLD_BELOW) {
+    if (w < limits.min * FOLD_BELOW) {
       onFold(true);
       return;
     }
@@ -114,19 +125,28 @@ export function PanelHandle({ side, hidden, width, onToggle, onFold, onResize }:
     onResize(w);
   }
   function onPointerUp(e: PointerEvent<HTMLDivElement>) {
-    if (!drag.current) return;
+    const d = drag.current;
+    if (!d) return;
     drag.current = null;
     setDragging(false);
     e.currentTarget.releasePointerCapture?.(e.pointerId);
+    // A click on a folded panel's strip opens it.
+    if (hidden && !d.moved && e.type === "pointerup") onToggle();
   }
   function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
     if (e.target !== e.currentTarget) return;
     const rtl = getComputedStyle(e.currentTarget).direction === "rtl";
     if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
       e.preventDefault();
-      const dx = e.key === "ArrowRight" ? STEP : -STEP;
-      if (hidden) onFold(false);
-      onResize((hidden ? PANEL_WIDTH[side].min : width) + grow(dx, rtl));
+      const more = grow(e.key === "ArrowRight" ? STEP : -STEP, rtl);
+      if (hidden) {
+        // Folded, only the arrow that widens opens it.
+        if (more <= 0) return;
+        onFold(false);
+        onResize(limits.min);
+        return;
+      }
+      onResize(width + more);
     } else if (e.key === "Enter") {
       e.preventDefault();
       onToggle();
@@ -140,7 +160,7 @@ export function PanelHandle({ side, hidden, width, onToggle, onFold, onResize }:
       aria-orientation="vertical"
       aria-label={t(`panels.resize.${side}`)}
       aria-valuemin={0}
-      aria-valuemax={PANEL_WIDTH[side].max}
+      aria-valuemax={limits.max}
       aria-valuenow={hidden ? 0 : width}
       tabIndex={0}
       onPointerDown={onPointerDown}
@@ -153,6 +173,8 @@ export function PanelHandle({ side, hidden, width, onToggle, onFold, onResize }:
       <button
         type="button"
         className="panel-grip"
+        // The separator itself takes the keyboard (Enter folds); the grip is for the pointer.
+        tabIndex={-1}
         aria-expanded={!hidden}
         aria-label={label}
         title={label}

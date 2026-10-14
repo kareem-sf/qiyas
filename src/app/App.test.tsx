@@ -685,6 +685,10 @@ test("the side panels fold away behind their handles, resize, and the choice com
   expect((again as HTMLElement).style.getPropertyValue("--left-w")).toBe("220px");
   fireEvent.keyDown(screen.getByRole("separator", { name: en["panels.resize.left"] }), { key: "ArrowRight" });
   expect((again as HTMLElement).style.getPropertyValue("--left-w")).toBe("236px");
+  // The BOQ tab keeps its own, wider width.
+  expect((again as HTMLElement).style.getPropertyValue("--side-w")).toBe("340px");
+  fireEvent.click(screen.getByRole("tab", { name: en.boq }));
+  expect((again as HTMLElement).style.getPropertyValue("--side-w")).toBe("620px");
   localStorage.removeItem("qiyas.panels.hidden");
   localStorage.removeItem("qiyas.panels.width");
 });
