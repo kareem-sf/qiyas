@@ -25,7 +25,7 @@ qiyas/
     qiyas-mcp       the stdio bridge Claude Desktop and Claude Code start (bundled beside the app)
     qiyas-cli       the command line without a window: convert, run a script, take off, batch
     qiyas-desktop   the Tauri app: IPC, file dialogs, settings, keychain, assistant, MCP switch
-  src/              React + TypeScript + Vite: viewport, ribbon, command line, panels
+  src/              React + TypeScript + Vite: viewport, ribbon, command line, panels; `src/ui/` the UI kit
   scripts/check.sh  cargo fmt, clippy, test, a release speed test, tsc, vitest, in one run
 ```
 
@@ -58,7 +58,62 @@ size="sm|md" label? />`, 3x3 (`sm`, one 12 px status-bar line) or 5x5 (`md`), pu
 (`.dot-loader`, one keyframe, a per-dot `--p` sets the delay; no timer), `--accent` dots, grid
 follows the text direction, still under `prefers-reduced-motion`. Without `label` it is `aria-hidden`
 and the text beside it (kept) speaks; with one it is a named `img`, never a live region. The status bar
-gets `waiting` from `useCommandLine` (opening, comparing, PDF page drawing); no `.spinner` is left.
+gets `waiting` from `useCommandLine` (opening, comparing); no `.spinner` is left. A wait that reports a
+percentage is a bar instead (see the UI kit below).
+
+The UI kit (`src/ui/` and the parts it feeds): MIT headless libraries, styled with plain CSS from the
+brand tokens in `theme.css` (no Tailwind, no shadcn, no `motion`; CSS transitions only, none under
+`prefers-reduced-motion`). `LanguageProvider` hands Base UI the direction (`DirectionProvider`), so
+arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) stubs `ResizeObserver`,
+`matchMedia` and `scrollIntoView` for jsdom.
+- `@base-ui/react`: Tabs (the ribbon's and the side panel's: one `Tabs.Indicator`, moved by a CSS
+  transform, is the chosen tab's face; `SideTabs.tsx` never wraps and folds the last tabs into a "⋯"
+  menu when the panel is too narrow, like the ribbon's "More"); Tooltip (`shell/Tooltip.tsx`: the
+  `Tip` wrapper keeps its API, the delay is 400 ms, the next card shows at once within 300 ms, and a
+  click's focus shows none); Menu (`shell/RibbonFlyout.tsx`: a group's "⋯" and the tabs' "More", where
+  the "More" tab is a `Tabs.Tab` that is also the `Menu.Trigger`); Context Menu (`viewport/CanvasMenu.tsx`:
+  Move, Copy, Erase, Properties, Zoom extents on a right-click of the drawing); Popover (the status
+  bar's list of recovered problems); Dialog (`ui/ModalDialog.tsx`, behind the Settings, Plot, Purge,
+  Audit and Recovery dialogs: Escape closes unless `dismissible` is false, a click outside does not,
+  `open` false hides the Plot dialog while a window is clicked); Toggle Group and Radio Group
+  (`ui/Segmented.tsx`: the status bar's OSNAP / ORTHO / POLAR / GRID, the PDF attach mode and the
+  conflicts' status filter); Progress (`ui/Progress.tsx`). Base UI moves focus and closes popups a
+  tick later, so tests wait (`act`, or fake timers advanced) before they look.
+- `@tanstack/react-table` (v9: `tableFeatures`, `useTable`) and `@tanstack/react-virtual`: `ui/DataGrid.tsx`
+  is the take-off, BOQ and conflicts tables: sorting (click, again, again; numbers largest first, text
+  in natural order, nothing last), resizing (drag the edge, arrows on it, double click to reset; the
+  sizes are kept per grid in `localStorage` `qiyas.grid.<name>`), a sticky header, virtualised rows (a
+  box with no layout keeps its initial size), sections (`section`, rows sorted inside them), the one
+  `grow` column takes the room left over, every cell's full text is its tooltip, the arrows, Home, End
+  and Enter work on rows, and the row buttons (`actions`) show on hover or focus. Row heights are
+  fixed (27 px; the conflicts' reason wraps to two lines at 40). `--row-hover` and `--row-current`
+  are solid colours, because the row buttons sit on them.
+- `@headless-tree/react`: the layers panel is a tree (`LayersPanel.tsx`, `layerGroups.ts`): a drawing
+  with 12 layers or more is grouped by discipline prefix (`A-`, `S-`, `E-`) and by xref (`PLAN|…`), a
+  prefix or xref with one layer stays at the top. The library's movement keys (arrows, Home, End) are
+  off while the focus is in a layer's properties (`isEnabled`), so a drop-down keeps its arrows; a
+  click selects, Enter or a double click makes a layer current, the folded groups are kept in
+  `qiyas.layers.collapsed`. Eye (and the current layer's pencil) stay on the row; isolate, make
+  current and properties show over the end of the name on hover or focus.
+- `cmdk`: the command line's suggestions (`CommandLine.tsx`). The chosen row is the line's own
+  (`active`), not cmdk's: nothing is chosen until the arrows choose, so Enter runs what was typed; a
+  hidden first row takes cmdk's start. A command shows its shortest alias as a `<kbd>`; an alias whose
+  command does not itself start with what was typed is its own row; headings only when both show.
+- `sonner`: notices (`ui/notices.tsx`, the one `<Notices>` in `App.tsx`): `setNotice` is a toast, one at
+  a time (a new one takes the last one's place; `null`, or the next command, takes it away), `waiting`
+  keeps it with the dots until replaced; `setError` is a toast that stays until it is closed or `null`
+  (the next success) clears it; both are on `useShell`. At the bottom end (bottom left in Arabic), above
+  the status bar. The status bar says status only. `notifyUndo` is a toast with a counting-down Undo
+  button (the Purge dialog offers it, calling the app's `history(undo)`, once it closes: the modal
+  dialog would make the toast inert); any other command (`run`) takes it away.
+- Mizan's thread (`ai/useStickToBottom.ts`): follows the newest message while the reader is at the
+  bottom; scrolled up it leaves them and offers "Jump to latest". There is no propose-and-approve flow
+  for BOQ changes (the tools apply and each card can be undone), so there are no suggestion cards.
+- The side panels' widths and folds are our own handle (`app/panelRails.tsx`: drag, double click, arrows;
+  kept on this computer), not `react-resizable-panels`.
+- Dependencies (all MIT; `tslib`, 0BSD, comes with them, text in `LICENSES/tslib-0BSD.txt`):
+  `@base-ui/react`, `@tanstack/react-table`, `@tanstack/react-virtual` (3.14.13: the newest that passes
+  pnpm's release-age gate), `@headless-tree/core` and `/react`, `cmdk`, `sonner`.
 
 ## Global constraints
 
@@ -76,7 +131,7 @@ gets `waiting` from `useCommandLine` (opening, comparing, PDF page drawing); no 
 - Window title and product name: `Qiyas`. Arabic name: `قياس`. Bundle identifier: `com.qsmind.qiyas`.
 - This repo is its own git repo. Commit inside it. Pushing `main` and pushing a `v*` tag are the founder's acts or his explicit ask; CI builds the draft release, and only a human clicks Publish.
 - Only MPL-2.0, Apache-2.0, MIT, BSD, ISC, OFL, Zlib or BSL-1.0 dependencies (ISC: `ring`,
-  `rustls-webpki`, `untrusted`; Zlib: `foldhash`; BSL-1.0: `clipboard-win`, `error-code` on
+  `rustls-webpki`, `untrusted`; 0BSD, a BSD: `tslib`; Zlib: `foldhash`; BSL-1.0: `clipboard-win`, `error-code` on
   Windows, through `arboard`, the system clipboard, MIT OR Apache-2.0, with its Wayland
   data-control feature). No code copied from Open CAD Studio (GPL).
 - Thmanyah font files are never committed. `scripts/fonts.sh` copies them from `~/Downloads/Thmanyah-Font-Family/thmanyah typeface` into the git-ignored `src/fonts/thmanyah/`. Instrument Sans (OFL) is committed. The viewport draws drawing text with Noto Sans and Noto Sans Arabic (OFL, unhinted Regular, with their licences in `crates/qiyas-render/fonts/`), behind the drawing's own TrueType font when the computer has it.
@@ -136,7 +191,8 @@ gets `waiting` from `useCommandLine` (opening, comparing, PDF page drawing); no 
   (depth 4); View tab, External references to reload or locate one (kept in the project file).
 - Command line (Ctrl+9 shows or hides it): AutoCAD-style words and aliases (DI, AA, COUNT, DIV,
   ME, ID, Z E/W/IN/OUT, LAYOFF, U…), typed points `x,y`, `@dx,dy`, `@d<angle` in drawing units,
-  Arabic digits accepted. Extra aliases: `aliases` in `settings.json`, edited in ALIASEDIT.
+  Arabic digits accepted. Extra aliases: `aliases` in `settings.json`, edited in ALIASEDIT. Typing
+  a command lists the matches in a cmdk list above the line (see the UI kit).
 - Properties palette under Layers: what the Select tool picked (colour as drawn, linetype,
   weight, attributes, values in metres); a drawing's own entity is edited there (see Layers,
   groups and properties).
@@ -488,7 +544,7 @@ gets `waiting` from `useCommandLine` (opening, comparing, PDF page drawing); no 
   is drawn again; a table's sets every cell; a change of shape runs `follow_edit`; rows on an
   entity take its new layer. `EntityInfo` has `rotation`, `closed`, `global_width`, `scale`, and
   a dimension's text `height`.
-- Window: the Layers panel opens a layer's properties under its row (on, frozen, locked, plot,
+- Window: the Layers panel (a tree; see the UI kit) opens a layer's properties under its row (on, frozen, locked, plot,
   colour, linetype, lineweight, rename, delete), adds layers, and opens Layer states… (LAYSTATE,
   LAS) and Translate layers… (LAYTRANS, `LayerTranslator`); the properties palette edits the
   picked host entity in place (xref and block content stay read-only) and, with nothing picked,
@@ -603,7 +659,7 @@ gets `waiting` from `useCommandLine` (opening, comparing, PDF page drawing); no 
   question they were clicked in (`drop` by its id; a drawing dealt with is no longer what Later
   opens); Later and Escape wait while one works. A Discard Rust refuses (another Qiyas took the
   drawing) is said in the window's language (`refusedBy`). After a Recover its Save As offers the
-  recovered drawing's name, and one status bar notice says "Recovered from autosave of <time>",
+  recovered drawing's name, and one notice (a toast) says "Recovered from autosave of <time>",
   with "; saved to <path>" when it was saved. A drawing double-clicked while the launch question
   is up with nothing to ask about opens at once, behind it.
 - Panic hook (`files::install_panic_hook`): after the usual report, autosaves every drawing with
@@ -663,7 +719,7 @@ gets `waiting` from `useCommandLine` (opening, comparing, PDF page drawing); no 
   checks out falls back to the default on load. An icon ribbon (`ribbonIcons.tsx`: one family, 24
   grid, 1.5 stroke, `currentColor`, keyed by command, a test fails when a button has none; icons
   that point along the text mirror in Arabic): every button is an icon with its name as
-  `aria-label` and a tooltip (`Tooltip.tsx`: name, `tip.<command>` description, the command line
+  `aria-label` and a tooltip (`Tooltip.tsx`, Base UI: name, `tip.<command>` description, the command line
   alias from the alias table via `ribbonInfo.ts` `COMMAND_LINE`; "Coming soon" on a disabled
   one; after a short delay, on keyboard focus too, hides on Escape, blur and click). Each group
   is a box of buttons in two rows filled column by column (a group made only of the headline tools
@@ -672,8 +728,9 @@ gets `waiting` from `useCommandLine` (opening, comparing, PDF page drawing); no 
   42 px (24 px icon), scaled a little in narrow and wide windows. As the window narrows a group
   puts more buttons behind its "⋯" flyout (`Ribbon.tsx`, measured: scrollWidth against
   clientWidth), and the panel scrolls sideways only when that is not enough; flyouts
-  (`RibbonFlyout.tsx`) are placed on the window, so the scroll never clips them, and take the
-  keyboard. Views (and Open's recents menu) are drop-downs placed the same way; Views never goes
+  (`RibbonFlyout.tsx`, a Base UI Menu) are placed on the window, so the scroll never clips them, and take the
+  keyboard (Left and Right move between their columns). Views (and Open's recents menu) are drop-downs, still
+  our own, placed the same way; Views never goes
   behind a "⋯". Open (with its recents arrow), Save, Save as, Undo and Redo are not in the data:
   they are the quick-access bar on the tabs' row after the app name (`QUICK_ACCESS` in
   `ribbonLayout.ts`; logical sides, so Arabic mirrors it), always shown, a `role="toolbar"` with
@@ -681,7 +738,7 @@ gets `waiting` from `useCommandLine` (opening, comparing, PDF page drawing); no 
   and stops `--prefs-width` short of the header's end (a margin, so no tab lies under the
   preferences overlay; `theme.css`; the preferences are icons now, about 220 px); they take their
   own row under 900 px (move the width with the quick-access bar's and the prefs' width). The tab
-  "More" is a `role="tab"` that opens a menu; the tab chosen from it shows in its place. The dialogs (Options, Customize, Aliases) are the window's.
+  "More" is a `role="tab"` that opens a menu; the tab chosen from it shows in its place (the indicator slides under it). The dialogs (Options, Customize, Aliases) are the window's.
 - The window's half (`src/app/useOptions.ts`, read at start and after a dialog saves; Manage tab,
   Drawing group Audit…, Purge… and Recover…, Setup group Options…, Customize…, Aliases…): PURGE (`PU`)
   opens `PurgeDialog` on a dry run of every kind, listed by kind with a tick each (kinds with

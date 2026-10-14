@@ -36,6 +36,26 @@ First public release.
   narrows, so the panel does not scroll. The header's buttons share one size scale.
 - Installers for Linux (AppImage, deb, rpm), Windows (setup.exe, MSI) and macOS (Apple silicon
   and Intel), each with a signature for the updater.
+- A quieter, thinner interface on headless libraries (Base UI, TanStack Table and Virtual, Headless
+  Tree, cmdk, Sonner; all MIT, styled in our own CSS):
+  - The take-off, BOQ and conflicts tables are one data grid: columns sort and resize (and keep
+    their widths), the header stays on top, long lists scroll without lag, numbers line up at the
+    end in tabular figures, the description takes the room that is left and shows its full text in
+    a tooltip, and rows are reached with the arrow keys. A conflict row shows itself on the drawing
+    when clicked.
+  - The layers panel is a tree with keyboard movement; a long list is grouped by A-, S-, E- prefix
+    and by xref. Isolate, make current and properties show on hover or focus, so long layer names
+    are no longer cut.
+  - The command line lists matching commands above it with each shortcut as a small key.
+  - The ribbon's and the side panel's tabs have a sliding indicator; the side panel's tabs never
+    wrap (the last fold into a menu when the panel is narrow).
+  - Messages such as "Saved to …", what a modify left out and errors are quiet toasts at the bottom
+    end of the window (the bottom left in Arabic); the status bar keeps to status. After a purge,
+    closing its dialog offers Undo for a few seconds.
+  - Right-click the drawing for Move, Copy, Erase, Properties and Zoom extents.
+  - OSNAP, ORTHO, POLAR and GRID are one segmented control.
+  - Mizan's conversation keeps to the newest message and offers "Jump to latest" when you have
+    scrolled up. A PDF page being drawn and an update downloading show a labelled progress bar.
 
 Rebuilt on 2026-10-13 under the same version: the Windows and macOS installers were added, the
 language and theme buttons no longer cover the ribbon's last tabs in a narrow window, the
