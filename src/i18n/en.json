@@ -1077,6 +1077,8 @@
   "panels.show.left": "Show the layers panel",
   "panels.hide.right": "Hide the take-off panel",
   "panels.show.right": "Show the take-off panel",
+  "panels.resize.left": "Resize the layers panel",
+  "panels.resize.right": "Resize the take-off panel",
   "audit.button": "Audit…",
   "purge.button": "Purge…",
   "options.button": "Options…",

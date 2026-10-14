@@ -661,7 +661,7 @@ test("PARAMETERS (PAR) opens the manager; an edit is set, redrawn and saved; the
   expect(core.calls[0]).toBe(`run_command {"cmd":{"type":"delete_constraint","id":1}}`);
 });
 
-test("the side panels fold away behind their rails, and the choice comes back on the next start", async () => {
+test("the side panels fold away behind their handles, resize, and the choice comes back on the next start", async () => {
   localStorage.removeItem("qiyas.panels.hidden");
   await mount();
   const middle = document.querySelector(".middle")!;
@@ -681,7 +681,12 @@ test("the side panels fold away behind their rails, and the choice comes back on
   fireEvent.click(screen.getByRole("button", { name: en["panels.show.left"] }));
   expect(again.classList.contains("left-off")).toBe(false);
   expect(again.classList.contains("right-off")).toBe(true);
+  // The handle resizes the panel it stands beside.
+  expect((again as HTMLElement).style.getPropertyValue("--left-w")).toBe("220px");
+  fireEvent.keyDown(screen.getByRole("separator", { name: en["panels.resize.left"] }), { key: "ArrowRight" });
+  expect((again as HTMLElement).style.getPropertyValue("--left-w")).toBe("236px");
   localStorage.removeItem("qiyas.panels.hidden");
+  localStorage.removeItem("qiyas.panels.width");
 });
 
 test("Delete erases what is selected, and types in a text field as ever", async () => {

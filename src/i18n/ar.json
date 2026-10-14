@@ -1077,6 +1077,8 @@
   "panels.show.left": "إظهار لوحة الطبقات",
   "panels.hide.right": "إخفاء لوحة الحصر",
   "panels.show.right": "إظهار لوحة الحصر",
+  "panels.resize.left": "تغيير عرض لوحة الطبقات",
+  "panels.resize.right": "تغيير عرض لوحة الحصر",
   "audit.button": "تدقيق الرسم…",
   "purge.button": "تنظيف الرسم…",
   "options.button": "الخيارات…",

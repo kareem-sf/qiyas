@@ -3,7 +3,7 @@
  *  the selection) and hands their results to the top bar, the dialogs and the panels. Hooks
  *  that call back into one made later (`apply`, `onCommand`, the tool's `cancel`) reach it
  *  through a ref filled right after it exists. */
-import { useRef, useState } from "react";
+import { useRef, useState, type CSSProperties } from "react";
 import { boundaryAt, entityInfo, pick, pickWindow, snap, undo, type DrawingInfo } from "../api";
 import { useLanguage, useT } from "../i18n";
 import { metresPerUnit } from "../shell/AttachPdfDialog";
@@ -13,7 +13,7 @@ import type { Action } from "../tools/commandParser";
 import { useTool } from "../tools/useTool";
 import { Dialogs, FileDialogs } from "./Dialogs";
 import { Header } from "./Header";
-import { PanelRail, usePanelRails } from "./panelRails";
+import { PanelHandle, usePanelRails } from "./panelRails";
 import { LeftPanels, SidePanel, WorkArea } from "./Panels";
 import { readProblems } from "./shared";
 import { useAnnotate } from "./useAnnotate";
@@ -322,7 +322,10 @@ export default function App() {
         options={options}
         parametric={parametric}
       />
-      <div className={`middle${panels.hidden.left ? " left-off" : ""}${panels.hidden.right ? " right-off" : ""}`}>
+      <div
+        className={`middle${panels.hidden.left ? " left-off" : ""}${panels.hidden.right ? " right-off" : ""}`}
+        style={{ "--left-w": `${panels.width.left}px`, "--side-w": `${panels.width.right}px` } as CSSProperties}
+      >
         <LeftPanels
           info={info}
           sheetShown={sheetShown}
@@ -332,7 +335,14 @@ export default function App() {
           layers={layers}
           selection={selection}
         />
-        <PanelRail side="left" hidden={panels.hidden.left} onToggle={() => panels.toggle("left")} />
+        <PanelHandle
+          side="left"
+          hidden={panels.hidden.left}
+          width={panels.width.left}
+          onToggle={() => panels.toggle("left")}
+          onFold={(folded) => panels.setFolded("left", folded)}
+          onResize={(w) => panels.resize("left", w)}
+        />
         <WorkArea
           info={info}
           fileTabs={fileTabs}
@@ -353,7 +363,14 @@ export default function App() {
           colours={options.colours}
           parametric={parametric}
         />
-        <PanelRail side="right" hidden={panels.hidden.right} onToggle={() => panels.toggle("right")} />
+        <PanelHandle
+          side="right"
+          hidden={panels.hidden.right}
+          width={panels.width.right}
+          onToggle={() => panels.toggle("right")}
+          onFold={(folded) => panels.setFolded("right", folded)}
+          onResize={(w) => panels.resize("right", w)}
+        />
         <SidePanel
           info={info}
           drafting={drafting}
