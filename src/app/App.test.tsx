@@ -740,3 +740,31 @@ test("Delete with nothing selected starts ERASE; Delete again erases what was pi
     `run_command {"cmd":{"type":"delete_entities","targets":[{"handle":42,"chain":[]}]}}`,
   ]);
 });
+
+test("with the command line on, a hint it does not show stays in the status bar (COUNT: not a block)", async () => {
+  await mount();
+  await clickOpen();
+  await typeLine("COUNT");
+  canvas.props!.onClick([10, 10], [100, 100], 1, false);
+  await settle();
+  expect(screen.getByRole("status").textContent).toBe(en["measure.notABlock"]);
+});
+
+test("Delete in a dialog or a menu erases nothing in the drawing behind", async () => {
+  await mount();
+  await clickOpen();
+  canvas.props!.onClick([10, 10], [100, 100], 1, false);
+  await settle();
+  core.calls.length = 0;
+  for (const role of ["dialog", "menu"]) {
+    const box = document.createElement("div");
+    box.setAttribute("role", role);
+    const button = document.createElement("button");
+    box.append(button);
+    document.body.append(box);
+    fireEvent.keyDown(button, { code: "Delete", key: "Delete" });
+    await settle();
+    box.remove();
+  }
+  expect(core.calls.filter((c) => c.startsWith("run_command"))).toEqual([]);
+});

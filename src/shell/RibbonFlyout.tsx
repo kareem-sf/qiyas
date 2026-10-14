@@ -47,7 +47,11 @@ export function RibbonFlyout({ anchor, label, rows, onClose, children }: Props) 
       if (!ref.current?.contains(target) && !anchor.contains(target)) close.current(false);
     };
     const escape = (e: globalThis.KeyboardEvent) => {
-      if (e.key === "Escape") close.current(true);
+      if (e.key !== "Escape") return;
+      // Escape closes the flyout only: it never reaches the window's handler, which would also
+      // cancel the tool and the selection.
+      e.stopPropagation();
+      close.current(true);
     };
     document.addEventListener("mousedown", outside);
     document.addEventListener("keydown", escape);

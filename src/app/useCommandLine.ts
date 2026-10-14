@@ -443,6 +443,9 @@ export function useCommandLine({
         // Enter on a focused button presses it; don't also finish the measure.
         if (e.target instanceof HTMLButtonElement) return;
         measure.finish();
+      } else if (action === "erase" && (e.target as Element | null)?.closest?.("dialog[open], [role=dialog], [role=menu]")) {
+        // Delete in a dialog or a menu is not for the drawing behind it.
+        return;
       } else if (action === "erase" && tool === "erase") {
         // Delete again: ERASE is on already, so choosing it changes nothing; erase what it picked.
         if (!e.repeat) measure.finish();
@@ -528,9 +531,10 @@ export function useCommandLine({
   };
   const prompt = t(promptKey, promptKey === measure.hint ? (measure.hintArgs ?? undefined) : undefined);
 
-  // The command line already says what the tool waits for: the status bar does not say it again
-  // (it keeps the notice, or the file name). With the command line hidden, the status bar says it.
-  const promptShown = commandLineOn && promptKey !== "cmd.prompt.command";
+  // The command line already asks the tool's own prompt: the status bar does not say it again (it
+  // keeps the notice, or the file name). A hint the command line does not show (COUNT's "not a
+  // block") stays, and with the command line hidden the status bar says it all.
+  const promptShown = commandLineOn && promptKey === measure.hint;
   const message = opening
     ? t("opening")
     : windowPick
