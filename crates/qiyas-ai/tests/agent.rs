@@ -652,6 +652,49 @@ async fn history_is_append_only_and_system_prompt_is_stable() {
 }
 
 #[tokio::test]
+async fn a_question_ends_the_turn_cleanly_and_the_answer_carries_on() {
+    let question = "Which one: the wall on A-WALL, or the arc on A-WALL-CURVE?";
+    let mock = serve(move |n| match n {
+        0 => text_turn(&[question]),
+        1 => tool_turn(&[("toolu_1", "list_layers", &["{}"])]),
+        _ => text_turn(&["The arc is 6.28 m."]),
+    })
+    .await;
+    let (_dir, session) = sample();
+    let mut agent = Agent::new(
+        Box::new(mock.anthropic()),
+        session,
+        AgentSettings::default(),
+    );
+    let (result, events) = turn(&mut agent, "How long is the curved wall?").await;
+    result.unwrap();
+    // The turn is over after the question: one request, no tool run, a Done at the end.
+    assert_eq!(mock.requests().len(), 1);
+    assert_eq!(texts(&events).join(""), question);
+    assert!(
+        matches!(events.last(), Some(AgentEvent::Done { .. })),
+        "{events:?}"
+    );
+    assert!(!events
+        .iter()
+        .any(|e| matches!(e, AgentEvent::ToolCall { .. })));
+
+    // The engineer's answer is the next message; the question stays in the history before it.
+    let (result, _events) = turn(&mut agent, "The arc.").await;
+    result.unwrap();
+    let reqs = mock.requests();
+    assert_eq!(reqs.len(), 3);
+    let messages = reqs[1].body["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 3, "question, then the answer");
+    assert_eq!(messages[1]["role"], "assistant");
+    assert_eq!(messages[1]["content"][0]["text"], question);
+    assert_eq!(
+        messages[2]["content"].as_array().unwrap().last().unwrap()["text"],
+        "The arc."
+    );
+}
+
+#[tokio::test]
 async fn cancel_stops_within_one_second() {
     let mock = serve(|_| Reply::Drip).await;
     let (_dir, session) = sample();

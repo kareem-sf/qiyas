@@ -108,6 +108,13 @@ fn catalogue_schemas_are_strict_objects() {
             "id_point",
             "extract_data",
             "zoom_to",
+            "add_text",
+            "room_areas",
+            "label_spaces",
+            "add_table",
+            "edit_table_cell",
+            "draw",
+            "insert_block",
             "view_image",
         ]
     );

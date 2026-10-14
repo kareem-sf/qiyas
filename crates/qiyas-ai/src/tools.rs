@@ -151,29 +151,38 @@ pub fn catalogue() -> Vec<ToolSpec> {
         ),
         tool(
             "measure_length",
-            "Measure a length and add it to the take-off. Give handle (a line, polyline or arc \
-             from find_entities; a closed shape gives its perimeter) or points, not both. Prefer \
-             handle over points: it measures the drawn geometry exactly. Returns the measurement \
-             with its id; shown is in metres.",
+            "Measure a length and add it to the take-off. To get the length or perimeter of \
+             something drawn (a wall, a curved wall, an arc, a polyline), find that entity \
+             first (find_entities near the place or on the layer, or get_entity) and give its \
+             handle: that measures the drawn geometry exactly, arcs and bulges included (a closed \
+             shape gives its perimeter). Give points only to measure between points the user \
+             gave you; never approximate a curve with points you chose yourself. If several \
+             entities could be meant, ask the user which. Give handle or points, not both. \
+             Returns the measurement with its id; shown is in metres.",
             json!({
                 "handle": handle("The entity to measure, from find_entities."),
                 "chain": chain(),
-                "points": points("A polyline in drawing coordinates, 2 points or more.")
+                "points": points("A polyline between points the user gave, in drawing \
+                                  coordinates, 2 points or more.")
             }),
             &[],
             true,
         ),
         tool(
             "measure_area",
-            "Measure an area and add it to the take-off. Give handle (a closed polyline, circle \
-             or hatch from find_entities) or points, not both. Prefer handle over points: it \
-             measures the drawn geometry exactly. Returns the measurement with its id; shown is \
-             in square metres.",
+            "Measure an area and add it to the take-off. To get the area of something drawn \
+             (a room, a slab, a circle, a hatch), find that entity first (find_entities near \
+             the place or on the layer, or get_entity) and give its handle: that measures the \
+             drawn geometry exactly, arcs and bulges included. Give points only for corners the \
+             user gave you; never approximate a curve with points you chose yourself. If several \
+             entities could be meant, ask the user which. To get the net area of an enclosed \
+             space bounded by several entities, use room_areas. Give handle or points, not \
+             both. Returns the measurement with its id; shown is in square metres.",
             json!({
                 "handle": handle("The closed entity to measure, from find_entities."),
                 "chain": chain(),
-                "points": points("The corners of the ring in drawing coordinates, 3 points or \
-                                  more; it is closed for you.")
+                "points": points("The corners of the ring the user gave, in drawing \
+                                  coordinates, 3 points or more; it is closed for you.")
             }),
             &[],
             true,
@@ -198,7 +207,10 @@ pub fn catalogue() -> Vec<ToolSpec> {
              count handles must be block references. A volume is the area times height. An item \
              is a quantity in its own unit (e.g. 5 bags) and may have no geometry. For one shape \
              prefer measure_length, measure_area or count_blocks; use this to sum several \
-             entities, for volumes and items, or to set the description at once.",
+             entities, for volumes and items, or to set the description at once. A take-off \
+             row needs a real measured quantity: a row with no geometry and a quantity of 0 is \
+             refused. Notes and analysis (room sizes, overall widths, comments) are not rows: \
+             write them in your answer, or in the drawing with add_text or add_comment.",
             json!({
                 "kind": {
                     "type": "string",
@@ -218,7 +230,12 @@ pub fn catalogue() -> Vec<ToolSpec> {
                 "height": { "type": "number", "description": "A volume's height in metres, above 0." },
                 "value": { "type": "number", "description": "An item's quantity, in its unit." },
                 "unit": { "type": "string", "description": "An item's unit, e.g. bags, t, nr." },
-                "note": { "type": "string", "description": "A note for the user." }
+                "note": { "type": "string", "description": "A note for the user." },
+                "empty_item": {
+                    "type": "boolean",
+                    "description": "true only when the user explicitly asked for an empty \
+                                    item with no quantity yet; never for notes or analysis."
+                }
             }),
             &["kind", "description"],
             true,
@@ -352,7 +369,11 @@ pub fn catalogue() -> Vec<ToolSpec> {
             "Draw a dimension into the drawing itself, as AutoCAD would: a real dimension entity \
              (lines, arrowheads and the measured text) saved in the DWG/DXF, on the current layer \
              in the current dimension style, sized by the annotation scale \
-             (set_annotation_scale). Points are [x, y] in drawing coordinates. Kinds and \
+             (set_annotation_scale). The text shows the drawing's unit after the number \
+             (\"12.00 m\", cm, mm, inches or feet) unless the user turned that off in the \
+             dimension style. Without an annotation scale the text is the style's own size \
+             (0.18 drawing units by default), small on a plan in metres: set the plan's scale \
+             (e.g. 1:100) first. Points are [x, y] in drawing coordinates. Kinds and \
              what each needs: linear p1, p2, line_point (horizontal or vertical by where \
              line_point is; rotation in degrees for another direction); aligned p1, p2, offset \
              (the line that far to the left of p1->p2, negative right); angular vertex, p1, p2, \
@@ -525,6 +546,228 @@ pub fn catalogue() -> Vec<ToolSpec> {
             false,
         ),
         tool(
+            "add_text",
+            "Write text into the drawing itself (real TEXT, or MTEXT for several lines or a \
+             wrapping width), saved in the DWG/DXF, one undo step for all the texts of the \
+             call. Each text has a point (where it starts, [x, y] in drawing coordinates; for \
+             multi-line text the top left corner) and text (any language; Arabic is kept in \
+             reading order). height is the text's size in the drawing, in metres (2.5 mm printed \
+             at 1:100 is 0.25 m); left out, it is 2.5 mm times the annotation scale \
+             (set_annotation_scale), the size the Text tool uses. rotation in degrees turns single-line text. layer names the layer \
+             (it is created, white, when the drawing has none); left out, the current layer. \
+             Look with view_image afterwards and say what you wrote and where.",
+            json!({
+                "texts": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "text": { "type": "string", "description": "What to write; \\n starts a new line." },
+                            "point": point_described("Where it starts: [x, y] in drawing coordinates."),
+                            "height": { "type": "number", "description": "Text height in metres, above 0. Default 2.5 mm times the annotation scale." },
+                            "rotation": { "type": "number", "description": "Degrees counter-clockwise; single-line text only." },
+                            "width": { "type": "number", "description": "MTEXT wrapping width in metres; 0 or left out: no wrapping." }
+                        },
+                        "required": ["text", "point"],
+                        "additionalProperties": false
+                    },
+                    "description": "The texts to write, at most 200."
+                },
+                "layer": { "type": "string", "description": "The layer to write on; the current layer when left out." },
+                "style": { "type": "string", "description": "A text style of the drawing; the current one when left out." }
+            }),
+            &["texts"],
+            true,
+        ),
+        tool(
+            "room_areas",
+            "Find the enclosed spaces (rooms) of the drawing and their areas in square metres, \
+             without changing anything. Each space is the smallest closed region the drawn line \
+             work makes round a seed point, the same finder the Hatch tool uses; its net area is \
+             the region's area less the closed shapes inside it (columns, shafts, a fountain) \
+             unless subtract_islands is false. Seeds are the room-name texts already in the \
+             drawing (all of them, or those on text_layer, or those matching names) or points you \
+             give in seeds. Returns per space: name, net_area_m2, enclosed_area_m2 (what the line \
+             work encloses, columns that overlap the walls already cut out), the islands taken \
+             off (area and bounds) and the point; and the texts that fell in no closed region. \
+             Check the result against the drawing (view_image) before you write it anywhere; \
+             label_spaces writes it into the drawing.",
+            json!({
+                "seeds": seeds_schema(),
+                "text_layer": { "type": "string", "description": "Take the room names from the Text and MText on this layer." },
+                "names": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Only the texts equal to one of these (any case) are rooms."
+                },
+                "within": bbox("Only room names placed inside this box."),
+                "subtract_islands": { "type": "boolean", "description": "Take the closed shapes inside a space off its area. Default true." }
+            }),
+            &[],
+            false,
+        ),
+        tool(
+            "label_spaces",
+            "Do room_areas and write each net area into the drawing as text, like \"58.29 m²\", \
+             just under the room name (or at the seed point when it has no name), one undo step \
+             for all the labels. Same inputs as room_areas, plus: layer (the labels' layer, \
+             created if missing; the current layer when left out), height in metres (the room \
+             name's own height by default), decimals (default 2). It adds texts; it does not \
+             remove labels that are already there, so look with read_text first and ask the user \
+             when some exist. Returns the same list, with the label's handle and point.",
+            json!({
+                "seeds": seeds_schema(),
+                "text_layer": { "type": "string", "description": "Take the room names from the Text and MText on this layer." },
+                "names": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Only the texts equal to one of these (any case) are rooms."
+                },
+                "within": bbox("Only room names placed inside this box."),
+                "subtract_islands": { "type": "boolean", "description": "Take the closed shapes inside a space off its area. Default true." },
+                "layer": { "type": "string", "description": "The labels' layer; the current layer when left out." },
+                "height": { "type": "number", "description": "Label height in metres; the room name's own height when left out." },
+                "decimals": { "type": "integer", "description": "Decimal places, 0 to 6. Default 2." }
+            }),
+            &[],
+            true,
+        ),
+        tool(
+            "add_table",
+            "Draw a table (a schedule: rooms and areas, doors, windows, a BOQ extract) into the \
+             drawing itself, as a real table entity, one undo step. point is its top left corner \
+             in drawing coordinates; columns are the heading cells and rows the lines below, \
+             every cell a string (numbers as text, already formatted). Sizes are metres: \
+             text_height (default 2.5 mm times the annotation scale), row_height (twice the \
+             text by default) and col_width (every column the same; wide enough for the longest \
+             cell by default). layer as add_text. Put the schedule where it hides nothing \
+             (find_entities / view_image first), and edit one later with edit_table_cell.",
+            json!({
+                "point": point_described("Top left corner: [x, y] in drawing coordinates."),
+                "columns": { "type": "array", "items": { "type": "string" }, "description": "The heading cells." },
+                "rows": {
+                    "type": "array",
+                    "items": { "type": "array", "items": { "type": "string" } },
+                    "description": "The lines below the headings; each at most as long as columns."
+                },
+                "text_height": { "type": "number", "description": "Metres, above 0." },
+                "row_height": { "type": "number", "description": "Metres, above 0." },
+                "col_width": { "type": "number", "description": "Metres, above 0." },
+                "layer": { "type": "string", "description": "The layer; the current layer when left out." }
+            }),
+            &["point", "columns", "rows"],
+            true,
+        ),
+        tool(
+            "edit_table_cell",
+            "Change cells of a table in the drawing (from add_table, or a handle from \
+             find_entities with kind Table); rows and columns count from 0, row 0 being the \
+             headings. One undo step for all the cells of the call.",
+            json!({
+                "handle": handle("The table, from add_table or find_entities."),
+                "cells": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "row": { "type": "integer" },
+                            "col": { "type": "integer" },
+                            "text": { "type": "string" }
+                        },
+                        "required": ["row", "col", "text"],
+                        "additionalProperties": false
+                    },
+                    "description": "The cells to change."
+                }
+            }),
+            &["handle", "cells"],
+            true,
+        ),
+        tool(
+            "draw",
+            "Draw shapes into the drawing itself (real entities, saved in the DWG/DXF), one undo \
+             step for all the shapes of the call: lines, polylines (bulges make arcs), \
+             rectangles, circles, arcs, hatches and revision clouds. All numbers are in \
+             drawing units (list_sheets gives them), unlike heights in the text tools. Use it \
+             to build a legend or a key: a framed box (rectangle), a swatch or a sample line per \
+             layer in that layer's colour, then add_text for the labels beside them and \
+             insert_block for symbols. layer and color apply to every shape of the call (the \
+             layer is created when missing; color is \"ByLayer\", \"ACI n\" or \"#rrggbb\"). \
+             Place it where it hides nothing, look with view_image, and say what you drew.",
+            json!({
+                "shapes": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "kind": {
+                                "type": "string",
+                                "enum": ["line", "polyline", "rectangle", "circle", "arc", "hatch", "revcloud"]
+                            },
+                            "a": point_described("line: start; rectangle: one corner."),
+                            "b": point_described("line: end; rectangle: the opposite corner."),
+                            "points": points("polyline: the vertices; hatch: the ring to fill; revcloud: the polygon."),
+                            "bulges": { "type": "array", "items": { "type": "number" }, "description": "polyline: per vertex the bulge (tan of a quarter of the arc's angle, + counter-clockwise) of the segment starting there." },
+                            "closed": { "type": "boolean", "description": "polyline: join the last point to the first." },
+                            "centre": point_described("circle, arc: the centre."),
+                            "radius": { "type": "number", "description": "circle, arc: above 0." },
+                            "start": { "type": "number", "description": "arc: start angle in degrees, counter-clockwise from +X." },
+                            "end": { "type": "number", "description": "arc: end angle in degrees." },
+                            "pattern": { "type": "string", "enum": ["solid", "ansi31", "ansi37"], "description": "hatch: the fill. Default solid." },
+                            "arc_length": { "type": "number", "description": "revcloud: the length of each arc, above 0." }
+                        },
+                        "required": ["kind"],
+                        "additionalProperties": false
+                    },
+                    "description": "The shapes to draw, at most 200."
+                },
+                "layer": { "type": "string", "description": "The layer; the current layer when left out." },
+                "color": { "type": "string", "description": "\"ByLayer\", \"ACI n\" (1 to 255) or \"#rrggbb\"; the current colour when left out." }
+            }),
+            &["shapes"],
+            true,
+        ),
+        tool(
+            "insert_block",
+            "Insert references of blocks the drawing already has (block_summary lists them) at \
+             points, one undo step for all of them; fills the block's attributes by tag. Use it \
+             for symbols in a legend or to place a door, window or column block. scale 1 and \
+             rotation 0 by default; point in drawing coordinates. layer as add_text.",
+            json!({
+                "blocks": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": { "type": "string", "description": "The block's name." },
+                            "point": point_described("Insertion point: [x, y] in drawing coordinates."),
+                            "scale": { "type": "number", "description": "Above 0. Default 1." },
+                            "rotation": { "type": "number", "description": "Degrees counter-clockwise. Default 0." },
+                            "attributes": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "tag": { "type": "string" },
+                                        "value": { "type": "string" }
+                                    },
+                                    "required": ["tag", "value"],
+                                    "additionalProperties": false
+                                },
+                                "description": "Attribute values by tag."
+                            }
+                        },
+                        "required": ["name", "point"],
+                        "additionalProperties": false
+                    },
+                    "description": "The references to insert, at most 200."
+                },
+                "layer": { "type": "string", "description": "The layer; the current layer when left out." }
+            }),
+            &["blocks"],
+            true,
+        ),
+        tool(
             "view_image",
             "A PNG picture of the sheet shown, so you can look at the drawing: lines in their \
              colours on white, the take-off in violet. The caption gives the bounds used.",
@@ -599,6 +842,24 @@ fn point_described(description: &str) -> Value {
 
 fn points(description: &str) -> Value {
     json!({ "type": "array", "items": point(), "description": description })
+}
+
+/// The points room_areas and label_spaces look for spaces round.
+fn seeds_schema() -> Value {
+    json!({
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "name": { "type": "string", "description": "The room's name, if it has one." },
+                "point": point_described("A point inside the space: [x, y] in drawing coordinates.")
+            },
+            "required": ["point"],
+            "additionalProperties": false
+        },
+        "description": "Points inside the spaces wanted, with their names; when given, the \
+                        texts of the drawing are not used."
+    })
 }
 
 fn bbox(description: &str) -> Value {

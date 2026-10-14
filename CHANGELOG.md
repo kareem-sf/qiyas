@@ -47,6 +47,24 @@ First public release.
   measured value and text. Click a value to copy it. Sections fold, and stay folded. Pick several
   entities (Shift, a box, a group) to see how many, of which kinds, the total length and area and
   the layer, colour and linetype they share.
+- Dimensions show the drawing's unit after the number ("12.00 m", cm, mm, inches, feet), the
+  AutoCAD way: a suffix (DIMPOST) on each dimension Qiyas makes, so the DWG stays standard.
+  Dimensions already in a drawing and styles that have a suffix of their own are left alone.
+  "Show units" in the Dimension style panel turns it off for a style (on by default) and rebuilds
+  that style's dimensions; undo brings it back.
+- Mizan asks before it guesses: when a request is unclear or leaves out something it needs (which
+  entities or layer, which BOQ item, units, scale, tolerance, where to put something, overwrite
+  or add) it asks one short question with the options it sees, in your language, and waits for the
+  answer. When the request is clear it just does it.
+- Mizan measures what you drew, not a rough copy: for a length, area or perimeter it finds the
+  entity and measures it by handle, which is exact for arcs and polylines with bulges (a curved
+  wall is measured along the curve). Points it clicks itself only follow the shape roughly, so it
+  uses them only between points you give, and a measurement made that way now carries a hint to
+  redo it on the entity. Notes and analysis no longer land in the take-off as empty rows.
+- Mizan writes into the drawing: text (`add_text`), the net area of every room under its name
+  (`label_spaces`, from the enclosed spaces net of columns and islands; `room_areas` for the
+  numbers alone), schedules as real tables (`add_table`, `edit_table_cell`), and shapes and block
+  symbols (`draw`, `insert_block`) to build a legend. Each call is one undo step.
 - Installers for Linux (AppImage, deb, rpm), Windows (setup.exe, MSI) and macOS (Apple silicon
   and Intel), each with a signature for the updater.
 - A quieter, thinner interface on headless libraries (Base UI, TanStack Table and Virtual, Headless

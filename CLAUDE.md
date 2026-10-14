@@ -20,7 +20,7 @@ qiyas/
     qiyas-boq       Excel in and out (calamine to read, rust_xlsxwriter to write)
     qiyas-pdf       PDF import as vectors and text, PDF underlay pages
     qiyas-plot      plot a sheet to PDF, plot styles (CTB/STB), print through the OS
-    qiyas-ai        the 36 AI tools over the command bus, the agent loop, the Claude and
+    qiyas-ai        the 43 AI tools over the command bus, the agent loop, the Claude and
                     OpenAI-compatible clients, the MCP server
     qiyas-mcp       the stdio bridge Claude Desktop and Claude Code start (bundled beside the app)
     qiyas-cli       the command line without a window: convert, run a script, take off, batch
@@ -235,7 +235,12 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   control points), point, donut, ray, xline, revcloud, wipeout, hatch (closed entities or a
   ring; solid, ANSI31, ANSI37 or a built-in pattern: LINE, NET, DASH, BRICK), 2D solid, trace,
   multiline, sketch. One undo step on the sheet on screen; `Outcome::Added` lists the handles.
-  Wire form `{"type":"draw","kind":"line",...}`, angles in degrees. Not an AI tool yet.
+  Wire form `{"type":"draw","kind":"line",...}`, angles in degrees. Mizan's `draw` (line,
+  polyline, rectangle, circle, arc, hatch, revcloud).
+- `Command::Batch { commands }` runs `Draw`, `Text`, `MText`, `InsertBlock`, `Table`, `EditCell`,
+  `NewLayer` and `SetCurrent` in order as ONE undo step (tables snapshot, so the current layer
+  comes back too) and as all or nothing; `Outcome::Added` lists every entity. Anything else is
+  refused. The AI's drawing tools use it.
 - `Session::current` (layer, colour, linetype, lineweight; layer "0" and ByLayer by default)
   styles new entities. `Command::SetCurrent` is not an undo step; saved in the project file;
   layer and linetype as the drawing spells them, lineweights from AutoCAD's standard set; a
@@ -366,6 +371,22 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   override; it replaces the style's, which applies at 1:1), new text 2.5 mm x scale. No
   annotative scale lists. All undoable (header bits are in `TablesSnapshot`). DIMTAD 4 puts the
   text below the line; `entity_info` shows `%%c`/`%%d` as their signs.
+- Units after the number: a dimension Qiyas makes (Annotate tools, command line, Mizan, any
+  `DimSpec`) shows the drawing's unit: " m", " cm", " mm", `"` (inches), `'` (feet) from
+  INSUNITS, unknown as mm (`Units`). The AutoCAD way: a DIMPOST override on the dimension itself
+  (`ACAD` `DSTYLE` group 3, `<> m`; `qiyas_geom::dimpost`/`set_dimpost`, which `DimLook::named`
+  reads, so AutoCAD's own overrides count too), only when its style's DIMPOST is empty (or the
+  codec's plain `<>`), DIMLFAC is 1 and it is no angle; existing AutoCAD dimensions and styles that
+  have a suffix are never touched. `DimStyleFields::show_units` ("Show units" in the style panel,
+  `SetDimStyle`, default on, older wire commands without it read as on) is kept in the drawing's
+  variable `QIYAS_DIMUNITS_<style>` ("0" once off; undoable with the tables); turning it
+  off or on rebuilds the style's Qiyas-made dimensions with the suffix taken off or put on (a
+  suffix that is not one of ours stays), another style edit rebuilds them as they are. DimEdit and
+  find and replace rebuild from the dimension's own override, so the suffix stays. A DWG read
+  keeps the xdata bytes it read and writes them over an edited record: `apply_unit_suffix` drops
+  the `ACAD` blob (`raw_dwg_eed`) of the dimension it changes. Default text height is the style's
+  DIMTXT x DIMSCALE (the codec's stock 0.18, whatever the units, when the drawing has no style of
+  its own): readable on a plan in metres only after `set_annotation_scale`; Mizan's tool says so.
 - Annotate tab (Dimensions, Leaders, Dimension style…); command line DLI, DAL, DAN, DRA, DDI, DAR,
   DOR, DBA, DCO, QDIM, DED (T text, F flip, M move), DIMBREAK, DIMSPACE, DIMJOGLINE, LE, MLD, TOL,
   D (DIMSTYLE). Mizan draws them too: `add_dimension` (every `DimSpec` kind, handles for the
@@ -950,6 +971,34 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 - AI measurements are marked `ai`; the card's Undo only undoes when the last step is the AI's.
 - The in-app agent is called Mizan (ميزان): the side tab, the panel and the system prompt use the
   name; code keeps `assistant` / `useAssistant`.
+- Mizan asks before guessing (`prompt.rs`): when the request is ambiguous or misses what it needs
+  (entities or layer, BOQ item, units, scale, tolerance, placement, overwrite or add) it asks the
+  engineer one short question with the options it sees, in the engineer's language, and waits;
+  when the request is clear it acts. The question is a plain text answer: the turn ends
+  (`StopReason::EndTurn`, `AgentEvent::Done`), the question stays in the history and the next
+  message is the answer (`agent.rs` test `a_question_ends_the_turn_cleanly...`). The fixed prompt
+  stays under 700 words (a test).
+- Measuring a drawn thing is by handle (find_entities / get_entity, then `measure_length` /
+  `measure_area`): exact for lines, arcs, circles, LWPOLYLINE and heavy POLYLINE with bulges
+  (tested in DXF and DWG). Points are for points the engineer gave. A points measurement whose
+  extent matches one drawn entity (within a tenth) still measures, but the answer carries `hint`
+  and `candidates` (handle, kind, layer, length, area) so Mizan removes it and measures the
+  handle. `add_measurement` refuses a no-geometry item of quantity 0 (notes, analysis) unless
+  `empty_item` is true; `add_markup` is unaffected.
+- Mizan writes into the drawing (`qiyas-ai/src/execute/author.rs`, 43 tools in all): `add_text`
+  (TEXT, or MTEXT for several lines or a width; height in metres, default 2.5 mm x annotation
+  scale), `room_areas` and `label_spaces` (the smallest closed region round each room-name text
+  or seed via `Session::boundary_at`, like Hatch: `enclosed_area_m2` is what the line work
+  encloses, columns that overlap a wall are already out, `net_area_m2` also takes the islands off
+  (fountain, shaft; `subtract_islands` false keeps them); bulged edges are exact; texts that look
+  like areas are skipped so a second run does not label labels; `label_spaces` writes "NN.NN m²"
+  just under each name), `add_table` over `Command::Table` (headings + rows of strings) and
+  `edit_table_cell`, `draw` (line, polyline with bulges, rectangle, circle, arc, hatch, revcloud;
+  drawing units) and `insert_block`. Each call is one undo step through `Command::Batch`; a layer
+  that does not exist is made (white) and the current layer and colour are put back. Verified on
+  `samples/test-plan.dwg`: living room 58.29 - 4 x 0.0025 = 58.28 enclosed, 51.211 net of the
+  fountain; bedroom 22.085; kitchen 17.385 (the 0.4 m columns overlap the inset corners by
+  0.05 x 0.05).
 - Agent log: `logs/agent.log` beside `settings.json` (mode 0600, moved to `agent.log.1` past
   5 MB). Each conversation's provider, model and address, then every user message, request,
   answer (text, calls, tokens, time), tool run (input, result) and error with the service's

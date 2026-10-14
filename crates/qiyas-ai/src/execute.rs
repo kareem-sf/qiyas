@@ -14,6 +14,8 @@ use serde_json::{json, Value};
 
 use crate::image::{height_for, normalized, render_png, MAX_SIDE};
 
+mod author;
+
 /// Largest JSON result, in bytes. Longer results lose rows (or have their strings cut).
 const MAX_OUTPUT: usize = 40_960;
 /// `find_entities` rows per page when the model gives no limit.
@@ -214,6 +216,16 @@ pub fn execute(
         }
         "add_markup" => (add_markup(session, parse(input)?, source)?, 0),
         "add_dimension" => (add_dimension(session, parse(input)?, source)?, 0),
+        "add_text" => (author::add_text(session, parse(input)?, source)?, 0),
+        "room_areas" => (
+            author::room_areas(session, parse(input)?, false, source)?,
+            0,
+        ),
+        "label_spaces" => (author::room_areas(session, parse(input)?, true, source)?, 0),
+        "add_table" => (author::add_table(session, parse(input)?, source)?, 0),
+        "edit_table_cell" => (author::edit_table_cell(session, parse(input)?, source)?, 0),
+        "draw" => (author::draw(session, parse(input)?, source)?, 0),
+        "insert_block" => (author::insert_block(session, parse(input)?, source)?, 0),
         "set_annotation_scale" => {
             let ScaleInput { scale } = parse(input)?;
             session.run_as(Command::AnnotationScale { name: scale }, source)?;
@@ -389,6 +401,9 @@ struct AddInput {
     unit: Option<String>,
     #[serde(default)]
     note: String,
+    /// True when the user explicitly asked for an empty item.
+    #[serde(default)]
+    empty_item: bool,
 }
 
 #[derive(Deserialize)]
@@ -698,6 +713,12 @@ fn measure(
         (None, None) => return Err(bad("Give handle or points")),
     };
     let default_name = matches!(cmd, Command::AddMeasurement { .. });
+    let by_points = match &cmd {
+        Command::MeasureDistance { points } | Command::MeasureArea { points } => {
+            Some(points.clone())
+        }
+        _ => None,
+    };
     let mut outcome = session.run_as(cmd, source)?;
     // "LwPolyline on A-ROOM" is the default name MeasureEntity would give: mark it so, in the
     // take-off (the step just recorded) and in the answer.
@@ -712,7 +733,77 @@ fn measure(
             m.auto_description = true;
         }
     }
-    measured(outcome)
+    let mut out = measured(outcome)?;
+    // Points that trace one drawn entity only approximate it: say so, and where it is.
+    if let Some(points) = by_points {
+        let candidates = traced_entities(session, &points);
+        if !candidates.is_empty() {
+            let what = if kind == Kind::Length {
+                "length"
+            } else {
+                "area"
+            };
+            out["hint"] = json!(format!(
+                "These points follow a drawn entity, so they only approximate its shape. \
+                 Remove this measurement (remove_measurement) and call measure_{what} with the \
+                 handle of the entity meant (candidates), which measures the drawn geometry \
+                 exactly; if several could be meant, ask the user which."
+            ));
+            out["candidates"] = json!(candidates);
+        }
+    }
+    Ok(out)
+}
+
+/// The drawn entities whose extent is that of `points` (within a tenth of it): what a user
+/// clicking along one entity most likely meant.
+fn traced_entities(session: &Session, points: &[[f64; 2]]) -> Vec<Value> {
+    const KINDS: [&str; 10] = [
+        "Line",
+        "Arc",
+        "Circle",
+        "Ellipse",
+        "Spline",
+        "LwPolyline",
+        "Polyline",
+        "Polyline2D",
+        "Polyline3D",
+        "Hatch",
+    ];
+    if points.is_empty() {
+        return Vec::new();
+    }
+    let [lo, hi] = bounds_of(points);
+    let extent = (hi[0] - lo[0]).max(hi[1] - lo[1]);
+    if !(extent.is_finite() && extent > 0.0) {
+        return Vec::new();
+    }
+    let tol = extent * 0.1;
+    let page = session.find_entities(&EntityFilter {
+        within: Some([[lo[0] - tol, lo[1] - tol], [hi[0] + tol, hi[1] + tol]]),
+        limit: 500,
+        ..Default::default()
+    });
+    page.rows
+        .into_iter()
+        .filter(|r| KINDS.contains(&r.kind.as_str()))
+        .filter(|r| {
+            let [rl, rh] = r.bounds;
+            [rl[0] - lo[0], rl[1] - lo[1], rh[0] - hi[0], rh[1] - hi[1]]
+                .iter()
+                .all(|d| d.abs() <= tol)
+        })
+        .take(5)
+        .map(|r| {
+            json!({
+                "handle": r.handle,
+                "kind": r.kind,
+                "layer": r.layer,
+                "length": r.length,
+                "area": r.area,
+            })
+        })
+        .collect()
 }
 
 fn count_blocks(
@@ -756,6 +847,21 @@ fn add_measurement(
     if input.unit.as_deref() == Some("markup") {
         return Err(bad("Use add_markup for markups"));
     }
+    // Notes and analysis are not take-off rows: a row needs a measured quantity.
+    if input.kind == Kind::Item
+        && input.points.is_empty()
+        && input.handles.is_empty()
+        && input.value.is_none_or(|v| v == 0.0)
+        && !input.empty_item
+    {
+        return Err(bad(
+            "A take-off row needs a real measured quantity, and this one has no geometry and a \
+             quantity of 0, so it was not added. Notes and analysis (room sizes, overall widths, \
+             comments) are not rows: write them in your answer, or into the drawing with \
+             add_text or add_comment. Only if the user explicitly asked for an empty item, call \
+             again with empty_item true.",
+        ));
+    }
     let mut seen = HashSet::new();
     for &h in &input.handles {
         if !seen.insert(h) {
@@ -772,7 +878,8 @@ fn add_measurement(
     let to_drawing_units = session.drawing.units.to_metres();
     let cmd = Command::AddMeasurement {
         kind: input.kind,
-        value: input.value,
+        // An explicitly empty item is a quantity of 0.
+        value: input.value.or(input.empty_item.then_some(0.0)),
         unit: input.unit,
         height: input.height.map(|h| h / to_drawing_units),
         points: input.points,

@@ -232,6 +232,13 @@ pub enum Command {
     /// colour, linetype and lineweight (`Session::current`): one undo step. `Outcome::Added` lists
     /// the new entities.
     Draw(DrawSpec),
+    /// Drawing commands run in order as ONE undo step (and undone together if one fails):
+    /// `Draw`, `Text`, `MText`, `InsertBlock`, `Table`, `EditCell`, `NewLayer` and `SetCurrent`
+    /// (a legend, or a text on every room). The current layer, colour and linetype are put
+    /// back by undo too. `Outcome::Added` lists every entity the commands added, in order.
+    Batch {
+        commands: Vec<Command>,
+    },
     /// Sets the drawing state new entities take (`Session::current`). Not an undo step.
     SetCurrent {
         current: Current,
@@ -813,6 +820,11 @@ impl Command {
                     takeoff: false,
                 })
             }
+            // Layers, the text mark's application and the current state, all in one step.
+            Command::Batch { .. } => Some(Part::Document {
+                tables: true,
+                takeoff: false,
+            }),
             // A wipeout registers its class with the drawing.
             Command::Draw(spec) => Some(Part::Document {
                 tables: matches!(spec, DrawSpec::Wipeout { .. }),
@@ -1269,6 +1281,31 @@ impl Session {
             Command::SetCurrent { current } => {
                 self.set_current(current)?;
                 return Ok(Outcome::Changed);
+            }
+            Command::Batch { commands } => {
+                let mut handles = Vec::new();
+                for command in commands {
+                    if !matches!(
+                        command,
+                        Command::Draw(_)
+                            | Command::Text { .. }
+                            | Command::MText { .. }
+                            | Command::InsertBlock { .. }
+                            | Command::Table { .. }
+                            | Command::EditCell { .. }
+                            | Command::NewLayer { .. }
+                            | Command::SetCurrent { .. }
+                    ) {
+                        return Err(CoreError::InvalidCommand(
+                            "A batch takes drawing commands only".to_string(),
+                        ));
+                    }
+                    // Not `run_as`: the batch is the one undo step.
+                    if let Outcome::Added { handles: more } = self.execute(command, source)? {
+                        handles.extend(more);
+                    }
+                }
+                return Ok(Outcome::Added { handles });
             }
             Command::Modify(spec) => {
                 let outcome = self.modify(spec)?;
