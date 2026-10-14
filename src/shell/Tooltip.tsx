@@ -62,6 +62,8 @@ export function Tip({ info, children }: { info: TipInfo; children(describedBy: s
         render={<span />}
         onPointerDown={() => (pressed.current = true)}
         onBlur={() => (pressed.current = false)}
+        // Escape that hides the card is not also the window's Escape.
+        onKeyDown={(e) => open && e.key === "Escape" && e.stopPropagation()}
       >
         {children(open ? id : undefined)}
       </Tooltip.Trigger>

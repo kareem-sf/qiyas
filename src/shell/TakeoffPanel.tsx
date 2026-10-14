@@ -126,7 +126,7 @@ export const TakeoffPanel = memo(function TakeoffPanel({
       {
         id: "unit",
         header: t("unit"),
-        size: 32,
+        size: 44,
         sortValue: (m) => t(`qty.${m.unit}`),
         cell: (m) => t(`qty.${m.unit}`),
       },

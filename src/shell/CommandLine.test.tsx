@@ -208,3 +208,12 @@ test("the list closes when the input loses the focus, and while a point is asked
   point.type("lay");
   expect(screen.queryByRole("listbox")).toBeNull();
 });
+
+test("Home and End are the caret's: they are not taken (prevented) by the list", () => {
+  const { input, type } = setup();
+  type("lay");
+  for (const key of ["Home", "End"]) {
+    // Not prevented, so the caret moves; and it does not reach cmdk's root, which would prevent it.
+    expect(fireEvent.keyDown(input, { key })).toBe(true);
+  }
+});

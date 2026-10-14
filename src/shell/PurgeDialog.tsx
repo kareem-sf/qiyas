@@ -57,7 +57,7 @@ export function PurgeDialog({ look, apply, onUndo, onClose }: Props) {
   /** Closes it; what it purged can be taken back for a few seconds from a toast. */
   function close() {
     if (gone && gone.total > 0 && onUndo) {
-      notifyUndo({ message: t("purge.done", { n: gone.total }), label: undoLabel, seconds: UNDO_SECONDS, onUndo });
+      notifyUndo({ message: t("purge.done", { n: gone.total }), name: t("undo"), label: undoLabel, seconds: UNDO_SECONDS, onUndo });
     }
     onClose();
   }

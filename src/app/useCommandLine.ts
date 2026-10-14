@@ -446,6 +446,8 @@ export function useCommandLine({
       } else if (action === "finish") {
         // Enter on a focused button presses it; don't also finish the measure.
         if (e.target instanceof HTMLButtonElement) return;
+        // Nor on a menu item, a grid or tree row or a list option: they are divs, and Enter is theirs.
+        if ((e.target as Element | null)?.closest?.("[role^='menuitem'],[role=row],[role=treeitem],[role=option]")) return;
         measure.finish();
       } else if (action === "erase" && (e.target as Element | null)?.closest?.("dialog[open], [role=dialog], [role=menu]")) {
         // Delete in a dialog or a menu is not for the drawing behind it.

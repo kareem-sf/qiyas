@@ -65,6 +65,8 @@ export const dismissNotice = (id?: Id) => void toast.dismiss(id);
 
 type Undo = {
   message: string;
+  /** The button's name for assistive technology ("Undo"): fixed, the countdown is not read out. */
+  name: string;
   /** The button's words ("Undo"), followed by the seconds left. */
   label: (seconds: number) => string;
   seconds: number;
@@ -74,7 +76,7 @@ type Undo = {
 
 /** A toast with an Undo button that counts down and goes when the time is up; a thin line shrinks
  *  with it. Pressing the button runs `onUndo` and closes it. */
-function UndoToast({ id, message, label, seconds, onUndo }: Undo & { id: Id }) {
+function UndoToast({ id, message, name, label, seconds, onUndo }: Undo & { id: Id }) {
   const [left, setLeft] = useState(seconds);
   useEffect(() => {
     const tick = setInterval(() => setLeft((s) => Math.max(0, s - 1)), 1000);
@@ -86,12 +88,13 @@ function UndoToast({ id, message, label, seconds, onUndo }: Undo & { id: Id }) {
       <button
         type="button"
         className="toast-action"
+        aria-label={name}
         onClick={() => {
           toast.dismiss(id);
           onUndo();
         }}
       >
-        {label(left)}
+        <span aria-hidden="true">{label(left)}</span>
       </button>
       <span className="toast-timer" style={{ animationDuration: `${seconds}s` }} aria-hidden="true" />
     </div>

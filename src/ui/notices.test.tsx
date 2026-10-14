@@ -112,7 +112,7 @@ test("a notice about something still going on stays, with the dots, until the ne
 
 function UndoButton({ onUndo }: { onUndo(): void }) {
   const label = useUndoLabel();
-  return <button onClick={() => notifyUndo({ message: "Purged 14 entries (one undo step)", label, seconds: 5, onUndo })}>go</button>;
+  return <button onClick={() => notifyUndo({ message: "Purged 14 entries (one undo step)", name: "Undo", label, seconds: 5, onUndo })}>go</button>;
 }
 
 test("an undo toast counts down the seconds; the button takes the change back and closes it", async () => {
@@ -126,8 +126,11 @@ test("an undo toast counts down the seconds; the button takes the change back an
   await advance(50);
   fireEvent.click(screen.getByRole("button", { name: "go" }));
   await advance(300);
-  const button = () => screen.getByRole("button", { name: /^Undo/ });
+  const button = () => screen.getByRole("button", { name: "Undo" });
   expect(button().textContent).toBe("Undo (5 s)");
+  // The seconds change inside a live region: the name is fixed and the countdown is hidden from it.
+  expect(button().getAttribute("aria-label")).toBe("Undo");
+  expect(button().querySelector("span")!.getAttribute("aria-hidden")).toBe("true");
   await advance(1000);
   expect(button().textContent).toBe("Undo (4 s)");
   await advance(2000);
@@ -136,19 +139,19 @@ test("an undo toast counts down the seconds; the button takes the change back an
   expect(onUndo).toHaveBeenCalledTimes(1);
   await advance(3000);
   expect(shown()).toEqual([]);
-  expect(screen.queryByRole("button", { name: /^Undo/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
 });
 
 test("an undo toast goes when the time is up, and when something else is done first", async () => {
   mount();
   const onUndo = vi.fn();
-  const open = () => notifyUndo({ message: "Purged", label: (n) => `Undo (${n} s)`, seconds: 3, onUndo });
+  const open = () => notifyUndo({ message: "Purged", name: "Undo", label: (n) => `Undo (${n} s)`, seconds: 3, onUndo });
   await advance(50);
   act(() => void open());
   await advance(300);
-  expect(screen.getByRole("button", { name: /^Undo/ })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Undo" })).toBeTruthy();
   await advance(3500);
-  expect(screen.queryByRole("button", { name: /^Undo/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
   expect(onUndo).not.toHaveBeenCalled();
 
   // Another command: the toast's undo would be of that command, so it is gone.
@@ -156,5 +159,5 @@ test("an undo toast goes when the time is up, and when something else is done fi
   await advance(300);
   act(() => notifyUndoGone());
   await advance(3000);
-  expect(screen.queryByRole("button", { name: /^Undo/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
 });

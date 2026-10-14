@@ -332,6 +332,29 @@ test("DIVIDE 5 answers the divide prompt once: one divide_along for the command,
   expect(screen.getByRole("form", { name: en.divide })).toBeTruthy();
 });
 
+test("Enter on a menu item, grid row, tree row or option is theirs: it does not finish the measure", async () => {
+  await mount();
+  await clickOpen();
+  await typeLine("AA");
+  for (const p of [[0, 0], [10, 0], [10, 10]]) canvas.props!.onClick(p, p, 1, false);
+  await settle();
+  core.calls.length = 0;
+  for (const role of ["menuitem", "menuitemcheckbox", "row", "treeitem", "option"]) {
+    const el = document.createElement("div");
+    el.setAttribute("role", role);
+    el.tabIndex = 0;
+    document.body.appendChild(el);
+    fireEvent.keyDown(el, { key: "Enter", code: "Enter" });
+    el.remove();
+  }
+  await settle();
+  expect(core.calls.filter((c) => c.startsWith("run_command"))).toEqual([]);
+  // Enter elsewhere still finishes it.
+  fireEvent.keyDown(document.body, { key: "Enter", code: "Enter" });
+  await settle();
+  expect(core.calls.filter((c) => c.startsWith("run_command")).length).toBe(1);
+});
+
 test("hooks made before apply and onCommand reach them: TEXT's text, a tool palette's command line", async () => {
   await mount();
   await clickOpen();

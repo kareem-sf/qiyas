@@ -396,3 +396,21 @@ test("Space never presses a focused ribbon button", () => {
   expect(down).toBe(false);
   expect(up).toBe(false);
 });
+
+test("Escape that closes a flyout does not also reach the window's Escape", async () => {
+  const onWindowKey = vi.fn();
+  window.addEventListener("keydown", onWindowKey);
+  try {
+    render(<Ribbon {...props} />);
+    const more = screen.getByRole("tab", { name: "More" });
+    act(() => more.focus());
+    fireEvent.keyDown(more, { key: "ArrowDown" });
+    await settle();
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    await settle();
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(onWindowKey).not.toHaveBeenCalledWith(expect.objectContaining({ key: "Escape" }));
+  } finally {
+    window.removeEventListener("keydown", onWindowKey);
+  }
+});

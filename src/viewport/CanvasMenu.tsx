@@ -40,7 +40,12 @@ export function CanvasMenu({ box, hasDrawing, onTool, onProperties, onZoomExtent
       <ContextMenu.Trigger render={box}>{children}</ContextMenu.Trigger>
       <ContextMenu.Portal>
         <ContextMenu.Positioner className="rb-flyout-pos" collisionPadding={8}>
-          <ContextMenu.Popup className="rb-flyout canvas-menu" aria-label={t("canvas.menu")}>
+          <ContextMenu.Popup
+            className="rb-flyout canvas-menu"
+            aria-label={t("canvas.menu")}
+            // Escape closes the menu only, not the tool behind it.
+            onKeyDown={(e) => e.key === "Escape" && e.stopPropagation()}
+          >
             {MODIFY.map(({ tool, label }) => (
               <ContextMenu.Item key={tool} className="rb-item" disabled={!hasDrawing} onClick={() => onTool(tool)}>
                 <span>{t(label)}</span>

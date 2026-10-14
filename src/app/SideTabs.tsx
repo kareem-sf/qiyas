@@ -109,7 +109,11 @@ export function SideTabs<Id extends string>({ tabs, value, onChange, className, 
           </Menu.Trigger>
           <Menu.Portal>
             <Menu.Positioner className="rb-flyout-pos" side="bottom" align="end" sideOffset={4} collisionPadding={8}>
-              <Menu.Popup className="rb-flyout side-more-menu" aria-label={t("panels.moreTabs")}>
+              <Menu.Popup
+                className="rb-flyout side-more-menu"
+                aria-label={t("panels.moreTabs")}
+                onKeyDown={(e) => e.key === "Escape" && e.stopPropagation()}
+              >
                 <Menu.RadioGroup value={value} onValueChange={(next) => onChange(next as Id)}>
                   {folded.map((x) => (
                     <Menu.RadioItem key={x.id} value={x.id} closeOnClick className="rb-item">

@@ -1316,7 +1316,7 @@ span.grid-sort {
   display: flex;
   align-items: center;
   gap: 1px;
-  padding-inline: 8px 4px;
+  padding-inline: 8px 10px;
   background: var(--panel);
   opacity: 0;
   transition: opacity 120ms ease;

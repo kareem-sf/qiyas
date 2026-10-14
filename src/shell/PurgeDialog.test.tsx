@@ -126,9 +126,9 @@ test("closing the dialog after a purge offers the undo in a toast that counts do
   fireEvent.click(screen.getByRole("button", { name: "Purge" }));
   await screen.findByText("Purged 3 entries (one undo step)");
   // The dialog is modal: the toast comes when it is closed, with a few seconds to press Undo.
-  expect(screen.queryByRole("button", { name: /^Undo/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Close" }));
-  const undo = await screen.findByRole("button", { name: /^Undo \(\d s\)$/ });
+  const undo = await screen.findByRole("button", { name: "Undo" });
   expect(undo.textContent).toBe("Undo (8 s)");
   fireEvent.click(undo);
   expect(onUndo).toHaveBeenCalledTimes(1);
@@ -145,5 +145,5 @@ test("closing without purging offers no undo", async () => {
   await screen.findByRole("group", { name: "Blocks (2)" });
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   await new Promise((r) => setTimeout(r, 400));
-  expect(screen.queryByRole("button", { name: /^Undo/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
 });

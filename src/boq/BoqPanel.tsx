@@ -115,7 +115,7 @@ export const BoqPanel = memo(function BoqPanel({
       {
         id: "unit",
         header: t("unit"),
-        size: 40,
+        size: 48,
         sortValue: (l) => unitLabel(t, l.item.unit),
         cell: (l) => unitLabel(t, l.item.unit),
       },

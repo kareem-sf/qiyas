@@ -24,7 +24,7 @@ export function useStickToBottom(changed: readonly unknown[]) {
   const toBottom = (smooth: boolean) => {
     const el = box.current;
     if (!el) return;
-    el.scrollTo?.({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
+    el.scrollTo?.({ top: el.scrollHeight, behavior: smooth && !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "smooth" : "auto" });
   };
 
   const onScroll = () => {

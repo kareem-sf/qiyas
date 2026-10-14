@@ -26,6 +26,8 @@ export function RibbonFlyout({ open, onOpenChange, label, rows, children, items 
   // Base UI moves between the rows with Up and Down; between columns is ours: the next column is
   // the one on the end side, and an item with no neighbour that way stays put.
   const onKeyDown = (e: KeyboardEvent) => {
+    // Escape closes the flyout only: it does not also cancel the tool and the selection.
+    if (e.key === "Escape") e.stopPropagation();
     if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
     const all = Array.from(popup.current?.querySelectorAll<HTMLElement>('[role^="menuitem"]:not([aria-disabled="true"])') ?? []);
     const at = all.indexOf(e.target as HTMLElement);

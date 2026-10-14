@@ -136,6 +136,11 @@ export function CommandLine({ state, prompt, onAction, inputRef }: Props) {
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Home" || e.key === "End") {
+      // The caret's: cmdk's root would take them (and stop the caret) for its list.
+      e.stopPropagation();
+      return;
+    }
     if (e.key === "ArrowUp" || e.key === "ArrowDown") {
       e.preventDefault();
       const step = e.key === "ArrowUp" ? -1 : 1;
