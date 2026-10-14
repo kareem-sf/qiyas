@@ -68,6 +68,8 @@ function builtInShortcut(e: Keys): Shortcut | null {
     return null;
   }
   if (e.code === "Escape") return "escape";
+  // Delete erases what is selected (ERASE takes the selection as it is), as in AutoCAD.
+  if (e.code === "Delete" && !e.shiftKey) return "erase";
   if (!e.shiftKey && e.code in TOGGLE_CODES) return TOGGLE_CODES[e.code];
   if (e.code === "Enter" || e.code === "NumpadEnter") return "finish";
   if (e.shiftKey) return null;
@@ -89,6 +91,7 @@ export const BUILT_IN_SHORTCUTS: [string, string][] = [
   ["pasteclip", "Ctrl+V"],
   ["pasteblock", "Ctrl+Shift+V"],
   ["escape", "Escape"],
+  ["erase", "Delete"],
   ["finish", "Enter"],
   ["osnap", "F3"],
   ["grid", "F7"],

@@ -29,10 +29,10 @@ const CORE: RibbonLayout = {
   ],
 };
 
-test("the window's default has the eight tabs, Home its five groups, and Manage has Audit, Purge, Recover, Options, Customize and Aliases", () => {
+test("the window's default has the eight tabs, Measure first, Draw its six groups, and Manage has Audit, Purge, Recover, Options, Customize and Aliases", () => {
   expect(DEFAULT_RIBBON.tabs.map((t) => t.id)).toEqual([
-    "home",
     "measure",
+    "home",
     "annotate",
     "parametric",
     "insert",
@@ -40,8 +40,12 @@ test("the window's default has the eight tabs, Home its five groups, and Manage 
     "manage",
     "output",
   ]);
-  const home = DEFAULT_RIBBON.tabs[0];
-  expect(home.groups.map((g) => g.id)).toEqual(["draw", "modify", "text", "clipboard", "layers"]);
+  // The tab with id "home" is the Draw tab: its label is the Draw group's.
+  const home = DEFAULT_RIBBON.tabs[1];
+  expect(home.label).toBe("draw.group");
+  expect(home.groups.map((g) => g.id)).toEqual(["draw", "modify", "edit", "text", "clipboard", "layers"]);
+  expect(home.groups.find((g) => g.id === "modify")!.buttons).toHaveLength(10);
+  expect(home.groups.find((g) => g.id === "edit")!.buttons).toHaveLength(13);
   // Open, Save, Save as, Undo and Redo are the quick-access bar's, never a layout's.
   const commands = DEFAULT_RIBBON.tabs.flatMap((t) => t.groups.flatMap((g) => g.buttons.map((b) => b.command)));
   for (const c of ["open", "save", "saveAs", "undo", "redo"]) expect(commands).not.toContain(c);
@@ -52,6 +56,18 @@ test("the window's default has the eight tabs, Home its five groups, and Manage 
     "compare",
     "exportConflicts",
   ]);
+  expect(measure.groups.map((g) => g.id)).toEqual(["measure", "inquiry", "takeoff", "dims", "markup"]);
+  // Dimensions: five on show, the other ten and the style behind its "⋯".
+  const dims = measure.groups.find((g) => g.id === "dims")!;
+  expect([dims.main, dims.buttons.length]).toEqual([5, 15]);
+  expect(measure.groups.find((g) => g.id === "markup")!.buttons.map((b) => b.command)).toEqual(["revcloud", "commentCloud", "leader", "mtext"]);
+  // Annotate: every dimension type and the style, Leaders, Markup (where the revision cloud with a
+  // comment is added), Tables.
+  const annotate = DEFAULT_RIBBON.tabs.find((t) => t.id === "annotate")!;
+  expect(annotate.groups.map((g) => g.id)).toEqual(["dims", "notes", "markup", "tables"]);
+  expect(annotate.groups[0].buttons).toHaveLength(15);
+  expect(annotate.groups[0].main).toBeUndefined();
+  expect(annotate.groups[2].buttons.map((b) => b.command)).toEqual(["revcloud", "commentCloud"]);
   const parametric = DEFAULT_RIBBON.tabs.find((t) => t.id === "parametric")!;
   expect(parametric.groups.map((g) => g.buttons.length)).toEqual([13, 5, 3]);
   const manage = DEFAULT_RIBBON.tabs.find((t) => t.id === "manage")!;
@@ -101,7 +117,7 @@ test("with no saved layout the tree is the window's default, less the buttons th
   // (nor Purge, which this cut-down core lacks).
   expect(keys("manage")).toEqual(["runScript", "audit"]);
   // Audit, beside Line in the core's data, is hidden there (it shows on Manage in the window's).
-  const draw = tree[0].groups.find((g) => g.id === "draw")!;
+  const draw = tree.find((t) => t.id === "home")!.groups.find((g) => g.id === "draw")!;
   expect(draw.buttons.find((b) => b.command === "audit")!.hidden).toBe(true);
   expect(draw.buttons.find((b) => b.command === "line")!.hidden).toBe(false);
   // Every button the layout saves is one the core knows.
@@ -125,4 +141,14 @@ test("hidden tabs, groups and buttons are left out; empty groups and tabs go; no
   });
   tree[0].hidden = true;
   expect(layoutOf(tree)).toBeNull();
+});
+
+test("a group's \"main\" survives a round trip through the Customize tree; a button may sit in two places", () => {
+  const tree = editTree(DEFAULT_RIBBON, null);
+  const saved = layoutOf(tree)!;
+  expect(saved).toEqual(DEFAULT_RIBBON);
+  expect(saved.tabs[0].groups.find((g) => g.id === "dims")!.main).toBe(5);
+  // Revision cloud is on Measure's Markup, Annotate's Markup and Draw's Draw group.
+  const places = DEFAULT_RIBBON.tabs.flatMap((t) => t.groups.filter((g) => g.buttons.some((b) => b.command === "revcloud")).map((g) => `${t.id}/${g.id}`));
+  expect(places).toEqual(["measure/markup", "home/draw", "annotate/markup"]);
 });

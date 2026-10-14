@@ -41,6 +41,10 @@ pub struct RibbonGroup {
     pub id: String,
     pub label: String,
     pub buttons: Vec<RibbonButton>,
+    /// How many of the buttons the group shows; the rest wait behind its "⋯" button (all when
+    /// left out).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub main: Option<usize>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -84,19 +88,59 @@ fn group(id: &str, label: &str, buttons: Vec<RibbonButton>) -> RibbonGroup {
         id: id.into(),
         label: label.into(),
         buttons,
+        main: None,
+    }
+}
+
+/// A group that shows its first `main` buttons and keeps the rest behind its "⋯" button.
+fn group_main(id: &str, label: &str, buttons: Vec<RibbonButton>, main: usize) -> RibbonGroup {
+    RibbonGroup {
+        main: Some(main),
+        ..group(id, label, buttons)
     }
 }
 
 fn tab(id: &str, groups: Vec<RibbonGroup>) -> RibbonTab {
+    tab_labelled(id, id, groups)
+}
+
+fn tab_labelled(id: &str, label: &str, groups: Vec<RibbonGroup>) -> RibbonTab {
     RibbonTab {
         id: id.into(),
-        label: id.into(),
+        label: label.into(),
         groups,
     }
 }
 
-/// The ribbon Qiyas ships: Home (Draw, Modify, Annotation, Clipboard, Layers), Measure (Measure,
-/// Inquiry, Take-off: export, import BOQ, compare, export conflicts), Annotate, Parametric
+/// Every dimension tool, then the dimension style: the Dimensions group of Measure (its first
+/// five on show) and of Annotate (all of them).
+fn dimensions() -> Vec<RibbonButton> {
+    let mut buttons = tools(
+        "dim",
+        &[
+            "dimLinear",
+            "dimAligned",
+            "dimAngular",
+            "dimRadius",
+            "dimDiameter",
+            "dimArc",
+            "dimOrdinate",
+            "dimBaseline",
+            "dimContinue",
+            "qdim",
+            "dimEdit",
+            "dimBreak",
+            "dimSpace",
+            "dimJogLine",
+        ],
+    );
+    buttons.push(action("dimStyle", "dim.styleButton"));
+    buttons
+}
+
+/// The ribbon Qiyas ships: Measure (Measure, Inquiry, Take-off, Dimensions, Markup), Draw (the tab
+/// with id "home": Draw, Modify, Edit, Annotation, Clipboard, Layers), Annotate (Dimensions,
+/// Leaders, Markup, Tables), then, under "More" in the window, Parametric
 /// (geometric and dimensional constraints, Parameters manager, Delete constraints, the constraint
 /// bar), Insert, View, Manage (Run script; Audit, Purge and Recover; Options, Customize and
 /// Aliases) and Output (Plot, Quick print, Print all layouts, Plot styles), as `Ribbon.tsx` draws
@@ -104,67 +148,6 @@ fn tab(id: &str, groups: Vec<RibbonGroup>) -> RibbonTab {
 /// window's quick-access bar beside the tabs, always shown.
 pub fn default_ribbon() -> RibbonLayout {
     use ButtonKind::Toggle;
-    let home = tab(
-        "home",
-        vec![
-            group(
-                "draw",
-                "draw.group",
-                tools(
-                    "draw",
-                    &[
-                        "line",
-                        "polyline",
-                        "rectangle",
-                        "circle",
-                        "arc",
-                        "ellipse",
-                        "spline",
-                        "point",
-                        "hatch",
-                        "revcloud",
-                        "wipeout",
-                    ],
-                ),
-            ),
-            group("modify", "modify.group", {
-                let mut buttons = tools(
-                    "modify",
-                    &[
-                        "move", "copy", "rotate", "scale", "mirror", "stretch", "align", "array",
-                        "explode", "erase",
-                    ],
-                );
-                buttons.extend(tools(
-                    "edit",
-                    &[
-                        "trim", "extend", "break", "join", "lengthen", "reverse", "offset",
-                        "fillet", "chamfer", "blend", "pedit", "overkill", "flatten",
-                    ],
-                ));
-                buttons
-            }),
-            group("text", "ribbon.annotation", {
-                let mut buttons = tools("text", &["text", "mtext", "textEdit"]);
-                buttons.push(action("find", "text.find"));
-                buttons
-            }),
-            group(
-                "clipboard",
-                "clip.group",
-                tools("clip", &["copyclip", "copybase", "pasteclip", "pasteblock"]),
-            ),
-            group("layers", "layers", {
-                let mut buttons = vec![
-                    action("layerStates", "layer.statesButton"),
-                    action("translateLayers", "layer.translateButton"),
-                ];
-                buttons.extend(tools("layerTool", &["group", "ungroup", "matchprop"]));
-                buttons.push(button(Toggle, "groupSelect", "group.select"));
-                buttons
-            }),
-        ],
-    );
     let measure = tab(
         "measure",
         vec![
@@ -195,38 +178,103 @@ pub fn default_ribbon() -> RibbonLayout {
                     action("exportConflicts", "exportConflicts"),
                 ],
             ),
+            group_main("dims", "dim.group", dimensions(), 5),
+            group(
+                "markup",
+                "ribbon.markup",
+                vec![
+                    tool("revcloud", "draw.revcloud"),
+                    tool("commentCloud", "dim.commentCloud"),
+                    tool("leader", "dim.leader"),
+                    tool("mtext", "text.mtext"),
+                ],
+            ),
+        ],
+    );
+    let home = tab_labelled(
+        "home",
+        "draw.group",
+        vec![
+            group(
+                "draw",
+                "draw.group",
+                tools(
+                    "draw",
+                    &[
+                        "line",
+                        "polyline",
+                        "rectangle",
+                        "circle",
+                        "arc",
+                        "ellipse",
+                        "spline",
+                        "point",
+                        "hatch",
+                        "revcloud",
+                        "wipeout",
+                    ],
+                ),
+            ),
+            group(
+                "modify",
+                "modify.group",
+                tools(
+                    "modify",
+                    &[
+                        "move", "copy", "rotate", "scale", "mirror", "stretch", "align", "array",
+                        "explode", "erase",
+                    ],
+                ),
+            ),
+            group(
+                "edit",
+                "ribbon.edit",
+                tools(
+                    "edit",
+                    &[
+                        "trim", "extend", "break", "join", "lengthen", "reverse", "offset",
+                        "fillet", "chamfer", "blend", "pedit", "overkill", "flatten",
+                    ],
+                ),
+            ),
+            group("text", "ribbon.annotation", {
+                let mut buttons = tools("text", &["text", "mtext", "textEdit"]);
+                buttons.push(action("find", "text.find"));
+                buttons
+            }),
+            group(
+                "clipboard",
+                "clip.group",
+                tools("clip", &["copyclip", "copybase", "pasteclip", "pasteblock"]),
+            ),
+            group("layers", "layers", {
+                let mut buttons = vec![
+                    action("layerStates", "layer.statesButton"),
+                    action("translateLayers", "layer.translateButton"),
+                ];
+                buttons.extend(tools("layerTool", &["group", "ungroup", "matchprop"]));
+                buttons.push(button(Toggle, "groupSelect", "group.select"));
+                buttons
+            }),
         ],
     );
     let annotate = tab(
         "annotate",
         vec![
-            group("dims", "dim.group", {
-                let mut buttons = tools(
-                    "dim",
-                    &[
-                        "dimLinear",
-                        "dimAligned",
-                        "dimAngular",
-                        "dimRadius",
-                        "dimDiameter",
-                        "dimArc",
-                        "dimOrdinate",
-                        "dimBaseline",
-                        "dimContinue",
-                        "qdim",
-                        "dimEdit",
-                        "dimBreak",
-                        "dimSpace",
-                        "dimJogLine",
-                    ],
-                );
-                buttons.push(action("dimStyle", "dim.styleButton"));
-                buttons
-            }),
+            group("dims", "dim.group", dimensions()),
             group(
                 "notes",
                 "dim.notes",
                 tools("dim", &["leader", "mleader", "tolerance"]),
+            ),
+            // The revision cloud, and the comment cloud (a cloud with its comment).
+            group(
+                "markup",
+                "ribbon.markup",
+                vec![
+                    tool("revcloud", "draw.revcloud"),
+                    tool("commentCloud", "dim.commentCloud"),
+                ],
             ),
             group(
                 "tables",
@@ -392,7 +440,7 @@ pub fn default_ribbon() -> RibbonLayout {
     );
     RibbonLayout {
         tabs: vec![
-            home, measure, annotate, parametric, insert, view, manage, output,
+            measure, home, annotate, parametric, insert, view, manage, output,
         ],
     }
 }

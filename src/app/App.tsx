@@ -13,6 +13,7 @@ import type { Action } from "../tools/commandParser";
 import { useTool } from "../tools/useTool";
 import { Dialogs, FileDialogs } from "./Dialogs";
 import { Header } from "./Header";
+import { PanelRail, usePanelRails } from "./panelRails";
 import { LeftPanels, SidePanel, WorkArea } from "./Panels";
 import { readProblems } from "./shared";
 import { useAnnotate } from "./useAnnotate";
@@ -38,6 +39,7 @@ export default function App() {
   const t = useT();
   const { lang } = useLanguage();
   const [info, setInfo] = useState<DrawingInfo | null>(null);
+  const panels = usePanelRails();
   const shell = useShell();
   const options = useOptions({ t, info, setError: shell.setError });
   const { theme, settingsOpen, setSettingsOpen, commandAliases, setError, setNotice, setSideTab, viewport, run, focusDrawing } =
@@ -320,7 +322,7 @@ export default function App() {
         options={options}
         parametric={parametric}
       />
-      <div className="middle">
+      <div className={`middle${panels.hidden.left ? " left-off" : ""}${panels.hidden.right ? " right-off" : ""}`}>
         <LeftPanels
           info={info}
           sheetShown={sheetShown}
@@ -330,6 +332,7 @@ export default function App() {
           layers={layers}
           selection={selection}
         />
+        <PanelRail side="left" hidden={panels.hidden.left} onToggle={() => panels.toggle("left")} />
         <WorkArea
           info={info}
           fileTabs={fileTabs}
@@ -350,6 +353,7 @@ export default function App() {
           colours={options.colours}
           parametric={parametric}
         />
+        <PanelRail side="right" hidden={panels.hidden.right} onToggle={() => panels.toggle("right")} />
         <SidePanel
           info={info}
           drafting={drafting}

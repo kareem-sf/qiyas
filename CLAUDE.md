@@ -643,25 +643,37 @@ with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test fo
   two commands on one key refused, `settings::shortcut_key` spells a key one way), `ribbon`
   (null = `ribbon::default_ribbon`), `aliases` (no two that differ only in case). The ribbon
   (`qiyas-desktop/src/ribbon.rs`, IPC `get_default_ribbon`) is data: tabs, groups, buttons
-  `{ kind: tool | action | toggle, command, label }` as `Ribbon.tsx` draws them (Home: Draw,
-  Modify, Annotation, Clipboard, Layers; Measure: Measure, Inquiry, Take-off (export, import BOQ,
-  compare, export conflicts); Annotate, Parametric, Insert, View, Manage (Drawing: Audit, Purge,
-  Recover), Output); `src/shell/ribbon.default.json` is that default, and both
+  `{ kind: tool | action | toggle, command, label }` as `Ribbon.tsx` draws them, in groups that may
+  carry `main` (how many buttons show; the rest wait behind the group's "⋯" flyout). Tabs: Measure
+  (Measure, Inquiry, Take-off, Dimensions with `main` 5, Markup), Draw (id `home`: Draw, Modify,
+  Edit, Annotation, Clipboard, Layers), Annotate (Dimensions with all kinds and the style,
+  Leaders, Markup, Tables); those three show on the tab row and the rest (Parametric, Insert, View,
+  Manage (Drawing: Audit, Purge, Recover), Output) are under "More" (`SHOWN_TABS`). Group id
+  `markup` holds the revision cloud and the comment cloud (COMMENT). `src/shell/ribbon.default.json` is that default, and both
   `tests/options.rs` and `ribbonLayout.test.ts` compare theirs with it. A saved layout may only
   use the default's buttons (moved between groups and tabs as it likes), and one that no longer
-  checks out falls back to the default on load. As AutoCAD's: each group is a box of its buttons
-  in up to three rows filled column by column, its name small and muted under them, a thin rule
-  between groups; the panel never wraps (fixed height, scrolls sideways in a narrow window; a
-  drop-down in it, Views, is placed on the window so the scroll never clips it). Open (with its
-  recents arrow), Save, Save as, Undo and Redo are not in the data: they are the quick-access bar
-  on the tabs' row after the app name (`QUICK_ACCESS` in `ribbonLayout.ts`; logical sides, so
-  Arabic mirrors it), always shown, buttons `nowrap`, a `role="toolbar"` with one tab stop and
-  arrow/Home/End movement (`useToolbarRoving`). The tabs' row scrolls sideways and stops
-  `--prefs-width` short of the header's end (a margin, so no tab lies under the preferences
-  overlay; `theme.css`; the variable is the overlay's real width, 470 px with its words, 345 px
-  without); the prefs drop their words under 1500 px and take their own row under
-  1020 px (move the widths with the quick-access bar's and the prefs' width). The Open recents menu is placed on the
-  window like Views. The dialogs (Options, Customize, Aliases) are the window's.
+  checks out falls back to the default on load. An icon ribbon (`ribbonIcons.tsx`: one family, 24
+  grid, 1.5 stroke, `currentColor`, keyed by command, a test fails when a button has none; icons
+  that point along the text mirror in Arabic): every button is an icon with its name as
+  `aria-label` and a tooltip (`Tooltip.tsx`: name, `tip.<command>` description, the command line
+  alias from the alias table via `ribbonInfo.ts` `COMMAND_LINE`; "Coming soon" on a disabled
+  one; after a short delay, on keyboard focus too, hides on Escape, blur and click). Each group
+  is a box of buttons in two rows filled column by column (a group made only of the headline tools
+  is one row of primary buttons), its name small and muted under them, a thin rule between groups.
+  Sizes are tokens in `theme.css` derived from `--font-base`: standard 30 px (18 px icon), primary
+  42 px (24 px icon), scaled a little in narrow and wide windows. As the window narrows a group
+  puts more buttons behind its "⋯" flyout (`Ribbon.tsx`, measured: scrollWidth against
+  clientWidth), and the panel scrolls sideways only when that is not enough; flyouts
+  (`RibbonFlyout.tsx`) are placed on the window, so the scroll never clips them, and take the
+  keyboard. Views (and Open's recents menu) are drop-downs placed the same way; Views never goes
+  behind a "⋯". Open (with its recents arrow), Save, Save as, Undo and Redo are not in the data:
+  they are the quick-access bar on the tabs' row after the app name (`QUICK_ACCESS` in
+  `ribbonLayout.ts`; logical sides, so Arabic mirrors it), always shown, a `role="toolbar"` with
+  one tab stop and arrow/Home/End movement (`useToolbarRoving`). The tabs' row scrolls sideways
+  and stops `--prefs-width` short of the header's end (a margin, so no tab lies under the
+  preferences overlay; `theme.css`; the preferences are icons now, about 220 px); they take their
+  own row under 900 px (move the width with the quick-access bar's and the prefs' width). The tab
+  "More" is a `role="tab"` that opens a menu; the tab chosen from it shows in its place. The dialogs (Options, Customize, Aliases) are the window's.
 - The window's half (`src/app/useOptions.ts`, read at start and after a dialog saves; Manage tab,
   Drawing group Audit…, Purge… and Recover…, Setup group Options…, Customize…, Aliases…): PURGE (`PU`)
   opens `PurgeDialog` on a dry run of every kind, listed by kind with a tick each (kinds with

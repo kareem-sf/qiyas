@@ -443,6 +443,12 @@ export function useCommandLine({
         // Enter on a focused button presses it; don't also finish the measure.
         if (e.target instanceof HTMLButtonElement) return;
         measure.finish();
+      } else if (action === "erase" && (e.target as Element | null)?.closest?.("dialog[open], [role=dialog], [role=menu]")) {
+        // Delete in a dialog or a menu is not for the drawing behind it.
+        return;
+      } else if (action === "erase" && tool === "erase") {
+        // Delete again: ERASE is on already, so choosing it changes nothing; erase what it picked.
+        if (!e.repeat) measure.finish();
       } else if (action && !e.repeat) {
         // Text selected in a panel: Ctrl+C copies it, as anywhere else.
         const text = window.getSelection()?.toString() ?? "";
@@ -470,33 +476,6 @@ export function useCommandLine({
   const fileName = info?.path.split(/[\\/]/).pop() ?? "";
   // An empty model is said next to the file name, not counted as a reading problem.
   const emptyModel = info?.problems.includes(EMPTY_MODEL) ?? false;
-  const message = opening
-    ? t("opening")
-    : windowPick
-      ? t(windowPick.first ? "plot.pickSecond" : "plot.pickFirst")
-    : pending
-      ? t(
-          pending.kind === "insert"
-            ? pending.of === "image"
-              ? "attachImage.pickHint"
-              : "attachPdf.pickHint"
-            : pending.kind === "fieldTarget"
-              ? "insertField.pickHint"
-              : pending.first
-              ? "calibrate.second"
-              : "calibrate.first",
-        )
-      : renderProgress !== null && !attachOpen
-        ? t("pdf.drawing", { n: renderProgress })
-        : measure.hint
-      ? // A notice (what a modify left out) goes beside the tool's prompt.
-        t(measure.hint, measure.hintArgs ?? undefined) + (notice ? ` — ${notice}` : "")
-      : (notice ??
-        (info
-          ? emptyModel
-            ? `${fileName} — ${t("problem.emptyModel")}`
-            : fileName
-          : t("noDrawing")));
   // What the command line waits for, and its prompt.
   let expect: Expect = "command";
   let promptKey = "cmd.prompt.command";
@@ -551,6 +530,38 @@ export function useCommandLine({
     ucs: info?.ucs,
   };
   const prompt = t(promptKey, promptKey === measure.hint ? (measure.hintArgs ?? undefined) : undefined);
+
+  // The command line already asks the tool's own prompt: the status bar does not say it again (it
+  // keeps the notice, or the file name). A hint the command line does not show (COUNT's "not a
+  // block") stays, and with the command line hidden the status bar says it all.
+  const promptShown = commandLineOn && promptKey === measure.hint;
+  const message = opening
+    ? t("opening")
+    : windowPick
+      ? t(windowPick.first ? "plot.pickSecond" : "plot.pickFirst")
+    : pending
+      ? t(
+          pending.kind === "insert"
+            ? pending.of === "image"
+              ? "attachImage.pickHint"
+              : "attachPdf.pickHint"
+            : pending.kind === "fieldTarget"
+              ? "insertField.pickHint"
+              : pending.first
+              ? "calibrate.second"
+              : "calibrate.first",
+        )
+      : renderProgress !== null && !attachOpen
+        ? t("pdf.drawing", { n: renderProgress })
+        : measure.hint && !promptShown
+      ? // A notice (what a modify left out) goes beside the tool's prompt.
+        t(measure.hint, measure.hintArgs ?? undefined) + (notice ? ` — ${notice}` : "")
+      : (notice ??
+        (info
+          ? emptyModel
+            ? `${fileName} — ${t("problem.emptyModel")}`
+            : fileName
+          : t("noDrawing")));
 
   return { commandLineOn, commandInput, onCommand, clickDrawing, commandState, prompt, message };
 }

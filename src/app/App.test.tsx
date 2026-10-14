@@ -11,6 +11,16 @@ import en from "../i18n/en.json";
 import App from "./App";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 
+/** Shows a ribbon tab; the ones after Annotate are under "More". */
+function goTab(name: string) {
+  const tab = screen.queryByRole("tab", { name });
+  if (tab) fireEvent.click(tab);
+  else {
+    fireEvent.click(document.querySelector<HTMLElement>(".ribbon-more")!);
+    fireEvent.click(screen.getByRole("menuitemradio", { name }));
+  }
+}
+
 const PLAN = "/d/plan.dwg";
 
 const core = vi.hoisted(() => ({
@@ -326,7 +336,7 @@ test("hooks made before apply and onCommand reach them: TEXT's text, a tool pale
 
   // A palette button (useBlocks) runs its command line through onCommand (useCommandLine).
   core.calls.length = 0;
-  fireEvent.click(screen.getByRole("tab", { name: en.insert }));
+  goTab(en.insert);
   fireEvent.click(screen.getByRole("button", { name: en["block.toolPalettes"] }));
   await settle();
   fireEvent.click(screen.getByRole("button", { name: "Divide in 3" }));
@@ -408,7 +418,7 @@ test("QUICKPRINT and the Output tab: quick print, print all layouts and the plot
   ]);
   expect(status()).toBe("Sent to Office");
 
-  fireEvent.click(screen.getByRole("tab", { name: en.output }));
+  goTab(en.output);
   for (const key of ["plot.button", "plot.quickPrint", "plot.printAll", "plot.styles"] as const) {
     expect((screen.getByRole("button", { name: en[key] }) as HTMLButtonElement).disabled).toBe(false);
   }
@@ -444,7 +454,7 @@ test("Run script (Manage tab, SCRIPT, SCR): a .scr runs on the drawing, its log 
   core.calls.length = 0;
   core.chosen = "/d/count.scr";
 
-  fireEvent.click(screen.getByRole("tab", { name: en.manage }));
+  goTab(en.manage);
   fireEvent.click(screen.getByRole("button", { name: en["script.run"] }));
   await settle();
   expect(vi.mocked(openDialog)).toHaveBeenLastCalledWith({ filters: [{ name: en["script.file"], extensions: ["scr"] }] });
@@ -497,7 +507,7 @@ test("while a script runs the ribbon and the command line wait, and Stop asks th
   let finish = () => {};
   core.scriptHold = new Promise<void>((done) => (finish = done));
 
-  fireEvent.click(screen.getByRole("tab", { name: en.manage }));
+  goTab(en.manage);
   fireEvent.click(screen.getByRole("button", { name: en["script.run"] }));
   await settle();
   const header = document.querySelector("header.top")!;
@@ -535,7 +545,7 @@ test("the Manage tab and OPTIONS (OP), CUI and ALIASEDIT open their dialogs, wit
     await settle();
     expect(screen.queryByRole("heading", { name: title })).toBeNull();
   }
-  fireEvent.click(screen.getByRole("tab", { name: en.manage }));
+  goTab(en.manage);
   fireEvent.click(screen.getByRole("button", { name: en["options.button"] }));
   await settle();
   // Options hands the autosave interval to Settings.
@@ -568,7 +578,7 @@ test("PURGE (PU) and AUDIT: a dry run first, then one change that the window cat
   await settle();
 
   core.calls.length = 0;
-  fireEvent.click(screen.getByRole("tab", { name: en.manage }));
+  goTab(en.manage);
   fireEvent.click(screen.getByRole("button", { name: en["audit.button"] }));
   await settle();
   expect(core.calls).toEqual([`run_command {"cmd":{"type":"audit","fix":false}}`]);
@@ -614,7 +624,7 @@ test("PURGE and AUDIT wait while a block is edited in place: the window says so,
   await typeLine("PURGE");
   expect(screen.getByText(en["manage.blockEdit"])).toBeTruthy();
   expect(screen.queryByRole("heading", { name: en["purge.title"] })).toBeNull();
-  fireEvent.click(screen.getByRole("tab", { name: en.manage }));
+  goTab(en.manage);
   fireEvent.click(screen.getByRole("button", { name: en["audit.button"] }));
   await settle();
   expect(screen.queryByRole("heading", { name: en["audit.title"] })).toBeNull();
@@ -643,10 +653,118 @@ test("PARAMETERS (PAR) opens the manager; an edit is set, redrawn and saved; the
   expect(core.calls).toContain("save_project null");
 
   // The Parametric tab holds the tools; a glyph's click deletes its constraint.
-  fireEvent.click(screen.getByRole("tab", { name: en.parametric }));
+  goTab(en.parametric);
   expect(screen.getByRole("button", { name: en["param.gcHorizontal"] })).toBeTruthy();
   core.calls.length = 0;
   fireEvent.click(screen.getByRole("button", { name: en["param.glyph"].replace("{kind}", en["param.kind.horizontal"]) }));
   await settle();
   expect(core.calls[0]).toBe(`run_command {"cmd":{"type":"delete_constraint","id":1}}`);
+});
+
+test("the side panels fold away behind their rails, and the choice comes back on the next start", async () => {
+  localStorage.removeItem("qiyas.panels.hidden");
+  await mount();
+  const middle = document.querySelector(".middle")!;
+  expect(middle.className).toBe("middle");
+  fireEvent.click(screen.getByRole("button", { name: en["panels.hide.left"] }));
+  fireEvent.click(screen.getByRole("button", { name: en["panels.hide.right"] }));
+  expect(middle.classList.contains("left-off")).toBe(true);
+  expect(middle.classList.contains("right-off")).toBe(true);
+  // Folded: the rails stay, and now offer to show the panels again.
+  expect(screen.getByRole("button", { name: en["panels.show.left"] })).toBeTruthy();
+  expect(screen.getByRole("button", { name: en["panels.show.right"] })).toBeTruthy();
+
+  cleanup();
+  await mount();
+  const again = document.querySelector(".middle")!;
+  expect(again.classList.contains("left-off")).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: en["panels.show.left"] }));
+  expect(again.classList.contains("left-off")).toBe(false);
+  expect(again.classList.contains("right-off")).toBe(true);
+  localStorage.removeItem("qiyas.panels.hidden");
+});
+
+test("Delete erases what is selected, and types in a text field as ever", async () => {
+  await mount();
+  await clickOpen();
+  // The select tool picks the entity under the click.
+  canvas.props!.onClick([10, 10], [100, 100], 1, false);
+  await settle();
+  core.calls.length = 0;
+
+  // In the command line Delete edits the text: nothing is erased.
+  const input = document.querySelector<HTMLInputElement>("input[aria-autocomplete]")!;
+  fireEvent.keyDown(input, { code: "Delete", key: "Delete" });
+  await settle();
+  expect(core.calls.filter((c) => c.startsWith("run_command"))).toEqual([]);
+
+  fireEvent.keyDown(window, { code: "Delete", key: "Delete" });
+  await settle();
+  expect(core.calls.filter((c) => c.startsWith("run_command"))).toEqual([
+    `run_command {"cmd":{"type":"delete_entities","targets":[{"handle":42,"chain":[]}]}}`,
+  ]);
+});
+
+test("the tool's prompt is said once: on the command line, or in the status bar when that is hidden", async () => {
+  await mount();
+  await clickOpen();
+  const status = () => screen.getByRole("status").textContent;
+  const prompt = en["modify.prompt.select"].replace("{n}", "0");
+
+  await typeLine("MOVE");
+  // The command line asks; the status bar keeps the file name.
+  expect(document.querySelector(".command-line label")?.textContent).toBe(prompt);
+  expect(status()).toBe("plan.dwg");
+
+  // Ctrl+9 hides the command line: the status bar asks instead.
+  fireEvent.keyDown(window, { code: "Digit9", key: "9", ctrlKey: true });
+  await settle();
+  expect(document.querySelector(".command-line")).toBeNull();
+  expect(status()).toBe(prompt);
+});
+
+test("Delete with nothing selected starts ERASE; Delete again erases what was picked", async () => {
+  await mount();
+  await clickOpen();
+  core.calls.length = 0;
+  const runs = () => core.calls.filter((c) => c.startsWith("run_command"));
+
+  fireEvent.keyDown(window, { code: "Delete", key: "Delete" });
+  await settle();
+  expect(runs()).toEqual([]);
+  canvas.props!.onClick([10, 10], [100, 100], 1, false);
+  await settle();
+  fireEvent.keyDown(window, { code: "Delete", key: "Delete" });
+  await settle();
+  expect(runs()).toEqual([
+    `run_command {"cmd":{"type":"delete_entities","targets":[{"handle":42,"chain":[]}]}}`,
+  ]);
+});
+
+test("with the command line on, a hint it does not show stays in the status bar (COUNT: not a block)", async () => {
+  await mount();
+  await clickOpen();
+  await typeLine("COUNT");
+  canvas.props!.onClick([10, 10], [100, 100], 1, false);
+  await settle();
+  expect(screen.getByRole("status").textContent).toBe(en["measure.notABlock"]);
+});
+
+test("Delete in a dialog or a menu erases nothing in the drawing behind", async () => {
+  await mount();
+  await clickOpen();
+  canvas.props!.onClick([10, 10], [100, 100], 1, false);
+  await settle();
+  core.calls.length = 0;
+  for (const role of ["dialog", "menu"]) {
+    const box = document.createElement("div");
+    box.setAttribute("role", role);
+    const button = document.createElement("button");
+    box.append(button);
+    document.body.append(box);
+    fireEvent.keyDown(button, { code: "Delete", key: "Delete" });
+    await settle();
+    box.remove();
+  }
+  expect(core.calls.filter((c) => c.startsWith("run_command"))).toEqual([]);
 });
