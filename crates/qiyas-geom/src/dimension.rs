@@ -28,6 +28,8 @@ const ACAD: &str = "ACAD";
 const DIMSCALE_CODE: i16 = 40;
 /// DIMTXT's DXF group code.
 const DIMTXT_CODE: i16 = 140;
+/// DIMPOST's DXF group code.
+const DIMPOST_CODE: i16 = 3;
 
 /// The sizes and number format a dimension, leader or tolerance is drawn with: its style's
 /// values times its scale, in drawing units.
@@ -121,6 +123,10 @@ impl DimLook {
             };
             look.text_height = height * k;
         }
+        // Its own suffix (a DIMPOST override, which may be empty: no suffix).
+        if let Some(post) = dimpost(common) {
+            look.post = post;
+        }
         // The text style is held by handle in a DWG.
         if !style.dimtxsty_handle.is_null() {
             if let Some(s) = doc
@@ -197,6 +203,50 @@ pub fn set_dimscale(common: &mut EntityCommon, scale: f64) {
 /// Gives a dimension its own DIMTXT (text height before DIMSCALE), keeping its other `DSTYLE`
 /// overrides.
 pub fn set_dimtxt(common: &mut EntityCommon, height: f64) {
+    set_dstyle(common, DIMTXT_CODE, Some(XDataValue::Real(height)));
+}
+
+/// The DIMPOST a dimension overrides its style's with (`ACAD` `DSTYLE` xdata, group 3), if any;
+/// an empty one means no suffix.
+pub fn dimpost(common: &EntityCommon) -> Option<String> {
+    let values = &common.extended_data.get_record(ACAD)?.values;
+    let at = values
+        .iter()
+        .position(|v| matches!(v, XDataValue::String(s) if s.eq_ignore_ascii_case("DSTYLE")))?;
+    let mut rest = values[at + 1..].iter();
+    while let Some(v) = rest.next() {
+        match v {
+            XDataValue::ControlString(s) if s == "}" => break,
+            XDataValue::Integer16(c) if *c == DIMPOST_CODE => {
+                return match rest.next() {
+                    Some(XDataValue::String(s)) => Some(s.clone()),
+                    _ => None,
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Gives a dimension its own DIMPOST (`<>` stands for the number; text without it is a suffix),
+/// keeping its other `DSTYLE` overrides: how AutoCAD stores a suffix set on one dimension.
+pub fn set_dimpost(common: &mut EntityCommon, post: &str) {
+    set_dstyle(
+        common,
+        DIMPOST_CODE,
+        Some(XDataValue::String(post.to_string())),
+    );
+}
+
+/// Drops a dimension's own DIMPOST, keeping its other `DSTYLE` overrides: its style's applies.
+pub fn clear_dimpost(common: &mut EntityCommon) {
+    set_dstyle(common, DIMPOST_CODE, None);
+}
+
+/// Sets (or, with `None`, drops) the `DSTYLE` override `code`, keeping the others; a `DSTYLE`
+/// left without any override is dropped.
+fn set_dstyle(common: &mut EntityCommon, code: i16, value: Option<XDataValue>) {
     let mut pairs: Vec<(i16, XDataValue)> = Vec::new();
     if let Some(record) = common.extended_data.get_record(ACAD) {
         let values = &record.values;
@@ -216,8 +266,12 @@ pub fn set_dimtxt(common: &mut EntityCommon, height: f64) {
             }
         }
     }
-    pairs.retain(|(c, _)| *c != DIMTXT_CODE);
-    pairs.push((DIMTXT_CODE, XDataValue::Real(height)));
+    pairs.retain(|(c, _)| *c != code);
+    pairs.extend(value.map(|v| (code, v)));
+    if pairs.is_empty() {
+        common.extended_data.remove_record(ACAD);
+        return;
+    }
     let mut record = ExtendedDataRecord::new(ACAD);
     record.add_value(XDataValue::String("DSTYLE".to_string()));
     record.add_value(XDataValue::ControlString("{".to_string()));

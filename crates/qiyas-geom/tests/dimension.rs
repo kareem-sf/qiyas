@@ -274,3 +274,48 @@ fn dimtad_4_puts_the_text_below_the_line() {
     // The line is at y 2: the text's middle is a gap and half a height below it.
     assert!((at[1] - (2.0 - 0.05 - 0.1)).abs() < 1e-9, "{at:?}");
 }
+
+#[test]
+fn a_dimension_own_dimpost_overrides_its_styles_and_keeps_the_other_overrides() {
+    use qiyas_geom::{clear_dimpost, dimpost, dimscale, dimtxt, set_dimpost, set_dimtxt};
+
+    let mut doc = doc();
+    let (_, dim) = linear(&mut doc, None);
+    let EntityType::Dimension(mut d) = dim else {
+        panic!("a dimension")
+    };
+    assert_eq!(dimpost(&d.base().common), None);
+    set_dimscale(&mut d.base_mut().common, 50.0);
+    set_dimtxt(&mut d.base_mut().common, 2.5);
+    set_dimpost(&mut d.base_mut().common, "<> m");
+    let common = &d.base().common;
+    assert_eq!(dimpost(common).as_deref(), Some("<> m"));
+    assert_eq!(dimscale(common), Some(50.0));
+    assert_eq!(dimtxt(common), Some(2.5));
+
+    // The look takes it over the style's own (empty) one.
+    let look = DimLook::named(&doc, "Standard", common);
+    assert_eq!(look.post, "<> m");
+    assert_eq!(format_measure(10.0, &look), "10.000 m");
+
+    // Setting it again replaces it; another override set later keeps it.
+    set_dimpost(&mut d.base_mut().common, "<> cm");
+    set_dimtxt(&mut d.base_mut().common, 3.0);
+    assert_eq!(dimpost(&d.base().common).as_deref(), Some("<> cm"));
+    // An empty suffix is an override too: no suffix, whatever the style says.
+    set_dimpost(&mut d.base_mut().common, "");
+    assert_eq!(dimpost(&d.base().common).as_deref(), Some(""));
+    let look = DimLook::named(&doc, "Standard", &d.base().common);
+    assert_eq!(look.post, "");
+
+    // Cleared, the style's applies and the others stay; with nothing left the record goes.
+    clear_dimpost(&mut d.base_mut().common);
+    assert_eq!(dimpost(&d.base().common), None);
+    assert_eq!(dimscale(&d.base().common), Some(50.0));
+    assert_eq!(dimtxt(&d.base().common), Some(3.0));
+    let mut bare = d.base().common.clone();
+    bare.extended_data.clear();
+    set_dimpost(&mut bare, "<> m");
+    clear_dimpost(&mut bare);
+    assert!(bare.extended_data.is_empty());
+}

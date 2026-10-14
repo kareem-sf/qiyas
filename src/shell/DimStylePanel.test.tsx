@@ -27,9 +27,10 @@ const fields = {
   ext_extension: 1.25,
   gap: 0.625,
   scale: 1,
+  show_units: true,
 };
 const styles: DimStyleInfo[] = [
-  { name: "QS-50", fields: { ...fields, scale: 50, precision: 3 } },
+  { name: "QS-50", fields: { ...fields, scale: 50, precision: 3, show_units: false } },
   { name: "Standard", fields },
 ];
 
@@ -69,7 +70,11 @@ test("chooses another style, makes it current; a bad value can't be saved", asyn
   expect(field("Scale").value).toBe("50");
   fireEvent.click(screen.getByRole("button", { name: "Make current" }));
   await waitFor(() =>
-    expect(onSave).toHaveBeenCalledWith("QS-50", { ...fields, scale: 50, precision: 3 }, true),
+    expect(onSave).toHaveBeenCalledWith(
+      "QS-50",
+      { ...fields, scale: 50, precision: 3, show_units: false },
+      true,
+    ),
   );
   fireEvent.change(field("Text height"), { target: { value: "0" } });
   expect(screen.getByRole("button", { name: "Save style" })).toHaveProperty("disabled", true);
@@ -88,6 +93,28 @@ test("creates a style from the current one, sets the annotation scale, shows err
   fireEvent.click(screen.getByRole("button", { name: "Set scale" }));
   await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("big is no scale"));
   expect(onScale).toHaveBeenCalledWith("big");
+});
+
+test("Show units is on by default, saved with the style, and follows the chosen style", async () => {
+  const { onSave } = panel();
+  const units = () => screen.getByRole("checkbox", { name: /Show units/ }) as HTMLInputElement;
+  expect(units().checked).toBe(true);
+  fireEvent.click(units());
+  expect(units().checked).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "Save style" }));
+  await waitFor(() => expect(onSave).toHaveBeenCalledWith("Standard", { ...fields, show_units: false }, false));
+  // QS-50 has it off; switching the style shows that, and turning it on is saved.
+  fireEvent.change(screen.getByRole("combobox", { name: "Style" }), { target: { value: "QS-50" } });
+  expect(units().checked).toBe(false);
+  fireEvent.click(units());
+  fireEvent.click(screen.getByRole("button", { name: "Save style" }));
+  await waitFor(() =>
+    expect(onSave).toHaveBeenLastCalledWith("QS-50", { ...fields, scale: 50, precision: 3, show_units: true }, false),
+  );
+  // A new style made from the current one starts with the current style's switch.
+  fireEvent.change(screen.getByRole("textbox", { name: "New style name" }), { target: { value: "QS-100" } });
+  fireEvent.click(screen.getByRole("button", { name: "New from current" }));
+  await waitFor(() => expect(onSave).toHaveBeenLastCalledWith("QS-100", fields, false));
 });
 
 test("the tolerance dialog writes AutoCAD's frame", async () => {

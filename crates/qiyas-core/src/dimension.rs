@@ -21,13 +21,14 @@ use opencadcodec::tables::DimStyle;
 use opencadcodec::{BlockRecord, EntityType, Handle, MText, Vector3};
 use opencadkernel::geom2d::Curve;
 use qiyas_geom::{
-    dimension_entities, flatten, is_logical_text, set_dimscale, snap_shapes, DimLook, Xform,
+    clear_dimpost, dimension_entities, dimpost, flatten, is_logical_text, set_dimpost,
+    set_dimscale, snap_shapes, style_named, DimLook, Xform,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::session::MEASURE_TOL;
 use crate::text::{escape_mtext, mark_logical};
-use crate::{CoreError, Session, Target};
+use crate::{CoreError, Session, Target, Units};
 
 /// A dimension to add (`Command::Dimension`). Points are in drawing coordinates, angles in
 /// degrees. Circles and arcs are picked as `Target`s at the top of the sheet.
@@ -111,10 +112,18 @@ pub struct DimStyleFields {
     pub gap: f64,
     /// DIMSCALE: every size above times this.
     pub scale: f64,
+    /// Show the drawing's unit after the number ("12 m"): a DIMPOST suffix Qiyas gives the
+    /// dimensions it makes when the style has none of its own. On unless turned off.
+    #[serde(default = "yes")]
+    pub show_units: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 impl DimStyleFields {
-    fn of(style: &DimStyle) -> Self {
+    fn of(style: &DimStyle, show_units: bool) -> Self {
         DimStyleFields {
             arrow_size: style.dimasz,
             text_height: style.dimtxt,
@@ -123,6 +132,7 @@ impl DimStyleFields {
             ext_extension: style.dimexe,
             gap: style.dimgap,
             scale: style.dimscale,
+            show_units,
         }
     }
 
@@ -164,6 +174,21 @@ impl DimStyleFields {
 pub struct DimStyleInfo {
     pub name: String,
     pub fields: DimStyleFields,
+}
+
+/// Every suffix Qiyas gives a dimension for its drawing's units.
+const UNIT_POSTS: [&str; 5] = ["<> m", "<> cm", "<> mm", "<>\"", "<>'"];
+
+/// Whether a DIMPOST holds no suffix: empty, or just the number (`<>`), as the codec's own
+/// styles have it.
+fn no_suffix(post: &str) -> bool {
+    matches!(post.trim(), "" | "<>")
+}
+
+/// The drawing variable that holds the "Show units" switch of the dimension style `name`: "0"
+/// when it is off (no variable: on).
+fn units_variable(name: &str) -> String {
+    format!("QIYAS_DIMUNITS_{name}")
 }
 
 type P = [f64; 2];
@@ -278,7 +303,7 @@ impl Session {
             .filter(|s| !s.name.contains('|') && !s.name.is_empty())
             .map(|s| DimStyleInfo {
                 name: s.name.clone(),
-                fields: DimStyleFields::of(s),
+                fields: DimStyleFields::of(s, self.dim_units_shown(&s.name)),
             })
             .collect();
         out.sort_by(|a, b| a.name.cmp(&b.name));
@@ -331,6 +356,7 @@ impl Session {
             return Err(invalid("Give the style a name without |<>/\\\":;?*=`"));
         }
         let from = self.dim_style();
+        let units_before = self.dim_units_shown(name);
         let doc = &mut self.drawing.doc;
         if doc.dim_styles.get(name).is_none() {
             let mut style = doc
@@ -362,12 +388,101 @@ impl Session {
             h.dim_line_gap = fields.gap;
             h.dim_scale = fields.scale;
         }
-        if changed {
+        let units_changed = fields.show_units != units_before;
+        if units_changed {
+            let value = if fields.show_units { "1" } else { "0" };
+            if !self
+                .drawing
+                .doc
+                .set_drawing_variable(&units_variable(&name), value)
+            {
+                return Err(invalid("The drawing's variables could not take the switch"));
+            }
+        }
+        if changed || units_changed {
             for h in self.generated_dimensions(&name) {
+                // Turning the switch is what puts the unit on, or takes it off, the style's
+                // dimensions; any other edit rebuilds them as they are.
+                if units_changed {
+                    self.apply_unit_suffix(h);
+                }
                 self.rebuild_dimension(h)?;
             }
         }
         Ok(())
+    }
+
+    /// Whether the dimension style `name` shows the drawing's unit after the number (its "Show
+    /// units" switch, kept in the drawing's variables only once turned off).
+    pub fn dim_units_shown(&self, name: &str) -> bool {
+        self.drawing.doc.drawing_variable(&units_variable(name)) != Some("0")
+    }
+
+    /// The DIMPOST suffix for the drawing's units: " m", " cm", " mm", `"` or `'` after the
+    /// number. Units the header does not name are millimetres, as everywhere in Qiyas.
+    fn unit_post(&self) -> &'static str {
+        match Units::from_header(self.drawing.doc.header.insertion_units) {
+            Units::Metres => "<> m",
+            Units::Centimetres => "<> cm",
+            Units::Millimetres | Units::Unknown => "<> mm",
+            Units::Inches => "<>\"",
+            Units::Feet => "<>'",
+        }
+    }
+
+    /// Gives the dimension `h` the unit suffix, or takes it off, as its style says: a DIMPOST
+    /// override on the dimension itself (how AutoCAD keeps a suffix set on one dimension), only
+    /// when its style has no suffix of its own, its "Show units" switch is on and its numbers are
+    /// in drawing units (DIMLFAC 1). A suffix of any other kind on the dimension is left alone.
+    fn apply_unit_suffix(&mut self, h: Handle) {
+        let post = self.unit_post();
+        let doc = &self.drawing.doc;
+        let Some(EntityType::Dimension(d)) = doc.get_entity(h) else {
+            return;
+        };
+        let base = d.base();
+        let style = style_named(doc, &base.style_name);
+        let measures_length = !matches!(d, Dimension::Angular2Ln(_) | Dimension::Angular3Pt(_));
+        // DIMLFAC 0 reads as 1 (see `DimLook`).
+        let factor = if style.dimlfac.is_finite() && style.dimlfac != 0.0 {
+            style.dimlfac
+        } else {
+            1.0
+        };
+        let wanted = measures_length
+            && no_suffix(&style.dimpost)
+            && (factor - 1.0).abs() < 1e-12
+            && self.dim_units_shown(&base.style_name);
+        let own = dimpost(&base.common);
+        // A suffix that is not one of ours is somebody's choice.
+        if own.as_deref().is_some_and(|p| !UNIT_POSTS.contains(&p)) {
+            return;
+        }
+        if (own.as_deref() == Some(post) && wanted) || (own.is_none() && !wanted) {
+            return;
+        }
+        // A DWG read keeps each application's xdata as the bytes it came in, and writes those
+        // back over the edited record: drop ACAD's so the edit is what is saved.
+        let acad = self
+            .drawing
+            .doc
+            .app_ids
+            .get("ACAD")
+            .map(|a| a.handle.value());
+        if let Some(EntityType::Dimension(d)) = self.drawing.doc.get_entity_mut(h) {
+            let common = &mut d.base_mut().common;
+            if wanted {
+                set_dimpost(common, post);
+            } else {
+                clear_dimpost(common);
+            }
+            if let Some(acad) = acad {
+                common
+                    .extended_data
+                    .raw_dwg_eed
+                    .retain(|(app, _)| *app != acad);
+            }
+        }
     }
 
     /// The dimensions at the top of every sheet in the style `name` whose block Qiyas generated
@@ -673,6 +788,7 @@ impl Session {
         }
         let handles = self.add_styled(dims.into_iter().map(EntityType::Dimension).collect())?;
         for &h in &handles {
+            self.apply_unit_suffix(Handle::new(h));
             self.rebuild_dimension(Handle::new(h))?;
         }
         Ok(handles)

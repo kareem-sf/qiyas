@@ -45,6 +45,7 @@ fn fields(precision: i16) -> DimStyleFields {
         ext_extension: 0.2,
         gap: 0.05,
         scale: 1.0,
+        show_units: true,
     }
 }
 
@@ -146,7 +147,11 @@ fn a_linear_dimension_of_the_10_m_line_reads_10_000_and_has_a_complete_block() {
     assert_eq!(d.base().common.layer, "0", "the current layer");
     let parts = block_of(&s, h);
     let (lines, arrows, texts) = counts(&parts);
-    assert_eq!(texts, vec!["10.000".to_string()], "the style's precision");
+    assert_eq!(
+        texts,
+        vec!["10.000 m".to_string()],
+        "the style's precision, then the drawing's unit"
+    );
     assert_eq!(lines, 3, "two extension lines and the dimension line");
     assert_eq!(arrows, 2);
     assert!((text_height(&parts) - 0.3).abs() < 1e-12);
@@ -160,7 +165,7 @@ fn a_linear_dimension_of_the_10_m_line_reads_10_000_and_has_a_complete_block() {
     assert!(s.drawing.doc.get_entity(Handle::new(h)).is_none());
     assert_eq!(s.drawing.doc.block_records.iter().count(), blocks - 1);
     assert!(s.redo());
-    assert_eq!(counts(&block_of(&s, h)).2, vec!["10.000".to_string()]);
+    assert_eq!(counts(&block_of(&s, h)).2, vec!["10.000 m".to_string()]);
 }
 
 #[test]
@@ -172,7 +177,7 @@ fn a_new_dimension_saves_with_its_block_and_reads_back_in_dxf_and_dwg() {
         let parts = block_of(&again, h);
         let (lines, arrows, texts) = counts(&parts);
         assert_eq!((lines, arrows), (3, 2), "{ext}: the block is complete");
-        assert_eq!(texts, vec!["10.000".to_string()], "{ext}");
+        assert_eq!(texts, vec!["10.000 m".to_string()], "{ext}");
         let rows = again.read_dimensions(None);
         let row = rows
             .iter()
@@ -437,7 +442,7 @@ fn dim_edit_overrides_flips_and_moves_text_and_rebuilds_the_block() {
         op: DimEditOp::TextOverride("<> TYP".to_string()),
     })
     .unwrap();
-    assert_eq!(counts(&block_of(&s, h)).2, vec!["10.000 TYP".to_string()]);
+    assert_eq!(counts(&block_of(&s, h)).2, vec!["10.000 m TYP".to_string()]);
     assert_eq!(dim(&s, h).base().text_override(), Some("<> TYP"));
 
     s.run(Command::DimEdit {
@@ -482,7 +487,7 @@ fn dim_edit_overrides_flips_and_moves_text_and_rebuilds_the_block() {
     assert_eq!(dim(&again, h).base().text_override(), Some("<> TYP"));
     assert_eq!(
         counts(&block_of(&again, h)).2,
-        vec!["10.000 TYP".to_string()]
+        vec!["10.000 m TYP".to_string()]
     );
 
     // Each edit was one step.
@@ -490,7 +495,7 @@ fn dim_edit_overrides_flips_and_moves_text_and_rebuilds_the_block() {
         assert!(s.undo());
     }
     assert_eq!(dim(&s, h).base().text_override(), None);
-    assert_eq!(counts(&block_of(&s, h)).2, vec!["10.000".to_string()]);
+    assert_eq!(counts(&block_of(&s, h)).2, vec!["10.000 m".to_string()]);
 }
 
 #[test]
@@ -509,7 +514,10 @@ fn find_and_replace_rebuilds_a_dimension_block() {
         whole_word: false,
     })
     .unwrap();
-    assert_eq!(counts(&block_of(&s, h)).2, vec!["SLAB 10.000".to_string()]);
+    assert_eq!(
+        counts(&block_of(&s, h)).2,
+        vec!["SLAB 10.000 m".to_string()]
+    );
 }
 
 #[test]
@@ -527,7 +535,7 @@ fn arabic_dimension_text_is_kept_in_reading_order() {
             _ => None,
         })
         .unwrap();
-    assert_eq!(text.value, "10.000 جدار");
+    assert_eq!(text.value, "10.000 m جدار");
     assert!(qiyas_geom::is_logical_text(&text.common));
     let glyphs = |s: &Session| {
         let batch = s.batch();
@@ -758,7 +766,7 @@ fn dimension_styles_are_created_from_the_current_one_and_edited() {
     assert!(info.dim_styles.iter().any(|d| d.name == "Standard"));
     let h = one(s.run(linear_cmd()).unwrap());
     assert_eq!(dim(&s, h).base().style_name, "QS-50");
-    assert_eq!(counts(&block_of(&s, h)).2, vec!["10.00".to_string()]);
+    assert_eq!(counts(&block_of(&s, h)).2, vec!["10.00 m".to_string()]);
     assert!((text_height(&block_of(&s, h)) - 15.0).abs() < 1e-9);
     assert!(s.undo() && s.undo());
     assert_eq!(s.info().dim_style, "Standard");
@@ -994,6 +1002,326 @@ fn an_ordinate_at_the_datum_reads_0_and_entity_info_shows_symbols() {
         .unwrap());
     assert_eq!(
         s.entity_info(d, &[]).unwrap().text.as_deref(),
-        Some("Ø4.00")
+        Some("Ø4.00 m")
     );
+}
+
+// ---- The unit after the number (DIMPOST, "Show units") ----
+
+/// The sample in `units` (INSUNITS) with a 3-decimal Standard style, the 10 line dimensioned.
+fn dimensioned_in(units: i16, name: &str) -> (tempfile::TempDir, Session, u64) {
+    let mut doc = sample();
+    doc.header.insertion_units = units;
+    let (dir, mut s) = open(&doc, name);
+    s.run(Command::SetDimStyle {
+        name: "Standard".to_string(),
+        fields: fields(3),
+        current: true,
+    })
+    .unwrap();
+    let h = one(s.run(linear_cmd()).unwrap());
+    (dir, s, h)
+}
+
+fn text_of(s: &Session, h: u64) -> String {
+    let texts = counts(&block_of(s, h)).2;
+    assert_eq!(texts.len(), 1, "{texts:?}");
+    texts[0].clone()
+}
+
+fn own_post(s: &Session, h: u64) -> Option<String> {
+    qiyas_geom::dimpost(&dim(s, h).base().common)
+}
+
+fn show_units(s: &Session, style: &str) -> bool {
+    s.info()
+        .dim_styles
+        .into_iter()
+        .find(|d| d.name == style)
+        .unwrap()
+        .fields
+        .show_units
+}
+
+#[test]
+fn a_new_dimension_shows_the_drawings_unit_after_the_number() {
+    // INSUNITS: 1 inches, 2 feet, 4 mm, 5 cm, 6 m; anything else (0, 9 ...) is read as mm.
+    for (units, text, post) in [
+        (6, "10.000 m", "<> m"),
+        (5, "10.000 cm", "<> cm"),
+        (4, "10.000 mm", "<> mm"),
+        (1, "10.000\"", "<>\""),
+        (2, "10.000'", "<>'"),
+        (0, "10.000 mm", "<> mm"),
+    ] {
+        let (_dir, s, h) = dimensioned_in(units, "units.dxf");
+        assert_eq!(text_of(&s, h), text, "INSUNITS {units}");
+        // AutoCAD's way: the dimension's own DIMPOST override, the style untouched.
+        assert_eq!(own_post(&s, h).as_deref(), Some(post), "INSUNITS {units}");
+        assert!(
+            !s.drawing
+                .doc
+                .dim_styles
+                .get("Standard")
+                .unwrap()
+                .dimpost
+                .contains(' '),
+            "the style itself is untouched"
+        );
+    }
+}
+
+#[test]
+fn the_unit_goes_with_the_other_kinds_but_not_with_angles() {
+    let (_dir, mut s, _) = dimensioned_in(6, "kinds.dxf");
+    let aligned = one(s
+        .run(Command::Dimension(DimSpec::Aligned {
+            p1: [0.0, 0.0],
+            p2: [3.0, 4.0],
+            offset: 1.0,
+        }))
+        .unwrap());
+    assert_eq!(text_of(&s, aligned), "5.000 m");
+    let angular = one(s
+        .run(Command::Dimension(DimSpec::Angular {
+            vertex: [0.0, 0.0],
+            p1: [4.0, 0.0],
+            p2: [0.0, 4.0],
+            arc_point: [2.0, 2.0],
+        }))
+        .unwrap());
+    let angle = text_of(&s, angular);
+    assert!(angle.starts_with("90") && angle.ends_with("%%d"), "{angle}");
+    assert_eq!(own_post(&s, angular), None, "an angle has no length unit");
+}
+
+#[test]
+fn a_style_with_its_own_suffix_is_left_alone() {
+    let mut doc = sample();
+    doc.dim_styles.get_mut("Standard").unwrap().dimpost = "<> (net)".to_string();
+    let (_dir, mut s) = open(&doc, "own.dxf");
+    s.run(Command::SetDimStyle {
+        name: "Standard".to_string(),
+        fields: fields(3),
+        current: true,
+    })
+    .unwrap();
+    let h = one(s.run(linear_cmd()).unwrap());
+    assert_eq!(text_of(&s, h), "10.000 (net)");
+    assert_eq!(own_post(&s, h), None, "no override on top of the style's");
+    // Editing the style keeps it that way.
+    let mut bigger = fields(3);
+    bigger.arrow_size = 0.5;
+    s.run(Command::SetDimStyle {
+        name: "Standard".to_string(),
+        fields: bigger,
+        current: false,
+    })
+    .unwrap();
+    assert_eq!(text_of(&s, h), "10.000 (net)");
+    assert_eq!(own_post(&s, h), None);
+}
+
+#[test]
+fn the_show_units_switch_turns_the_suffix_off_and_on_and_is_one_undo_step() {
+    let (_dir, mut s, h) = dimensioned_in(6, "switch.dxf");
+    assert!(show_units(&s, "Standard"), "on by default");
+    let mut off = fields(3);
+    off.show_units = false;
+    s.run(Command::SetDimStyle {
+        name: "Standard".to_string(),
+        fields: off,
+        current: false,
+    })
+    .unwrap();
+    assert!(!show_units(&s, "Standard"));
+    // Only the switch changed, and the dimension of that style is rebuilt without the unit.
+    assert_eq!(text_of(&s, h), "10.000");
+    assert_eq!(own_post(&s, h), None);
+    let plain = one(s.run(linear_cmd()).unwrap());
+    assert_eq!(text_of(&s, plain), "10.000", "new ones follow the switch");
+    assert_eq!(own_post(&s, plain), None);
+
+    s.run(Command::SetDimStyle {
+        name: "Standard".to_string(),
+        fields: fields(3),
+        current: false,
+    })
+    .unwrap();
+    assert!(show_units(&s, "Standard"));
+    assert_eq!(text_of(&s, h), "10.000 m");
+    assert_eq!(text_of(&s, plain), "10.000 m");
+
+    // Undo puts the switch and the text back, in one step each.
+    assert!(s.undo());
+    assert!(!show_units(&s, "Standard"));
+    assert_eq!(text_of(&s, h), "10.000");
+    assert!(s.undo() && s.undo());
+    assert!(show_units(&s, "Standard"));
+    assert_eq!(text_of(&s, h), "10.000 m");
+}
+
+#[test]
+fn a_suffix_that_is_not_ours_is_never_taken_off_or_replaced() {
+    let (_dir, mut s, h) = dimensioned_in(6, "foreign.dxf");
+    // Somebody (AutoCAD) gave this dimension its own suffix.
+    if let Some(EntityType::Dimension(d)) = s.drawing.doc.get_entity_mut(Handle::new(h)) {
+        qiyas_geom::set_dimpost(&mut d.base_mut().common, "<> TYP");
+    }
+    let mut off = fields(3);
+    off.show_units = false;
+    s.run(Command::SetDimStyle {
+        name: "Standard".to_string(),
+        fields: off,
+        current: false,
+    })
+    .unwrap();
+    s.run(Command::SetDimStyle {
+        name: "Standard".to_string(),
+        fields: fields(3),
+        current: false,
+    })
+    .unwrap();
+    assert_eq!(own_post(&s, h).as_deref(), Some("<> TYP"));
+    assert_eq!(text_of(&s, h), "10.000 TYP");
+}
+
+#[test]
+fn a_dimension_style_in_other_numbers_gets_no_unit() {
+    // DIMLFAC 1000 turns metres into millimetres: the drawing's unit would be wrong.
+    let mut doc = sample();
+    doc.dim_styles.get_mut("Standard").unwrap().dimlfac = 1000.0;
+    let (_dir, mut s) = open(&doc, "lfac.dxf");
+    let h = one(s.run(linear_cmd()).unwrap());
+    assert_eq!(own_post(&s, h), None);
+    assert!(!text_of(&s, h).contains(' '), "{}", text_of(&s, h));
+}
+
+#[test]
+fn rebuilt_dimensions_keep_the_suffix() {
+    let (_dir, mut s, h) = dimensioned_in(6, "rebuilt.dxf");
+    s.run(Command::DimEdit {
+        target: t(h),
+        op: DimEditOp::TextOverride("WALL <>".to_string()),
+    })
+    .unwrap();
+    assert_eq!(text_of(&s, h), "WALL 10.000 m");
+    s.run(Command::DimEdit {
+        target: t(h),
+        op: DimEditOp::Flip,
+    })
+    .unwrap();
+    s.run(Command::DimEdit {
+        target: t(h),
+        op: DimEditOp::MoveText([14.0, 2.0]),
+    })
+    .unwrap();
+    assert_eq!(text_of(&s, h), "WALL 10.000 m");
+    s.run(Command::FindReplace {
+        find: "WALL".to_string(),
+        replace: "SLAB".to_string(),
+        scope: TextScope::Sheet,
+        match_case: true,
+        whole_word: false,
+    })
+    .unwrap();
+    assert_eq!(text_of(&s, h), "SLAB 10.000 m");
+    // Back to the measured text.
+    s.run(Command::DimEdit {
+        target: t(h),
+        op: DimEditOp::TextOverride(String::new()),
+    })
+    .unwrap();
+    assert_eq!(text_of(&s, h), "10.000 m");
+    // A style edit that changes the precision rebuilds with the suffix too.
+    s.run(Command::SetDimStyle {
+        name: "Standard".to_string(),
+        fields: fields(1),
+        current: false,
+    })
+    .unwrap();
+    assert_eq!(text_of(&s, h), "10.0 m");
+}
+
+#[test]
+fn an_autocad_dimension_gets_no_suffix_when_it_is_edited() {
+    // A dimension with no block (AutoCAD's own, as the file has it) and no suffix of its own.
+    let mut doc = sample();
+    let mut d = DimensionLinear::new(Vector3::new(0.0, 28.0, 0.0), Vector3::new(4.0, 28.0, 0.0));
+    d.definition_point = Vector3::new(4.0, 30.0, 0.0);
+    let imported = doc
+        .add_entity(EntityType::Dimension(Dimension::Linear(d)))
+        .unwrap()
+        .value();
+    let (_dir, mut s) = open(&doc, "theirs.dxf");
+    s.run(Command::DimEdit {
+        target: t(imported),
+        op: DimEditOp::Flip,
+    })
+    .unwrap();
+    assert_eq!(text_of(&s, imported), "4.00");
+    assert_eq!(own_post(&s, imported), None);
+    // Nor does editing the style (its block is not Qiyas's).
+    s.run(Command::SetDimStyle {
+        name: "Standard".to_string(),
+        fields: fields(2),
+        current: false,
+    })
+    .unwrap();
+    assert_eq!(own_post(&s, imported), None);
+}
+
+#[test]
+fn the_suffix_and_the_switch_survive_a_save_in_dxf_and_dwg() {
+    for ext in ["dxf", "dwg"] {
+        let (dir, mut s, h) = dimensioned_in(6, &format!("keep.{ext}"));
+        s.save().unwrap();
+        let mut again = Session::open(&dir.path().join(format!("keep.{ext}"))).unwrap();
+        assert_eq!(text_of(&again, h), "10.000 m", "{ext}: the block's text");
+        assert_eq!(own_post(&again, h).as_deref(), Some("<> m"), "{ext}");
+        // Edited after reopening, still the same.
+        again
+            .run(Command::DimEdit {
+                target: t(h),
+                op: DimEditOp::Flip,
+            })
+            .unwrap();
+        assert_eq!(text_of(&again, h), "10.000 m", "{ext}");
+        assert!(show_units(&again, "Standard"), "{ext}");
+
+        // Switched off and saved: the switch and the plain text come back.
+        let mut off = fields(3);
+        off.show_units = false;
+        again
+            .run(Command::SetDimStyle {
+                name: "Standard".to_string(),
+                fields: off,
+                current: false,
+            })
+            .unwrap();
+        assert_eq!(own_post(&again, h), None, "{ext}: off in memory");
+        again.save().unwrap();
+        let off_again = Session::open(&dir.path().join(format!("keep.{ext}"))).unwrap();
+        assert!(!show_units(&off_again, "Standard"), "{ext}");
+        assert_eq!(text_of(&off_again, h), "10.000", "{ext}");
+        assert_eq!(own_post(&off_again, h), None, "{ext}");
+    }
+}
+
+#[test]
+fn the_style_wire_format_takes_show_units_and_defaults_it_on() {
+    let old = serde_json::json!({
+        "type": "set_dim_style",
+        "name": "Standard",
+        "fields": {
+            "arrow_size": 0.25, "text_height": 0.3, "precision": 2, "ext_offset": 0.1,
+            "ext_extension": 0.2, "gap": 0.05, "scale": 1.0
+        }
+    });
+    let Command::SetDimStyle { fields, .. } = serde_json::from_value(old).unwrap() else {
+        panic!("a style command")
+    };
+    assert!(fields.show_units, "an older caller gets the units");
+    let json = serde_json::to_value(fields).unwrap();
+    assert_eq!(json["show_units"], true);
 }

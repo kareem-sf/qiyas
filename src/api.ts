@@ -169,6 +169,8 @@ export type DimStyleFields = {
   ext_extension: number;
   gap: number;
   scale: number;
+  /** Show the drawing's unit after the number ("12 m"); saved with the style. */
+  show_units: boolean;
 };
 
 export type DimStyleInfo = { name: string; fields: DimStyleFields };
@@ -245,8 +247,6 @@ export type EntityInfo = {
    *  centre. */
   viewport_scale?: number | null;
   viewport_centre?: P | null;
-};
-
   /** A line's or an arc's end points, a circle's, arc's or ellipse's centre, in world
    *  coordinates and drawing units. */
   start?: P | null;
@@ -261,6 +261,8 @@ export type EntityInfo = {
   position?: P | null;
   /** A hatch's pattern name ("SOLID" for a solid fill). */
   pattern?: string | null;
+};
+
 /** A table's cells for the table editor (`qiyas_core::TableInfo`). */
 export type TableInfo = {
   /** Each cell's text as read (formatting codes gone), row by row. */

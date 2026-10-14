@@ -19,10 +19,13 @@ type Props = {
   onClose(): void;
 };
 
-/** The fields as typed, by key. */
-type Typed = Record<keyof DimStyleFields, string>;
+/** The number fields. */
+type NumberKey = Exclude<keyof DimStyleFields, "show_units">;
 
-const KEYS: (keyof DimStyleFields)[] = [
+/** The number fields as typed, by key. */
+type Typed = Record<NumberKey, string>;
+
+const KEYS: NumberKey[] = [
   "arrow_size",
   "text_height",
   "precision",
@@ -35,9 +38,12 @@ const KEYS: (keyof DimStyleFields)[] = [
 const typed = (f: DimStyleFields): Typed =>
   Object.fromEntries(KEYS.map((k) => [k, String(f[k])])) as Typed;
 
-/** The typed fields as numbers, or null when one is not a valid value. */
-function read(f: Typed): DimStyleFields | null {
-  const out = Object.fromEntries(KEYS.map((k) => [k, Number(f[k])])) as DimStyleFields;
+/** The typed fields as numbers (with the units switch), or null when one is not a valid value. */
+function read(f: Typed, showUnits: boolean): DimStyleFields | null {
+  const out = {
+    ...(Object.fromEntries(KEYS.map((k) => [k, Number(f[k])])) as Record<NumberKey, number>),
+    show_units: showUnits,
+  };
   const ok =
     KEYS.every((k) => f[k].trim() !== "" && Number.isFinite(out[k]) && out[k] >= 0) &&
     out.text_height > 0 &&
@@ -56,11 +62,12 @@ export function DimStylePanel({ styles, current, annotationScale, onSave, onScal
   const [name, setName] = useState(current);
   const chosen = styles.find((s) => s.name === name) ?? styles.find((s) => s.name === current) ?? null;
   const [fields, setFields] = useState<Typed | null>(chosen ? typed(chosen.fields) : null);
+  const [showUnits, setShowUnits] = useState(chosen?.fields.show_units ?? true);
   const [newName, setNewName] = useState("");
   const [scale, setScale] = useState(annotationScale);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const values = fields ? read(fields) : null;
+  const values = fields ? read(fields, showUnits) : null;
 
   useEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -71,7 +78,10 @@ export function DimStylePanel({ styles, current, annotationScale, onSave, onScal
   function choose(next: string) {
     setName(next);
     const style = styles.find((s) => s.name === next);
-    if (style) setFields(typed(style.fields));
+    if (style) {
+      setFields(typed(style.fields));
+      setShowUnits(style.fields.show_units);
+    }
   }
 
   async function act(work: () => Promise<void>) {
@@ -130,6 +140,12 @@ export function DimStylePanel({ styles, current, annotationScale, onSave, onScal
               />
             </label>
           ))}
+        {fields && (
+          <label className="check">
+            <input type="checkbox" checked={showUnits} onChange={(e) => setShowUnits(e.target.checked)} />
+            <span>{t("dim.style.show_units")}</span>
+          </label>
+        )}
         <div className="buttons">
           <button
             type="button"
@@ -158,6 +174,7 @@ export function DimStylePanel({ styles, current, annotationScale, onSave, onScal
                 setNewName("");
                 setName(created);
                 setFields(typed(fromCurrent));
+                setShowUnits(fromCurrent.show_units);
               })
             }
           >
