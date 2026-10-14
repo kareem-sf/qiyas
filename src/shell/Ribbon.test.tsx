@@ -600,10 +600,10 @@ test("the tabs' row scrolls sideways and stops short of the preferences instead 
   expect(row).toContain("scrollbar-width: thin");
   expect(row).toContain("margin-inline-end: var(--prefs-width)");
   expect(row).not.toContain("padding-inline-end");
-  // The reserve is at least the overlay's real width: the preferences are icons (and the two
-  // language names), about 220px; at 1024px the row (about 560px) and the overlay fit side by side.
+  // The reserve is at least the overlay's real width: four icon buttons (language, theme,
+  // settings, about), about 145px; at 1024px the row (about 560px) and the overlay fit side by side.
   const reserve = Number(css.match(/:root \{\s*--prefs-width: (\d+)px/)![1]);
-  expect(reserve).toBeGreaterThanOrEqual(230);
+  expect(reserve).toBeGreaterThanOrEqual(150);
   expect(reserve + 560).toBeLessThanOrEqual(1024);
   expect(rule(".prefs")).toContain("min-width: var(--prefs-width)");
   expect(css).toMatch(/\.ribbon-tabs::-webkit-scrollbar \{\s*height: 6px/);

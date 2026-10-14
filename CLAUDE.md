@@ -736,7 +736,9 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   `ribbonLayout.ts`; logical sides, so Arabic mirrors it), always shown, a `role="toolbar"` with
   one tab stop and arrow/Home/End movement (`useToolbarRoving`). The tabs' row scrolls sideways
   and stops `--prefs-width` short of the header's end (a margin, so no tab lies under the
-  preferences overlay; `theme.css`; the preferences are icons now, about 220 px); they take their
+  preferences overlay; `theme.css`; the preferences are four icon buttons, about 150 px: one
+  language switch naming the other language ("ع" / "EN"), one theme switch showing where it
+  goes (moon in light, sun in dark), settings (a gear) and about); they take their
   own row under 900 px (move the width with the quick-access bar's and the prefs' width). The tab
   "More" is a `role="tab"` that opens a menu; the tab chosen from it shows in its place (the indicator slides under it). The dialogs (Options, Customize, Aliases) are the window's.
 - The window's half (`src/app/useOptions.ts`, read at start and after a dialog saves; Manage tab,

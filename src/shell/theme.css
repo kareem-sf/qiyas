@@ -186,7 +186,7 @@ body {
    of `--prefs-width`, the overlay's width) and scrolls sideways inside what is left: a tab can
    never lie under them. Its menus are placed `fixed`, so the scrolling does not clip them. */
 :root {
-  --prefs-width: 250px;
+  --prefs-width: 160px;
 }
 .ribbon-tabs {
   display: flex;
@@ -499,6 +499,8 @@ body {
 .rb-tooltip-note {
   opacity: 0.7;
 }
+/* Four quiet icon buttons, the same size and colour as the quick-access bar's: the language
+   (the other language's short name), the theme (where it goes), settings and about. */
 .prefs {
   position: absolute;
   top: 0;
@@ -508,22 +510,29 @@ body {
   justify-content: flex-end;
   align-items: center;
   display: flex;
-  gap: 8px;
-  padding: 6px 10px 0;
-}
-.prefs [role="group"] {
-  display: flex;
-  align-items: center;
   gap: 2px;
+  padding: 6px 10px 0;
 }
 .prefs button {
   height: var(--rb-std);
   min-width: var(--rb-std);
-  padding: 0 8px;
-  color: var(--fg);
-}
-.prefs button.rb {
   padding: 0;
+  color: var(--muted);
+  background: transparent;
+}
+.prefs button:hover,
+.prefs button:focus-visible {
+  color: var(--fg);
+  background: var(--hover);
+}
+.prefs .pref-lang {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+.prefs .pref-lang:lang(ar) {
+  font-family: "Thmanyah Sans", "Instrument Sans", system-ui, sans-serif;
+  font-size: 14px;
 }
 /* Narrow windows: the prefs sit beside the ribbon tabs' row (app name, quick-access bar, three
    tabs and "More": about 560px) and take their own row under 900px. `--prefs-width` is the

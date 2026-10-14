@@ -173,22 +173,27 @@ export function Header({
         })}
       />
       <div className="prefs">
-        <div role="group" aria-label={t("language")}>
-          <button type="button" lang="en" aria-pressed={lang === "en"} onClick={() => setLang("en")}>
-            {t("langEn")}
-          </button>
-          <button type="button" lang="ar" aria-pressed={lang === "ar"} onClick={() => setLang("ar")}>
-            {t("langAr")}
-          </button>
-        </div>
-        <div role="group" aria-label={t("theme")}>
-          <button type="button" className="rb" aria-label={t("light")} title={t("light")} aria-pressed={theme === "light"} onClick={() => chooseTheme("light")}>
-            <RibbonIcon name="sun" />
-          </button>
-          <button type="button" className="rb" aria-label={t("dark")} title={t("dark")} aria-pressed={theme === "dark"} onClick={() => chooseTheme("dark")}>
-            <RibbonIcon name="moon" />
-          </button>
-        </div>
+        {/* One switch each: the language button names the other language in its own script; the
+            theme button shows where it goes (a moon in light, a sun in dark). */}
+        <button
+          type="button"
+          className="rb pref-lang"
+          lang={lang === "en" ? "ar" : "en"}
+          aria-label={t(lang === "en" ? "langAr" : "langEn")}
+          title={t(lang === "en" ? "langAr" : "langEn")}
+          onClick={() => setLang(lang === "en" ? "ar" : "en")}
+        >
+          {lang === "en" ? "ع" : "EN"}
+        </button>
+        <button
+          type="button"
+          className="rb"
+          aria-label={t(theme === "dark" ? "light" : "dark")}
+          title={t(theme === "dark" ? "light" : "dark")}
+          onClick={() => chooseTheme(theme === "dark" ? "light" : "dark")}
+        >
+          <RibbonIcon name={theme === "dark" ? "sun" : "moon"} />
+        </button>
         <button
           type="button"
           className="rb"
@@ -197,7 +202,7 @@ export function Header({
           title={t("settings")}
           onClick={() => setSettingsOpen(true)}
         >
-          <RibbonIcon name="options" />
+          <RibbonIcon name="gear" />
         </button>
         <button type="button" className="rb" aria-haspopup="dialog" aria-label={t("about")} title={t("about")} onClick={() => setAboutOpen(true)}>
           <RibbonIcon name="info" />
