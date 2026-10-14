@@ -1397,5 +1397,10 @@
   "conflicts.sheets": "اللوحات",
   "conflicts.noteColumn": "ملاحظة",
   "cmd.group.commands": "الأوامر",
-  "cmd.group.shortcuts": "الاختصارات"
+  "cmd.group.shortcuts": "الاختصارات",
+  "toast.undoIn": "تراجع ({n} ث)",
+  "notices.label": "الإشعارات",
+  "attachPdf.drawing": "جارٍ رسم الصفحة…",
+  "pdf.drawingLabel": "جارٍ رسم صفحة PDF…",
+  "about.downloadingLabel": "جارٍ تنزيل التحديث…"
 }

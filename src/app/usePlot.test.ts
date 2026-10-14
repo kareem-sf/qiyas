@@ -258,7 +258,7 @@ test("Quick print: the view on screen, fitted and turned to suit it, on the defa
   };
   expect(core.calls).toContain(`plot_and_print ${JSON.stringify({ job, printer: "Office" })}`);
   expect(core.calls).toContain(`load_plot_style {"path":"/s/mono.ctb"}`);
-  expect(deps.setNotice.mock.calls).toEqual([[null], ["plot.plotting"], ['plot.sentTo {"printer":"Office"}']]);
+  expect(deps.setNotice.mock.calls).toEqual([[null], ["plot.plotting", { waiting: true }], ['plot.sentTo {"printer":"Office"}']]);
   expect(deps.setError).toHaveBeenLastCalledWith(null);
 });
 

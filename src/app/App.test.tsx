@@ -3,7 +3,7 @@
  *  hooks reach each other in the right order with the right state. The core (every IPC call
  *  through `invoke`), the file dialogs and the canvas are faked; `calls` is what reached the
  *  core, in order. */
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { LanguageProvider } from "../i18n";
@@ -22,6 +22,12 @@ function goTab(name: string) {
 }
 
 const PLAN = "/d/plan.dwg";
+
+/** What the notices say now (the toasts), the newest first: what was done and any error are
+ *  toasts, the status bar says what is happening. */
+const toasts = () => [...document.querySelectorAll('[data-sonner-toast]:not([data-removed="true"]) [data-title]')].map((el) => el.textContent);
+/** Sonner shows a toast, and takes a replaced one away, a frame or two later. */
+const expectToasts = (texts: string[]) => waitFor(() => expect(toasts()).toEqual(texts));
 
 const core = vi.hoisted(() => ({
   calls: [] as string[],
@@ -397,13 +403,14 @@ test("PLOT: a window clicked in the drawing (usePlot through the command line) i
     output: null,
   };
   expect(core.calls).toEqual([`plot_pdf_to ${JSON.stringify({ job, path: "/d/plan.pdf" })}`]);
-  expect(status()).toBe("Plotted to \u2068/d/plan.pdf\u2069 — pictures not plotted: 2");
+  await expectToasts(["Plotted to \u2068/d/plan.pdf\u2069 — pictures not plotted: 2"]);
+  // The status bar goes back to the drawing's name.
+  expect(status()).toBe("plan.dwg");
 });
 
 test("QUICKPRINT and the Output tab: quick print, print all layouts and the plot style editor", async () => {
   await mount();
   await clickOpen();
-  const status = () => screen.getByRole("status").textContent;
   const printed = () => core.calls.filter((c) => c.startsWith("plot_and_print")).map((c) => JSON.parse(c.slice(15)));
   core.calls.length = 0;
 
@@ -425,7 +432,7 @@ test("QUICKPRINT and the Output tab: quick print, print all layouts and the plot
       printer: "Office",
     },
   ]);
-  expect(status()).toBe("Sent to Office");
+  await expectToasts(["Sent to Office"]);
 
   goTab(en.output);
   for (const key of ["plot.button", "plot.quickPrint", "plot.printAll", "plot.styles"] as const) {
@@ -435,7 +442,7 @@ test("QUICKPRINT and the Output tab: quick print, print all layouts and the plot
   fireEvent.click(screen.getByRole("button", { name: en["plot.printAll"] }));
   await settle();
   expect(printed().map((p) => [p.job.sheet, p.job.area, p.printer])).toEqual([["*Paper_Space", "layout", "Office"]]);
-  expect(status()).toBe("Layouts sent: 1, one print job each: Sent to Office");
+  await expectToasts(["Layouts sent: 1, one print job each: Sent to Office"]);
 
   fireEvent.click(screen.getByRole("button", { name: en["plot.styles"] }));
   expect(screen.getByRole("heading", { name: en["plotStyle.title"] })).toBeTruthy();
@@ -529,7 +536,7 @@ test("while a script runs the ribbon and the command line wait, and Stop asks th
   core.calls.length = 0;
   await typeLine("COUNT DOOR");
   expect(core.calls.filter((c) => c.startsWith("run_command"))).toEqual([]);
-  expect(screen.getByText(en["script.busy"])).toBeTruthy();
+  await expectToasts([en["script.busy"]]);
 
   fireEvent.click(screen.getByRole("button", { name: en["script.stop"] }));
   await settle();
@@ -633,13 +640,13 @@ test("PURGE and AUDIT wait while a block is edited in place: the window says so,
   await clickOpen();
   core.calls.length = 0;
   await typeLine("PURGE");
-  expect(screen.getByText(en["manage.blockEdit"])).toBeTruthy();
+  await expectToasts([en["manage.blockEdit"]]);
   expect(screen.queryByRole("heading", { name: en["purge.title"] })).toBeNull();
   goTab(en.manage);
   fireEvent.click(screen.getByRole("button", { name: en["audit.button"] }));
   await settle();
   expect(screen.queryByRole("heading", { name: en["audit.title"] })).toBeNull();
-  expect(screen.getByText(en["manage.blockEdit"])).toBeTruthy();
+  await expectToasts([en["manage.blockEdit"]]);
   expect(core.calls.filter((c) => c.startsWith("run_command"))).toEqual([]);
 });
 
@@ -811,6 +818,8 @@ test("opening a drawing and comparing show dots beside the status bar's text, an
   expect(bar().querySelector(".dot-loader.dot-chase")).toBeTruthy();
   compared();
   await settle();
-  expect(bar().textContent).toBe(en["conflicts.none"]);
+  // What the comparison found is a notice; the status bar is back to the drawing.
+  await expectToasts([en["conflicts.none"]]);
+  expect(bar().textContent).toBe("plan.dwg");
   expect(bar().querySelector(".dot-loader")).toBeNull();
 });

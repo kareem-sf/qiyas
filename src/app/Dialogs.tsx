@@ -82,6 +82,8 @@ type Props = {
   plot: Plot;
   options: Options;
   parametric: Pick<Parametric, "parametersOpen" | "parameters" | "setParameter" | "closeParameters" | "deleteConstraint">;
+  /** Takes the last step back (the app's undo): the toast after a purge offers it. */
+  onUndo(): void;
 };
 
 /** The dialogs over the drawing (between the top bar and the panels). */
@@ -99,6 +101,7 @@ export function Dialogs({
   plot,
   options,
   parametric,
+  onUndo,
 }: Props) {
   const t = useT();
   const { theme, aboutOpen, setAboutOpen, settingsOpen, setSettingsOpen, loadAliases, run, setNotice, focusDrawing } =
@@ -636,6 +639,7 @@ export function Dialogs({
         <PurgeDialog
           look={runCommand}
           apply={runDrawingCommand}
+          onUndo={onUndo}
           onClose={() => {
             options.setPurgeOpen(false);
             focusDrawing();

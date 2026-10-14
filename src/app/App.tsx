@@ -11,6 +11,7 @@ import { CommandLine } from "../shell/CommandLine";
 import { StatusBar } from "../shell/StatusBar";
 import type { Action } from "../tools/commandParser";
 import { useTool } from "../tools/useTool";
+import { Notices } from "../ui/notices";
 import { Dialogs, FileDialogs } from "./Dialogs";
 import { Header } from "./Header";
 import { PanelHandle, usePanelRails } from "./panelRails";
@@ -257,7 +258,7 @@ export default function App() {
   });
   const { selected, boqLinked, conflictLinked } = takeoff;
   const plot = usePlot({ t, switchGen, info, sheet, viewport, run, setError, setNotice, focusDrawing, measure });
-  const { commandLineOn, commandInput, onCommand, clickDrawing, commandState, prompt, message, waiting } = useCommandLine({
+  const { commandLineOn, commandInput, onCommand, clickDrawing, commandState, prompt, message, waiting, progress } = useCommandLine({
     t,
     info,
     measure,
@@ -325,6 +326,7 @@ export default function App() {
         plot={plot}
         options={options}
         parametric={parametric}
+        onUndo={() => history(undo)}
       />
       <div
         className={`middle${panels.hidden.left ? " left-off" : ""}${panels.hidden.right ? " right-off" : ""}`}
@@ -409,9 +411,11 @@ export default function App() {
         problems={problems}
         message={message}
         waiting={waiting}
+        progress={progress}
         ucs={info?.ucs}
       />
       <FileDialogs drawings={drawings} />
+      <Notices theme={theme} />
     </div>
   );
 }

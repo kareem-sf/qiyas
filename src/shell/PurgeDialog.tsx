@@ -5,19 +5,27 @@ import { useEffect, useState } from "react";
 import { PURGE_KINDS, type Command, type Outcome, type PurgeKind, type PurgeReport } from "../api";
 import { useT } from "../i18n";
 import { ModalDialog } from "../ui/ModalDialog";
+import { notifyUndo, useUndoLabel } from "../ui/notices";
 
 type Props = {
   /** Runs a command that changes nothing (the dry run). */
   look(cmd: Command): Promise<Outcome>;
   /** Runs a command that changes the drawing (the purge itself), redrawing after it. */
   apply(cmd: Command): Promise<Outcome>;
+  /** Takes the purge back: the app's undo, offered in a toast for a few seconds once the dialog is
+   *  closed (the dialog itself is modal, and the toast could not be pressed under it). */
+  onUndo?(): void;
   onClose(): void;
 };
 
 const reportOf = (o: Outcome) => (o.type === "purged" ? o.report : null);
 
-export function PurgeDialog({ look, apply, onClose }: Props) {
+/** How long the undo toast stays, in seconds. */
+const UNDO_SECONDS = 8;
+
+export function PurgeDialog({ look, apply, onUndo, onClose }: Props) {
   const t = useT();
+  const undoLabel = useUndoLabel();
   const [found, setFound] = useState<PurgeReport | null>(null);
   const [gone, setGone] = useState<PurgeReport | null>(null);
   const [ticked, setTicked] = useState<Set<PurgeKind>>(new Set());
@@ -46,11 +54,19 @@ export function PurgeDialog({ look, apply, onClose }: Props) {
     }
   }
 
+  /** Closes it; what it purged can be taken back for a few seconds from a toast. */
+  function close() {
+    if (gone && gone.total > 0 && onUndo) {
+      notifyUndo({ message: t("purge.done", { n: gone.total }), label: undoLabel, seconds: UNDO_SECONDS, onUndo });
+    }
+    onClose();
+  }
+
   const shown = gone ?? found;
   const count = (r: PurgeReport, k: PurgeKind) => r[k].length;
 
   return (
-    <ModalDialog className="purge" labelledBy="purge-title" onClose={onClose}>
+    <ModalDialog className="purge" labelledBy="purge-title" onClose={close}>
       <form
         method="dialog"
         onSubmit={(e) => {
@@ -117,7 +133,7 @@ export function PurgeDialog({ look, apply, onClose }: Props) {
           </p>
         )}
         <div className="buttons">
-          <button type="button" onClick={onClose}>
+          <button type="button" onClick={close}>
             {t(gone ? "purge.close" : "settings.cancel")}
           </button>
           {!gone && (

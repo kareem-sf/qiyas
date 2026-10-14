@@ -15,6 +15,7 @@ import {
   type UpdateProgress,
 } from "../api";
 import { useLanguage, useT } from "../i18n";
+import { Progress } from "../ui/Progress";
 import { DotLoader } from "./DotLoader";
 import type { Theme } from "../viewport/gl";
 import { version } from "../../package.json";
@@ -165,6 +166,10 @@ export function About({ theme, onClose }: { theme: Theme; onClose: () => void })
           </>
         )}
         {error && <p role="alert">{error}</p>}
+        {/* The size is known: how far the download is, as a bar (the button says it too). */}
+        {step.kind === "available" && step.phase === "downloading" && step.progress?.total ? (
+          <Progress value={(step.progress.downloaded / step.progress.total) * 100} label={t("about.downloadingLabel")} />
+        ) : null}
         {step.kind === "available" ? (
           <button type="button" disabled={step.phase !== "ready"} onClick={install}>
             {step.phase !== "ready" && <DotLoader pattern={step.phase === "installing" ? "spiral" : "scan"} />}

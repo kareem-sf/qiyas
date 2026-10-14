@@ -79,10 +79,15 @@ test("an update found is installed only on a click; the download shows its progr
   expect(screen.getByRole("button", { name: "Downloading…" })).toBeTruthy();
   // The dots wait beside the text (hidden from assistive technology: the name stays the text).
   expect(screen.getByRole("button", { name: "Downloading…" }).querySelector(".dot-loader")).toBeTruthy();
+  // No size yet: no percentage, so no bar.
+  expect(screen.queryByRole("progressbar")).toBeNull();
   await send("update:progress", { downloaded: 45, total: 100 });
   expect(screen.getByRole("button", { name: "Downloading… 45%" })).toBeTruthy();
+  // The size is known: how far it is, as a labelled bar too.
+  expect(screen.getByRole("progressbar", { name: "Downloading the update…" }).getAttribute("aria-valuenow")).toBe("45");
   await send("update:progress", { downloaded: 3_500_000, total: null });
   expect(screen.getByRole("button", { name: "Downloading… 3.5 MB" })).toBeTruthy();
+  expect(screen.queryByRole("progressbar")).toBeNull();
   // While it downloads, Close still works (it stops the download: below).
   expect((screen.getByRole("button", { name: "Close" }) as HTMLButtonElement).disabled).toBe(false);
 

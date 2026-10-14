@@ -1720,6 +1720,108 @@ span.grid-sort {
   font-variant-numeric: tabular-nums;
 }
 
+/* Notices (`ui/notices.tsx`, Sonner): a thin card in the panel's colours at the end of the bottom edge,
+   its text start-aligned. An error has the warning colour on its start edge; an undo toast has its
+   button and a line that runs down with the seconds. Sonner places and stacks them. */
+.toast {
+  position: relative;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: min(360px, calc(100vw - 28px));
+  padding: 8px 12px;
+  overflow: hidden;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgb(14 15 18 / 0.14);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+:root[data-theme="dark"] .toast {
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.4);
+}
+.toast-title {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.toast-error::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  width: 3px;
+  background: var(--warn);
+}
+.toast-close {
+  position: absolute;
+  inset-block-start: 4px;
+  inset-inline-end: 4px;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.toast-close:hover {
+  color: var(--fg);
+  background: var(--hover);
+}
+.toast-close svg {
+  width: 10px;
+  height: 10px;
+}
+.toast-error {
+  padding-inline-end: 28px;
+}
+.toast-wait {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.toast-action {
+  flex: none;
+  padding: 2px 8px;
+  color: var(--accent);
+  border-color: var(--rule);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.toast-timer {
+  position: absolute;
+  inset-inline: 0;
+  inset-block-end: 0;
+  height: 2px;
+  background: var(--accent);
+  transform-origin: left;
+  animation: toast-timer linear forwards;
+}
+:root[dir="rtl"] .toast-timer {
+  transform-origin: right;
+}
+@keyframes toast-timer {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .toast-timer {
+    animation: none;
+    transform: none;
+  }
+}
+
 /* About box */
 .about {
   width: 340px;
@@ -2157,6 +2259,53 @@ span.grid-sort {
   min-height: 0;
   width: auto;
   border-inline-start: 0;
+}
+
+/* Progress (`ui/Progress.tsx`): the label and the percentage on one line over a thin track. */
+.progress {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.progress-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+}
+.progress-value {
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+}
+.progress-track {
+  height: 3px;
+  overflow: hidden;
+  background: var(--rule);
+  border-radius: 2px;
+}
+.progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: width 160ms ease;
+}
+/* In the status bar: one line, the bar a short stretch beside the label. */
+.progress.compact {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+.progress.compact .progress-head {
+  gap: 6px;
+}
+.progress.compact .progress-track {
+  width: 72px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .progress-fill {
+    transition: none;
+  }
 }
 
 /* Dot loader (`DotLoader.tsx`): a small grid of dots that glow one after the other while something

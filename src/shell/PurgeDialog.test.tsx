@@ -106,3 +106,44 @@ test("a click outside the dialog does not close it", async () => {
   fireEvent.click(document.body);
   expect(onClose).not.toHaveBeenCalled();
 });
+
+test("closing the dialog after a purge offers the undo in a toast that counts down; a purge of nothing offers none", async () => {
+  const { Notices } = await import("../ui/notices");
+  const { useState } = await import("react");
+  const onUndo = vi.fn();
+  const apply = vi.fn(async (_: Command) => purged(report({ dry_run: false, total: 3 })));
+  function Host() {
+    const [open, setOpen] = useState(true);
+    return (
+      <>
+        <Notices theme="light" />
+        {open && <PurgeDialog look={async () => purged(report())} apply={apply} onUndo={onUndo} onClose={() => setOpen(false)} />}
+      </>
+    );
+  }
+  render(<Host />);
+  await screen.findByRole("group", { name: "Blocks (2)" });
+  fireEvent.click(screen.getByRole("button", { name: "Purge" }));
+  await screen.findByText("Purged 3 entries (one undo step)");
+  // The dialog is modal: the toast comes when it is closed, with a few seconds to press Undo.
+  expect(screen.queryByRole("button", { name: /^Undo/ })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  const undo = await screen.findByRole("button", { name: /^Undo \(\d s\)$/ });
+  expect(undo.textContent).toBe("Undo (8 s)");
+  fireEvent.click(undo);
+  expect(onUndo).toHaveBeenCalledTimes(1);
+});
+
+test("closing without purging offers no undo", async () => {
+  const { Notices } = await import("../ui/notices");
+  render(
+    <>
+      <Notices theme="light" />
+      <PurgeDialog look={async () => purged(report())} apply={vi.fn()} onUndo={vi.fn()} onClose={() => {}} />
+    </>,
+  );
+  await screen.findByRole("group", { name: "Blocks (2)" });
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  await new Promise((r) => setTimeout(r, 400));
+  expect(screen.queryByRole("button", { name: /^Undo/ })).toBeNull();
+});

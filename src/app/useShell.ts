@@ -1,10 +1,10 @@
-/** The window's own chrome: theme, the status bar's error and notice, the settings and About
+/** The window's own chrome: theme, the notices and errors (toasts), the settings and About
  *  dialogs' switches, the side panel's tab, the command line aliases, and the viewport refs. */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { aliases as readAliases } from "../api";
 import { blurAfterClick } from "../shell/blurAfterClick";
-import { useAutoClear } from "../shell/useAutoClear";
 import { mergeAliases } from "../tools/aliases";
+import { dismissNotice, notify, notifyError, notifyUndoGone } from "../ui/notices";
 import type { Theme } from "../viewport/gl";
 import type { ViewportHandle } from "../viewport/Viewport";
 import { initialTheme, THEME_KEY } from "./shared";
@@ -18,9 +18,9 @@ export function useShell() {
   /** The user's command line aliases from the settings. */
   const [userAliases, setUserAliases] = useState<Record<string, string>>({});
   const commandAliases = useMemo(() => mergeAliases(userAliases), [userAliases]);
-  const [error, setError] = useState<string | null>(null);
-  /** A one-off status bar message, e.g. after an export; the next action clears it. */
-  const [notice, setNotice] = useState<string | null>(null);
+  /** The toast of the notice and of the error on screen, so the next one takes its place. */
+  const noticeToast = useRef<string | number | null>(null);
+  const errorToast = useRef<string | number | null>(null);
   /** The right panel's tab. */
   const [sideTab, setSideTab] = useState<SideTab>("takeoff");
   const viewport = useRef<ViewportHandle>(null);
@@ -32,8 +32,18 @@ export function useShell() {
 
   // Space pans the drawing; a button the mouse just clicked must not take it as a press.
   useEffect(blurAfterClick, []);
-  // A notice goes with the next command (`run`), or on its own after a few seconds.
-  useAutoClear(notice, () => setNotice(null));
+
+  /** A one-off message, e.g. after an export: a toast that goes by itself after a few seconds or
+   *  with the next command (`run` says null). One at a time: a new one takes the place of the last. */
+  const setNotice = useCallback((text: string | null, opts?: { waiting?: boolean }) => {
+    if (noticeToast.current !== null) dismissNotice(noticeToast.current);
+    noticeToast.current = text === null ? null : notify(text, opts);
+  }, []);
+  /** An error: a toast that stays until it is closed or `null` (the next success) takes it away. */
+  const setError = useCallback((message: string | null) => {
+    if (errorToast.current !== null) dismissNotice(errorToast.current);
+    errorToast.current = message === null ? null : notifyError(message);
+  }, []);
 
   /** Reads the user's command line aliases (at start and after the settings close). */
   const loadAliases = () =>
@@ -53,9 +63,11 @@ export function useShell() {
     }
   }
 
-  /** Runs an IPC step, showing its error in the status bar. */
+  /** Runs an IPC step, showing its error as a toast. */
   async function run(step: () => Promise<void>) {
     setNotice(null);
+    // Another command: what an undo toast offered to take back is no longer the last step.
+    notifyUndoGone();
     try {
       await step();
       setError(null);
@@ -76,9 +88,7 @@ export function useShell() {
     setSettingsOpen,
     commandAliases,
     loadAliases,
-    error,
     setError,
-    notice,
     setNotice,
     sideTab,
     setSideTab,

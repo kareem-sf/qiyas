@@ -143,8 +143,7 @@ type WorkProps = {
 };
 
 /** The drawing: the edit in place's bar, the file tabs, the canvas (with the along prompt, the
- *  in-place text editor and the image sliders over it), the split view, the error, the sheet
- *  tabs. */
+ *  in-place text editor and the image sliders over it), the split view, the sheet tabs. */
 export function WorkArea({
   info,
   fileTabs,
@@ -167,7 +166,7 @@ export function WorkArea({
   chooseTool,
   onProperties,
 }: WorkProps) {
-  const { theme, error, setError, run, focusDrawing, viewport, viewportBox } = shell;
+  const { theme, setError, run, focusDrawing, viewport, viewportBox } = shell;
   const {
     batch,
     batchHeld,
@@ -302,11 +301,6 @@ export function WorkArea({
           />
         )}
       </div>
-      {error && (
-        <div className="error" role="alert">
-          {error}
-        </div>
-      )}
       {info && <SheetTabs sheets={info.sheets} active={sheet} onSelect={chooseSheet} />}
     </main>
   );

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { AttachMode, Units } from "../api";
 import { useT } from "../i18n";
+import { Progress } from "../ui/Progress";
 import { SegmentedChoice } from "../ui/Segmented";
 import type { Picture } from "../viewport/batch";
 import type { Point } from "../viewport/camera";
@@ -358,15 +359,16 @@ export function AttachPdfDialog(props: Props) {
             ]}
           />
         </fieldset>
-        {busy && (
-          <label>
-            <span>
+        {busy &&
+          (progress === null ? (
+            // No percentage yet (reading the PDF): the dots wait beside the words.
+            <p className="status">
               <DotLoader pattern="pulse" />
-              {progress === null ? t("attachPdf.working") : t("attachPdf.rendering", { n: progress })}
-            </span>
-            <progress max={100} value={progress ?? undefined} />
-          </label>
-        )}
+              {t("attachPdf.working")}
+            </p>
+          ) : (
+            <Progress value={progress} label={t("attachPdf.drawing")} />
+          ))}
         {error && (
           <p className="error" role="alert">
             {error}

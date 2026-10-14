@@ -29,7 +29,7 @@ type Deps = {
   info: DrawingInfo | null;
   measure: Measure;
   assistant: Pick<Assistant, "send">;
-  shell: Pick<Shell, "run" | "setError" | "notice" | "setNotice" | "setSideTab" | "viewport" | "commandAliases">;
+  shell: Pick<Shell, "run" | "setError" | "setNotice" | "setSideTab" | "viewport" | "commandAliases">;
   drafting: Pick<DraftingState, "toggleDrafting">;
   toolChoice: ToolChoice;
   commands: Commands;
@@ -92,7 +92,7 @@ export function useCommandLine({
   options,
   parametric,
 }: Deps) {
-  const { run, setError, notice, setNotice, setSideTab, viewport, commandAliases } = shell;
+  const { run, setError, setNotice, setSideTab, viewport, commandAliases } = shell;
   const { toggleDrafting } = drafting;
   const { tool, setTool, lastPoint, preset, chooseTool } = toolChoice;
   const { apply, history } = commands;
@@ -536,7 +536,7 @@ export function useCommandLine({
   const prompt = t(promptKey, promptKey === measure.hint ? (measure.hintArgs ?? undefined) : undefined);
 
   // The command line already asks the tool's own prompt: the status bar does not say it again (it
-  // keeps the notice, or the file name). A hint the command line does not show (COUNT's "not a
+  // keeps the file name; what was done is a toast). A hint the command line does not show (COUNT's "not a
   // block") stays, and with the command line hidden the status bar says it all.
   const promptShown = commandLineOn && promptKey === measure.hint;
   const message = opening
@@ -558,28 +558,21 @@ export function useCommandLine({
               : "calibrate.first",
         )
       : renderProgress !== null && !attachOpen
-        ? t("pdf.drawing", { n: renderProgress })
+        ? t("pdf.drawingLabel")
         : measure.hint && !promptShown
-      ? // A notice (what a modify left out) goes beside the tool's prompt.
-        t(measure.hint, measure.hintArgs ?? undefined) + (notice ? ` — ${notice}` : "")
-      : (notice ??
-        (info
-          ? emptyModel
-            ? `${fileName} — ${t("problem.emptyModel")}`
-            : fileName
-          : t("noDrawing")));
+      ? t(measure.hint, measure.hintArgs ?? undefined)
+      : info
+        ? emptyModel
+          ? `${fileName} — ${t("problem.emptyModel")}`
+          : fileName
+        : t("noDrawing");
 
   // What the status bar waits for, as the dots to show beside the message: the same order as the
-  // message above, so the dots never stand beside a text about something else.
-  const waiting: DotPattern | null = opening
-    ? "scan"
-    : comparing
-      ? "chase"
-      : windowPick || pending
-        ? null
-        : renderProgress !== null && !attachOpen
-          ? "pulse"
-          : null;
+  // message above, so the dots never stand beside a text about something else. A PDF page being
+  // drawn knows how far it is: that is a bar (`progress`), not dots.
+  const waiting: DotPattern | null = opening ? "scan" : comparing ? "chase" : null;
+  const progress =
+    !opening && !comparing && !windowPick && !pending && renderProgress !== null && !attachOpen ? renderProgress : null;
 
-  return { commandLineOn, commandInput, onCommand, clickDrawing, commandState, prompt, message, waiting };
+  return { commandLineOn, commandInput, onCommand, clickDrawing, commandState, prompt, message, waiting, progress };
 }

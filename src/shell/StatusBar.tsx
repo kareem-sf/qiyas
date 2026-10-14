@@ -4,6 +4,7 @@ import type { Drafting, Ucs } from "../api";
 import { useT } from "../i18n";
 import type { DraftingToggle } from "../tools/shortcuts";
 import { isWorld, toUcs } from "../tools/ucs";
+import { Progress } from "../ui/Progress";
 import { SegmentedToggles } from "../ui/Segmented";
 import { DotLoader, type DotPattern } from "./DotLoader";
 
@@ -17,6 +18,9 @@ type Props = {
   /** The motion to show beside the message while something waits (opening, comparing, a picture
    *  drawing); null or absent for none. The message keeps saying what it is. */
   waiting?: DotPattern | null;
+  /** How far something that reports it is (a PDF page being drawn), 0 to 100: a bar beside the
+   *  message, which says what it is. */
+  progress?: number | null;
   /** Decimals of the cursor position. */
   precision?: number;
   /** Metres per drawing unit: the cursor is shown in metres. */
@@ -48,6 +52,7 @@ export function StatusBar({
   problems,
   message,
   waiting = null,
+  progress = null,
   precision = 3,
   metresPerUnit = 1,
   snapLabel = null,
@@ -67,8 +72,14 @@ export function StatusBar({
   return (
     <footer className="status">
       <span className="message" role="status" aria-live="polite">
-        {waiting && <DotLoader pattern={waiting} />}
-        {message}
+        {progress !== null ? (
+          <Progress compact value={progress} label={message} />
+        ) : (
+          <>
+            {waiting && <DotLoader pattern={waiting} />}
+            {message}
+          </>
+        )}
       </span>
       {snapLabel && <span className="snap-kind">{snapLabel}</span>}
       {problems.length > 0 && (

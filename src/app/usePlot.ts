@@ -220,7 +220,7 @@ export function usePlot({ t, switchGen, info, sheet, viewport, run, setError, se
     try {
       await run(async () => {
         try {
-          setNotice(t("plot.plotting"));
+          setNotice(t("plot.plotting"), { waiting: true });
           await work(stillHere);
         } catch (e) {
           setNotice(null);

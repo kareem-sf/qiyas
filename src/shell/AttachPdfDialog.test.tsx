@@ -118,15 +118,23 @@ test("a custom scale is drawing units per point, and a failure stays in the dial
   expect(props.onClose).not.toHaveBeenCalled();
 });
 
-test("while the page is drawn the progress text keeps its words and the dots move beside them", async () => {
+test("while the page is drawn a labelled bar shows how far it is; before there is a percentage the dots wait beside the words", async () => {
   let finish = () => {};
   const onAttach = vi.fn(() => new Promise<void>((done) => (finish = done)));
-  setup({ onAttach, progress: 40 });
+  const { view, props } = setup({ onAttach, progress: null });
   fireEvent.click(screen.getByRole("button", { name: "Choose…" }));
   await screen.findByText("Pages 1–20 of 45");
   fireEvent.click(screen.getByRole("button", { name: "Attach" }));
-  const text = await screen.findByText("Drawing the page… 40%");
-  expect(text.querySelector(".dot-loader.dot-pulse")?.getAttribute("aria-hidden")).toBe("true");
+  // Reading the PDF: no percentage, so dots beside the words and no bar.
+  const reading = await screen.findByText("Reading the PDF…");
+  expect(reading.querySelector(".dot-loader.dot-pulse")?.getAttribute("aria-hidden")).toBe("true");
+  expect(screen.queryByRole("progressbar")).toBeNull();
+  // Drawing the page: a bar with its label and the percentage, no dots.
+  view.rerender(<AttachPdfDialog {...props} progress={40} />);
+  const bar = await screen.findByRole("progressbar", { name: "Drawing the page…" });
+  expect(bar.getAttribute("aria-valuenow")).toBe("40");
+  expect(bar.textContent).toContain("40 %");
+  expect(screen.queryByText("Reading the PDF…")).toBeNull();
   finish();
 });
 

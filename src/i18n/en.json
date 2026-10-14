@@ -1397,5 +1397,10 @@
   "conflicts.sheets": "Sheets",
   "conflicts.noteColumn": "Note",
   "cmd.group.commands": "Commands",
-  "cmd.group.shortcuts": "Shortcuts"
+  "cmd.group.shortcuts": "Shortcuts",
+  "toast.undoIn": "Undo ({n} s)",
+  "notices.label": "Notices",
+  "attachPdf.drawing": "Drawing the page…",
+  "pdf.drawingLabel": "Drawing the PDF page…",
+  "about.downloadingLabel": "Downloading the update…"
 }
