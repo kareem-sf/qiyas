@@ -52,6 +52,14 @@ three late refs are `measureRef` (`useSheets` cancels the tool when the sheet ch
 (`useBlocks`, `useAnnotate`) and `onCommandRef` (the tool palette in `useBlocks`); they are called
 with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test for each.
 
+Waiting is shown by `src/shell/DotLoader.tsx` (clean-room, our own design: do not copy code from any
+dot-matrix loader library, whose licence forbids it): `<DotLoader pattern="scan|spiral|pulse|chase"
+size="sm|md" label? />`, 3x3 (`sm`, one 12 px status-bar line) or 5x5 (`md`), pure CSS in `theme.css`
+(`.dot-loader`, one keyframe, a per-dot `--p` sets the delay; no timer), `--accent` dots, grid
+follows the text direction, still under `prefers-reduced-motion`. Without `label` it is `aria-hidden`
+and the text beside it (kept) speaks; with one it is a named `img`, never a live region. The status bar
+gets `waiting` from `useCommandLine` (opening, comparing, PDF page drawing); no `.spinner` is left.
+
 ## Global constraints
 
 - Desktop only, no web build. Local check is `scripts/check.sh`. CI on GitHub

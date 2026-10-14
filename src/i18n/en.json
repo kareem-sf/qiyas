@@ -163,6 +163,7 @@
   "dark": "Dark",
   "noDrawing": "No drawing open",
   "opening": "Opening…",
+  "compare.running": "Comparing with the BOQ…",
   "unitsUnknown": "Units unknown, assuming mm",
   "recovered": "Recovered with {n} problems",
   "problems": "Problems",

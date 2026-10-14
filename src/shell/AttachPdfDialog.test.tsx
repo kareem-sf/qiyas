@@ -118,6 +118,18 @@ test("a custom scale is drawing units per point, and a failure stays in the dial
   expect(props.onClose).not.toHaveBeenCalled();
 });
 
+test("while the page is drawn the progress text keeps its words and the dots move beside them", async () => {
+  let finish = () => {};
+  const onAttach = vi.fn(() => new Promise<void>((done) => (finish = done)));
+  setup({ onAttach, progress: 40 });
+  fireEvent.click(screen.getByRole("button", { name: "Choose…" }));
+  await screen.findByText("Pages 1–20 of 45");
+  fireEvent.click(screen.getByRole("button", { name: "Attach" }));
+  const text = await screen.findByText("Drawing the page… 40%");
+  expect(text.querySelector(".dot-loader.dot-pulse")?.getAttribute("aria-hidden")).toBe("true");
+  finish();
+});
+
 test("a PDF that can't be read says why", async () => {
   setup({
     pageCount: vi.fn(async () => {

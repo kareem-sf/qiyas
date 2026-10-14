@@ -255,7 +255,7 @@ export default function App() {
   });
   const { selected, boqLinked, conflictLinked } = takeoff;
   const plot = usePlot({ t, switchGen, info, sheet, viewport, run, setError, setNotice, focusDrawing, measure });
-  const { commandLineOn, commandInput, onCommand, clickDrawing, commandState, prompt, message } = useCommandLine({
+  const { commandLineOn, commandInput, onCommand, clickDrawing, commandState, prompt, message, waiting } = useCommandLine({
     t,
     info,
     measure,
@@ -400,6 +400,7 @@ export default function App() {
         unitsWarning={info?.units === "unknown"}
         problems={problems}
         message={message}
+        waiting={waiting}
         ucs={info?.ucs}
       />
       <FileDialogs drawings={drawings} />

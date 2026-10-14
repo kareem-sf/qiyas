@@ -15,6 +15,7 @@ import {
   type UpdateProgress,
 } from "../api";
 import { useLanguage, useT } from "../i18n";
+import { DotLoader } from "./DotLoader";
 import type { Theme } from "../viewport/gl";
 import { version } from "../../package.json";
 
@@ -166,6 +167,7 @@ export function About({ theme, onClose }: { theme: Theme; onClose: () => void })
         {error && <p role="alert">{error}</p>}
         {step.kind === "available" ? (
           <button type="button" disabled={step.phase !== "ready"} onClick={install}>
+            {step.phase !== "ready" && <DotLoader pattern={step.phase === "installing" ? "spiral" : "scan"} />}
             {step.phase === "ready"
               ? t("about.install")
               : step.phase === "installing"
@@ -175,6 +177,7 @@ export function About({ theme, onClose }: { theme: Theme; onClose: () => void })
         ) : (
           step.kind !== "installed" && (
             <button type="button" disabled={step.kind === "checking"} onClick={check}>
+              {step.kind === "checking" && <DotLoader pattern="scan" />}
               {t(step.kind === "checking" ? "about.checking" : "about.checkUpdates")}
             </button>
           )

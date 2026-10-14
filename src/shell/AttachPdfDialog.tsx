@@ -3,6 +3,7 @@ import type { AttachMode, Units } from "../api";
 import { useT } from "../i18n";
 import type { Picture } from "../viewport/batch";
 import type { Point } from "../viewport/camera";
+import { DotLoader } from "./DotLoader";
 
 /** Pages shown (and thumbnails fetched) at a time. */
 export const PAGES_AT_ONCE = 20;
@@ -368,6 +369,7 @@ export function AttachPdfDialog(props: Props) {
         {busy && (
           <label>
             <span>
+              <DotLoader pattern="pulse" />
               {progress === null ? t("attachPdf.working") : t("attachPdf.rendering", { n: progress })}
             </span>
             <progress max={100} value={progress ?? undefined} />

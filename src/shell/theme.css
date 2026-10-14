@@ -1846,25 +1846,79 @@ button.close {
   border-inline-start: 0;
 }
 
-.spinner {
-  display: inline-block;
-  width: 10px;
-  height: 10px;
+/* Dot loader (`DotLoader.tsx`): a small grid of dots that glow one after the other while something
+   waits. 3 by 3 (`dot-sm`) fits the status bar's line, 5 by 5 (`dot-md`) a panel's. The dots are the
+   text colour of the place they sit in, tinted with the accent; each has `--p`, its place in the
+   motion, which sets a negative delay so the pattern is already running on the first frame. The grid
+   follows the text direction, so sweeps and spirals mirror in Arabic. */
+.dot-loader {
+  --dm-dot: calc(var(--font-base) * 0.16);
+  --dm-gap: calc(var(--font-base) * 0.12);
+  --dm-dur: 1.2s;
+  display: inline-grid;
+  grid-template-columns: repeat(3, var(--dm-dot));
+  gap: var(--dm-gap);
   flex-shrink: 0;
-  border: 1.5px solid var(--accent-soft);
-  border-top-color: var(--accent);
+  vertical-align: middle;
+  color: var(--accent);
+}
+.dot-loader.dot-md {
+  --dm-dot: calc(var(--font-base) * 0.2);
+  --dm-gap: calc(var(--font-base) * 0.15);
+  grid-template-columns: repeat(5, var(--dm-dot));
+}
+.dot-loader.dot-spiral {
+  --dm-dur: 1.5s;
+}
+.dot-loader.dot-pulse {
+  --dm-dur: 1.6s;
+}
+.dot-loader i {
+  width: var(--dm-dot);
+  height: var(--dm-dot);
   border-radius: 50%;
-  animation: spin 0.8s linear infinite;
+  background: currentColor;
+  opacity: 0.2;
+  animation: dot-glow var(--dm-dur) ease-in-out infinite;
+  animation-delay: calc((var(--p) - 1) * var(--dm-dur));
 }
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
+.dot-loader i.rest {
+  animation: none;
+}
+@keyframes dot-glow {
+  0% {
+    opacity: 0.2;
+    transform: scale(0.7);
+  }
+  14% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  55%,
+  100% {
+    opacity: 0.2;
+    transform: scale(0.7);
   }
 }
+/* Still: no motion, the dots are bright where the motion starts and fade along it. */
 @media (prefers-reduced-motion: reduce) {
-  .spinner {
-    animation-duration: 2.4s;
+  .dot-loader i {
+    animation: none;
+    opacity: calc(1 - var(--p) * 0.75);
   }
+  .dot-loader i.rest {
+    opacity: 0.2;
+  }
+}
+/* Beside its text: a small gap; the flex rows that have their own gap need none. */
+.dot-loader {
+  margin-inline-end: 6px;
+}
+.working .dot-loader,
+.tool-state .dot-loader,
+.side-tabs .dot-loader,
+.script-running .dot-loader {
+  margin-inline-end: 0;
 }
 
 /* Assistant */

@@ -81,6 +81,10 @@ test("Undo is only offered on the newest change, and not while busy", () => {
   expect(screen.queryByText("Undo")).toBeNull();
   expect(screen.getByText("Stop")).toBeTruthy();
   expect(screen.getByText("Working…")).toBeTruthy();
+  // Dots beside the text, not a ring: a 5 by 5 pulse, hidden from assistive technology.
+  const dots = screen.getByText("Working…").querySelector(".dot-loader.dot-md.dot-pulse");
+  expect(dots?.getAttribute("aria-hidden")).toBe("true");
+  expect(document.querySelector(".spinner")).toBeNull();
 });
 
 test("after an undo the card before it can be undone; a stale card says why", () => {

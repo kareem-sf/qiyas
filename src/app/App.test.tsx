@@ -34,6 +34,9 @@ const core = vi.hoisted(() => ({
   scriptOpens: false,
   /** While set, run_script waits for it: the script is running. */
   scriptHold: null as Promise<void> | null,
+  /** While set, open_drawing and compare wait for it: the window is opening or comparing. */
+  openHold: null as Promise<void> | null,
+  compareHold: null as Promise<void> | null,
   /** More of settings.json than the autosave minutes and the tool palette. */
   settings: {} as Record<string, unknown>,
   /** The block edited in place, as drawing_info says. */
@@ -67,7 +70,11 @@ vi.mock("@tauri-apps/api/core", () => ({
           .filter((p) => core.autosaved.has(p))
           .map((drawing) => ({ drawing, autosave: `${drawing}.sv$`, saved_at: 1 }));
       case "open_drawing":
+        if (core.openHold) await core.openHold;
         return info(args!.path as string);
+      case "compare":
+        if (core.compareHold) await core.compareHold;
+        return [];
       case "drawing_info":
         return info(PLAN);
       case "get_drafting":
@@ -222,6 +229,8 @@ beforeEach(() => {
   core.active = 1;
   core.scriptOpens = false;
   core.scriptHold = null;
+  core.openHold = null;
+  core.compareHold = null;
   core.settings = {};
   core.blockEdit = null;
 });
@@ -513,6 +522,8 @@ test("while a script runs the ribbon and the command line wait, and Stop asks th
   const header = document.querySelector("header.top")!;
   expect(header.hasAttribute("inert")).toBe(true);
   expect(screen.getByText(en["script.running"].replace("{line}", "1"))).toBeTruthy();
+  // The chase runs beside the text, hidden from assistive technology.
+  expect(document.querySelector(".script-running .dot-loader.dot-chase")?.getAttribute("aria-hidden")).toBe("true");
 
   // A command typed meanwhile is refused, not run between the script's lines.
   core.calls.length = 0;
@@ -776,4 +787,30 @@ test("Delete in a dialog or a menu erases nothing in the drawing behind", async 
     box.remove();
   }
   expect(core.calls.filter((c) => c.startsWith("run_command"))).toEqual([]);
+});
+
+test("opening a drawing and comparing show dots beside the status bar's text, and only while they wait", async () => {
+  await mount();
+  const bar = () => document.querySelector("footer.status .message") as HTMLElement;
+  expect(bar().querySelector(".dot-loader")).toBeNull();
+
+  let opened = () => {};
+  core.openHold = new Promise<void>((done) => (opened = done));
+  await clickOpen();
+  expect(bar().textContent).toBe(en.opening);
+  expect(bar().querySelector(".dot-loader.dot-scan")).toBeTruthy();
+  opened();
+  await settle();
+  expect(bar().textContent).toBe("plan.dwg");
+  expect(bar().querySelector(".dot-loader")).toBeNull();
+
+  let compared = () => {};
+  core.compareHold = new Promise<void>((done) => (compared = done));
+  await typeLine("COMPARE");
+  expect(bar().textContent).toBe(en["compare.running"]);
+  expect(bar().querySelector(".dot-loader.dot-chase")).toBeTruthy();
+  compared();
+  await settle();
+  expect(bar().textContent).toBe(en["conflicts.none"]);
+  expect(bar().querySelector(".dot-loader")).toBeNull();
 });

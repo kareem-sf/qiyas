@@ -11,6 +11,7 @@ import { ImageDisplayPanel } from "../shell/AttachImageDialog";
 import { BlockEditBar } from "../shell/BlockDialogs";
 import { CommentsPanel } from "../shell/CommentsPanel";
 import { ConstraintBar } from "../shell/ConstraintBar";
+import { DotLoader } from "../shell/DotLoader";
 import { FileTabs } from "../shell/FileTabs";
 import { AlongPrompt, InfoCard } from "../shell/InfoCard";
 import { LayersPanel } from "../shell/LayersPanel";
@@ -381,7 +382,7 @@ export function SidePanel({ info, drafting, shell, takeoffState, takeoff, ai, co
           onClick={() => setSideTab("assistant")}
         >
           {t("assistant")}
-          {assistant.busy && <span className="spinner" aria-hidden="true" />}
+          {assistant.busy && <DotLoader pattern="pulse" />}
         </button>
       </div>
       {infoCard && <InfoCard info={infoCard} onClose={() => setInfoCard(null)} />}

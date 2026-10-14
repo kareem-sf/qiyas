@@ -1,4 +1,5 @@
 import { useT } from "../i18n";
+import { DotLoader } from "../shell/DotLoader";
 import type { ToolCardItem } from "./messages";
 
 type Props = {
@@ -9,7 +10,7 @@ type Props = {
   onUndo?(): void;
 };
 
-/** One tool the assistant ran: its name, a spinner while it runs, then its one-line result. */
+/** One tool the assistant ran: its name, dots moving while it runs, then its one-line result. */
 export function ToolCard({ card, onShow, onUndo }: Props) {
   const t = useT();
   const key = `tool.${card.name}`;
@@ -19,7 +20,7 @@ export function ToolCard({ card, onShow, onUndo }: Props) {
       <div className="tool-head">
         <span className="tool-state" aria-hidden="true">
           {card.status === "running" ? (
-            <span className="spinner" />
+            <DotLoader pattern="spiral" />
           ) : (
             <svg viewBox="0 0 16 16">
               <path d={card.status === "done" ? "M3.5 8.5l3 3 6-7" : "M4 4l8 8M12 4l-8 8"} />

@@ -335,7 +335,7 @@ test("a plot that fails says why and stays open", async () => {
   await loaded();
   fireEvent.click(plotButton());
   // Plotting runs off the drawing: the dialog says so while it waits.
-  expect(await screen.findByText("Plotting…")).toBeTruthy();
+  expect((await screen.findByText("Plotting…")).querySelector(".dot-loader")).toBeTruthy();
   expect((await screen.findByRole("alert")).textContent).toBe("Nothing to plot: the area is empty");
   expect(screen.queryByText("Plotting…")).toBeNull();
   expect(props.onClose).not.toHaveBeenCalled();
