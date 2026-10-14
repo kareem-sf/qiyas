@@ -84,7 +84,7 @@ test("Undo is only offered on the newest change, and not while busy", () => {
   // The Qiyas mark, alive, beside the text (not dots, not a ring), hidden from assistive technology.
   const mark = screen.getByText("Working…").querySelector(".mizan-mark.mizan-mark-md");
   expect(mark?.getAttribute("aria-hidden")).toBe("true");
-  expect(mark?.querySelector(".mm-turn .mm-sphere")).toBeTruthy();
+  expect(mark?.querySelector(".mm-pen line")).toBeTruthy();
   expect(screen.getByText("Working…").querySelector(".dot-loader")).toBeNull();
   expect(document.querySelector(".spinner")).toBeNull();
 });

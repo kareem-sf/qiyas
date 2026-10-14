@@ -7,13 +7,23 @@ import { MizanMark } from "./MizanMark";
 
 afterEach(cleanup);
 
-test("the mark is the brand drawing: the sphere's mesh and its face, turning together", () => {
+test("the mark is the brand drawing: the sphere's mesh, drawn line by line, and its face", () => {
   const { container } = render(<MizanMark />);
   const svg = container.querySelector("svg.mizan-mark.mizan-mark-sm")!;
   expect(svg.getAttribute("aria-hidden")).toBe("true");
-  const mesh = svg.querySelector(".mm-sphere")!.getAttribute("d")!;
-  expect(brand).toContain(mesh);
-  expect(svg.querySelector(".mm-turn .mm-face")).toBeTruthy();
+  // The faint copy is the brand's mesh exactly; the pen draws every one of its segments, in order
+  // round the centre, each with its place in the sweep.
+  const mesh = svg.querySelector(".mm-ghost")!.getAttribute("d")!;
+  const brandMesh = brand.match(/class="sphere" d="([^"]+)"/)![1];
+  const segs = (d: string) => d.split("M").filter(Boolean).sort();
+  expect(segs(mesh)).toEqual(segs(brandMesh));
+  const lines = [...svg.querySelectorAll(".mm-pen line")];
+  expect(lines).toHaveLength(segs(brandMesh).length);
+  expect(lines.every((l) => l.getAttribute("pathLength") === "1")).toBe(true);
+  const places = lines.map((l) => Number((l as SVGElement).style.getPropertyValue("--i")));
+  expect(places[0]).toBe(0);
+  expect([...places].sort((a, b) => a - b)).toEqual(places);
+  expect(places[places.length - 1]).toBeLessThan(1);
   expect(brand).toContain(svg.querySelector(".mm-face")!.getAttribute("points")!);
 });
 
@@ -31,6 +41,10 @@ test("two marks on one page keep their own gradient", () => {
   }
 });
 
-test("with reduced motion the mark stands still", () => {
-  expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\) \{\s*\.mizan-mark \.mm-turn,\s*\.mizan-mark \.mm-face \{\s*animation: none;/);
+test("the pen draws and wipes; nothing blinks; with reduced motion the mark stands still", () => {
+  expect(css).toMatch(/@keyframes mm-draw \{\s*0% \{\s*stroke-dashoffset: 1;/);
+  expect(css).not.toMatch(/@keyframes mm-turn/);
+  // Reduced motion: drawn and still, the face shown.
+  expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\) \{\s*\.mizan-mark \.mm-pen line \{\s*animation: none;\s*stroke-dashoffset: 0;/);
+  expect(css).toMatch(/\.mizan-mark \.mm-face \{\s*animation: none;\s*opacity: 1;/);
 });
