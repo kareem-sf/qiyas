@@ -9,20 +9,31 @@ afterEach(cleanup);
 
 const props = { active: "select" as const, onTool() {}, onOpen() {}, onZoomExtents() {} };
 
+/** Shows a tab: a click on it, or, for the tabs under "More", the menu and its item. */
+function go(name: string) {
+  const tab = screen.queryByRole("tab", { name });
+  if (tab) {
+    fireEvent.click(tab);
+    return;
+  }
+  fireEvent.click(document.querySelector<HTMLElement>(".ribbon-more")!);
+  fireEvent.click(screen.getByRole("menuitemradio", { name }));
+}
+
 test("the View tab says whether the drawing's Arabic text is reversed", () => {
   const onArabicReversed = vi.fn();
   const { rerender } = render(
     <Ribbon {...props} arabicReversed={false} onArabicReversed={onArabicReversed} />,
   );
-  fireEvent.click(screen.getByRole("tab", { name: "View" }));
-  const box = screen.getByRole("checkbox", { name: "Arabic text is reversed" }) as HTMLInputElement;
-  expect(box.checked).toBe(false);
+  go("View");
+  const box = screen.getByRole("button", { name: "Arabic text is reversed" }) as HTMLButtonElement;
+  expect(box.getAttribute("aria-pressed")).toBe("false");
   fireEvent.click(box);
   expect(onArabicReversed).toHaveBeenCalledWith(true);
 
   rerender(<Ribbon {...props} arabicReversed />);
-  const off = screen.getByRole("checkbox", { name: "Arabic text is reversed" }) as HTMLInputElement;
-  expect(off.checked).toBe(true);
+  const off = screen.getByRole("button", { name: "Arabic text is reversed" }) as HTMLButtonElement;
+  expect(off.getAttribute("aria-pressed")).toBe("true");
   // No drawing open: nothing to set.
   expect(off.disabled).toBe(true);
 });
@@ -31,7 +42,7 @@ test("the Measure tab has the inquiry tools and Extract data", () => {
   const onTool = vi.fn();
   const onExtract = vi.fn();
   render(<Ribbon {...props} onTool={onTool} onExtract={onExtract} />);
-  fireEvent.click(screen.getByRole("tab", { name: "Measure" }));
+  go("Measure");
   for (const [name, tool] of [
     ["Geometry", "geometry"],
     ["Divide", "divide"],
@@ -61,7 +72,7 @@ test("Open has the recent drawings beside it, and View has the named views", asy
   );
   expect(screen.getByRole("button", { name: "Open…" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Recent drawings" })).toBeTruthy();
-  fireEvent.click(screen.getByRole("tab", { name: "View" }));
+  go("View");
   fireEvent.click(screen.getByRole("button", { name: /Views/ }));
   expect(await screen.findByRole("menu", { name: "Views" })).toBeTruthy();
   expect(loadViews).toHaveBeenCalled();
@@ -69,25 +80,34 @@ test("Open has the recent drawings beside it, and View has the named views", asy
 
 test("without a drawing on the Model sheet, Views is disabled", () => {
   render(<Ribbon {...props} />);
-  fireEvent.click(screen.getByRole("tab", { name: "View" }));
+  go("View");
   expect((screen.getByRole("button", { name: "Views" }) as HTMLButtonElement).disabled).toBe(true);
 });
 
 test("the ribbon tabs have a roving tab stop and Space presses a tab", () => {
   render(<Ribbon {...props} />);
   const tab = (name: string) => screen.getByRole("tab", { name });
-  expect(["Home", "Measure", "View"].map((n) => tab(n).tabIndex)).toEqual([0, -1, -1]);
-  tab("Home").focus();
-  fireEvent.keyDown(tab("Home"), { key: "ArrowRight" });
+  const names = ["Measure", "Draw", "Annotate", "More"];
+  expect(screen.getAllByRole("tablist")).toHaveLength(1);
+  expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(names);
+  expect(names.map((n) => tab(n).tabIndex)).toEqual([0, -1, -1, -1]);
+  tab("Measure").focus();
+  fireEvent.keyDown(tab("Measure"), { key: "ArrowRight" });
+  expect(document.activeElement).toBe(tab("Draw"));
+  fireEvent.keyDown(tab("Draw"), { key: " " });
+  expect(tab("Draw").getAttribute("aria-selected")).toBe("true");
+  expect(names.map((n) => tab(n).tabIndex)).toEqual([-1, 0, -1, -1]);
+  // "More" is the last stop, and the arrows go round.
+  fireEvent.keyDown(tab("Draw"), { key: "End" });
+  expect(document.activeElement).toBe(tab("More"));
+  fireEvent.keyDown(tab("More"), { key: "ArrowRight" });
   expect(document.activeElement).toBe(tab("Measure"));
-  fireEvent.keyDown(tab("Measure"), { key: " " });
-  expect(tab("Measure").getAttribute("aria-selected")).toBe("true");
-  expect(["Home", "Measure", "View"].map((n) => tab(n).tabIndex)).toEqual([-1, 0, -1]);
 });
 
 test("the Home tab has the Draw group", () => {
   const onTool = vi.fn();
   const { rerender } = render(<Ribbon {...props} onTool={onTool} />);
+  go("Draw");
   for (const [name, tool] of [
     ["Line", "line"],
     ["Polyline", "polyline"],
@@ -115,6 +135,7 @@ test("the Home tab has the Draw group", () => {
 test("the Home tab has the Modify group", () => {
   const onTool = vi.fn();
   render(<Ribbon {...props} onTool={onTool} />);
+  go("Draw");
   const group = screen.getByRole("group", { name: "Modify" });
   expect(group).toBeTruthy();
   for (const [name, tool] of [
@@ -138,6 +159,7 @@ test("the Home tab has the Annotation group with Find and replace", () => {
   const onTool = vi.fn();
   const onFind = vi.fn();
   render(<Ribbon {...props} onTool={onTool} onFind={onFind} />);
+  go("Draw");
   const group = screen.getByRole("group", { name: "Annotation" });
   for (const [name, tool] of [
     ["Text", "text"],
@@ -155,7 +177,7 @@ test("the Annotate tab has the Dimensions group, the dimension style and the Lea
   const onTool = vi.fn();
   const onDimStyle = vi.fn();
   render(<Ribbon {...props} onTool={onTool} onDimStyle={onDimStyle} />);
-  fireEvent.click(screen.getByRole("tab", { name: "Annotate" }));
+  go("Annotate");
   const dims = screen.getByRole("group", { name: "Dimensions" });
   for (const [name, tool] of [
     ["Linear", "dimLinear"],
@@ -193,7 +215,7 @@ test("the Annotate tab has the Tables group: table, edit, field and update field
   const onTool = vi.fn();
   const onUpdateFields = vi.fn();
   render(<Ribbon {...props} onTool={onTool} onUpdateFields={onUpdateFields} />);
-  fireEvent.click(screen.getByRole("tab", { name: "Annotate" }));
+  go("Annotate");
   const group = screen.getByRole("group", { name: "Tables" });
   for (const [name, tool] of [
     ["Table", "table"],
@@ -217,7 +239,7 @@ test("the Insert tab has the Block group", () => {
     onToolPalettes: vi.fn(),
   };
   render(<Ribbon {...props} onTool={onTool} {...handlers} />);
-  fireEvent.click(screen.getByRole("tab", { name: "Insert" }));
+  go("Insert");
   const group = screen.getByRole("group", { name: "Block" });
   for (const [name, tool] of [
     ["Create block", "block"],
@@ -255,6 +277,7 @@ test("Home has a Layers group: layer states, the translator, groups, match prope
       onGroupSelect={onGroupSelect}
     />,
   );
+  go("Draw");
   const layers = within(screen.getByRole("group", { name: "Layers" }));
   fireEvent.click(layers.getByRole("button", { name: "Layer states" }));
   expect(onLayerStates).toHaveBeenCalled();
@@ -270,8 +293,8 @@ test("Home has a Layers group: layer states, the translator, groups, match prope
   }
   // They are not the Modify group's.
   expect(within(screen.getByRole("group", { name: "Modify" })).queryByRole("button", { name: "Ungroup" })).toBeNull();
-  const box = layers.getByRole("checkbox", { name: "Group selection" }) as HTMLInputElement;
-  expect(box.checked).toBe(true);
+  const box = layers.getByRole("button", { name: "Group selection" });
+  expect(box.getAttribute("aria-pressed")).toBe("true");
   fireEvent.click(box);
   expect(onGroupSelect).toHaveBeenCalledWith(false);
 });
@@ -280,6 +303,7 @@ test("the Home tab has the Clipboard group, and Recover is on Manage beside Audi
   const onTool = vi.fn();
   const onRecover = vi.fn();
   render(<Ribbon {...props} onTool={onTool} onRecover={onRecover} />);
+  go("Draw");
   const group = screen.getByRole("group", { name: "Clipboard" });
   for (const [name, tool] of [
     ["Copy to clipboard", "copyclip"],
@@ -291,9 +315,13 @@ test("the Home tab has the Clipboard group, and Recover is on Manage beside Audi
     expect(onTool).toHaveBeenLastCalledWith(tool);
   }
   expect(screen.queryByRole("button", { name: "Recover…" })).toBeNull();
-  fireEvent.click(screen.getByRole("tab", { name: "Manage" }));
+  go("Manage");
   const drawing = screen.getByRole("group", { name: "Drawing" });
-  expect(within(drawing).getAllByRole("button").map((b) => b.textContent)).toEqual(["Audit…", "Purge…", "Recover…"]);
+  expect(within(drawing).getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual([
+    "Audit…",
+    "Purge…",
+    "Recover…",
+  ]);
   fireEvent.click(within(drawing).getByRole("button", { name: "Recover…" }));
   expect(onRecover).toHaveBeenCalled();
 });
@@ -306,7 +334,7 @@ test("the View tab has the Viewports group: MVIEW, two views, the UCS and sheet 
   const { rerender } = render(
     <Ribbon {...props} onTool={onTool} onSplit={onSplit} onUcsWorld={onUcsWorld} onSheetSet={onSheetSet} />,
   );
-  fireEvent.click(screen.getByRole("tab", { name: "View" }));
+  go("View");
   const group = screen.getByRole("group", { name: "Viewports" });
   fireEvent.click(within(group).getByRole("button", { name: "New viewport" }));
   expect(onTool).toHaveBeenLastCalledWith("mview");
@@ -334,7 +362,7 @@ test("the Manage tab has Audit, Purge, Options, Customize and Aliases", () => {
     onAliases: vi.fn(),
   };
   render(<Ribbon {...props} {...handlers} />);
-  fireEvent.click(screen.getByRole("tab", { name: "Manage" }));
+  go("Manage");
   for (const [name, handler] of [
     ["Audit…", handlers.onAudit],
     ["Purge…", handlers.onPurge],
@@ -385,9 +413,9 @@ test("a saved layout is drawn as it is: its tabs, groups and buttons in their or
   expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["View", "Home"]);
   // The first tab is on screen.
   expect(screen.getByRole("button", { name: "Zoom window" })).toBeTruthy();
-  fireEvent.click(screen.getByRole("tab", { name: "Home" }));
+  go("Home");
   expect(screen.getAllByRole("group").map((g) => g.getAttribute("aria-label"))).toEqual(["Draw", "Take-off"]);
-  expect(within(screen.getByRole("group", { name: "Draw" })).getAllByRole("button").map((b) => b.textContent)).toEqual([
+  expect(within(screen.getByRole("group", { name: "Draw" })).getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual([
     "Circle",
     "Line",
   ]);
@@ -443,42 +471,70 @@ test("the quick-access bar sits after the app name, before the tabs: Open (with 
   expect((within(plain).getByRole("button", { name: "Open…" }) as HTMLButtonElement).disabled).toBe(false);
 });
 
-test("Home is Draw, Modify, Annotation, Clipboard and Layers; each group is a box of buttons with its name under them", () => {
+test("Draw is Draw, Modify, Edit, Annotation, Clipboard and Layers; each group is a box of icon buttons with its name under them", () => {
   const { container } = render(<Ribbon {...props} />);
+  go("Draw");
   const groups = screen.getAllByRole("group");
-  expect(groups.map((g) => g.getAttribute("aria-label"))).toEqual(["Draw", "Modify", "Annotation", "Clipboard", "Layers"]);
+  expect(groups.map((g) => g.getAttribute("aria-label"))).toEqual([
+    "Draw",
+    "Modify",
+    "Edit",
+    "Annotation",
+    "Clipboard",
+    "Layers",
+  ]);
   for (const g of groups) {
     const [buttons, label] = Array.from(g.children);
     expect(buttons.className).toBe("ribbon-group-buttons");
     expect(label.className).toBe("ribbon-group-label");
     expect(label.textContent).toBe(g.getAttribute("aria-label"));
+    // Icon buttons: a name for the screen reader, no words on the button.
+    for (const b of within(g).getAllByRole("button")) {
+      expect(b.textContent).toBe("");
+      expect(b.getAttribute("aria-label")).toBeTruthy();
+      expect(b.querySelector("svg")).toBeTruthy();
+    }
   }
-  // Modify is one group of its 23 tools, no row break inside it.
-  const modify = screen.getByRole("group", { name: "Modify" });
-  expect(within(modify).getAllByRole("button")).toHaveLength(23);
+  // Modify is the transform tools, Edit the 13 edit tools; no row break inside a group.
+  expect(within(screen.getByRole("group", { name: "Modify" })).getAllByRole("button")).toHaveLength(10);
+  expect(within(screen.getByRole("group", { name: "Edit" })).getAllByRole("button")).toHaveLength(13);
   expect(container.querySelector(".ribbon-break, .sep")).toBeNull();
   const layers = screen.getByRole("group", { name: "Layers" });
-  expect(within(layers).getAllByRole("button").map((b) => b.textContent)).toEqual([
+  expect(within(layers).getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual([
     "Layer states",
     "Translate layers",
     "Group",
     "Ungroup",
     "Match properties",
+    "Group selection",
   ]);
-  expect(within(layers).getByRole("checkbox", { name: "Group selection" })).toBeTruthy();
 });
 
-test("the Measure tab has a Take-off group: export, import BOQ, compare, export conflicts", () => {
+test("the Measure tab is first: Measure, Inquiry, Take-off, Dimensions and Markup", () => {
   const handlers = { onExport: vi.fn(), onImportBoq: vi.fn(), onCompare: vi.fn(), onExportConflicts: vi.fn() };
   render(<Ribbon {...props} {...handlers} />);
-  expect(screen.queryByRole("button", { name: "Compare" })).toBeNull();
-  fireEvent.click(screen.getByRole("tab", { name: "Measure" }));
-  expect(screen.getAllByRole("group").map((g) => g.getAttribute("aria-label"))).toEqual(["Measure", "Inquiry", "Take-off"]);
+  expect(screen.getAllByRole("group").map((g) => g.getAttribute("aria-label"))).toEqual([
+    "Measure",
+    "Inquiry",
+    "Take-off",
+    "Dimensions",
+    "Markup",
+  ]);
   const group = screen.getByRole("group", { name: "Take-off" });
   const buttons = within(group).getAllByRole("button");
   expect(buttons).toHaveLength(4);
   buttons.forEach((b) => fireEvent.click(b));
   for (const h of Object.values(handlers)) expect(h).toHaveBeenCalledTimes(1);
+  // The headline groups are one row of primary buttons.
+  expect(group.firstElementChild!.className).toContain("primary");
+  expect(screen.getByRole("group", { name: "Measure" }).firstElementChild!.className).toContain("primary");
+  expect(screen.getByRole("group", { name: "Inquiry" }).firstElementChild!.className).not.toContain("primary");
+  const markup = within(screen.getByRole("group", { name: "Markup" }));
+  expect(markup.getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual([
+    "Revision cloud",
+    "Leader",
+    "MText",
+  ]);
 });
 
 test("in Arabic the ribbon reads right to left: the same order from the start edge, Arabic names, logical sides", () => {
@@ -495,20 +551,10 @@ test("in Arabic the ribbon reads right to left: the same order from the start ed
     const bar = screen.getByRole("toolbar", { name: "الوصول السريع" });
     expect(bar.previousElementSibling!.textContent).toBe("قياس");
     expect(bar.nextElementSibling!.getAttribute("role")).toBe("tablist");
-    expect(screen.getAllByRole("group").map((g) => g.getAttribute("aria-label"))).toEqual([
-      "رسم",
-      "تعديل",
-      "توضيح",
-      "الحافظة",
-      "الطبقات",
-    ]);
-    expect(screen.getAllByRole("group").map((g) => g.lastElementChild!.textContent)).toEqual([
-      "رسم",
-      "تعديل",
-      "توضيح",
-      "الحافظة",
-      "الطبقات",
-    ]);
+    const names = ["أدوات القياس", "استعلام", "الحصر", "الأبعاد", "ملاحظات"];
+    expect(screen.getAllByRole("group").map((g) => g.getAttribute("aria-label"))).toEqual(names);
+    expect(screen.getAllByRole("group").map((g) => g.lastElementChild!.textContent)).toEqual(names);
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["القياسات", "رسم", "التعليقات", "المزيد"]);
   } finally {
     cleanup();
     localStorage.clear();
@@ -523,10 +569,11 @@ test("in Arabic the ribbon reads right to left: the same order from the start ed
   const panel = rule(".ribbon-panel");
   expect(panel).toContain("flex-wrap: nowrap");
   expect(panel).toContain("overflow-x: auto");
-  expect(panel).toMatch(/\bheight: \d+px/);
+  // Sized from the tokens, shorter than the 104px of the text ribbon.
+  expect(panel).toContain("min-height: calc(var(--rb-std) * 2");
   const grid = rule(".ribbon-group-buttons");
   expect(grid).toContain("grid-auto-flow: column");
-  expect(grid).toContain("grid-template-rows: repeat(3, auto)");
+  expect(grid).toContain("grid-template-rows: repeat(2, var(--rb-std))");
   for (const r of [rule(".quick-access"), rule(".ribbon-group"), panel]) expect(r).not.toMatch(/\b(left|right)\b/);
 });
 
@@ -534,8 +581,8 @@ test("in Arabic the ribbon reads right to left: the same order from the start ed
 const rule = (selector: string) => css.match(new RegExp(`\\n${selector.replace(/[.+]/g, "\\$&")} \\{([^}]*)\\}`))![1];
 
 test("the tabs' row scrolls sideways and stops short of the preferences instead of lying under them", () => {
-  // The quick-access buttons never wrap and never shrink.
-  expect(rule(".quick-access button")).toContain("white-space: nowrap");
+  // The tabs never wrap and never shrink.
+  expect(rule(".ribbon-tabs \\[role=\"tab\"\\]")).toContain("white-space: nowrap");
   expect(rule(".ribbon-tabs > \\*")).toContain("flex-shrink: 0");
   // The row scrolls (thin bar) and its end margin is the overlay's width, from one variable the
   // overlay reads too, so they stay in step. A margin, not padding: padding is only reached at
@@ -545,19 +592,18 @@ test("the tabs' row scrolls sideways and stops short of the preferences instead 
   expect(row).toContain("scrollbar-width: thin");
   expect(row).toContain("margin-inline-end: var(--prefs-width)");
   expect(row).not.toContain("padding-inline-end");
-  // The reserve is at least the overlay's real width: about 335px without its words, 460px with.
-  expect(Number(css.match(/:root \{\s*--prefs-width: (\d+)px/)![1])).toBeGreaterThanOrEqual(460);
+  // The reserve is at least the overlay's real width: the preferences are icons (and the two
+  // language names), about 220px; at 1024px the row (about 560px) and the overlay fit side by side.
+  const reserve = Number(css.match(/:root \{\s*--prefs-width: (\d+)px/)![1]);
+  expect(reserve).toBeGreaterThanOrEqual(230);
+  expect(reserve + 560).toBeLessThanOrEqual(1024);
   expect(rule(".prefs")).toContain("min-width: var(--prefs-width)");
   expect(css).toMatch(/\.ribbon-tabs::-webkit-scrollbar \{\s*height: 6px/);
-  // Words dropped under 1500px (and the variable shrinks with them), the prefs on their own row
-  // under 1020px.
-  const narrow = css.match(/@media \(max-width: 1500px\) \{([\s\S]*?)\n\}/)![1];
-  expect(Number(narrow.match(/--prefs-width: (\d+)px/)![1])).toBeGreaterThanOrEqual(335);
-  expect(narrow).toContain("display: none");
-  const stacked = css.match(/@media \(max-width: 1020px\) \{([\s\S]*?)\n\}/)![1];
+  // The prefs take a row of their own under 900px.
+  const stacked = css.match(/@media \(max-width: 900px\) \{([\s\S]*?)\n\}/)![1];
   expect(stacked).toContain("position: static");
   expect(stacked).toMatch(/\.ribbon-tabs \{\s*margin-inline-end: 0/);
-  expect(css).not.toMatch(/max-width: (1100|700|1420)px/);
+  expect(css).not.toMatch(/max-width: (1500|1020|700|1420)px/);
   // Logical sides only, so Arabic mirrors the row and the overlay.
   for (const r of [row, rule(".prefs"), stacked]) expect(r).not.toMatch(/\b(left|right)\b/);
 });
@@ -596,7 +642,7 @@ test("the quick-access bar is a toolbar: one tab stop, arrows, Home and End move
   // The tab stop stays on the last button focused when focus leaves the bar.
   button("Undo").focus();
   fireEvent.keyDown(button("Undo"), { key: "ArrowLeft" });
-  screen.getByRole("tab", { name: "Home" }).focus();
+  screen.getByRole("tab", { name: "Measure" }).focus();
   expect(stops()).toEqual([-1, -1, -1, 0, -1, -1]);
 });
 

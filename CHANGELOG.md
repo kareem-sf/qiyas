@@ -26,12 +26,19 @@ First public release.
 - Mizan, the built-in AI assistant (Claude or any OpenAI-compatible service), and an MCP server
   for Claude Desktop and Claude Code.
 - English and Arabic.
+- The layers and the take-off panels fold away behind a thin rail on their inner edge, to give the
+  drawing the whole width; the choice is remembered.
+- The ribbon is an icon ribbon, measure first: Measure, Draw and Annotate on the tab row, the rest
+  under More. Every button is an icon with a tooltip (its name, what it does, its command line
+  alias); a group shows its main buttons and puts the others behind a "⋯" button as the window
+  narrows, so the panel does not scroll. The header's buttons share one size scale.
 - Installers for Linux (AppImage, deb, rpm), Windows (setup.exe, MSI) and macOS (Apple silicon
   and Intel), each with a signature for the updater.
 
 Rebuilt on 2026-10-13 under the same version: the Windows and macOS installers were added, the
-language and theme buttons no longer cover the ribbon's last tabs in a narrow window, and the
-installers' metadata says Apache-2.0 (it said "UNLICENSED").
+language and theme buttons no longer cover the ribbon's last tabs in a narrow window, the
+installers' metadata says Apache-2.0 (it said "UNLICENSED"), and the header shows the Qiyas mark
+with the name Qiyas only.
 
 [Unreleased]: https://github.com/qs-mind/qiyas/compare/v0.0.1...HEAD
 [0.0.1]: https://github.com/qs-mind/qiyas/releases/tag/v0.0.1

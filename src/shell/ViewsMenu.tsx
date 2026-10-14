@@ -1,6 +1,8 @@
 import { useState, type CSSProperties, type FormEvent, type KeyboardEvent } from "react";
 import type { NamedView } from "../api";
 import { useT } from "../i18n";
+import { RibbonIcon } from "./ribbonIcons";
+import { Tip, type TipInfo } from "./Tooltip";
 import { useMenu } from "./useMenu";
 
 type Props = {
@@ -11,11 +13,13 @@ type Props = {
   onSave(name: string): Promise<void>;
   onDelete(name: string): Promise<void>;
   onKey?(e: KeyboardEvent): void;
+  /** The button's tooltip. */
+  tip?: TipInfo;
 };
 
 /** The View tab's Views drop-down: the drawing's named views (choose one to show it, × to delete
  *  it), and Save current view… with a name. */
-export function ViewsMenu({ load, onGo, onSave, onDelete, onKey }: Props) {
+export function ViewsMenu({ load, onGo, onSave, onDelete, onKey, tip }: Props) {
   const t = useT();
   const menu = useMenu<HTMLDivElement>();
   const [list, setList] = useState<NamedView[]>([]);
@@ -65,16 +69,23 @@ export function ViewsMenu({ load, onGo, onSave, onDelete, onKey }: Props) {
 
   return (
     <div className="split" ref={menu.ref}>
-      <button
-        type="button"
-        aria-haspopup="menu"
-        aria-expanded={menu.open}
-        onClick={toggle}
-        onKeyDown={onKey}
-        onKeyUp={onKey}
-      >
-        {t("views")} ▾
-      </button>
+      <Tip info={tip ?? { name: t("views") }}>
+        {(describedBy) => (
+          <button
+            type="button"
+            className="rb"
+            aria-label={t("views")}
+            aria-haspopup="menu"
+            aria-expanded={menu.open}
+            aria-describedby={describedBy}
+            onClick={toggle}
+            onKeyDown={onKey}
+            onKeyUp={onKey}
+          >
+            <RibbonIcon name="views" />
+          </button>
+        )}
+      </Tip>
       {menu.open && (
         <div className="menu" role="menu" aria-label={t("views")} style={at}>
           {list.length === 0 && <div className="menu-note">{t("views.none")}</div>}

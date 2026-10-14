@@ -23,6 +23,16 @@ test("tool letters, Escape and Enter", () => {
   expect(shortcutFor(keys("KeyQ"))).toBeNull();
 });
 
+test("Delete erases; Shift, Ctrl or Alt with it does not", () => {
+  expect(shortcutFor(keys("Delete"))).toBe("erase");
+  expect(shortcutFor(keys("Delete", { shiftKey: true }))).toBeNull();
+  expect(shortcutFor(keys("Delete", { ctrlKey: true }))).toBeNull();
+  expect(shortcutFor(keys("Delete", { altKey: true }))).toBeNull();
+  // A user who gives ERASE another key frees Delete.
+  expect(shortcutFor(keys("Delete"), { erase: "E" })).toBeNull();
+  expect(shortcutFor(keys("KeyE"), { erase: "E" })).toBe("erase");
+});
+
 test("undo, redo and save with Ctrl", () => {
   expect(shortcutFor(keys("KeyZ", { ctrlKey: true }))).toBe("undo");
   expect(shortcutFor(keys("KeyZ", { ctrlKey: true, shiftKey: true }))).toBe("redo");

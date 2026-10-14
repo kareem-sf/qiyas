@@ -135,6 +135,7 @@ export function CommandLine({ state, prompt, onAction, inputRef }: Props) {
           aria-activedescendant={open && active >= 0 ? `${id}-opt-${active}` : undefined}
           autoComplete="off"
           spellCheck={false}
+          placeholder={t("cmd.placeholder")}
           dir="auto"
           value={text}
           onChange={(e) => {

@@ -69,7 +69,7 @@ async function setup(ribbon: RibbonLayout | null) {
   const onSaved = vi.fn();
   const onClose = vi.fn();
   render(<CustomizeUi onSaved={onSaved} onClose={onClose} />);
-  await screen.findByRole("checkbox", { name: "Show Home" });
+  await screen.findByRole("tree");
   return { onSaved, onClose };
 }
 
@@ -113,7 +113,8 @@ test("Reset to default saves no layout of the user's; hiding every tab is refuse
   expect((await screen.findByRole("alert")).textContent).toBe("Keep at least one tab with a button on it");
   expect(api.setSettings).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "Reset to default" }));
-  expect((screen.getByRole("checkbox", { name: "Show Home" }) as HTMLInputElement).checked).toBe(true);
+  // The window's default: Measure, Draw (the tab with id "home"), Annotate...
+  expect((screen.getAllByRole("checkbox", { name: "Show Draw" })[0] as HTMLInputElement).checked).toBe(true);
   save();
   await vi.waitFor(() => expect(api.setSettings).toHaveBeenCalled());
   expect(saved()).toBeNull();
@@ -126,13 +127,13 @@ test("the window's own buttons the core can't keep in a layout are named", async
   expect(screen.getByText(/Options….*Customize….*Aliases…/)).toBeTruthy();
 });
 
-test("with the shipped default it shows the new groups: Home's Annotation, Measure's Take-off, no File", async () => {
+test("with the shipped default it shows the new groups: Draw's Edit and Annotation, Measure's Take-off, Dimensions and Markup, no File", async () => {
   api.getSettings.mockResolvedValue({ ...settings, ribbon: null });
   api.getDefaultRibbon.mockResolvedValue(fixture);
   render(<CustomizeUi onSaved={() => {}} onClose={() => {}} />);
-  await screen.findByRole("checkbox", { name: "Show Home" });
-  for (const name of ["Draw", "Modify", "Annotation", "Clipboard", "Layers", "Take-off"]) {
-    expect(screen.getByRole("checkbox", { name: `Show ${name}` })).toBeTruthy();
+  await screen.findByRole("tree");
+  for (const name of ["Draw", "Modify", "Edit", "Annotation", "Clipboard", "Layers", "Take-off", "Markup"]) {
+    expect(screen.getAllByRole("checkbox", { name: `Show ${name}` }).length).toBeGreaterThan(0);
   }
   expect(screen.queryByRole("checkbox", { name: "Show File" })).toBeNull();
   expect(screen.queryByRole("checkbox", { name: "Show History" })).toBeNull();

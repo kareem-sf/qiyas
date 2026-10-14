@@ -143,13 +143,42 @@ button[aria-pressed="true"] {
   border-top: 1px solid var(--rule);
 }
 
+/* Ribbon sizes: a small set of tokens derived from the base type size (`--font-base`), used by
+   everything in the header (the quick-access icons, the tabs, the preferences, the ribbon's
+   buttons), so they all scale together. Two button sizes only: the standard one (about 30px,
+   18px icon) and the primary one (about 42px, 24px icon) for the headline tools. `--rb-scale`
+   follows the window: a little smaller in a narrow one, a little larger in a wide one. */
+:root {
+  --font-base: 13px;
+  --rb-scale: 1;
+  --rb-std: calc(var(--font-base) * 2.3 * var(--rb-scale));
+  --rb-std-icon: calc(var(--font-base) * 1.4 * var(--rb-scale));
+  --rb-pri: calc(var(--font-base) * 3.2 * var(--rb-scale));
+  --rb-pri-icon: calc(var(--font-base) * 1.85 * var(--rb-scale));
+  --rb-gap: 2px;
+  --rb-group-pad: 8px;
+  --rb-radius: 6px;
+}
+@media (max-width: 1100px) {
+  :root {
+    --rb-scale: 0.94;
+  }
+}
+@media (min-width: 1700px) {
+  :root {
+    --rb-scale: 1.08;
+  }
+}
+body {
+  font-size: var(--font-base);
+}
+
 /* Ribbon: the tabs' row (app name, quick-access bar, tabs), then the panel of the tab chosen.
    The preferences float over the header's end, so the row stops that far short of it (a margin
-   of `--prefs-width`, the overlay's width with its words, narrower without) and scrolls
-   sideways inside what is left: a tab can never lie under them. Its drop-down menus are placed
-   `fixed`, so the scrolling does not clip them. */
+   of `--prefs-width`, the overlay's width) and scrolls sideways inside what is left: a tab can
+   never lie under them. Its menus are placed `fixed`, so the scrolling does not clip them. */
 :root {
-  --prefs-width: 470px;
+  --prefs-width: 250px;
 }
 .ribbon-tabs {
   display: flex;
@@ -170,11 +199,25 @@ button[aria-pressed="true"] {
 .ribbon-tabs > * {
   flex-shrink: 0;
 }
+/* The Qiyas mark (the sphere with the Qiyas face; white lines on the dark theme) before the
+   name. Only "Qiyas" here: the QS Mind lockup is the About box's. */
 .app-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-weight: 700;
   font-size: 15px;
   color: var(--accent);
   margin-inline-end: 10px;
+}
+.app-name::before {
+  content: "";
+  width: var(--rb-std-icon);
+  height: var(--rb-std-icon);
+  background: url("/brand/qiyas-mark.svg") no-repeat center / contain;
+}
+:root[data-theme="dark"] .app-name::before {
+  background-image: url("/brand/qiyas-mark-white.svg");
 }
 /* Open, Save, Save as, Undo, Redo: always there, after the app name (logical sides, so Arabic
    mirrors it). */
@@ -186,30 +229,93 @@ button[aria-pressed="true"] {
   margin-inline-end: 8px;
   border-inline-end: 1px solid var(--rule);
 }
-.quick-access button {
-  padding: 2px 8px;
-  white-space: nowrap;
-}
 .ribbon-tablist {
   display: flex;
   gap: 2px;
 }
 .ribbon-tabs [role="tab"] {
-  border-radius: 6px 6px 0 0;
+  height: var(--rb-std);
+  padding: 0 12px;
+  border-radius: var(--rb-radius) var(--rb-radius) 0 0;
   color: var(--muted);
+  white-space: nowrap;
 }
 .ribbon-tabs [role="tab"][aria-selected="true"] {
   background: var(--bg);
   color: var(--fg);
   font-weight: 500;
 }
-/* One row of group boxes that never wraps: a narrow window scrolls it sideways. Its height is
-   fixed (three rows of buttons and the group names), whichever tab is chosen. */
+.ribbon-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.ribbon-more .ic {
+  width: calc(var(--rb-std-icon) * 0.7);
+  height: calc(var(--rb-std-icon) * 0.7);
+}
+/* An icon button: standard size, or primary for the headline tools. Its name is its aria-label;
+   the tooltip says the rest. */
+.rb {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--rb-std);
+  height: var(--rb-std);
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--rb-radius);
+  color: var(--fg);
+}
+.rb .ic {
+  display: block;
+  width: var(--rb-std-icon);
+  height: var(--rb-std-icon);
+}
+.rb.primary {
+  width: var(--rb-pri);
+  height: var(--rb-pri);
+}
+.rb.primary .ic {
+  width: var(--rb-pri-icon);
+  height: var(--rb-pri-icon);
+}
+.rb[aria-pressed="true"],
+.rb[aria-expanded="true"] {
+  background: var(--accent-soft);
+  border-color: transparent;
+  color: var(--accent);
+}
+.rb:disabled {
+  pointer-events: none;
+}
+:root[dir="rtl"] .ic-mirrored {
+  transform: scaleX(-1);
+}
+/* The box round a button that hears the pointer for it (a disabled button hears none). */
+.rb-tip {
+  display: inline-flex;
+}
+.quick-access .split {
+  display: inline-flex;
+  align-items: center;
+}
+.quick-access .rb.split-arrow {
+  width: calc(var(--rb-std) * 0.55);
+  margin-inline-start: -4px;
+}
+.quick-access .rb.split-arrow .ic {
+  width: calc(var(--rb-std-icon) * 0.7);
+  height: calc(var(--rb-std-icon) * 0.7);
+}
+/* The panel: one row of group boxes that never wraps. A group puts buttons behind its "⋯" as the
+   window narrows (`Ribbon.tsx`); only when that is not enough does it scroll sideways. Its height
+   is two rows of standard buttons and the group names, whichever tab is chosen. */
 .ribbon-panel {
   display: flex;
   flex-wrap: nowrap;
   align-items: stretch;
-  height: 104px;
+  min-height: calc(var(--rb-std) * 2 + var(--rb-gap) + 14px + 10px);
   box-sizing: border-box;
   padding: 4px 4px 2px;
   overflow-x: auto;
@@ -224,13 +330,14 @@ button[aria-pressed="true"] {
   background: var(--rule);
   border-radius: 3px;
 }
-/* A group (Draw, Modify…): its buttons in up to three rows, filled column by column, its name
-   small and muted under them, a thin rule before the next group. */
+/* A group (Draw, Modify...): its buttons in two rows filled column by column (the headline
+   groups: one row of primary buttons), its name small and muted under them, a thin rule before
+   the next group. */
 .ribbon-group {
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
-  padding: 0 8px;
+  padding: 0 var(--rb-group-pad);
 }
 .ribbon-group + .ribbon-group {
   border-inline-start: 1px solid var(--rule);
@@ -239,16 +346,13 @@ button[aria-pressed="true"] {
   flex: 1;
   display: grid;
   grid-auto-flow: column;
-  grid-template-rows: repeat(3, auto);
-  align-content: start;
-  justify-items: stretch;
-  gap: 2px 2px;
+  grid-template-rows: repeat(2, var(--rb-std));
+  align-content: center;
+  justify-content: start;
+  gap: var(--rb-gap);
 }
-.ribbon-group-buttons button {
-  padding: 2px 8px;
-  line-height: 18px;
-  text-align: start;
-  white-space: nowrap;
+.ribbon-group-buttons.primary {
+  grid-template-rows: var(--rb-pri);
 }
 .ribbon-group-label {
   font-size: 11px;
@@ -257,17 +361,67 @@ button[aria-pressed="true"] {
   text-align: center;
   white-space: nowrap;
 }
-.ribbon-check {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 8px;
-  white-space: nowrap;
-  cursor: pointer;
+/* The list behind a "⋯" or "More": icon and name, in columns of rows. */
+.rb-flyout {
+  z-index: 30;
+  display: grid;
+  grid-auto-flow: column;
+  gap: 0 var(--rb-gap);
+  padding: 6px;
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgb(14 15 18 / 0.14);
 }
-.ribbon-check input {
-  accent-color: var(--accent);
-  margin: 0;
+.rb-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border-radius: 5px;
+  text-align: start;
+  white-space: nowrap;
+}
+.rb-item .ic {
+  flex: none;
+  width: var(--rb-std-icon);
+  height: var(--rb-std-icon);
+}
+.rb-item.on {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+/* The tooltip: a small dark card (ink on the light theme, paper on the dark). */
+.rb-tooltip {
+  position: fixed;
+  z-index: 40;
+  width: max-content;
+  max-width: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 11px;
+  border-radius: 6px;
+  background: var(--fg);
+  color: var(--bg);
+  font-size: 12px;
+  line-height: 1.35;
+  box-shadow: 0 6px 18px rgb(14 15 18 / 0.2);
+  pointer-events: none;
+}
+.rb-tooltip b {
+  font-size: 12.5px;
+  font-weight: 700;
+}
+.rb-tooltip kbd {
+  margin-top: 2px;
+  font: inherit;
+  font-size: 11px;
+  opacity: 0.7;
+  letter-spacing: 0.04em;
+}
+.rb-tooltip-note {
+  opacity: 0.7;
 }
 .prefs {
   position: absolute;
@@ -276,39 +430,29 @@ button[aria-pressed="true"] {
   min-width: var(--prefs-width);
   box-sizing: border-box;
   justify-content: flex-end;
+  align-items: center;
   display: flex;
-  gap: 12px;
-  padding: 6px 10px;
+  gap: 8px;
+  padding: 6px 10px 0;
 }
 .prefs [role="group"] {
   display: flex;
   align-items: center;
   gap: 2px;
-  color: var(--muted);
-}
-.prefs [role="group"] span {
-  margin-inline-end: 4px;
 }
 .prefs button {
+  height: var(--rb-std);
+  min-width: var(--rb-std);
+  padding: 0 8px;
   color: var(--fg);
-  padding: 2px 8px;
 }
-/* Narrow windows: the prefs sit beside the ribbon tabs' row (app name, quick-access bar and
-   eight tabs: about 1,020px), so drop their words (the groups keep their aria-labels) under
-   1500px, where the row and the worded prefs no longer fit side by side, and give them a row of
-   their own under 1020px. `--prefs-width` is the overlay's real width (about 335px without its
-   words, measured on Windows 11 at 1024px, about 460px with them) and a little spare. A media
-   query cannot read a variable: when the quick-access bar or the prefs grow, move the widths
-   with them. */
-@media (max-width: 1500px) {
-  :root {
-    --prefs-width: 345px;
-  }
-  .prefs [role="group"] span {
-    display: none;
-  }
+.prefs button.rb {
+  padding: 0;
 }
-@media (max-width: 1020px) {
+/* Narrow windows: the prefs sit beside the ribbon tabs' row (app name, quick-access bar, three
+   tabs and "More": about 560px) and take their own row under 900px. `--prefs-width` is the
+   overlay's real width and a little spare. */
+@media (max-width: 900px) {
   .ribbon-tabs {
     margin-inline-end: 0;
   }
@@ -321,6 +465,48 @@ button[aria-pressed="true"] {
   }
 }
 
+/* The rails that fold the side panels away: a thin strip on each panel's inner edge with a
+   chevron that points where the panel will go (logical sides, so Arabic mirrors them). A folded
+   panel is not drawn at all; the drawing takes its width. */
+.panel-rail {
+  flex-shrink: 0;
+  width: 14px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--panel);
+  color: var(--muted);
+  cursor: pointer;
+}
+.panel-rail:hover,
+.panel-rail:focus-visible {
+  background: var(--rule);
+  color: var(--fg);
+}
+.panel-rail::before {
+  font-size: 10px;
+}
+.panel-rail.left::before,
+.middle.right-off .panel-rail.right::before {
+  content: "‹";
+}
+.panel-rail.right::before,
+.middle.left-off .panel-rail.left::before {
+  content: "›";
+}
+:root[dir="rtl"] .panel-rail.left::before,
+:root[dir="rtl"] .middle.right-off .panel-rail.right::before {
+  content: "›";
+}
+:root[dir="rtl"] .panel-rail.right::before,
+:root[dir="rtl"] .middle.left-off .panel-rail.left::before {
+  content: "‹";
+}
+.middle.left-off .left:not(.panel-rail),
+.middle.right-off .side {
+  display: none;
+}
+
 /* Left column: the layers, then the properties of the picked entity. */
 .left {
   width: 220px;
@@ -328,6 +514,7 @@ button[aria-pressed="true"] {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  overflow-y: auto;
   background: var(--panel);
   border-inline-end: 1px solid var(--rule);
 }
@@ -1501,10 +1688,6 @@ button.close {
   background: var(--accent-soft);
   border-color: var(--accent);
 }
-.prefs .gear {
-  line-height: 0;
-  padding: 3px 6px;
-}
 .gear svg {
   width: 16px;
   height: 16px;
@@ -1521,6 +1704,8 @@ button.close {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
   background: var(--panel);
   border-inline-start: 1px solid var(--rule);
 }
@@ -2117,8 +2302,11 @@ button.close {
   list-style: none;
   margin: 0;
   padding: 0;
-  min-height: calc(2 * 1.4em);
   color: var(--muted);
+}
+/* No history yet: no empty lines above the prompt. */
+.command-log:empty {
+  display: none;
 }
 .command-log li {
   white-space: nowrap;
@@ -2140,10 +2328,20 @@ button.close {
   min-width: 0;
   font: 12px/1.4 ui-monospace, monospace;
   color: var(--fg);
-  background: var(--bg);
-  border: 1px solid var(--rule);
+  /* Part of the prompt's line, not a second bar: a box only on hover and while typing. */
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: 4px;
   padding: 1px 6px;
+}
+.command-input input::placeholder {
+  color: var(--muted);
+  font-family: inherit;
+}
+.command-input input:hover,
+.command-input input:focus {
+  background: var(--bg);
+  border-color: var(--rule);
 }
 .command-input [role="listbox"] {
   position: absolute;

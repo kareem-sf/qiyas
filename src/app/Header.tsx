@@ -2,6 +2,7 @@
 import { clearRecents, recents as readRecents, redo, undo, views as readViews, type DrawingInfo, type NamedView } from "../api";
 import { useLanguage, useT } from "../i18n";
 import { Ribbon } from "../shell/Ribbon";
+import { RibbonIcon } from "../shell/ribbonIcons";
 import type { Measure } from "./shared";
 import type { Annotate } from "./useAnnotate";
 import type { Attach } from "./useAttach";
@@ -158,6 +159,7 @@ export function Header({
         onCustomize={() => options.setCustomizeOpen(true)}
         onAliases={() => options.setAliasesOpen(true)}
         layout={options.ribbon}
+        aliases={shell.commandAliases}
         arabicReversed={arabicReversed}
         onArabicReversed={info ? chooseArabicReversed : undefined}
         {...(onModel && {
@@ -172,7 +174,6 @@ export function Header({
       />
       <div className="prefs">
         <div role="group" aria-label={t("language")}>
-          <span>{t("language")}</span>
           <button type="button" lang="en" aria-pressed={lang === "en"} onClick={() => setLang("en")}>
             {t("langEn")}
           </button>
@@ -181,30 +182,25 @@ export function Header({
           </button>
         </div>
         <div role="group" aria-label={t("theme")}>
-          <span>{t("theme")}</span>
-          <button type="button" aria-pressed={theme === "light"} onClick={() => chooseTheme("light")}>
-            {t("light")}
+          <button type="button" className="rb" aria-label={t("light")} title={t("light")} aria-pressed={theme === "light"} onClick={() => chooseTheme("light")}>
+            <RibbonIcon name="sun" />
           </button>
-          <button type="button" aria-pressed={theme === "dark"} onClick={() => chooseTheme("dark")}>
-            {t("dark")}
+          <button type="button" className="rb" aria-label={t("dark")} title={t("dark")} aria-pressed={theme === "dark"} onClick={() => chooseTheme("dark")}>
+            <RibbonIcon name="moon" />
           </button>
         </div>
         <button
           type="button"
-          className="gear"
+          className="rb"
           aria-haspopup="dialog"
           aria-label={t("settings")}
           title={t("settings")}
           onClick={() => setSettingsOpen(true)}
         >
-          <svg viewBox="0 0 16 16" aria-hidden="true">
-            <circle cx="8" cy="8" r="2.2" />
-            <path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4" />
-            <circle cx="8" cy="8" r="4.6" />
-          </svg>
+          <RibbonIcon name="options" />
         </button>
-        <button type="button" aria-haspopup="dialog" onClick={() => setAboutOpen(true)}>
-          {t("about")}
+        <button type="button" className="rb" aria-haspopup="dialog" aria-label={t("about")} title={t("about")} onClick={() => setAboutOpen(true)}>
+          <RibbonIcon name="info" />
         </button>
       </div>
     </header>

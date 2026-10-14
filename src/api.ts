@@ -1292,7 +1292,8 @@ export type Settings = {
 export type RibbonButtonKind = "tool" | "action" | "toggle";
 /** One ribbon button; `label` is an i18n key (or the user's own text). */
 export type RibbonButton = { kind: RibbonButtonKind; command: string; label: string };
-export type RibbonGroup = { id: string; label: string; buttons: RibbonButton[] };
+/** `main`: how many of the buttons the group shows; the rest wait behind its "⋯" button (all when left out). */
+export type RibbonGroup = { id: string; label: string; buttons: RibbonButton[]; main?: number };
 export type RibbonTab = { id: string; label: string; groups: RibbonGroup[] };
 /** The ribbon as data (`qiyas_desktop::ribbon`): a saved one may only hold the default's buttons. */
 export type RibbonLayout = { tabs: RibbonTab[] };

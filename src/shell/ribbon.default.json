@@ -1,8 +1,200 @@
 {
   "tabs": [
     {
+      "id": "measure",
+      "label": "measure",
+      "groups": [
+        {
+          "id": "measure",
+          "label": "ribbon.measure",
+          "buttons": [
+            {
+              "kind": "tool",
+              "command": "select",
+              "label": "select"
+            },
+            {
+              "kind": "tool",
+              "command": "distance",
+              "label": "distance"
+            },
+            {
+              "kind": "tool",
+              "command": "area",
+              "label": "area"
+            },
+            {
+              "kind": "tool",
+              "command": "count",
+              "label": "count"
+            }
+          ]
+        },
+        {
+          "id": "inquiry",
+          "label": "ribbon.inquiry",
+          "buttons": [
+            {
+              "kind": "tool",
+              "command": "geometry",
+              "label": "geometry"
+            },
+            {
+              "kind": "tool",
+              "command": "divide",
+              "label": "divide"
+            },
+            {
+              "kind": "tool",
+              "command": "measureAlong",
+              "label": "measureAlong"
+            },
+            {
+              "kind": "tool",
+              "command": "idPoint",
+              "label": "idPoint"
+            },
+            {
+              "kind": "action",
+              "command": "extract",
+              "label": "extract"
+            }
+          ]
+        },
+        {
+          "id": "takeoff",
+          "label": "ribbon.takeoff",
+          "buttons": [
+            {
+              "kind": "action",
+              "command": "exportTakeoff",
+              "label": "exportTakeoff"
+            },
+            {
+              "kind": "action",
+              "command": "importBoq",
+              "label": "importBoq"
+            },
+            {
+              "kind": "action",
+              "command": "compare",
+              "label": "compare"
+            },
+            {
+              "kind": "action",
+              "command": "exportConflicts",
+              "label": "exportConflicts"
+            }
+          ]
+        },
+        {
+          "id": "dims",
+          "label": "dim.group",
+          "buttons": [
+            {
+              "kind": "tool",
+              "command": "dimLinear",
+              "label": "dim.dimLinear"
+            },
+            {
+              "kind": "tool",
+              "command": "dimAligned",
+              "label": "dim.dimAligned"
+            },
+            {
+              "kind": "tool",
+              "command": "dimAngular",
+              "label": "dim.dimAngular"
+            },
+            {
+              "kind": "tool",
+              "command": "dimRadius",
+              "label": "dim.dimRadius"
+            },
+            {
+              "kind": "tool",
+              "command": "dimDiameter",
+              "label": "dim.dimDiameter"
+            },
+            {
+              "kind": "tool",
+              "command": "dimArc",
+              "label": "dim.dimArc"
+            },
+            {
+              "kind": "tool",
+              "command": "dimOrdinate",
+              "label": "dim.dimOrdinate"
+            },
+            {
+              "kind": "tool",
+              "command": "dimBaseline",
+              "label": "dim.dimBaseline"
+            },
+            {
+              "kind": "tool",
+              "command": "dimContinue",
+              "label": "dim.dimContinue"
+            },
+            {
+              "kind": "tool",
+              "command": "qdim",
+              "label": "dim.qdim"
+            },
+            {
+              "kind": "tool",
+              "command": "dimEdit",
+              "label": "dim.dimEdit"
+            },
+            {
+              "kind": "tool",
+              "command": "dimBreak",
+              "label": "dim.dimBreak"
+            },
+            {
+              "kind": "tool",
+              "command": "dimSpace",
+              "label": "dim.dimSpace"
+            },
+            {
+              "kind": "tool",
+              "command": "dimJogLine",
+              "label": "dim.dimJogLine"
+            },
+            {
+              "kind": "action",
+              "command": "dimStyle",
+              "label": "dim.styleButton"
+            }
+          ],
+          "main": 5
+        },
+        {
+          "id": "markup",
+          "label": "ribbon.markup",
+          "buttons": [
+            {
+              "kind": "tool",
+              "command": "revcloud",
+              "label": "draw.revcloud"
+            },
+            {
+              "kind": "tool",
+              "command": "leader",
+              "label": "dim.leader"
+            },
+            {
+              "kind": "tool",
+              "command": "mtext",
+              "label": "text.mtext"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "home",
-      "label": "home",
+      "label": "draw.group",
       "groups": [
         {
           "id": "draw",
@@ -118,7 +310,13 @@
               "kind": "tool",
               "command": "erase",
               "label": "modify.erase"
-            },
+            }
+          ]
+        },
+        {
+          "id": "edit",
+          "label": "ribbon.edit",
+          "buttons": [
             {
               "kind": "tool",
               "command": "trim",
@@ -277,95 +475,6 @@
       ]
     },
     {
-      "id": "measure",
-      "label": "measure",
-      "groups": [
-        {
-          "id": "measure",
-          "label": "ribbon.measure",
-          "buttons": [
-            {
-              "kind": "tool",
-              "command": "select",
-              "label": "select"
-            },
-            {
-              "kind": "tool",
-              "command": "distance",
-              "label": "distance"
-            },
-            {
-              "kind": "tool",
-              "command": "area",
-              "label": "area"
-            },
-            {
-              "kind": "tool",
-              "command": "count",
-              "label": "count"
-            }
-          ]
-        },
-        {
-          "id": "inquiry",
-          "label": "ribbon.inquiry",
-          "buttons": [
-            {
-              "kind": "tool",
-              "command": "geometry",
-              "label": "geometry"
-            },
-            {
-              "kind": "tool",
-              "command": "divide",
-              "label": "divide"
-            },
-            {
-              "kind": "tool",
-              "command": "measureAlong",
-              "label": "measureAlong"
-            },
-            {
-              "kind": "tool",
-              "command": "idPoint",
-              "label": "idPoint"
-            },
-            {
-              "kind": "action",
-              "command": "extract",
-              "label": "extract"
-            }
-          ]
-        },
-        {
-          "id": "takeoff",
-          "label": "ribbon.takeoff",
-          "buttons": [
-            {
-              "kind": "action",
-              "command": "exportTakeoff",
-              "label": "exportTakeoff"
-            },
-            {
-              "kind": "action",
-              "command": "importBoq",
-              "label": "importBoq"
-            },
-            {
-              "kind": "action",
-              "command": "compare",
-              "label": "compare"
-            },
-            {
-              "kind": "action",
-              "command": "exportConflicts",
-              "label": "exportConflicts"
-            }
-          ]
-        }
-      ]
-    },
-    {
       "id": "annotate",
       "label": "annotate",
       "groups": [
@@ -468,6 +577,17 @@
               "kind": "tool",
               "command": "tolerance",
               "label": "dim.tolerance"
+            }
+          ]
+        },
+        {
+          "id": "markup",
+          "label": "ribbon.markup",
+          "buttons": [
+            {
+              "kind": "tool",
+              "command": "revcloud",
+              "label": "draw.revcloud"
             }
           ]
         },

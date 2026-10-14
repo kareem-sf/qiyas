@@ -1,6 +1,8 @@
 import { useState, type CSSProperties, type KeyboardEvent } from "react";
 import type { Recent } from "../api";
 import { useT } from "../i18n";
+import { RibbonIcon } from "./ribbonIcons";
+import { Tip, type TipInfo } from "./Tooltip";
 import { useMenu } from "./useMenu";
 
 type Props = {
@@ -11,11 +13,13 @@ type Props = {
   onOpenRecent(path: string): void;
   onClear(): Promise<void>;
   onKey?(e: KeyboardEvent): void;
+  /** The tooltip of the Open button. */
+  tip?: TipInfo;
 };
 
 /** The ribbon's Open split button: Open… and, beside it, the recent drawings (file name, its
  *  folder muted; greyed with "(missing)" when the file is gone), then Clear recents. */
-export function RecentsMenu({ onOpen, load, onOpenRecent, onClear, onKey }: Props) {
+export function RecentsMenu({ onOpen, load, onOpenRecent, onClear, onKey, tip }: Props) {
   const t = useT();
   const menu = useMenu<HTMLDivElement>();
   const [list, setList] = useState<Recent[]>([]);
@@ -39,22 +43,30 @@ export function RecentsMenu({ onOpen, load, onOpenRecent, onClear, onKey }: Prop
 
   return (
     <div className="split" ref={menu.ref}>
-      <button type="button" onClick={onOpen} onKeyDown={onKey} onKeyUp={onKey}>
-        {t("open")}
-      </button>
-      <button
-        type="button"
-        className="split-arrow"
-        aria-haspopup="menu"
-        aria-expanded={menu.open}
-        aria-label={t("recent.title")}
-        title={t("recent.title")}
-        onClick={toggle}
-        onKeyDown={onKey}
-        onKeyUp={onKey}
-      >
-        ▾
-      </button>
+      <Tip info={tip ?? { name: t("open") }}>
+        {(describedBy) => (
+          <button type="button" className="rb" aria-label={t("open")} aria-describedby={describedBy} onClick={onOpen} onKeyDown={onKey} onKeyUp={onKey}>
+            <RibbonIcon name="open" />
+          </button>
+        )}
+      </Tip>
+      <Tip info={{ name: t("recent.title") }}>
+        {(describedBy) => (
+          <button
+            type="button"
+            className="rb split-arrow"
+            aria-haspopup="menu"
+            aria-expanded={menu.open}
+            aria-label={t("recent.title")}
+            aria-describedby={describedBy}
+            onClick={toggle}
+            onKeyDown={onKey}
+            onKeyUp={onKey}
+          >
+            <RibbonIcon name="chevron" />
+          </button>
+        )}
+      </Tip>
       {menu.open && (
         <div className="menu" role="menu" aria-label={t("recent.title")} style={at}>
           {list.length === 0 && <div className="menu-note">{t("recent.none")}</div>}

@@ -8,9 +8,10 @@ use qiyas_desktop_lib::settings::{self, Settings};
 
 fn custom_ribbon() -> RibbonLayout {
     let mut layout = ribbon::default_ribbon();
-    // Measure first, with the draw group's first button only, renamed.
-    layout.tabs.swap(0, 1);
+    // Measure is first already; on Draw (id "home") the Edit group keeps its first button only,
+    // renamed.
     let home = &mut layout.tabs[1];
+    assert_eq!(home.id, "home");
     home.groups[2].buttons.truncate(1);
     home.groups[2].label = "My drawing".into();
     layout
@@ -171,8 +172,8 @@ fn the_default_ribbon_is_valid_and_holds_every_tab() {
     assert_eq!(
         tabs,
         [
-            "home",
             "measure",
+            "home",
             "annotate",
             "parametric",
             "insert",
@@ -207,25 +208,41 @@ fn the_default_ribbon_is_valid_and_holds_every_tab() {
             "{command}"
         );
     }
-    // The JSON the window reads: Home starts with Draw, Line.
+    // The JSON the window reads: Draw (id "home") starts with Draw, Line; Measure comes first and
+    // its Dimensions group shows five buttons.
     let json = serde_json::to_value(&layout).unwrap();
     assert_eq!(
-        json["tabs"][0]["groups"][0]["buttons"][0]["command"],
+        json["tabs"][1]["groups"][0]["buttons"][0]["command"],
         "line"
     );
-    assert_eq!(json["tabs"][0]["groups"][0]["buttons"][0]["kind"], "tool");
-    let home: Vec<&str> = layout.tabs[0]
+    assert_eq!(json["tabs"][1]["groups"][0]["buttons"][0]["kind"], "tool");
+    assert_eq!(json["tabs"][0]["groups"][3]["main"], 5);
+    assert!(json["tabs"][1]["groups"][0].get("main").is_none());
+    let home: Vec<&str> = layout.tabs[1]
         .groups
         .iter()
         .map(|g| g.id.as_str())
         .collect();
-    assert_eq!(home, ["draw", "modify", "text", "clipboard", "layers"]);
-    let measure: Vec<&str> = layout.tabs[1]
+    assert_eq!(
+        home,
+        ["draw", "modify", "edit", "text", "clipboard", "layers"]
+    );
+    let measure: Vec<&str> = layout.tabs[0]
         .groups
         .iter()
         .map(|g| g.id.as_str())
         .collect();
-    assert_eq!(measure, ["measure", "inquiry", "takeoff"]);
+    assert_eq!(
+        measure,
+        ["measure", "inquiry", "takeoff", "dims", "markup"]
+    );
+    // Annotate: the Markup group (id "markup") is where a revision cloud with a comment goes.
+    let annotate: Vec<&str> = layout.tabs[2]
+        .groups
+        .iter()
+        .map(|g| g.id.as_str())
+        .collect();
+    assert_eq!(annotate, ["dims", "notes", "markup", "tables"]);
     // Open, Save, Save as, Undo and Redo are the window's quick-access bar, in no layout.
     for command in ["open", "save", "saveAs", "undo", "redo"] {
         assert!(buttons.iter().all(|b| b.command != command), "{command}");
@@ -237,7 +254,7 @@ fn a_saved_ribbon_may_move_buttons_between_groups_and_tabs_but_not_add_the_quick
     let mut layout = ribbon::default_ribbon();
     // Compare from Measure's Take-off to Home's Draw, Recover from Manage to a new Home group,
     // and Draw's Line to the end of Modify.
-    let takeoff = &mut layout.tabs[1].groups[2];
+    let takeoff = &mut layout.tabs[0].groups[2];
     let at = takeoff
         .buttons
         .iter()
@@ -252,7 +269,7 @@ fn a_saved_ribbon_may_move_buttons_between_groups_and_tabs_but_not_add_the_quick
         .unwrap();
     let recover = drawing.buttons.pop().unwrap();
     assert_eq!(recover.command, "recover");
-    let home = &mut layout.tabs[0];
+    let home = &mut layout.tabs[1];
     let line = home.groups[0].buttons.remove(0);
     home.groups[0].buttons.push(compare);
     home.groups[1].buttons.push(line);
@@ -260,6 +277,7 @@ fn a_saved_ribbon_may_move_buttons_between_groups_and_tabs_but_not_add_the_quick
         id: "mine".into(),
         label: "My files".into(),
         buttons: vec![recover],
+        main: None,
     });
     assert_eq!(ribbon::validate(&layout), Ok(()));
     let dir = tempfile::tempdir().unwrap();
@@ -305,10 +323,10 @@ fn a_ribbon_with_an_unknown_button_or_twin_ids_is_refused() {
         .contains("format_disk"));
     // A tool's command run as an action is not a button the window knows.
     let mut wrong_kind = ribbon::default_ribbon();
-    wrong_kind.tabs[0].groups[2].buttons[0].kind = ButtonKind::Action;
+    wrong_kind.tabs[1].groups[3].buttons[0].kind = ButtonKind::Action;
     assert!(ribbon::validate(&wrong_kind).is_err());
     let mut twins = ribbon::default_ribbon();
-    twins.tabs[1].id = "home".into();
+    twins.tabs[0].id = "home".into();
     assert!(ribbon::validate(&twins).unwrap_err().contains("home"));
     let empty = RibbonLayout { tabs: Vec::new() };
     assert!(ribbon::validate(&empty).is_err());

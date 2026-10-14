@@ -10,8 +10,32 @@ const action = (command: string, label = command) => button("action", command, l
 const toggle = (command: string, label = command) => button("toggle", command, label);
 /** Tools labelled `<prefix>.<name>`. */
 const tools = (prefix: string, names: string[]) => names.map((n) => tool(n, `${prefix}.${n}`));
-const group = (id: string, label: string, buttons: RibbonButton[]): RibbonGroup => ({ id, label, buttons });
-const tab = (id: string, groups: RibbonGroup[]): RibbonTab => ({ id, label: id, groups });
+/** `main`: how many of the buttons show; the rest are behind the group's "⋯" button. */
+const group = (id: string, label: string, buttons: RibbonButton[], main?: number): RibbonGroup =>
+  main === undefined ? { id, label, buttons } : { id, label, buttons, main };
+const tab = (id: string, groups: RibbonGroup[], label = id): RibbonTab => ({ id, label, groups });
+
+/** The dimension tools, every kind, then the dimension style: the Dimensions group of Measure
+ *  (its first five on show, the rest behind "⋯") and of Annotate (all of them). */
+const dimensions = () => [
+  ...tools("dim", [
+    "dimLinear",
+    "dimAligned",
+    "dimAngular",
+    "dimRadius",
+    "dimDiameter",
+    "dimArc",
+    "dimOrdinate",
+    "dimBaseline",
+    "dimContinue",
+    "qdim",
+    "dimEdit",
+    "dimBreak",
+    "dimSpace",
+    "dimJogLine",
+  ]),
+  action("dimStyle", "dim.styleButton"),
+];
 
 /** The quick-access bar on the ribbon's tabs row (`Ribbon.tsx`): Open, Save, Save as, Undo and
  *  Redo, always shown, never part of a layout. */
@@ -19,43 +43,11 @@ export const QUICK_ACCESS: RibbonButton[] = [action("open"), action("save"), act
 
 /** The ribbon Qiyas ships: the same as the core's `default_ribbon` (`qiyas-desktop/src/ribbon.rs`);
  *  `ribbon.default.json` pins both (`ribbonLayout.test.ts` and the core's `tests/options.rs`).
- *  Open, Save, Save as, Undo and Redo are not in it: `Ribbon.tsx` keeps them in the quick-access
- *  bar beside the tabs. */
+ *  Measure first, then Draw (the tab with id "home"), then Annotate; `Ribbon.tsx` shows those
+ *  three and puts the rest of the tabs under "More". Open, Save, Save as, Undo and Redo are not
+ *  in it: `Ribbon.tsx` keeps them in the quick-access bar beside the tabs. */
 export const DEFAULT_RIBBON: RibbonLayout = {
   tabs: [
-    tab("home", [
-      group(
-        "draw",
-        "draw.group",
-        tools("draw", ["line", "polyline", "rectangle", "circle", "arc", "ellipse", "spline", "point", "hatch", "revcloud", "wipeout"]),
-      ),
-      group("modify", "modify.group", [
-        ...tools("modify", ["move", "copy", "rotate", "scale", "mirror", "stretch", "align", "array", "explode", "erase"]),
-        ...tools("edit", [
-          "trim",
-          "extend",
-          "break",
-          "join",
-          "lengthen",
-          "reverse",
-          "offset",
-          "fillet",
-          "chamfer",
-          "blend",
-          "pedit",
-          "overkill",
-          "flatten",
-        ]),
-      ]),
-      group("text", "ribbon.annotation", [...tools("text", ["text", "mtext", "textEdit"]), action("find", "text.find")]),
-      group("clipboard", "clip.group", tools("clip", ["copyclip", "copybase", "pasteclip", "pasteblock"])),
-      group("layers", "layers", [
-        action("layerStates", "layer.statesButton"),
-        action("translateLayers", "layer.translateButton"),
-        ...tools("layerTool", ["group", "ungroup", "matchprop"]),
-        toggle("groupSelect", "group.select"),
-      ]),
-    ]),
     tab("measure", [
       group("measure", "ribbon.measure", ["select", "distance", "area", "count"].map((n) => tool(n))),
       group("inquiry", "ribbon.inquiry", [
@@ -63,28 +55,53 @@ export const DEFAULT_RIBBON: RibbonLayout = {
         action("extract"),
       ]),
       group("takeoff", "ribbon.takeoff", [action("exportTakeoff"), action("importBoq"), action("compare"), action("exportConflicts")]),
+      group("dims", "dim.group", dimensions(), 5),
+      group("markup", "ribbon.markup", [tool("revcloud", "draw.revcloud"), tool("leader", "dim.leader"), tool("mtext", "text.mtext")]),
     ]),
-    tab("annotate", [
-      group("dims", "dim.group", [
-        ...tools("dim", [
-          "dimLinear",
-          "dimAligned",
-          "dimAngular",
-          "dimRadius",
-          "dimDiameter",
-          "dimArc",
-          "dimOrdinate",
-          "dimBaseline",
-          "dimContinue",
-          "qdim",
-          "dimEdit",
-          "dimBreak",
-          "dimSpace",
-          "dimJogLine",
+    tab(
+      "home",
+      [
+        group(
+          "draw",
+          "draw.group",
+          tools("draw", ["line", "polyline", "rectangle", "circle", "arc", "ellipse", "spline", "point", "hatch", "revcloud", "wipeout"]),
+        ),
+        group("modify", "modify.group", tools("modify", ["move", "copy", "rotate", "scale", "mirror", "stretch", "align", "array", "explode", "erase"])),
+        group(
+          "edit",
+          "ribbon.edit",
+          tools("edit", [
+            "trim",
+            "extend",
+            "break",
+            "join",
+            "lengthen",
+            "reverse",
+            "offset",
+            "fillet",
+            "chamfer",
+            "blend",
+            "pedit",
+            "overkill",
+            "flatten",
+          ]),
+        ),
+        group("text", "ribbon.annotation", [...tools("text", ["text", "mtext", "textEdit"]), action("find", "text.find")]),
+        group("clipboard", "clip.group", tools("clip", ["copyclip", "copybase", "pasteclip", "pasteblock"])),
+        group("layers", "layers", [
+          action("layerStates", "layer.statesButton"),
+          action("translateLayers", "layer.translateButton"),
+          ...tools("layerTool", ["group", "ungroup", "matchprop"]),
+          toggle("groupSelect", "group.select"),
         ]),
-        action("dimStyle", "dim.styleButton"),
-      ]),
+      ],
+      "draw.group",
+    ),
+    tab("annotate", [
+      group("dims", "dim.group", dimensions()),
       group("notes", "dim.notes", tools("dim", ["leader", "mleader", "tolerance"])),
+      // Revision cloud now; the revision cloud with a comment will be appended here.
+      group("markup", "ribbon.markup", [tool("revcloud", "draw.revcloud")]),
       group("tables", "table.group", [
         tool("table", "table.table"),
         tool("tableEdit", "table.tableEdit"),
@@ -235,10 +252,11 @@ export function layoutOf(tree: EditTab[]): RibbonLayout | null {
       label,
       groups: groups
         .filter((g) => !g.hidden)
-        .map(({ id, label, buttons }) => ({
+        .map(({ id, label, buttons, main }) => ({
           id,
           label,
           buttons: buttons.filter((b) => !b.hidden).map(({ kind, command, label }) => ({ kind, command, label })),
+          ...(main === undefined ? {} : { main }),
         }))
         .filter((g) => g.buttons.length > 0),
     }))
