@@ -1395,5 +1395,7 @@
   "grid.resize": "Resize column {name}",
   "conflicts.reason": "What",
   "conflicts.sheets": "Sheets",
-  "conflicts.noteColumn": "Note"
+  "conflicts.noteColumn": "Note",
+  "cmd.group.commands": "Commands",
+  "cmd.group.shortcuts": "Shortcuts"
 }

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import type { LayerInfo } from "../api";
 import { LayersPanel } from "./LayersPanel";
@@ -232,4 +232,137 @@ test("on a paper sheet with viewports a VP freeze column freezes a layer in the 
   expect(door.checked).toBe(false);
   fireEvent.click(door);
   expect(onViewportFrozen).toHaveBeenLastCalledWith(12, "A-DOOR", true);
+});
+
+/** The tree moves focus on the next tick. */
+const settle = () => act(async () => void (await new Promise((r) => setTimeout(r, 40))));
+/** A key pressed and let go, as the tree's hotkeys follow both. */
+const press = (el: Element, key: string) => {
+  fireEvent.keyDown(el, { key, code: key });
+  fireEvent.keyUp(el, { key, code: key });
+};
+
+const NAMES = ["0", "A-DOOR", "A-ROOM", "A-WALL", "A-WINDOW", "COMMENTS", "E-LIGHT", "E-POWER", "S-COLUMN", "S-BEAM", "S-SLAB", "Z-TEMP"];
+const many = () => NAMES.map((n) => layer(n));
+const rowOf = (name: string) =>
+  screen.getAllByRole("treeitem").find((r) => r.getAttribute("aria-label") === name) as HTMLElement;
+
+test("a short list is a flat tree of layers, each a row with its level and position", () => {
+  render(<LayersPanel layers={[layer("A-WALL"), layer("A-DOOR")]} hidden={new Set()} onToggle={() => {}} onIsolate={() => {}} onShowAll={() => {}} />);
+  const rows = screen.getAllByRole("treeitem");
+  expect(rows.map((r) => r.getAttribute("aria-label"))).toEqual(["A-WALL", "A-DOOR"]);
+  expect(rows.map((r) => r.getAttribute("aria-level"))).toEqual(["1", "1"]);
+  expect(rows[1].getAttribute("aria-posinset")).toBe("2");
+  expect(rows[1].getAttribute("aria-setsize")).toBe("2");
+});
+
+test("a long list groups its layers by prefix: the groups are open, the layers under them one level in", () => {
+  render(<LayersPanel layers={many()} hidden={new Set()} onToggle={() => {}} onIsolate={() => {}} onShowAll={() => {}} />);
+  expect(screen.getAllByRole("treeitem").map((r) => r.getAttribute("aria-label"))).toEqual([
+    "0", "A-", "A-DOOR", "A-ROOM", "A-WALL", "A-WINDOW", "COMMENTS", "E-", "E-LIGHT", "E-POWER", "S-", "S-COLUMN", "S-BEAM", "S-SLAB", "Z-TEMP",
+  ]);
+  expect(rowOf("A-").getAttribute("aria-expanded")).toBe("true");
+  expect(rowOf("A-").textContent).toContain("4");
+  expect(rowOf("A-WALL").getAttribute("aria-level")).toBe("2");
+  expect(rowOf("COMMENTS").getAttribute("aria-level")).toBe("1");
+  // Every layer keeps its controls.
+  expect(screen.getByRole("button", { name: "Visible: A-WALL" })).toBeTruthy();
+});
+
+test("the arrows, Home and End move between rows; Right opens a group and Left closes it", async () => {
+  render(<LayersPanel layers={many()} hidden={new Set()} onToggle={() => {}} onIsolate={() => {}} onShowAll={() => {}} />);
+  const rows = () => screen.getAllByRole("treeitem");
+  // One row is the tab stop.
+  expect(rows().filter((r) => r.tabIndex === 0)).toHaveLength(1);
+  rowOf("0").focus();
+  await settle();
+  press(rowOf("0"), "ArrowDown");
+  await settle();
+  expect(document.activeElement).toBe(rowOf("A-"));
+  press(rowOf("A-"), "ArrowDown");
+  await settle();
+  expect(document.activeElement).toBe(rowOf("A-DOOR"));
+  press(rowOf("A-DOOR"), "ArrowUp");
+  await settle();
+  expect(document.activeElement).toBe(rowOf("A-"));
+  // Left closes the open group, and its layers leave the tree.
+  press(rowOf("A-"), "ArrowLeft");
+  await settle();
+  expect(rowOf("A-").getAttribute("aria-expanded")).toBe("false");
+  expect(screen.queryByRole("treeitem", { name: "A-DOOR" })).toBeNull();
+  press(rowOf("A-"), "ArrowRight");
+  await settle();
+  expect(rowOf("A-").getAttribute("aria-expanded")).toBe("true");
+  expect(rowOf("A-DOOR")).toBeTruthy();
+  press(document.activeElement!, "End");
+  await settle();
+  expect(document.activeElement).toBe(rowOf("Z-TEMP"));
+  press(rowOf("Z-TEMP"), "Home");
+  await settle();
+  expect(document.activeElement).toBe(rowOf("0"));
+  // A layer's Left goes up to its group.
+  fireEvent.click(rowOf("A-WALL"));
+  await settle();
+  press(rowOf("A-WALL"), "ArrowLeft");
+  await settle();
+  expect(document.activeElement).toBe(rowOf("A-"));
+});
+
+test("a folded group stays folded: it is remembered on this computer", async () => {
+  localStorage.clear();
+  const first = render(<LayersPanel layers={many()} hidden={new Set()} onToggle={() => {}} onIsolate={() => {}} onShowAll={() => {}} />);
+  fireEvent.click(rowOf("S-"));
+  await settle();
+  expect(rowOf("S-").getAttribute("aria-expanded")).toBe("false");
+  first.unmount();
+  render(<LayersPanel layers={many()} hidden={new Set()} onToggle={() => {}} onIsolate={() => {}} onShowAll={() => {}} />);
+  expect(rowOf("S-").getAttribute("aria-expanded")).toBe("false");
+  expect(rowOf("A-").getAttribute("aria-expanded")).toBe("true");
+  localStorage.clear();
+});
+
+test("a click selects a layer's row; Enter or a double click on it makes the layer current", async () => {
+  const onMakeCurrent = vi.fn();
+  render(
+    <LayersPanel layers={[layer("A-WALL"), layer("A-DOOR"), layer("PLAN|A-DOOR")]} hidden={new Set()} current="A-WALL" onToggle={() => {}} onIsolate={() => {}} onShowAll={() => {}} onMakeCurrent={onMakeCurrent} />,
+  );
+  fireEvent.click(rowOf("A-DOOR"));
+  await settle();
+  expect(rowOf("A-DOOR").getAttribute("aria-selected")).toBe("true");
+  expect(rowOf("A-WALL").getAttribute("aria-selected")).toBe("false");
+  fireEvent.keyDown(rowOf("A-DOOR"), { key: "Enter" });
+  expect(onMakeCurrent).toHaveBeenLastCalledWith("A-DOOR");
+  onMakeCurrent.mockClear();
+  fireEvent.doubleClick(rowOf("A-DOOR"));
+  expect(onMakeCurrent).toHaveBeenCalledWith("A-DOOR");
+  // The current layer, an xref's layer: nothing to make.
+  onMakeCurrent.mockClear();
+  fireEvent.keyDown(rowOf("A-WALL"), { key: "Enter" });
+  fireEvent.keyDown(rowOf("PLAN|A-DOOR"), { key: "Enter" });
+  expect(onMakeCurrent).not.toHaveBeenCalled();
+  // Pressing a button in the row is not a double click on the row.
+  fireEvent.doubleClick(screen.getByRole("button", { name: "Visible: A-DOOR" }));
+  expect(onMakeCurrent).not.toHaveBeenCalled();
+});
+
+test("the arrows in a layer's properties are the properties': the tree's focus stays", async () => {
+  const wall: LayerInfo = { ...layer("A-WALL"), color_name: "ACI 1", linetype: "Continuous", lineweight: -3, plot: true };
+  render(
+    <LayersPanel layers={[wall, layer("A-DOOR")]} hidden={new Set()} linetypes={["Continuous", "DASHED"]} onToggle={() => {}} onIsolate={() => {}} onShowAll={() => {}} onSetLayer={() => {}} />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Layer properties: A-WALL" }));
+  const linetype = screen.getByRole("combobox", { name: "Linetype" });
+  linetype.focus();
+  const before = rowOf("A-WALL").tabIndex;
+  press(linetype, "ArrowDown");
+  await settle();
+  expect(document.activeElement).toBe(linetype);
+  expect(rowOf("A-WALL").tabIndex).toBe(before);
+});
+
+test("the row's buttons are in the row for the pointer and the keyboard; a name is whole in its tooltip", () => {
+  render(<LayersPanel layers={[layer("A-WALL-FULL-DETAIL-LONG")]} hidden={new Set()} onToggle={() => {}} onIsolate={() => {}} onShowAll={() => {}} onMakeCurrent={() => {}} />);
+  const row = rowOf("A-WALL-FULL-DETAIL-LONG");
+  expect(row.querySelector(".name")!.getAttribute("title")).toBe("A-WALL-FULL-DETAIL-LONG");
+  expect(row.querySelectorAll("button")).toHaveLength(3);
 });

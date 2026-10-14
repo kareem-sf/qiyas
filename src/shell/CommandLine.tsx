@@ -1,6 +1,7 @@
-import { useId, useMemo, useState, type KeyboardEvent, type Ref } from "react";
+import { Command } from "cmdk";
+import { useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type Ref } from "react";
 import { useT } from "../i18n";
-import { parse, suggest, type Action, type ParseState } from "../tools/commandParser";
+import { parse, suggest, type Action, type ParseState, type Suggestion } from "../tools/commandParser";
 
 /** Lines of history kept for ↑ and ↓. */
 const HISTORY = 50;
@@ -21,10 +22,42 @@ type Props = {
  *  count or send the question again. */
 const NOT_REPEATED: Action["type"][] = ["point", "number", "finish", "cancel", "count", "ai"];
 
+/** What the list shows for a suggestion: a command with the shortcut typed for it, or, for a
+ *  shortcut whose command does not itself start with what was typed, that command and the shortcut. */
+type Row = {
+  /** What Tab fills in and Enter runs: the command, or the shortcut as typed. */
+  name: string;
+  label: string;
+  /** The shortcut, shown as a small key. */
+  chip?: string;
+  group: "commands" | "shortcuts";
+};
+
+/** The rows of the list from the commands and aliases that match: each command with its shortest
+ *  alias; an alias whose command is already a row is only that row's chip. */
+function rowsOf(found: Suggestion[], aliases: Record<string, string>): Row[] {
+  const commands = new Set(found.filter((f) => !f.target).map((f) => f.name));
+  const shortest = (command: string) =>
+    Object.keys(aliases)
+      .filter((a) => aliases[a].trim().toUpperCase() === command && a.toUpperCase() !== command)
+      .sort((a, b) => a.length - b.length || a.localeCompare(b))[0];
+  return found.flatMap<Row>((f) => {
+    if (!f.target) return [{ name: f.name, label: f.name, chip: shortest(f.name), group: "commands" }];
+    if (commands.has(f.target.toUpperCase())) return [];
+    return [{ name: f.name, label: f.target, chip: f.name, group: "shortcuts" }];
+  });
+}
+
+/** The row cmdk starts on, which is no row: nothing is chosen until the arrows choose one, so Enter
+ *  runs what was typed. It is never shown. */
+const NONE = "\u0000none";
+
 /** The command line above the status bar: type a command (or its alias), a point or a number and
  *  press Enter. An empty Enter repeats the last command (or finishes a measure at a point prompt);
- *  ↑ and ↓ go through the last 50 lines; typing shows the matching commands (↑, ↓, Tab, Enter);
- *  Escape cancels. The two lines above show what was typed and any error. */
+ *  ↑ and ↓ go through the last 50 lines; typing shows the matching commands in a list above the
+ *  line (cmdk: ↑, ↓, Tab, Enter or a click choose one, each with its shortcut as a small key, in
+ *  sections when there are both commands and shortcuts to show); Escape cancels. The two lines
+ *  above show what was typed and any error. */
 export function CommandLine({ state, prompt, onAction, inputRef }: Props) {
   const t = useT();
   const id = useId();
@@ -39,10 +72,27 @@ export function CommandLine({ state, prompt, onAction, inputRef }: Props) {
   const [active, setActive] = useState(-1);
 
   const suggestions = useMemo(
-    () => (suggesting && state.expect === "command" ? suggest(text, state.aliases) : []),
+    () => (suggesting && state.expect === "command" ? rowsOf(suggest(text, state.aliases), state.aliases) : []),
     [suggesting, text, state.expect, state.aliases],
   );
   const open = suggestions.length > 0;
+  const list = useRef<HTMLDivElement>(null);
+  /** The ids the input points at: the list, and the row chosen (the combobox's `aria-*`). */
+  const [ids, setIds] = useState<{ list?: string; option?: string }>({});
+  useLayoutEffect(() => {
+    const box = list.current;
+    const name = active >= 0 ? suggestions[active]?.name.toLowerCase() : undefined;
+    // The row is found by its value: cmdk marks the chosen one a moment after this runs.
+    const option =
+      name === undefined
+        ? undefined
+        : Array.from(box?.querySelectorAll<HTMLElement>("[cmdk-item]") ?? []).find(
+            (el) => el.getAttribute("data-value")?.toLowerCase() === name,
+          );
+    const next = { list: box?.id || undefined, option: option?.id || undefined };
+    setIds((was) => (was.list === next.list && was.option === next.option ? was : next));
+    option?.scrollIntoView?.({ block: "nearest" });
+  });
 
   const write = (...lines: string[]) => setLog((l) => [...l, ...lines].slice(-LOG_LINES));
 
@@ -113,7 +163,6 @@ export function CommandLine({ state, prompt, onAction, inputRef }: Props) {
     }
   }
 
-  const listId = `${id}-list`;
   return (
     <section className="command-line" aria-label={t("cmd.label")}>
       <ol className="command-log" aria-live="polite">
@@ -123,16 +172,26 @@ export function CommandLine({ state, prompt, onAction, inputRef }: Props) {
           </li>
         ))}
       </ol>
-      <div className="command-input">
+      <Command
+        className="command-input"
+        shouldFilter={false}
+        loop
+        vimBindings={false}
+        disablePointerSelection
+        // The row chosen is ours (`active`): cmdk is told, and its own start on the first row is
+        // taken by the hidden one.
+        value={open && active >= 0 ? suggestions[active].name : NONE}
+        onValueChange={() => {}}
+      >
         <label htmlFor={`${id}-input`}>{prompt}</label>
         <input
           ref={inputRef}
           id={`${id}-input`}
           role="combobox"
           aria-expanded={open}
-          aria-controls={listId}
+          aria-controls={open ? ids.list : undefined}
           aria-autocomplete="list"
-          aria-activedescendant={open && active >= 0 ? `${id}-opt-${active}` : undefined}
+          aria-activedescendant={open ? ids.option : undefined}
           autoComplete="off"
           spellCheck={false}
           placeholder={t("cmd.placeholder")}
@@ -148,26 +207,31 @@ export function CommandLine({ state, prompt, onAction, inputRef }: Props) {
           onBlur={() => setSuggesting(false)}
         />
         {open && (
-          <ul id={listId} role="listbox" aria-label={t("cmd.suggestions")}>
-            {suggestions.map((s, i) => (
-              <li
-                key={s.name}
-                id={`${id}-opt-${i}`}
-                role="option"
-                aria-selected={i === active}
-                // Before the input's blur, so the click lands.
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  submit(s.name);
-                }}
-              >
-                <span>{s.name}</span>
-                {s.target && <span className="target">{s.target}</span>}
-              </li>
-            ))}
-          </ul>
+          <Command.List
+            ref={list}
+            label={t("cmd.suggestions")}
+            // Before the input's blur, so a click on a row lands.
+            onMouseDown={(e) => e.preventDefault()}
+          >
+            <Command.Item value={NONE} data-none="" hidden aria-hidden="true" />
+            {(["commands", "shortcuts"] as const).map((group) => {
+              const rows = suggestions.filter((r) => r.group === group);
+              if (rows.length === 0) return null;
+              const both = suggestions.some((r) => r.group !== group);
+              return (
+                <Command.Group key={group} heading={both ? t(`cmd.group.${group}`) : undefined}>
+                  {rows.map((r) => (
+                    <Command.Item key={r.name} value={r.name} className="cmd-item" onSelect={() => submit(r.name)}>
+                      <span>{r.label}</span>
+                      {r.chip && <kbd>{r.chip}</kbd>}
+                    </Command.Item>
+                  ))}
+                </Command.Group>
+              );
+            })}
+          </Command.List>
         )}
-      </div>
+      </Command>
     </section>
   );
 }

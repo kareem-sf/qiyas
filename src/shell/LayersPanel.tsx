@@ -1,7 +1,10 @@
-import { memo, useState, type KeyboardEvent } from "react";
+import { hotkeysCoreFeature, selectionFeature, syncDataLoaderFeature } from "@headless-tree/core";
+import { useTree } from "@headless-tree/react";
+import { memo, useEffect, useMemo, useState, type CSSProperties, type KeyboardEvent } from "react";
 import type { LayerInfo, LayerProp, ViewportInfo } from "../api";
 import { useT } from "../i18n";
 import type { Theme } from "../viewport/gl";
+import { buildLayerTree, ROOT, type LayerNode } from "./layerGroups";
 import { LINEWEIGHTS, weightLabel } from "./lineweights";
 import { swatchColor } from "./swatch";
 
@@ -68,7 +71,7 @@ function LayerProps({ layer, linetypes, onSet, onRename, onDelete }: LayerPropsP
   );
   const types = layer.linetype && !linetypes.includes(layer.linetype) ? [layer.linetype, ...linetypes] : linetypes;
   return (
-    <div className="layer-props">
+    <div className="layer-props" role="group" aria-label={`${t("layer.properties")}: ${layer.name}`}>
       {check("on", "layer.on", !layer.off)}
       {check("frozen", "layer.frozen", layer.frozen)}
       {check("locked", "layer.locked", layer.locked)}
@@ -118,11 +121,40 @@ function LayerProps({ layer, linetypes, onSet, onRename, onDelete }: LayerPropsP
   );
 }
 
-/** The drawing's layers: colour, name, an eye to hide or show, isolate to show only that one, and
- *  make current to draw on it (not an xref's layer, `XREF|LAYER`). A layer of the drawing itself
- *  opens its properties under its row (on, frozen, locked, plot, colour, linetype, lineweight,
- *  rename, delete); on a paper sheet with viewports a VP freeze column freezes a layer in the
- *  viewport chosen. The foot adds a layer and opens layer states and the translator.
+const STORE = "qiyas.layers.collapsed";
+
+/** The tree's movement keys, which the tree must leave alone while the keyboard is in a layer's
+ *  properties: an arrow there moves a drop-down or a caret, not the focus along the rows. Only
+ *  `hotkey` and `isEnabled` are ours; what each key does stays the library's. */
+const outsideProps = () => !document.activeElement?.closest(".layer-props");
+const MOVE_KEYS = {
+  focusNextItem: { hotkey: "ArrowDown", isEnabled: outsideProps },
+  focusPreviousItem: { hotkey: "ArrowUp", isEnabled: outsideProps },
+  expandOrDown: { hotkey: "ArrowRight", isEnabled: outsideProps },
+  collapseOrUp: { hotkey: "ArrowLeft", isEnabled: outsideProps },
+  focusFirstItem: { hotkey: "Home", isEnabled: outsideProps },
+  focusLastItem: { hotkey: "End", isEnabled: outsideProps },
+};
+
+/** The groups the user folded, remembered on this computer. */
+function storedCollapsed(): string[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(STORE) ?? "[]");
+    return Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** The drawing's layers as a tree, one row each: colour, name, an eye to hide or show it and, when
+ *  the pointer or the keyboard is on the row, isolate (show only that one), make current (draw on
+ *  it; not an xref's layer, `XREF|LAYER`) and its properties. A layer of the drawing itself opens
+ *  its properties under its row (on, frozen, locked, plot, colour, linetype, lineweight, rename,
+ *  delete); on a paper sheet with viewports a VP freeze column freezes a layer in the viewport
+ *  chosen. A long list is grouped by its names' prefix (A-, S-, E-...) and by xref (`layerGroups`);
+ *  Headless Tree gives the keyboard: the arrows, Home and End move between rows, Right and Left
+ *  open and close a group, a click or Shift/Ctrl select, Enter or a double click makes a layer
+ *  current. The foot adds a layer and opens layer states and the translator.
  *  Memoised: the app re-renders on every pointer move (cursor in the status bar). */
 export const LayersPanel = memo(function LayersPanel({
   layers,
@@ -148,6 +180,7 @@ export const LayersPanel = memo(function LayersPanel({
   const [open, setOpen] = useState<string | null>(null);
   const [fresh, setFresh] = useState("");
   const [chosenVp, setChosenVp] = useState<number | null>(null);
+  const [collapsed, setCollapsed] = useState(storedCollapsed);
   const viewport = viewports.find((v) => v.handle === chosenVp) ?? viewports[0] ?? null;
   const addLayer = () => {
     const name = fresh.trim();
@@ -155,6 +188,184 @@ export const LayersPanel = memo(function LayersPanel({
     onNewLayer(name);
     setFresh("");
   };
+
+  const tree = useMemo(() => buildLayerTree(layers), [layers]);
+  // Kept the same array while nothing changed: the tree takes a new one for a change of state.
+  const expanded = useMemo(() => tree.groups.filter((g) => !collapsed.includes(g)), [tree, collapsed]);
+  const instance = useTree<LayerNode>({
+    rootItemId: ROOT,
+    getItemName: (item) => item.getItemData().name,
+    isItemFolder: (item) => item.getItemData().kind === "group",
+    dataLoader: {
+      getItem: (id) => tree.nodes[id],
+      getChildren: (id) => (tree.nodes[id] as { children?: string[] }).children ?? [],
+    },
+    state: { expandedItems: expanded },
+    setExpandedItems: (update) => {
+      const next = typeof update === "function" ? update(expanded) : update;
+      const folded = tree.groups.filter((g) => !next.includes(g));
+      setCollapsed(folded);
+      try {
+        localStorage.setItem(STORE, JSON.stringify(folded));
+      } catch {
+        // Not remembered; the group is folded for this session.
+      }
+    },
+    hotkeys: MOVE_KEYS,
+    features: [syncDataLoaderFeature, selectionFeature, hotkeysCoreFeature],
+  });
+  // The tree is told when the layers (or which groups are open) change under it.
+  useEffect(() => {
+    instance.rebuildTree();
+  }, [instance, tree, collapsed]);
+
+  /** What one layer's row says and does. */
+  function layerRow(item: ReturnType<typeof instance.getItems>[number], l: LayerInfo) {
+    // Off and frozen layers stay hidden whatever the user does (the drawing says so).
+    const locked = l.off || l.frozen;
+    const visible = !locked && !hidden.has(l.name);
+    const eyeLabel = `${t("visible")}: ${l.name}`;
+    const isolateLabel = `${t("isolate")}: ${l.name}`;
+    const currentLabel = `${t("makeCurrent")}: ${l.name}`;
+    const propsLabel = `${t("layer.properties")}: ${l.name}`;
+    const isCurrent = current?.toUpperCase() === l.name.toUpperCase();
+    const own = !l.name.includes("|");
+    const expandedProps = open === l.name;
+    const vpFrozen = viewport?.frozen.some((n) => n.toUpperCase() === l.name.toUpperCase()) ?? false;
+    const canMakeCurrent = !!onMakeCurrent && own && !isCurrent;
+    const makeCurrent = () => !busy && canMakeCurrent && onMakeCurrent!(l.name);
+    const currentButton = onMakeCurrent && (
+      <button
+        type="button"
+        className="icon"
+        aria-label={currentLabel}
+        title={currentLabel}
+        aria-pressed={isCurrent}
+        disabled={!own}
+        aria-disabled={busy || undefined}
+        onClick={makeCurrent}
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M3 13l2.5-.5L13 5l-2-2-7.5 7.5z" />
+          {isCurrent && <path d="M2 15h12" />}
+        </svg>
+      </button>
+    );
+    return (
+      <div className={expandedProps ? "layer-node open" : "layer-node"} role="none" key={item.getId()}>
+        <div
+          {...item.getProps()}
+          className={visible ? "layer-row" : "layer-row dim"}
+          style={{ "--level": item.getItemMeta().level } as CSSProperties}
+          onDoubleClick={makeCurrent}
+          onKeyDown={(e) => {
+            // Enter on the row itself makes the layer current, as a double click does.
+            if (e.key === "Enter" && e.target === e.currentTarget) {
+              e.preventDefault();
+              makeCurrent();
+            }
+          }}
+        >
+          <span className="swatch" style={{ background: `rgb(${swatchColor(l.color, theme).join(",")})` }} />
+          <span className="name" title={l.name}>
+            <bdi>{l.name}</bdi>
+          </span>
+          {/* The row's buttons are not clicks on the row. */}
+          <span className="layer-more" onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
+            <button
+              type="button"
+              className="icon"
+              aria-label={isolateLabel}
+              title={isolateLabel}
+              disabled={locked}
+              aria-disabled={busy || undefined}
+              onClick={() => !busy && onIsolate(l.name)}
+            >
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <circle cx="8" cy="8" r="5.5" />
+                <circle cx="8" cy="8" r="1.5" />
+              </svg>
+            </button>
+            {!isCurrent && currentButton}
+            {onSetLayer && own && (
+              <button
+                type="button"
+                className="icon"
+                aria-label={propsLabel}
+                title={propsLabel}
+                aria-expanded={expandedProps}
+                onClick={() => setOpen(expandedProps ? null : l.name)}
+              >
+                <svg viewBox="0 0 16 16" aria-hidden="true">
+                  <path d={expandedProps ? "M4 10l4-4 4 4" : "M4 6l4 4 4-4"} />
+                </svg>
+              </button>
+            )}
+          </span>
+          <span className="layer-keep" onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
+            {viewport && own && onViewportFrozen && (
+              <input
+                type="checkbox"
+                className="vp-freeze"
+                aria-label={`${t("layer.vpFreeze")}: ${l.name}`}
+                title={`${t("layer.vpFreeze")}: ${l.name}`}
+                checked={vpFrozen}
+                onChange={(e) => onViewportFrozen(viewport.handle, l.name, e.currentTarget.checked)}
+              />
+            )}
+            {isCurrent && currentButton}
+            <button
+              type="button"
+              className="icon"
+              aria-label={eyeLabel}
+              title={eyeLabel}
+              aria-pressed={visible}
+              disabled={locked}
+              aria-disabled={busy || undefined}
+              onClick={() => !busy && onToggle(l.name)}
+            >
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8 12.1 12.5 8 12.5 1.5 8 1.5 8Z" />
+                {visible ? <circle cx="8" cy="8" r="2" /> : <path d="M2.5 13.5l11-11" />}
+              </svg>
+            </button>
+          </span>
+        </div>
+        {expandedProps && onSetLayer && (
+          <LayerProps
+            key={`${l.name}:${l.color_name}`}
+            layer={l}
+            linetypes={linetypes}
+            onSet={(prop, value) => onSetLayer(l.name, prop, value)}
+            onRename={onRenameLayer && ((to) => onRenameLayer(l.name, to))}
+            onDelete={onDeleteLayer && (() => onDeleteLayer(l.name))}
+          />
+        )}
+      </div>
+    );
+  }
+
+  /** A group's row: its name, how many layers it holds, a chevron that turns when it opens. */
+  function groupRow(item: ReturnType<typeof instance.getItems>[number], node: Extract<LayerNode, { kind: "group" }>) {
+    const isOpen = item.isExpanded();
+    return (
+      <div
+        {...item.getProps()}
+        key={item.getId()}
+        className="layer-row layer-group"
+        style={{ "--level": item.getItemMeta().level } as CSSProperties}
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true" className={isOpen ? "chevron open" : "chevron"}>
+          <path d="M6 4l4 4-4 4" />
+        </svg>
+        <span className="name" title={node.name}>
+          <bdi>{node.name}</bdi>
+        </span>
+        <span className="layer-count">{node.children.length}</span>
+      </div>
+    );
+  }
+
   return (
     <aside className="layers" aria-busy={busy || undefined}>
       <div className="layers-head">
@@ -175,111 +386,12 @@ export const LayersPanel = memo(function LayersPanel({
           </select>
         </label>
       )}
-      <ul>
-        {layers.map((l) => {
-          // Off and frozen layers stay hidden whatever the user does (the drawing says so).
-          const locked = l.off || l.frozen;
-          const visible = !locked && !hidden.has(l.name);
-          const eyeLabel = `${t("visible")}: ${l.name}`;
-          const isolateLabel = `${t("isolate")}: ${l.name}`;
-          const currentLabel = `${t("makeCurrent")}: ${l.name}`;
-          const propsLabel = `${t("layer.properties")}: ${l.name}`;
-          const isCurrent = current?.toUpperCase() === l.name.toUpperCase();
-          const own = !l.name.includes("|");
-          const expanded = open === l.name;
-          const vpFrozen = viewport?.frozen.some((n) => n.toUpperCase() === l.name.toUpperCase()) ?? false;
-          return (
-            <li key={l.name} className={visible ? undefined : "dim"}>
-              <div className="layer-row">
-                <span className="swatch" style={{ background: `rgb(${swatchColor(l.color, theme).join(",")})` }} />
-                <span className="name" title={l.name}>
-                  <bdi>{l.name}</bdi>
-                </span>
-                {viewport && own && onViewportFrozen && (
-                  <input
-                    type="checkbox"
-                    className="vp-freeze"
-                    aria-label={`${t("layer.vpFreeze")}: ${l.name}`}
-                    title={`${t("layer.vpFreeze")}: ${l.name}`}
-                    checked={vpFrozen}
-                    onChange={(e) => onViewportFrozen(viewport.handle, l.name, e.currentTarget.checked)}
-                  />
-                )}
-                <button
-                  type="button"
-                  className="icon"
-                  aria-label={eyeLabel}
-                  title={eyeLabel}
-                  aria-pressed={visible}
-                  disabled={locked}
-                  aria-disabled={busy || undefined}
-                  onClick={() => !busy && onToggle(l.name)}
-                >
-                  <svg viewBox="0 0 16 16" aria-hidden="true">
-                    <path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8 12.1 12.5 8 12.5 1.5 8 1.5 8Z" />
-                    {visible ? <circle cx="8" cy="8" r="2" /> : <path d="M2.5 13.5l11-11" />}
-                  </svg>
-                </button>
-                <button
-                  type="button"
-                  className="icon"
-                  aria-label={isolateLabel}
-                  title={isolateLabel}
-                  disabled={locked}
-                  aria-disabled={busy || undefined}
-                  onClick={() => !busy && onIsolate(l.name)}
-                >
-                  <svg viewBox="0 0 16 16" aria-hidden="true">
-                    <circle cx="8" cy="8" r="5.5" />
-                    <circle cx="8" cy="8" r="1.5" />
-                  </svg>
-                </button>
-                {onMakeCurrent && (
-                  <button
-                    type="button"
-                    className="icon"
-                    aria-label={currentLabel}
-                    title={currentLabel}
-                    aria-pressed={isCurrent}
-                    disabled={!own}
-                    aria-disabled={busy || undefined}
-                    onClick={() => !busy && !isCurrent && onMakeCurrent(l.name)}
-                  >
-                    <svg viewBox="0 0 16 16" aria-hidden="true">
-                      <path d="M3 13l2.5-.5L13 5l-2-2-7.5 7.5z" />
-                      {isCurrent && <path d="M2 15h12" />}
-                    </svg>
-                  </button>
-                )}
-                {onSetLayer && own && (
-                  <button
-                    type="button"
-                    className="icon"
-                    aria-label={propsLabel}
-                    title={propsLabel}
-                    aria-expanded={expanded}
-                    onClick={() => setOpen(expanded ? null : l.name)}
-                  >
-                    <svg viewBox="0 0 16 16" aria-hidden="true">
-                      <path d={expanded ? "M4 10l4-4 4 4" : "M4 6l4 4 4-4"} />
-                    </svg>
-                  </button>
-                )}
-              </div>
-              {expanded && onSetLayer && (
-                <LayerProps
-                  key={`${l.name}:${l.color_name}`}
-                  layer={l}
-                  linetypes={linetypes}
-                  onSet={(prop, value) => onSetLayer(l.name, prop, value)}
-                  onRename={onRenameLayer && ((to) => onRenameLayer(l.name, to))}
-                  onDelete={onDeleteLayer && (() => onDeleteLayer(l.name))}
-                />
-              )}
-            </li>
-          );
+      <div {...instance.getContainerProps(t("layers"))} className="layer-tree">
+        {instance.getItems().map((item) => {
+          const node = item.getItemData();
+          return node.kind === "group" ? groupRow(item, node) : layerRow(item, node.layer);
         })}
-      </ul>
+      </div>
       {(onNewLayer || onLayerStates || onTranslate) && (
         <div className="layers-foot">
           {onNewLayer && (

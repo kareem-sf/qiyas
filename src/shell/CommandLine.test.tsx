@@ -127,3 +127,84 @@ test("history keeps the last 50 lines", () => {
   for (let i = 0; i < 60; i++) key("ArrowUp");
   expect(input.value).toBe("LAYOFF L6");
 });
+
+const options = () => screen.getAllByRole("option");
+const chipOf = (name: string) =>
+  options()
+    .find((o) => o.querySelector("span")!.textContent === name)
+    ?.querySelector("kbd")?.textContent;
+
+test("each command shows its shortcut as a small key", () => {
+  const { type } = setup();
+  type("dis");
+  expect(chipOf("DIST")).toBe("DI");
+  type("tex");
+  expect(chipOf("TEXT")).toBe("DT");
+  // One with no shortcut has no key.
+  type("layo");
+  expect(chipOf("LAYOFF")).toBeUndefined();
+});
+
+test("a shortcut whose command does not start with what was typed is a row of its own; headings show only when there are both kinds", () => {
+  const { view, type } = setup();
+  const headings = () => [...view.container.querySelectorAll("[cmdk-group-heading]")].map((h) => h.textContent);
+  type("t");
+  // MTEXT is here only because T is typed for it.
+  expect(headings()).toEqual(["Commands", "Shortcuts"]);
+  const mtext = options().find((o) => o.querySelector("span")!.textContent === "MTEXT")!;
+  expect(mtext.querySelector("kbd")!.textContent).toBe("T");
+  expect(options().filter((o) => o.querySelector("span")!.textContent === "TEXT")).toHaveLength(1);
+  // Only commands: no headings.
+  type("lay");
+  expect(headings()).toEqual([]);
+});
+
+test("nothing is chosen until the arrows choose it, so Enter runs what was typed, not the first row", () => {
+  const { onAction, type, key, log } = setup();
+  type("layo");
+  expect(screen.queryByRole("option", { selected: true })).toBeNull();
+  key("Enter");
+  expect(onAction).not.toHaveBeenCalled();
+  expect(log()).toEqual(["Command: layo", "Unknown command: layo"]);
+});
+
+test("↑ from nothing goes to the last row, ↓ past the last goes round to the first; the input points at the chosen row", () => {
+  const { input, type, key } = setup();
+  type("lay");
+  const names = () => options().map((o) => o.querySelector("span")!.textContent);
+  expect(input.getAttribute("aria-activedescendant")).toBeNull();
+  key("ArrowUp");
+  expect(screen.getByRole("option", { selected: true }).querySelector("span")!.textContent).toBe(names().at(-1));
+  expect(input.getAttribute("aria-activedescendant")).toBe(screen.getByRole("option", { selected: true }).id);
+  expect(input.getAttribute("aria-controls")).toBe(screen.getByRole("listbox").id);
+  key("ArrowDown");
+  expect(screen.getByRole("option", { selected: true }).querySelector("span")!.textContent).toBe(names()[0]);
+});
+
+test("a click on a row runs it, and the pointer resting on one does not choose it", () => {
+  const { onAction, input, type } = setup();
+  type("area");
+  const row = options()[0];
+  fireEvent.pointerMove(row);
+  expect(screen.queryByRole("option", { selected: true })).toBeNull();
+  // The mouse is pressed on the list without taking the focus off the input.
+  const press = fireEvent.mouseDown(row);
+  expect(press).toBe(false);
+  fireEvent.click(row);
+  expect(onAction).toHaveBeenLastCalledWith({ type: "tool", tool: "area" });
+  expect(input.value).toBe("");
+  expect(screen.queryByRole("listbox")).toBeNull();
+});
+
+test("the list closes when the input loses the focus, and while a point is asked for it is not offered", () => {
+  const { input, type } = setup();
+  type("lay");
+  expect(screen.getByRole("listbox")).toBeTruthy();
+  fireEvent.blur(input);
+  expect(screen.queryByRole("listbox")).toBeNull();
+  expect(input.getAttribute("aria-expanded")).toBe("false");
+  cleanup();
+  const point = setup(state("point"), "Specify next point:");
+  point.type("lay");
+  expect(screen.queryByRole("listbox")).toBeNull();
+});

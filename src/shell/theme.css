@@ -708,20 +708,106 @@ body {
   justify-content: space-between;
   padding: 8px 10px;
 }
-.layers ul {
-  list-style: none;
-  margin: 0;
-  padding: 0 4px 8px;
+/* The tree: one row each, in the order the layers come; a group's layers are indented under it. */
+.layer-tree {
+  min-height: 0;
   overflow-y: auto;
+  padding: 0 4px 8px;
+  outline: none;
 }
-.layers li {
-  padding: 1px 6px;
-  border-radius: 6px;
-}
-.layers .layer-row {
+.layer-row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
+  min-height: 26px;
+  padding: 0 4px;
+  padding-inline-start: calc(6px + var(--level, 0) * 14px);
+  border-radius: 6px;
+  outline: none;
+}
+.layer-row:hover {
+  background: var(--row-hover);
+}
+.layer-row[aria-selected="true"] {
+  background: var(--row-current);
+}
+.layer-row:focus-visible {
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+.layer-row.dim .name {
+  color: var(--muted);
+}
+.layer-group {
+  font-weight: 600;
+  cursor: default;
+}
+.layer-group .chevron {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 140ms ease;
+}
+.layer-group .chevron.open {
+  transform: rotate(90deg);
+}
+:root[dir="rtl"] .layer-group .chevron {
+  transform: scaleX(-1);
+}
+:root[dir="rtl"] .layer-group .chevron.open {
+  transform: scaleX(-1) rotate(90deg);
+}
+.layer-count {
+  font-weight: 400;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+/* What stays on the row: the eye, and the pencil of the current layer. What shows when the pointer or
+   the keyboard is on it: isolate, make current, properties; they lie over the end of the name, on the
+   row's own colour, so a long name keeps its room until then. */
+.layer-keep {
+  display: flex;
+  flex: none;
+  align-items: center;
+}
+.layer-more {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 26px;
+  display: flex;
+  align-items: center;
+  padding-inline: 8px 2px;
+  background: var(--panel);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+.layer-row:hover .layer-more {
+  background: var(--row-hover);
+}
+.layer-row[aria-selected="true"] .layer-more {
+  background: var(--row-current);
+}
+.layer-row:hover .layer-more,
+.layer-row:focus-within .layer-more,
+.layer-node.open .layer-more {
+  opacity: 1;
+  pointer-events: auto;
+}
+.layer-keep .vp-freeze {
+  margin: 0 4px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .layer-more,
+  .layer-group .chevron {
+    transition: none;
+  }
 }
 /* A layer's properties, open under its row. */
 .layer-props {
@@ -768,12 +854,6 @@ body {
 .layer-new input {
   flex: 1;
   min-width: 0;
-}
-.layers li:hover {
-  background: var(--hover);
-}
-.layers li.dim .name {
-  color: var(--muted);
 }
 .swatch {
   width: 10px;
@@ -2732,24 +2812,33 @@ span.grid-sort {
   background: var(--bg);
   border-color: var(--rule);
 }
-.command-input [role="listbox"] {
+/* The suggestions (cmdk): a quiet list above the line, each command with its shortcut as a small key,
+   under a heading each when there are both commands and shortcuts. */
+.command-input [cmdk-list] {
   position: absolute;
   inset-block-end: 100%;
   inset-inline-start: 0;
   z-index: 5;
-  min-width: 200px;
+  min-width: 220px;
   max-height: 240px;
   overflow-y: auto;
   margin: 0 0 2px;
-  padding: 2px;
-  list-style: none;
+  padding: 3px;
   background: var(--bg);
   border: 1px solid var(--rule);
-  border-radius: 6px;
-  box-shadow: 0 4px 12px rgb(0 0 0 / 0.15);
+  border-radius: 8px;
+  box-shadow: 0 4px 14px rgb(14 15 18 / 0.14);
 }
-.command-input [role="option"] {
+.command-input [cmdk-group-heading] {
+  padding: 5px 8px 2px;
+  font-size: 10.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.cmd-item {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
   padding: 1px 8px;
@@ -2757,12 +2846,12 @@ span.grid-sort {
   font-family: ui-monospace, monospace;
   cursor: pointer;
 }
-.command-input [role="option"][aria-selected="true"],
-.command-input [role="option"]:hover {
+.cmd-item[data-selected="true"],
+.cmd-item:hover {
   background: var(--accent-soft);
 }
-.command-input [role="option"] .target {
-  color: var(--muted);
+.cmd-item[hidden] {
+  display: none;
 }
 
 /* Text: TEXT's editor where the text starts, the MText and text edit dialog, and the find and

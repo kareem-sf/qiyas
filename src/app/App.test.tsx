@@ -733,7 +733,7 @@ test("the tool's prompt is said once: on the command line, or in the status bar 
 
   await typeLine("MOVE");
   // The command line asks; the status bar keeps the file name.
-  expect(document.querySelector(".command-line label")?.textContent).toBe(prompt);
+  expect(document.querySelector(".command-line label:not([cmdk-label])")?.textContent).toBe(prompt);
   expect(status()).toBe("plan.dwg");
 
   // Ctrl+9 hides the command line: the status bar asks instead.
