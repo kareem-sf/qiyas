@@ -137,6 +137,8 @@ struct After {
     reshaped: bool,
     /// A dimension's or a table's block is drawn again.
     rebuild: bool,
+    /// A dimension took another style: its unit suffix follows the new one.
+    restyled: bool,
 }
 
 impl Session {
@@ -171,6 +173,9 @@ impl Session {
             if m.chain.is_empty() && measures(m, h.value()) {
                 m.layer.clone_from(&layer);
             }
+        }
+        if after.restyled {
+            self.restyled_dimension(h);
         }
         if after.rebuild {
             match self.entity(h) {
@@ -405,6 +410,7 @@ impl Session {
                     other => return Err(no_such(other, "dimension style")),
                 }
                 after.rebuild = true;
+                after.restyled = true;
             }
         }
         Ok(after)
@@ -492,6 +498,7 @@ impl Session {
                         if let (EntityType::Dimension(d), Some(s)) = (&mut e, &dim_style) {
                             d.base_mut().style_name.clone_from(s);
                             after.rebuild = true;
+                            after.restyled = true;
                         }
                     }
                     MatchProp::HatchPattern => {

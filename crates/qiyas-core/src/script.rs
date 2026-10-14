@@ -578,6 +578,15 @@ impl Parser {
         };
         let written = fields.get("type").and_then(|t| t.as_str()) == Some("write_block");
         for (key, field) in fields.iter_mut() {
+            // A batch's commands go through the same rule.
+            if key == "commands" {
+                if let Some(commands) = field.as_array_mut() {
+                    for command in commands {
+                        self.json_paths(line, command)?;
+                    }
+                }
+                continue;
+            }
             if key != "path" && !key.ends_with("_path") {
                 continue;
             }

@@ -1198,6 +1198,53 @@ fn a_dimension_style_in_other_numbers_gets_no_unit() {
 }
 
 #[test]
+fn a_dimension_on_a_layout_gets_no_drawing_unit() {
+    // Paper space is measured in paper units, not the drawing's metres.
+    let (_dir, mut s, model) = dimensioned_in(6, "paper.dxf");
+    assert_eq!(text_of(&s, model), "10.000 m");
+    let paper = s
+        .drawing
+        .sheets()
+        .into_iter()
+        .find(|sh| !sh.is_model)
+        .unwrap();
+    s.set_sheet(&paper.block).unwrap();
+    let h = one(s.run(linear_cmd()).unwrap());
+    assert_eq!(own_post(&s, h), None);
+    assert_eq!(text_of(&s, h), "10.000");
+}
+
+#[test]
+fn a_dimension_given_another_style_takes_that_styles_unit_rule() {
+    let mut doc = sample();
+    let mut lfac = doc.dim_styles.get("Standard").unwrap().clone();
+    lfac.name = "MM".to_string();
+    lfac.handle = doc.allocate_handle();
+    lfac.dimlfac = 1000.0;
+    doc.dim_styles.add(lfac).unwrap();
+    let (_dir, mut s) = open(&doc, "restyle.dxf");
+    let h = one(s.run(linear_cmd()).unwrap());
+    assert_eq!(own_post(&s, h).as_deref(), Some("<> m"));
+    // Metres shown as millimetres: the drawing's unit would be wrong, so it goes.
+    s.run(Command::SetProperty {
+        target: t(h),
+        prop: qiyas_core::EntityProp::DimStyle,
+        value: serde_json::json!("MM"),
+    })
+    .unwrap();
+    assert_eq!(own_post(&s, h), None);
+    assert!(!text_of(&s, h).contains(' '), "{}", text_of(&s, h));
+    // And back: Standard shows the unit again.
+    s.run(Command::SetProperty {
+        target: t(h),
+        prop: qiyas_core::EntityProp::DimStyle,
+        value: serde_json::json!("Standard"),
+    })
+    .unwrap();
+    assert_eq!(own_post(&s, h).as_deref(), Some("<> m"));
+}
+
+#[test]
 fn rebuilt_dimensions_keep_the_suffix() {
     let (_dir, mut s, h) = dimensioned_in(6, "rebuilt.dxf");
     s.run(Command::DimEdit {

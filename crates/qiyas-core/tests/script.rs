@@ -483,6 +483,24 @@ fn json_lines_follow_the_folder_rule_for_their_paths() {
             assert!(message.contains("outside"), "{line}: {message}");
         }
     }
+    // A batch's commands go through it too.
+    let batch = |p: &str| {
+        format!(
+            r#"{{"type":"batch","commands":[{{"type":"insert_block","name":"DOOR","at":[0,0],"from_path":"{p}"}}]}}"#
+        )
+    };
+    let script = parsed(&batch("door.dwg"), &scripts, Some(&drawing));
+    let Action::Command(Command::Batch { commands }) = &script.steps[0].action else {
+        panic!("{:?}", script.steps[0].action)
+    };
+    let inner = serde_json::to_value(&commands[0]).unwrap();
+    assert_eq!(
+        inner["from_path"].as_str().unwrap(),
+        real.join("door.dwg").to_string_lossy()
+    );
+    let (n, message) = error(&batch("../../x.dwg"), &scripts, Some(&drawing));
+    assert_eq!(n, 1);
+    assert!(message.contains("outside"), "{message}");
     // A command without a path is untouched.
     let script = parsed(
         r#"{"type":"count_block","block_name":"DOOR","layer":null}"#,

@@ -1300,7 +1300,9 @@ impl Session {
                             "A batch takes drawing commands only".to_string(),
                         ));
                     }
-                    // Not `run_as`: the batch is the one undo step.
+                    // Not `run_as`: the batch is the one undo step. Its edit-in-place rules
+                    // still hold for each command (a block never goes inside itself).
+                    self.check_block_edit(&command)?;
                     if let Outcome::Added { handles: more } = self.execute(command, source)? {
                         handles.extend(more);
                     }

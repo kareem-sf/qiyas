@@ -377,7 +377,8 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   (`ACAD` `DSTYLE` group 3, `<> m`; `qiyas_geom::dimpost`/`set_dimpost`, which `DimLook::named`
   reads, so AutoCAD's own overrides count too), only when its style's DIMPOST is empty (or the
   codec's plain `<>`), DIMLFAC is 1 and it is no angle; existing AutoCAD dimensions and styles that
-  have a suffix are never touched. `DimStyleFields::show_units` ("Show units" in the style panel,
+  have a suffix are never touched. A dimension on a layout gets none (paper units); one given another
+  style (properties, match) takes or drops the suffix as that style says. `DimStyleFields::show_units` ("Show units" in the style panel,
   `SetDimStyle`, default on, older wire commands without it read as on) is kept in the drawing's
   variable `QIYAS_DIMUNITS_<style>` ("0" once off; undoable with the tables); turning it
   off or on rebuilds the style's Qiyas-made dimensions with the suffix taken off or put on (a

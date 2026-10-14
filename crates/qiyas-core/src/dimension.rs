@@ -18,7 +18,7 @@ use opencadcodec::entities::{
     LeaderCreationType, Tolerance,
 };
 use opencadcodec::tables::DimStyle;
-use opencadcodec::{BlockRecord, EntityType, Handle, MText, Vector3};
+use opencadcodec::{BlockRecord, CadDocument, EntityType, Handle, MText, Vector3};
 use opencadkernel::geom2d::Curve;
 use qiyas_geom::{
     clear_dimpost, dimension_entities, dimpost, flatten, is_logical_text, set_dimpost,
@@ -449,7 +449,13 @@ impl Session {
         } else {
             1.0
         };
+        // A layout's numbers are paper units, not the drawing's: no suffix there.
+        let in_model = doc
+            .block_records
+            .get("*Model_Space")
+            .is_some_and(|m| m.handle == base.common.owner_handle);
         let wanted = measures_length
+            && in_model
             && no_suffix(&style.dimpost)
             && (factor - 1.0).abs() < 1e-12
             && self.dim_units_shown(&base.style_name);
@@ -494,17 +500,25 @@ impl Session {
             .into_iter()
             .flat_map(|sheet| self.drawing.entities_in(&sheet.block).collect::<Vec<_>>())
             .filter_map(|e| match e {
-                EntityType::Dimension(d) if d.base().style_name.eq_ignore_ascii_case(name) => {
-                    let block = &d.base().block_name;
-                    let ours = !block.is_empty()
-                        && doc
-                            .entities_in_block(block)
-                            .any(|part| is_logical_text(part.common()));
-                    ours.then_some(d.base().common.handle)
+                EntityType::Dimension(d)
+                    if d.base().style_name.eq_ignore_ascii_case(name)
+                        && generated_block(doc, d) =>
+                {
+                    Some(d.base().common.handle)
                 }
                 _ => None,
             })
             .collect()
+    }
+
+    /// The dimension `h` took another style: a Qiyas-made one takes the unit suffix as that
+    /// style says (its own DIMPOST, DIMLFAC, Show units). AutoCAD's are left as they are.
+    pub(crate) fn restyled_dimension(&mut self, h: Handle) {
+        if let Some(EntityType::Dimension(d)) = self.drawing.doc.get_entity(h) {
+            if generated_block(&self.drawing.doc, d) {
+                self.apply_unit_suffix(h);
+            }
+        }
     }
 
     /// The DIMSCALE a new annotation keeps as its own: the annotation scale's factor, which
@@ -1204,4 +1218,13 @@ fn crossing_param(a: [f64; 2], b: [f64; 2], p: [f64; 2], q: [f64; 2]) -> Option<
 
 fn lerp(a: [f64; 2], b: [f64; 2], t: f64) -> [f64; 2] {
     [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
+}
+
+/// Whether Qiyas generated the dimension's block (its parts carry `LOGICAL_TEXT_APP`).
+fn generated_block(doc: &CadDocument, d: &Dimension) -> bool {
+    let block = &d.base().block_name;
+    !block.is_empty()
+        && doc
+            .entities_in_block(block)
+            .any(|part| is_logical_text(part.common()))
 }

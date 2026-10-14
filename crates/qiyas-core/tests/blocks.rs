@@ -1064,6 +1064,33 @@ fn the_edited_block_cannot_be_redefined_meanwhile() {
 }
 
 #[test]
+fn a_batch_cannot_put_the_edited_block_inside_itself() {
+    let (_dir, mut session) = sample_session();
+    let ([_, rotated, _], _) = doors(&session);
+    session
+        .run(Command::EditBlockInPlace {
+            target: top(rotated),
+        })
+        .unwrap();
+    let before = sheet_handles(&session);
+    let refused = session.run(Command::Batch {
+        commands: vec![Command::InsertBlock {
+            name: "door".to_string(),
+            at: [0.0, 0.0],
+            scale: 1.0,
+            rotation: 0.0,
+            attribute_values: BTreeMap::new(),
+            from_path: None,
+        }],
+    });
+    assert!(
+        matches!(&refused, Err(CoreError::InvalidCommand(m)) if m.contains("inside itself")),
+        "{refused:?}"
+    );
+    assert_eq!(sheet_handles(&session), before);
+}
+
+#[test]
 fn discarding_drops_what_was_added_and_keeps_work_outside_the_block() {
     let (_dir, mut session) = sample_session();
     let ([_, rotated, _], leaf) = doors(&session);
