@@ -31,6 +31,8 @@ First public release.
 - Small dot-grid loading indicators (our own design) replace the spinner where the window waits:
   opening, comparing with the BOQ, drawing a PDF page, plotting, scripts and updates. Mizan works
   under the Qiyas mark itself, its mesh drawing itself line by line.
+- Mizan's answers render as real Markdown: headings, rules, nested lists, tables (scrolling in
+  their own box), quotes and code; links show where they point and never navigate.
 - The ribbon is an icon ribbon, measure first: Measure, Draw and Annotate on the tab row, the rest
   under More. Every button is an icon with a tooltip (its name, what it does, its command line
   alias); a group shows its main buttons and puts the others behind a "⋯" button as the window
