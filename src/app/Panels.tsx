@@ -1,6 +1,7 @@
 /** The window's three columns: the layers panel and the properties palette on the left, the
  *  drawing in the middle (file tabs, the canvas with what floats over it, the split view, sheet
  *  tabs), and the side panel (take-off, BOQ, conflicts, Mizan) on the right. */
+import { Tabs } from "@base-ui/react/tabs";
 import type { Drafting, DrawingInfo, Sheet, TabInfo } from "../api";
 import { AssistantPanel } from "../ai/AssistantPanel";
 import { BoqPanel } from "../boq/BoqPanel";
@@ -34,9 +35,10 @@ import type { Blocks } from "./useBlocks";
 import type { Comments } from "./useComments";
 import type { Drawings } from "./useDrawings";
 import type { Layers } from "./useLayers";
+import { SideTabs, type SideTabItem } from "./SideTabs";
 import type { Parametric } from "./useParametric";
 import type { Selection } from "./useSelection";
-import type { Shell } from "./useShell";
+import type { Shell, SideTab } from "./useShell";
 import type { Sheets } from "./useSheets";
 import type { Takeoff, TakeoffState } from "./useTakeoff";
 
@@ -324,76 +326,34 @@ export function SidePanel({ info, drafting, shell, takeoffState, takeoff, ai, co
   const { assistant, showCard, undoCard, openSettings } = ai;
   const openConflicts = openCount(conflicts);
 
-  // The BOQ table and the conflicts need more room than the take-off.
+  const tabs: SideTabItem<SideTab>[] = [
+    { id: "takeoff", label: t("takeoff") },
+    { id: "boq", label: t("boq") },
+    {
+      id: "conflicts",
+      label: t("conflicts"),
+      extra:
+        openConflicts > 0 ? (
+          <span className="tab-count" title={t("conflicts.openCount", { n: openConflicts })}>
+            {openConflicts}
+          </span>
+        ) : undefined,
+    },
+    { id: "comments", label: t("comments") },
+    { id: "assistant", label: t("assistant"), extra: assistant.busy ? <DotLoader pattern="pulse" /> : undefined },
+  ];
+
+  // The BOQ table and the conflicts need more room than the take-off. All the panels stay mounted,
+  // so a draft, a search or a running answer survives a tab switch.
   return (
-    <div className={sideTab === "boq" || sideTab === "conflicts" ? "side wide" : "side"}>
-      <div className="side-tabs" role="tablist">
-        <button
-          type="button"
-          role="tab"
-          id="tab-takeoff"
-          aria-controls="panel-takeoff"
-          aria-selected={sideTab === "takeoff"}
-          onClick={() => setSideTab("takeoff")}
-        >
-          {t("takeoff")}
-        </button>
-        <button
-          type="button"
-          role="tab"
-          id="tab-boq"
-          aria-controls="panel-boq"
-          aria-selected={sideTab === "boq"}
-          onClick={() => setSideTab("boq")}
-        >
-          {t("boq")}
-        </button>
-        <button
-          type="button"
-          role="tab"
-          id="tab-conflicts"
-          aria-controls="panel-conflicts"
-          aria-selected={sideTab === "conflicts"}
-          onClick={() => setSideTab("conflicts")}
-        >
-          {t("conflicts")}
-          {openConflicts > 0 && (
-            <span className="tab-count" title={t("conflicts.openCount", { n: openConflicts })}>
-              {openConflicts}
-            </span>
-          )}
-        </button>
-        <button
-          type="button"
-          role="tab"
-          id="tab-comments"
-          aria-controls="panel-comments"
-          aria-selected={sideTab === "comments"}
-          onClick={() => setSideTab("comments")}
-        >
-          {t("comments")}
-        </button>
-        <button
-          type="button"
-          role="tab"
-          id="tab-assistant"
-          aria-controls="panel-assistant"
-          aria-selected={sideTab === "assistant"}
-          onClick={() => setSideTab("assistant")}
-        >
-          {t("assistant")}
-          {assistant.busy && <DotLoader pattern="pulse" />}
-        </button>
-      </div>
+    <SideTabs<SideTab>
+      className={sideTab === "boq" || sideTab === "conflicts" ? "side wide" : "side"}
+      tabs={tabs}
+      value={sideTab}
+      onChange={setSideTab}
+    >
       {infoCard && <InfoCard info={infoCard} onClose={() => setInfoCard(null)} />}
-      {/* All stay mounted, so a draft, a search or a running answer survives a tab switch. */}
-      <div
-        className="side-panel"
-        role="tabpanel"
-        id="panel-takeoff"
-        aria-labelledby="tab-takeoff"
-        hidden={sideTab !== "takeoff"}
-      >
+      <Tabs.Panel value="takeoff" keepMounted tabIndex={-1} className="side-panel">
         <TakeoffPanel
           items={items}
           totals={itemTotals}
@@ -405,14 +365,8 @@ export function SidePanel({ info, drafting, shell, takeoffState, takeoff, ai, co
           onLink={linkRow}
           precision={drafting?.precision ?? 3}
         />
-      </div>
-      <div
-        className="side-panel"
-        role="tabpanel"
-        id="panel-boq"
-        aria-labelledby="tab-boq"
-        hidden={sideTab !== "boq"}
-      >
+      </Tabs.Panel>
+      <Tabs.Panel value="boq" keepMounted tabIndex={-1} className="side-panel">
         <BoqPanel
           boq={bill}
           takeoff={items}
@@ -421,14 +375,8 @@ export function SidePanel({ info, drafting, shell, takeoffState, takeoff, ai, co
           onImport={info ? onImportBoq : undefined}
           onTolerance={setTolerance}
         />
-      </div>
-      <div
-        className="side-panel"
-        role="tabpanel"
-        id="panel-conflicts"
-        aria-labelledby="tab-conflicts"
-        hidden={sideTab !== "conflicts"}
-      >
+      </Tabs.Panel>
+      <Tabs.Panel value="conflicts" keepMounted tabIndex={-1} className="side-panel">
         <ConflictsPanel
           conflicts={conflicts}
           compared={compared}
@@ -439,35 +387,23 @@ export function SidePanel({ info, drafting, shell, takeoffState, takeoff, ai, co
           onResolve={resolveConflict}
           onOpenBoq={openBoqTab}
         />
-      </div>
-      <div
-        className="side-panel"
-        role="tabpanel"
-        id="panel-comments"
-        aria-labelledby="tab-comments"
-        hidden={sideTab !== "comments"}
-      >
+      </Tabs.Panel>
+      <Tabs.Panel value="comments" keepMounted tabIndex={-1} className="side-panel">
         <CommentsPanel
           comments={comments.comments}
           sheets={info?.sheets ?? []}
           onRefresh={comments.refresh}
           onShow={comments.show}
         />
-      </div>
-      <div
-        className="side-panel"
-        role="tabpanel"
-        id="panel-assistant"
-        aria-labelledby="tab-assistant"
-        hidden={sideTab !== "assistant"}
-      >
+      </Tabs.Panel>
+      <Tabs.Panel value="assistant" keepMounted tabIndex={-1} className="side-panel">
         <AssistantPanel
           assistant={assistant}
           onShow={showCard}
           onUndo={undoCard}
           onSettings={openSettings}
         />
-      </div>
-    </div>
+      </Tabs.Panel>
+    </SideTabs>
   );
 }

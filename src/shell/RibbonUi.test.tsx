@@ -13,8 +13,20 @@ afterEach(() => {
 });
 
 const wait = (ms: number) => act(() => void vi.advanceTimersByTime(ms));
+/** Time passes and the promises it was waiting for settle (a popup closing, the focus returning). */
+const settle = (ms = 50) => act(async () => void (await vi.advanceTimersByTimeAsync(ms)));
+/** The pointer comes onto a button: Base UI hears it on the box round the button (`.rb-tip`), as a
+ *  `mouseenter` and a move. */
+const enter = (el: HTMLElement) => {
+  const box = el.closest(".rb-tip") ?? el;
+  act(() => {
+    fireEvent.mouseEnter(box);
+    fireEvent.mouseMove(box);
+  });
+};
+const leave = (el: HTMLElement) => act(() => void fireEvent.mouseLeave(el.closest(".rb-tip") ?? el));
 const hover = (el: HTMLElement) => {
-  fireEvent.mouseEnter(el);
+  enter(el);
   wait(HOVER_DELAY + 50);
 };
 
@@ -23,7 +35,7 @@ test("the pointer resting on a button shows a tooltip: name, what it does, its a
   fireEvent.click(screen.getByRole("tab", { name: "Draw" }));
   const trim = screen.getByRole("button", { name: "Trim" });
   expect(screen.queryByRole("tooltip")).toBeNull();
-  fireEvent.mouseEnter(trim);
+  enter(trim);
   // After a short delay, not at once.
   expect(screen.queryByRole("tooltip")).toBeNull();
   wait(HOVER_DELAY + 50);
@@ -32,7 +44,7 @@ test("the pointer resting on a button shows a tooltip: name, what it does, its a
   expect(tip.textContent).toContain("Cut objects back to the edge of another object.");
   expect(tip.querySelector("kbd")!.textContent).toBe("Alias · TR");
   expect(trim.getAttribute("aria-describedby")).toBe(tip.id);
-  fireEvent.mouseLeave(trim);
+  leave(trim);
   expect(screen.queryByRole("tooltip")).toBeNull();
   expect(trim.getAttribute("aria-describedby")).toBeNull();
 });
@@ -41,7 +53,7 @@ test("a command without an alias has no alias line; the ellipsis is not in the n
   render(<Ribbon {...props} onOpen={() => {}} />);
   hover(screen.getByRole("button", { name: "Select" }));
   expect(screen.getByRole("tooltip").querySelector("kbd")).toBeNull();
-  fireEvent.mouseLeave(screen.getByRole("button", { name: "Select" }));
+  leave(screen.getByRole("button", { name: "Select" }));
   hover(screen.getByRole("button", { name: "Open…" }));
   expect(screen.getByRole("tooltip").querySelector("b")!.textContent).toBe("Open");
 });
@@ -69,6 +81,8 @@ test("the keyboard's focus shows it, Escape, blur and a click hide it", () => {
   wait(300);
   expect(screen.queryByRole("tooltip")).not.toBeNull();
   act(() => select.blur());
+  // Base UI looks where the focus went on the next tick.
+  wait(50);
   expect(screen.queryByRole("tooltip")).toBeNull();
   // A click hides the one the pointer brought.
   hover(select);
@@ -80,6 +94,7 @@ test("the keyboard's focus shows it, Escape, blur and a click hide it", () => {
 test("focus a click brought shows no tooltip", () => {
   render(<Ribbon {...props} />);
   const select = screen.getByRole("button", { name: "Select" });
+  fireEvent.pointerDown(select);
   fireEvent.mouseDown(select);
   act(() => select.focus());
   wait(500);
@@ -100,8 +115,8 @@ test("moving from one button to the next while a card shows moves it at once", (
   render(<Ribbon {...props} />);
   hover(screen.getByRole("button", { name: "Distance" }));
   expect(screen.getByRole("tooltip").querySelector("b")!.textContent).toBe("Distance");
-  fireEvent.mouseLeave(screen.getByRole("button", { name: "Distance" }));
-  fireEvent.mouseEnter(screen.getByRole("button", { name: "Area" }));
+  leave(screen.getByRole("button", { name: "Distance" }));
+  enter(screen.getByRole("button", { name: "Area" }));
   expect(screen.getByRole("tooltip").querySelector("b")!.textContent).toBe("Area");
 });
 
@@ -155,20 +170,25 @@ test("More holds Parametric, Insert, View, Manage and Output; choosing one shows
   expect(screen.getByRole("menuitemradio", { name: "Insert" }).getAttribute("aria-checked")).toBe("false");
 });
 
-test("the More menu is reached by the keyboard: ArrowDown opens it, the arrows move, Escape closes it and gives the focus back", () => {
+test("the More menu is reached by the keyboard: ArrowDown opens it, the arrows move, Escape closes it and gives the focus back", async () => {
   render(<Ribbon {...props} />);
   const more = screen.getByRole("tab", { name: "More" });
   act(() => more.focus());
   fireEvent.keyDown(more, { key: "ArrowDown" });
+  await settle();
   const items = screen.getAllByRole("menuitemradio");
   expect(document.activeElement).toBe(items[0]);
   fireEvent.keyDown(items[0], { key: "ArrowDown" });
+  await settle();
   expect(document.activeElement).toBe(items[1]);
   fireEvent.keyDown(items[1], { key: "End" });
+  await settle();
   expect(document.activeElement).toBe(items[4]);
   fireEvent.keyDown(items[4], { key: "ArrowDown" });
+  await settle();
   expect(document.activeElement).toBe(items[0]);
-  fireEvent.keyDown(document.body, { key: "Escape" });
+  fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+  await settle();
   expect(screen.queryByRole("menu")).toBeNull();
   expect(document.activeElement).toBe(more);
 });
@@ -240,17 +260,19 @@ test("Measure's Dimensions shows its first five; the rest, and the style, are be
   expect(onDimStyle).toHaveBeenCalled();
   // Disabled without a handler, as on the bar.
   fireEvent.click(more);
-  expect((screen.getByRole("menuitem", { name: "Dimension style…" }) as HTMLButtonElement).disabled).toBe(false);
+  expect(screen.getByRole("menuitem", { name: "Dimension style…" }).getAttribute("aria-disabled")).toBeNull();
 });
 
-test("a flyout's tool shows pressed, and Escape closes it back onto its ⋯", () => {
+test("a flyout's tool shows pressed, and Escape closes it back onto its ⋯", async () => {
   render(<Ribbon {...props} active="dimArc" />);
   const more = screen.getByRole("button", { name: "More in Dimensions" });
   act(() => more.focus());
   fireEvent.keyDown(more, { key: "ArrowDown" });
+  await settle();
   expect(screen.getByRole("menuitemcheckbox", { name: "Arc length" }).getAttribute("aria-checked")).toBe("true");
   expect(document.activeElement).toBe(screen.getAllByRole("menuitemcheckbox")[0]);
-  fireEvent.keyDown(document.body, { key: "Escape" });
+  fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+  await settle();
   expect(screen.queryByRole("menu")).toBeNull();
   expect(document.activeElement).toBe(more);
 });

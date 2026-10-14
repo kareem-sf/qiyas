@@ -1,3 +1,5 @@
+import { Menu } from "@base-ui/react/menu";
+import { Tabs } from "@base-ui/react/tabs";
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { NamedView, Recent, RibbonButton, RibbonGroup, RibbonLayout } from "../api";
 import { useT } from "../i18n";
@@ -8,7 +10,7 @@ import { RibbonIcon } from "./ribbonIcons";
 import { aliasesFor, isPrimaryGroup } from "./ribbonInfo";
 import { DEFAULT_RIBBON, QUICK_ACCESS } from "./ribbonLayout";
 import { Tip, TooltipLayer, type TipInfo } from "./Tooltip";
-import { useRoving, useToolbarRoving } from "./useRoving";
+import { useToolbarRoving } from "./useRoving";
 import { ViewsMenu } from "./ViewsMenu";
 
 export type { Tool };
@@ -158,8 +160,9 @@ function actions(props: Props): Record<string, (() => void) | undefined> {
 /** Tabs the tabs' row shows; the others are under "More" (all of them when "More" would hold one). */
 const SHOWN_TABS = 3;
 
-/** The one flyout open: a group's "⋯" list, or the tabs' "More". */
-type Open = { kind: "more" | "group"; key: string; anchor: HTMLElement };
+/** The tab that is the "More" button: it is never the chosen tab itself, but stands for the one
+ *  chosen from its menu. */
+const MORE = "\u0000more";
 
 export function Ribbon(props: Props) {
   return (
@@ -179,11 +182,10 @@ function RibbonBody(props: Props) {
   const lead = tabs.length > SHOWN_TABS + 1 ? tabs.slice(0, SHOWN_TABS) : tabs;
   const more = tabs.slice(lead.length);
   const inMore = tab !== undefined && more.includes(tab);
-  const roving = useRoving(lead.length + (more.length > 0 ? 1 : 0), !tab ? 0 : inMore ? lead.length : lead.indexOf(tab));
   const quick = useToolbarRoving();
   const handlers = actions(props);
-  const [open, setOpen] = useState<Open | null>(null);
-  const moreTab = useRef<HTMLButtonElement>(null);
+  /** The flyout open: the key of a group's "⋯" list, or `MORE` for the tabs' menu. */
+  const [open, setOpen] = useState<string | null>(null);
 
   // How many buttons each group of the tab on screen shows in this width (`main`, or fewer when
   // the panel would need to scroll), by tab and group.
@@ -331,112 +333,69 @@ function RibbonBody(props: Props) {
     watch.observe(el);
     return () => watch.disconnect();
   }, []);
-  // Another tab, or the buttons rearranged under it: its flyout is closed.
-  useEffect(() => {
-    if (open && !open.anchor.isConnected) setOpen(null);
-  });
-
-  const close = (restoreFocus: boolean) => {
-    if (restoreFocus) open?.anchor.focus();
-    setOpen(null);
-  };
+  // Another tab: its flyouts are closed.
+  useEffect(() => setOpen(null), [tab?.id]);
 
   /** One row of a flyout: the icon and the name. */
   function flyoutItem(b: RibbonButton, key: string) {
     const r = resolve(b);
     const checkable = b.kind !== "action";
-    return (
-      <button
-        key={key}
-        type="button"
-        role={checkable ? "menuitemcheckbox" : "menuitem"}
-        aria-checked={checkable ? r.pressed : undefined}
-        className={checkable && r.pressed ? "rb-item on" : "rb-item"}
-        disabled={!r.run}
-        title={r.run ? undefined : t("comingSoon")}
-        onClick={() => {
-          setOpen(null);
-          r.run?.();
-        }}
-        onKeyDown={ignoreSpace}
-        onKeyUp={ignoreSpace}
-      >
+    const content = (
+      <>
         <RibbonIcon name={b.command} />
         <span>{t(r.label)}</span>
-      </button>
+      </>
+    );
+    const shared = {
+      className: checkable && r.pressed ? "rb-item on" : "rb-item",
+      disabled: !r.run,
+      title: r.run ? undefined : t("comingSoon"),
+      onKeyDown: ignoreSpace,
+      onKeyUp: ignoreSpace,
+    };
+    return checkable ? (
+      <Menu.CheckboxItem key={key} {...shared} checked={!!r.pressed} onCheckedChange={() => r.run?.()} closeOnClick>
+        {content}
+      </Menu.CheckboxItem>
+    ) : (
+      <Menu.Item key={key} {...shared} onClick={() => r.run?.()}>
+        {content}
+      </Menu.Item>
     );
   }
-
-  const flyout = () => {
-    if (!open) return null;
-    if (open.kind === "more") {
-      return (
-        <RibbonFlyout anchor={open.anchor} label={t("ribbon.more")} rows={more.length} onClose={close}>
-          {more.map((x) => (
-            <button
-              key={x.id}
-              type="button"
-              role="menuitemradio"
-              aria-checked={x === tab}
-              className={x === tab ? "rb-item on" : "rb-item"}
-              onClick={() => {
-                setTab(x.id);
-                setOpen(null);
-                moreTab.current?.focus();
-              }}
-              onKeyDown={ignoreSpace}
-              onKeyUp={ignoreSpace}
-            >
-              <span>{t(x.label)}</span>
-            </button>
-          ))}
-        </RibbonFlyout>
-      );
-    }
-    const g = tab?.groups.find((x) => `${tab.id}/${x.id}` === open.key);
-    if (!g) return null;
-    const { rest } = parts(tab!.id, g);
-    const columns = rest.length > 8 ? 3 : rest.length > 4 ? 2 : 1;
-    return (
-      <RibbonFlyout anchor={open.anchor} label={t(g.label)} rows={Math.ceil(rest.length / columns)} onClose={close}>
-        {rest.map((b, i) => flyoutItem(b, `${i}`))}
-      </RibbonFlyout>
-    );
-  };
-
-  const toggleFlyout = (kind: Open["kind"], key: string, anchor: HTMLElement) =>
-    setOpen(open && open.kind === kind && open.key === key ? null : { kind, key, anchor });
 
   const groupBox = (g: RibbonGroup) => {
     const name = t(g.label);
     const p = parts(tab!.id, g);
     const label = t("ribbon.groupMore", { name });
     const primary = isPrimaryGroup(g);
+    const columns = p.rest.length > 8 ? 3 : p.rest.length > 4 ? 2 : 1;
     return (
       <div key={g.id} className="ribbon-group" role="group" aria-label={name}>
         <div className={primary ? "ribbon-group-buttons primary" : "ribbon-group-buttons"}>
           {p.visible.map((b, i) => draw(b, `${i}`, primary))}
           {p.rest.length > 0 && (
-            <Tip info={{ name: label }}>
-              {(describedBy) => (
-                <button
-                  type="button"
-                  className={primary ? "rb primary" : "rb"}
-                  aria-label={label}
-                  aria-haspopup="menu"
-                  aria-expanded={open?.kind === "group" && open.key === p.key}
-                  aria-describedby={describedBy}
-                  onClick={(e) => toggleFlyout("group", p.key, e.currentTarget)}
-                  onKeyDown={(e) => {
-                    ignoreSpace(e);
-                    if (e.key === "ArrowDown") toggleFlyout("group", p.key, e.currentTarget);
-                  }}
-                  onKeyUp={ignoreSpace}
-                >
-                  <RibbonIcon name="more" />
-                </button>
-              )}
-            </Tip>
+            <RibbonFlyout
+              open={open === p.key}
+              onOpenChange={(on) => setOpen(on ? p.key : null)}
+              label={name}
+              rows={Math.ceil(p.rest.length / columns)}
+              items={p.rest.map((b, i) => flyoutItem(b, `${i}`))}
+            >
+              <Tip info={{ name: label }}>
+                {(describedBy) => (
+                  <Menu.Trigger
+                    className={primary ? "rb primary" : "rb"}
+                    aria-label={label}
+                    aria-describedby={describedBy}
+                    onKeyDown={ignoreSpace}
+                    onKeyUp={ignoreSpace}
+                  >
+                    <RibbonIcon name="more" />
+                  </Menu.Trigger>
+                )}
+              </Tip>
+            </RibbonFlyout>
           )}
         </div>
         <div className="ribbon-group-label" aria-hidden="true">
@@ -450,54 +409,64 @@ function RibbonBody(props: Props) {
   // then the panel of the tab chosen, each group a box of icon buttons with its name under them.
   // The panel does not wrap: a group puts buttons behind its "⋯" as the window narrows, and only
   // when even that is not enough does it scroll sideways (`theme.css`).
+  const chosenValue = inMore ? MORE : (tab?.id ?? null);
   return (
-    <div className="ribbon">
+    <Tabs.Root
+      className="ribbon"
+      value={chosenValue}
+      onValueChange={(value) => {
+        // "More" opens its menu; the tab it stands for is chosen there.
+        if (value !== MORE) setTab(String(value));
+      }}
+    >
       <div className="ribbon-tabs">
         <span className="app-name heading">{t("appName")}</span>
         <div className="quick-access" role="toolbar" aria-label={t("ribbon.quickAccess")} {...quick.props}>
           {QUICK_ACCESS.map((b) => draw(b, b.command))}
         </div>
-        <div className="ribbon-tablist" role="tablist" {...roving.props}>
-          {lead.map((x, i) => (
-            <button
-              key={x.id}
-              type="button"
-              role="tab"
-              aria-selected={x === tab}
-              tabIndex={roving.tabIndex(i)}
-              onClick={() => setTab(x.id)}
-            >
+        <Tabs.List className="ribbon-tablist">
+          {lead.map((x) => (
+            <Tabs.Tab key={x.id} value={x.id} className="ribbon-tab">
               {t(x.label)}
-            </button>
+            </Tabs.Tab>
           ))}
           {more.length > 0 && (
-            <button
-              ref={moreTab}
-              type="button"
-              role="tab"
-              className="ribbon-more"
-              aria-selected={inMore}
-              aria-haspopup="menu"
-              aria-expanded={open?.kind === "more"}
-              tabIndex={roving.tabIndex(lead.length)}
-              onClick={(e) => toggleFlyout("more", "more", e.currentTarget)}
-              onKeyDown={(e) => {
-                if (e.key === "ArrowDown") {
-                  e.preventDefault();
-                  setOpen({ kind: "more", key: "more", anchor: e.currentTarget });
-                }
-              }}
+            <RibbonFlyout
+              open={open === MORE}
+              onOpenChange={(on) => setOpen(on ? MORE : null)}
+              label={t("ribbon.more")}
+              rows={more.length}
+              items={
+                <Menu.RadioGroup value={tab?.id ?? ""} onValueChange={(value) => setTab(String(value))}>
+                  {more.map((x) => (
+                    <Menu.RadioItem
+                      key={x.id}
+                      value={x.id}
+                      closeOnClick
+                      className={x === tab ? "rb-item on" : "rb-item"}
+                      onKeyDown={ignoreSpace}
+                      onKeyUp={ignoreSpace}
+                    >
+                      <span>{t(x.label)}</span>
+                    </Menu.RadioItem>
+                  ))}
+                </Menu.RadioGroup>
+              }
             >
-              {inMore ? t(tab.label) : t("ribbon.more")}
-              <RibbonIcon name="chevron" />
-            </button>
+              <Menu.Trigger render={<Tabs.Tab value={MORE} className="ribbon-tab ribbon-more" />}>
+                {inMore ? t(tab.label) : t("ribbon.more")}
+                <RibbonIcon name="chevron" />
+              </Menu.Trigger>
+            </RibbonFlyout>
           )}
-        </div>
+          <Tabs.Indicator className="tab-indicator" />
+        </Tabs.List>
       </div>
-      <div className="ribbon-panel" role="tabpanel" ref={panel}>
-        {tab?.groups.map(groupBox)}
-      </div>
-      {flyout()}
-    </div>
+      {tab && (
+        <Tabs.Panel value={chosenValue} className="ribbon-panel" ref={panel} tabIndex={-1}>
+          {tab.groups.map(groupBox)}
+        </Tabs.Panel>
+      )}
+    </Tabs.Root>
   );
 }

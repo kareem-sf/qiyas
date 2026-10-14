@@ -1,4 +1,5 @@
 /** English and Arabic UI strings, the current language, and the page direction that follows it. */
+import { DirectionProvider } from "@base-ui/react/direction-provider";
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import ar from "./ar.json";
 import en from "./en.json";
@@ -38,7 +39,12 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  return <LanguageContext value={{ lang, setLang }}>{children}</LanguageContext>;
+  // Base UI's arrow keys and popup placement follow the language, not just the page's `dir`.
+  return (
+    <LanguageContext value={{ lang, setLang }}>
+      <DirectionProvider direction={lang === "ar" ? "rtl" : "ltr"}>{children}</DirectionProvider>
+    </LanguageContext>
+  );
 }
 
 export const useLanguage = () => useContext(LanguageContext);

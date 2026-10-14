@@ -229,7 +229,11 @@ body {
   margin-inline-end: 8px;
   border-inline-end: 1px solid var(--rule);
 }
+/* The tabs: one indicator element slides under whichever is chosen (Base UI's Tabs.Indicator, moved
+   with a transform), and it is the chosen tab's own face, the colour of the panel below it. */
 .ribbon-tablist {
+  position: relative;
+  isolation: isolate;
   display: flex;
   gap: 2px;
 }
@@ -239,11 +243,32 @@ body {
   border-radius: var(--rb-radius) var(--rb-radius) 0 0;
   color: var(--muted);
   white-space: nowrap;
+  transition: color 150ms ease;
 }
 .ribbon-tabs [role="tab"][aria-selected="true"] {
-  background: var(--bg);
   color: var(--fg);
   font-weight: 500;
+}
+.tab-indicator {
+  position: absolute;
+  z-index: -1;
+  left: 0;
+  top: 0;
+  width: var(--active-tab-width);
+  height: var(--active-tab-height);
+  translate: var(--active-tab-left) var(--active-tab-top);
+  border-radius: var(--rb-radius) var(--rb-radius) 0 0;
+  background: var(--bg);
+  box-shadow: inset 0 2px 0 var(--accent);
+  transition:
+    translate 200ms cubic-bezier(0.3, 0, 0.2, 1),
+    width 200ms cubic-bezier(0.3, 0, 0.2, 1);
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tab-indicator {
+    transition: none;
+  }
 }
 .ribbon-more {
   display: inline-flex;
@@ -362,8 +387,10 @@ body {
   white-space: nowrap;
 }
 /* The list behind a "⋯" or "More": icon and name, in columns of rows. */
-.rb-flyout {
+.rb-flyout-pos {
   z-index: 30;
+}
+.rb-flyout {
   display: grid;
   grid-auto-flow: column;
   gap: 0 var(--rb-gap);
@@ -381,20 +408,31 @@ body {
   border-radius: 5px;
   text-align: start;
   white-space: nowrap;
+  cursor: default;
+  outline: none;
+  user-select: none;
+}
+.rb-item[data-highlighted] {
+  background: var(--hover);
+}
+.rb-item[data-disabled] {
+  opacity: 0.4;
 }
 .rb-item .ic {
   flex: none;
   width: var(--rb-std-icon);
   height: var(--rb-std-icon);
 }
-.rb-item.on {
+.rb-item.on,
+.rb-item.on[data-highlighted] {
   background: var(--accent-soft);
   color: var(--accent);
 }
 /* The tooltip: a small dark card (ink on the light theme, paper on the dark). */
-.rb-tooltip {
-  position: fixed;
+.rb-tooltip-pos {
   z-index: 40;
+}
+.rb-tooltip {
   width: max-content;
   max-width: 260px;
   display: flex;
@@ -408,6 +446,11 @@ body {
   line-height: 1.35;
   box-shadow: 0 6px 18px rgb(14 15 18 / 0.2);
   pointer-events: none;
+  transition: opacity 120ms ease;
+}
+.rb-tooltip[data-starting-style],
+.rb-tooltip[data-ending-style] {
+  opacity: 0;
 }
 .rb-tooltip b {
   font-size: 12.5px;
@@ -1809,26 +1852,64 @@ button.close {
   background: var(--panel);
 }
 
+/* The tab row never wraps: the tabs are one line each at 12.5px, and a row too narrow for them
+   folds the last into a "⋯" menu (`SideTabs.tsx`). The chosen tab's face slides (`.tab-indicator`). */
 .side-tabs {
+  position: relative;
+  isolation: isolate;
   display: flex;
+  flex-wrap: nowrap;
   gap: 2px;
   padding: 6px 8px 0;
+  overflow: hidden;
   border-bottom: 1px solid var(--rule);
 }
-.side-tabs [role="tab"] {
+.side-tab {
+  flex: none;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
+  height: 28px;
+  padding: 0 9px;
   border-radius: 6px 6px 0 0;
+  font-size: 12.5px;
   color: var(--muted);
+  white-space: nowrap;
+  transition: color 150ms ease;
 }
-.side-tabs [role="tab"][aria-selected="true"] {
-  background: var(--bg);
+.side-tab[aria-selected="true"] {
   color: var(--fg);
-  font-weight: 500;
 }
-:root[dir="rtl"] .side-tabs [role="tab"] {
+.side-tab:focus-visible {
+  outline-offset: -2px;
+}
+:root[dir="rtl"] .side-tab {
   font-feature-settings: "swsh";
+}
+/* A tab that did not fit stays in the row, unseen, so its width is known. */
+.side-tab.folded {
+  position: absolute;
+  visibility: hidden;
+  pointer-events: none;
+}
+.side-tab-more {
+  padding: 0 7px;
+}
+.side-tab-more svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+.side-more-menu {
+  display: flex;
+  flex-direction: column;
+  min-width: 140px;
+}
+.side-more-menu .rb-item {
+  justify-content: space-between;
 }
 .side-panel {
   flex: 1;

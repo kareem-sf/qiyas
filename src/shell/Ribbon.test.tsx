@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { LanguageProvider } from "../i18n";
 import { Ribbon } from "./Ribbon";
@@ -84,7 +84,10 @@ test("without a drawing on the Model sheet, Views is disabled", () => {
   expect((screen.getByRole("button", { name: "Views" }) as HTMLButtonElement).disabled).toBe(true);
 });
 
-test("the ribbon tabs have a roving tab stop and Space presses a tab", () => {
+/** Base UI moves focus a tick after the key. */
+const settle = () => act(async () => void (await new Promise((r) => setTimeout(r, 30))));
+
+test("the ribbon tabs have a roving tab stop; the arrows move between them, round the ends", async () => {
   render(<Ribbon {...props} />);
   const tab = (name: string) => screen.getByRole("tab", { name });
   const names = ["Measure", "Draw", "Annotate", "More"];
@@ -93,14 +96,18 @@ test("the ribbon tabs have a roving tab stop and Space presses a tab", () => {
   expect(names.map((n) => tab(n).tabIndex)).toEqual([0, -1, -1, -1]);
   tab("Measure").focus();
   fireEvent.keyDown(tab("Measure"), { key: "ArrowRight" });
+  await settle();
   expect(document.activeElement).toBe(tab("Draw"));
-  fireEvent.keyDown(tab("Draw"), { key: " " });
+  // Enter and Space press a focused tab (a button's own click); the chosen tab is the tab stop.
+  fireEvent.click(tab("Draw"));
   expect(tab("Draw").getAttribute("aria-selected")).toBe("true");
   expect(names.map((n) => tab(n).tabIndex)).toEqual([-1, 0, -1, -1]);
   // "More" is the last stop, and the arrows go round.
   fireEvent.keyDown(tab("Draw"), { key: "End" });
+  await settle();
   expect(document.activeElement).toBe(tab("More"));
   fireEvent.keyDown(tab("More"), { key: "ArrowRight" });
+  await settle();
   expect(document.activeElement).toBe(tab("Measure"));
 });
 
