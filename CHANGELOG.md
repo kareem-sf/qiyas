@@ -29,7 +29,8 @@ First public release.
 - The layers and the take-off panels fold away behind a thin rail on their inner edge, to give the
   drawing the whole width; the choice is remembered.
 - Small dot-grid loading indicators (our own design) replace the spinner where the window waits:
-  opening, comparing with the BOQ, drawing a PDF page, plotting, scripts, updates and Mizan.
+  opening, comparing with the BOQ, drawing a PDF page, plotting, scripts and updates. Mizan works
+  under the Qiyas mark itself, turning slowly with its face breathing.
 - The ribbon is an icon ribbon, measure first: Measure, Draw and Annotate on the tab row, the rest
   under More. Every button is an icon with a tooltip (its name, what it does, its command line
   alias); a group shows its main buttons and puts the others behind a "⋯" button as the window

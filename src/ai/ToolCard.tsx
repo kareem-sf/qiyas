@@ -1,5 +1,5 @@
 import { useT } from "../i18n";
-import { DotLoader } from "../shell/DotLoader";
+import { MizanMark } from "./MizanMark";
 import type { ToolCardItem } from "./messages";
 
 type Props = {
@@ -20,7 +20,7 @@ export function ToolCard({ card, onShow, onUndo }: Props) {
       <div className="tool-head">
         <span className="tool-state" aria-hidden="true">
           {card.status === "running" ? (
-            <DotLoader pattern="spiral" />
+            <MizanMark />
           ) : (
             <svg viewBox="0 0 16 16">
               <path d={card.status === "done" ? "M3.5 8.5l3 3 6-7" : "M4 4l8 8M12 4l-8 8"} />

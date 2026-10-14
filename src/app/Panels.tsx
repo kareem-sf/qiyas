@@ -1,6 +1,7 @@
 /** The window's three columns: the layers panel and the properties palette on the left, the
  *  drawing in the middle (file tabs, the canvas with what floats over it, the split view, sheet
  *  tabs), and the side panel (take-off, BOQ, conflicts, Mizan) on the right. */
+import { MizanMark } from "../ai/MizanMark";
 import { Tabs } from "@base-ui/react/tabs";
 import type { Drafting, DrawingInfo, Sheet, TabInfo } from "../api";
 import { AssistantPanel } from "../ai/AssistantPanel";
@@ -12,7 +13,6 @@ import { ImageDisplayPanel } from "../shell/AttachImageDialog";
 import { BlockEditBar } from "../shell/BlockDialogs";
 import { CommentsPanel } from "../shell/CommentsPanel";
 import { ConstraintBar } from "../shell/ConstraintBar";
-import { DotLoader } from "../shell/DotLoader";
 import { FileTabs } from "../shell/FileTabs";
 import { AlongPrompt, InfoCard } from "../shell/InfoCard";
 import { LayersPanel } from "../shell/LayersPanel";
@@ -353,7 +353,7 @@ export function SidePanel({ info, drafting, shell, takeoffState, takeoff, ai, co
         ) : undefined,
     },
     { id: "comments", label: t("comments") },
-    { id: "assistant", label: t("assistant"), extra: assistant.busy ? <DotLoader pattern="pulse" /> : undefined },
+    { id: "assistant", label: t("assistant"), extra: assistant.busy ? <MizanMark /> : undefined },
   ];
 
   // The BOQ table and the conflicts need more room than the take-off. All the panels stay mounted,

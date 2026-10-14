@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { aiLog, type AiLog } from "../api";
 import { useT } from "../i18n";
-import { DotLoader } from "../shell/DotLoader";
+import { MizanMark } from "./MizanMark";
 import { Markdown } from "./Markdown";
 import { startNewOffered, TOO_LONG, undoableCard, type Item, type ToolCardItem } from "./messages";
 import { ToolCard } from "./ToolCard";
@@ -208,7 +208,7 @@ export const AssistantPanel = memo(function AssistantPanel({ assistant, onShow, 
           )}
           {busy && (
             <p className="working">
-              <DotLoader pattern="pulse" size="md" />
+              <MizanMark size="md" />
               {t("ai.working")}
             </p>
           )}

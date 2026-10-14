@@ -81,9 +81,11 @@ test("Undo is only offered on the newest change, and not while busy", () => {
   expect(screen.queryByText("Undo")).toBeNull();
   expect(screen.getByText("Stop")).toBeTruthy();
   expect(screen.getByText("Working…")).toBeTruthy();
-  // Dots beside the text, not a ring: a 5 by 5 pulse, hidden from assistive technology.
-  const dots = screen.getByText("Working…").querySelector(".dot-loader.dot-md.dot-pulse");
-  expect(dots?.getAttribute("aria-hidden")).toBe("true");
+  // The Qiyas mark, alive, beside the text (not dots, not a ring), hidden from assistive technology.
+  const mark = screen.getByText("Working…").querySelector(".mizan-mark.mizan-mark-md");
+  expect(mark?.getAttribute("aria-hidden")).toBe("true");
+  expect(mark?.querySelector(".mm-turn .mm-sphere")).toBeTruthy();
+  expect(screen.getByText("Working…").querySelector(".dot-loader")).toBeNull();
   expect(document.querySelector(".spinner")).toBeNull();
 });
 

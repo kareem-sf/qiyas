@@ -3352,3 +3352,60 @@ span.grid-sort {
 .parameters input {
   inline-size: 100%;
 }
+
+/* Mizan's working sign: the Qiyas mark (src/ai/MizanMark.tsx). The sphere turns slowly and its
+   face breathes. sm sits in a line of text, md beside "Working…". */
+.mizan-mark {
+  display: inline-block;
+  flex: none;
+  vertical-align: -0.2em;
+  overflow: visible;
+}
+.mizan-mark-sm {
+  width: 1.15em;
+  height: 1.15em;
+}
+.mizan-mark-md {
+  width: 22px;
+  height: 22px;
+}
+.mizan-mark .mm-sphere {
+  fill: none;
+  stroke: var(--fg);
+  /* Thick for the drawing's 240 units: at 15 to 22 px the mesh still reads as lines. */
+  stroke-width: 11;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.55;
+}
+.mizan-mark .mm-turn {
+  transform-origin: 120px 120px;
+  animation: mm-turn 3.6s linear infinite;
+}
+.mizan-mark .mm-face {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: mm-breathe 1.8s ease-in-out infinite;
+}
+@keyframes mm-turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes mm-breathe {
+  0%,
+  100% {
+    opacity: 0.6;
+    transform: scale(0.9);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.12);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mizan-mark .mm-turn,
+  .mizan-mark .mm-face {
+    animation: none;
+  }
+}
