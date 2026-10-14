@@ -3,7 +3,7 @@ import type { CSSProperties } from "react";
 /** The motions: a sweep across the grid, a spiral in, a pulse out from the centre, a chase round
  *  the border. All run on one CSS keyframe; a dot's place in the motion is its `--p` (0 to under 1). */
 export type DotPattern = "scan" | "spiral" | "pulse" | "chase";
-/** `sm` is a 3 by 3 grid (about 9 px, one status-bar line), `md` a 5 by 5 grid (about 21 px). */
+/** `sm` is a 3 by 3 grid (about 12 px, one status-bar line), `md` a 5 by 5 grid (about 26 px). */
 export type DotSize = "sm" | "md";
 
 type Props = {

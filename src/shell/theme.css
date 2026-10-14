@@ -1917,8 +1917,13 @@ button.close {
 .working .dot-loader,
 .tool-state .dot-loader,
 .side-tabs .dot-loader,
-.script-running .dot-loader {
+.script-running .dot-loader,
+.status > .dot-loader {
   margin-inline-end: 0;
+}
+/* A line of its own with a loader first (the Plot dialog's "Plotting…"): the loader's gap. */
+.status:has(> .dot-loader) {
+  gap: 6px;
 }
 
 /* Assistant */
