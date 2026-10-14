@@ -232,10 +232,7 @@ fn the_default_ribbon_is_valid_and_holds_every_tab() {
         .iter()
         .map(|g| g.id.as_str())
         .collect();
-    assert_eq!(
-        measure,
-        ["measure", "inquiry", "takeoff", "dims", "markup"]
-    );
+    assert_eq!(measure, ["measure", "inquiry", "takeoff", "dims", "markup"]);
     // Annotate: the Markup group (id "markup") is where a revision cloud with a comment goes.
     let annotate: Vec<&str> = layout.tabs[2]
         .groups
