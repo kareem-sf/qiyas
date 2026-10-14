@@ -17,6 +17,8 @@ licence; written by `scripts/third-party.sh`). This folder ships in every instal
   `resources/pdfium/`.
 - `foldhash-Zlib.txt`: foldhash (Zlib).
 - `clipboard-win-error-code-BSL-1.0.txt`: clipboard-win and error-code (BSL-1.0, Windows).
+- `tslib-0BSD.txt`: tslib (0BSD), a helper library of the window's UI kit (Base UI, cmdk, Headless
+  Tree, TanStack, Sonner: all MIT, listed in `THIRD-PARTY.md`).
 - `NotoSans-OFL.txt`, `NotoSansArabic-OFL.txt`, `InstrumentSans-OFL.txt` (added by the
   installer): the SIL Open Font License 1.1 of Noto Sans, Noto Sans Arabic and Instrument Sans.
 

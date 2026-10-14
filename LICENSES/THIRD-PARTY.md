@@ -556,8 +556,52 @@ where to get the source of the MPL-2.0 libraries.
 
 | Package | Version | Licence |
 |---|---|---|
+| @babel/runtime | 7.29.10 | MIT |
+| @base-ui/react | 1.9.0 | MIT |
+| @base-ui/utils | 0.5.0 | MIT |
+| @floating-ui/core | 1.8.0 | MIT |
+| @floating-ui/dom | 1.8.0 | MIT |
+| @floating-ui/react-dom | 2.1.9 | MIT |
+| @floating-ui/utils | 0.2.12 | MIT |
+| @headless-tree/core | 1.7.0 | MIT |
+| @headless-tree/react | 1.7.0 | MIT |
+| @radix-ui/primitive | 1.2.0 | MIT |
+| @radix-ui/react-compose-refs | 1.1.5 | MIT |
+| @radix-ui/react-context | 1.3.0 | MIT |
+| @radix-ui/react-dialog | 1.3.1 | MIT |
+| @radix-ui/react-dismissable-layer | 1.2.1 | MIT |
+| @radix-ui/react-focus-guards | 1.2.0 | MIT |
+| @radix-ui/react-focus-scope | 1.3.1 | MIT |
+| @radix-ui/react-id | 1.1.4 | MIT |
+| @radix-ui/react-portal | 1.2.0 | MIT |
+| @radix-ui/react-presence | 1.1.11 | MIT |
+| @radix-ui/react-primitive | 2.2.0 | MIT |
+| @radix-ui/react-slot | 1.5.0 | MIT |
+| @radix-ui/react-use-callback-ref | 1.1.5 | MIT |
+| @radix-ui/react-use-controllable-state | 1.3.0 | MIT |
+| @radix-ui/react-use-effect-event | 0.0.5 | MIT |
+| @radix-ui/react-use-layout-effect | 1.1.4 | MIT |
+| @tanstack/react-store | 0.11.2 | MIT |
+| @tanstack/react-table | 9.3.1 | MIT |
+| @tanstack/react-virtual | 3.14.13 | MIT |
+| @tanstack/store | 0.11.2 | MIT |
+| @tanstack/table-core | 9.3.1 | MIT |
+| @tanstack/virtual-core | 3.17.11 | MIT |
 | @tauri-apps/api | 2.12.1 | Apache-2.0 OR MIT |
 | @tauri-apps/plugin-dialog | 2.8.1 | MIT OR Apache-2.0 |
+| aria-hidden | 1.2.6 | MIT |
+| cmdk | 1.1.1 | MIT |
+| detect-node-es | 1.1.0 | MIT |
+| get-nonce | 1.0.1 | MIT |
 | react-dom | 19.3.0 | MIT |
+| react-remove-scroll-bar | 2.3.8 | MIT |
+| react-remove-scroll | 2.7.2 | MIT |
+| react-style-singleton | 2.2.3 | MIT |
 | react | 19.3.0 | MIT |
+| reselect | 5.3.0 | MIT |
 | scheduler | 0.28.0 | MIT |
+| sonner | 2.0.8 | MIT |
+| tslib | 2.8.1 | 0BSD |
+| use-callback-ref | 1.3.3 | MIT |
+| use-sidecar | 1.1.3 | MIT |
+| use-sync-external-store | 1.7.0 | MIT |
