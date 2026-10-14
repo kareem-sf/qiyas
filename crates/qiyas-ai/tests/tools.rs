@@ -98,6 +98,10 @@ fn catalogue_schemas_are_strict_objects() {
             "list_conflicts",
             "resolve_conflict",
             "add_markup",
+            "add_dimension",
+            "set_annotation_scale",
+            "add_comment",
+            "list_comments",
             "measure_geometry",
             "divide_along",
             "measure_along",
@@ -837,4 +841,105 @@ fn tools_see_xref_layers_blocks_and_entities() {
     )
     .unwrap();
     assert_eq!(out["hidden"], json!(["plan-arch|A-WALL"]));
+}
+
+#[test]
+fn add_dimension_draws_real_dimensions_of_each_kind() {
+    let (_dir, mut session) = sample();
+    let linear = run(
+        &mut session,
+        "add_dimension",
+        json!({ "kind": "linear", "p1": [0, 0], "p2": [4, 0], "line_point": [2, -1] }),
+    )
+    .unwrap();
+    let dims = linear["dimensions"].as_array().unwrap();
+    assert_eq!(dims.len(), 1);
+    let h = dims[0].as_u64().unwrap();
+    assert!(matches!(
+        session.drawing.doc.get_entity(opencadcodec::Handle::new(h)),
+        Some(EntityType::Dimension(_))
+    ));
+    let read = run(&mut session, "read_dimensions", json!({})).unwrap();
+    assert!(read.to_string().contains("4"), "{read}");
+    assert!(
+        session.is_dirty(),
+        "a drawing change, saved with the drawing"
+    );
+
+    run(
+        &mut session,
+        "add_dimension",
+        json!({ "kind": "aligned", "p1": [0, 0], "p2": [3, 4], "offset": 0.5 }),
+    )
+    .unwrap();
+    run(
+        &mut session,
+        "add_dimension",
+        json!({ "kind": "angular", "vertex": [0, 0], "p1": [4, 0], "p2": [0, 4], "arc_point": [2, 2] }),
+    )
+    .unwrap();
+    run(
+        &mut session,
+        "add_dimension",
+        json!({ "kind": "ordinate", "point": [4, 0], "leader_end": [4, -2] }),
+    )
+    .unwrap();
+    let arc = handles_of(&session, "Arc")[0];
+    for kind in ["radius", "diameter", "arc_length"] {
+        run(
+            &mut session,
+            "add_dimension",
+            json!({ "kind": kind, "handle": arc, "point": [3.5, 12] }),
+        )
+        .unwrap_or_else(|e| panic!("{kind}: {e}"));
+    }
+    let base = h;
+    let out = run(
+        &mut session,
+        "add_dimension",
+        json!({ "kind": "continue", "handle": base, "points": [[6, 0], [9, 0]] }),
+    )
+    .unwrap();
+    assert_eq!(out["dimensions"].as_array().unwrap().len(), 2);
+    let out = run(
+        &mut session,
+        "add_dimension",
+        json!({ "kind": "baseline", "handle": base, "points": [[6, 0]] }),
+    )
+    .unwrap();
+    assert_eq!(out["dimensions"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn add_dimension_names_what_is_missing() {
+    let (_dir, mut session) = sample();
+    let err = run(
+        &mut session,
+        "add_dimension",
+        json!({ "kind": "linear", "p1": [0, 0], "p2": [4, 0] }),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("line_point"), "{err}");
+    assert!(!session.can_undo());
+}
+
+#[test]
+fn add_comment_draws_a_cloud_and_list_comments_reads_it() {
+    let (_dir, mut session) = sample();
+    let out = run(
+        &mut session,
+        "add_comment",
+        json!({ "points": [[0, 0], [4, 0], [4, 3], [0, 3]], "text": "Check the door width" }),
+    )
+    .unwrap();
+    assert_eq!(out["layer"], "COMMENTS");
+    let cloud = out["cloud"].as_u64().unwrap();
+    let list = run(&mut session, "list_comments", json!({})).unwrap();
+    let comments = list["comments"].as_array().unwrap();
+    assert_eq!(comments.len(), 1);
+    assert_eq!(comments[0]["handle"], cloud);
+    assert_eq!(comments[0]["text"], "Check the door width");
+    assert!(session.undo_if(Source::Ai), "the AI's own step");
+    let list = run(&mut session, "list_comments", json!({})).unwrap();
+    assert!(list["comments"].as_array().unwrap().is_empty());
 }

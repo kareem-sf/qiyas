@@ -935,6 +935,11 @@ export type Command =
    *  the leader, then the text. MLEADER adds a short landing. */
   | { type: "leader"; points: P[]; text: string }
   | { type: "mleader"; points: P[]; text: string }
+  /** A revision cloud around the polygon `points` with the comment `text` beside it, on the
+   *  layer COMMENTS: `added` with the cloud, then its label. `arc_len` null: from the outline. */
+  | { type: "comment"; points: P[]; text: string; arc_len?: number | null }
+  /** The comment clouds of every sheet: `comments`. */
+  | { type: "list_comments" }
   /** A feature control frame (`{\Fgdt;p}` a symbol, `%%v` between fields) at `at`. */
   | { type: "tolerance"; at: P; frame: string }
   /** CANNOSCALE, "paper:drawing" such as "1:50". */
@@ -1073,6 +1078,17 @@ export type AutoSettings = { kinds?: ConstraintKind[]; distance_tolerance?: numb
 
 /** A constraint on the sheet on screen: the entities it holds, where its first part is, and a
  *  dimensional one's parameter, expression, value (drawing units or degrees) and Dimension. */
+/** A comment cloud: its cloud's and label's handles, the comment, its sheet (block name) and
+ *  the cloud's bounds in drawing coordinates. */
+export type CommentInfo = {
+  id: string;
+  handle: number;
+  label: number | null;
+  text: string;
+  sheet: string;
+  bounds: [P, P];
+};
+
 export type ConstraintInfo = {
   id: number;
   kind: ConstraintKind;
@@ -1178,7 +1194,8 @@ export type Outcome =
   /** Constraints added (or removed), by id. */
   | { type: "constrained"; ids: number[] }
   | { type: "constraints"; constraints: ConstraintInfo[] }
-  | { type: "parameters"; parameters: ParameterInfo[] };
+  | { type: "parameters"; parameters: ParameterInfo[] }
+  | { type: "comments"; comments: CommentInfo[] };
 
 export const runCommand = (cmd: Command) => invoke<Outcome>("run_command", { cmd });
 
@@ -1186,6 +1203,12 @@ export const runCommand = (cmd: Command) => invoke<Outcome>("run_command", { cmd
 export async function listConstraints(): Promise<ConstraintInfo[]> {
   const o = await runCommand({ type: "list_constraints" });
   return o.type === "constraints" ? o.constraints : [];
+}
+
+/** The comment clouds of every sheet. */
+export async function listComments(): Promise<CommentInfo[]> {
+  const o = await runCommand({ type: "list_comments" });
+  return o.type === "comments" ? o.comments : [];
 }
 
 /** Every parameter of the drawing, by name. */

@@ -498,7 +498,7 @@ impl Session {
     }
 
     /// The entities `spec` describes, unstyled and not yet in the drawing.
-    fn draw_entities(&self, spec: DrawSpec) -> Result<Vec<EntityType>, CoreError> {
+    pub(crate) fn draw_entities(&self, spec: DrawSpec) -> Result<Vec<EntityType>, CoreError> {
         let one = |e: EntityType| Ok(vec![e]);
         match spec {
             DrawSpec::Line { a, b } => {

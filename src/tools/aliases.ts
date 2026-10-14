@@ -21,6 +21,7 @@ export const COMMANDS = [
   "CALIBRATE",
   "CHAMFER",
   "CIRCLE",
+  "COMMENT",
   "COMPARE",
   "COPY",
   "COPYBASE",

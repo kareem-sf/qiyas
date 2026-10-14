@@ -21,6 +21,7 @@ import { useAttach } from "./useAttach";
 import { useBlocks } from "./useBlocks";
 import { useCommandLine } from "./useCommandLine";
 import { type Commands, useCommands, useToolChoice } from "./useCommands";
+import { useComments } from "./useComments";
 import { useDrafting } from "./useDrafting";
 import { useAutosave, useDrawings, useFileTabs } from "./useDrawings";
 import { useLayers } from "./useLayers";
@@ -274,6 +275,7 @@ export default function App() {
   onCommandRef.current = onCommand;
   const selection = useSelection({ info, tool, measure, batch, redraw, runLayerCommand });
   const { highlight, overlay } = useOverlay({ tool, measure, batch, selected, boqLinked, conflictLinked, aiHighlight });
+  const comments = useComments({ sideTab: shell.sideTab, viewport, sheet, chooseSheet, switchGen, info, batch });
 
   // An empty model is said next to the file name, not counted as a reading problem.
   const problems = info ? readProblems(info) : [];
@@ -348,7 +350,15 @@ export default function App() {
           colours={options.colours}
           parametric={parametric}
         />
-        <SidePanel info={info} drafting={drafting} shell={shell} takeoffState={takeoffState} takeoff={takeoff} ai={ai} />
+        <SidePanel
+          info={info}
+          drafting={drafting}
+          shell={shell}
+          takeoffState={takeoffState}
+          takeoff={takeoff}
+          ai={ai}
+          comments={comments}
+        />
       </div>
       {commandLineOn && (
         <CommandLine state={commandState} prompt={prompt} onAction={onCommand} inputRef={commandInput} />

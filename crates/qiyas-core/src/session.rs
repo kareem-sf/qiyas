@@ -759,6 +759,11 @@ impl Session {
         self.with_cache(None, |cached| cached.batch.clone())
     }
 
+    /// What the sheet on screen draws, `[[min_x, min_y], [max_x, max_y]]`; zeros when nothing.
+    pub(crate) fn sheet_bounds(&self) -> [[f64; 2]; 2] {
+        self.with_cache(None, |cached| cached.batch.bounds)
+    }
+
     /// The batch of the sheet `sheet` (block name), on screen or not, as `with_sheet` draws it
     /// (pictures only on the sheet on screen); for the PDF plot.
     pub fn sheet_batch(&self, sheet: &str) -> Batch {
