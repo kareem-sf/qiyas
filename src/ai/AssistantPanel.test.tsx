@@ -184,9 +184,10 @@ test("the thread follows the newest message while the reader is at the bottom; s
   expect(box.scrollTop).toBe(1200);
   expect(screen.queryByRole("button", { name: "Jump to latest" })).toBeNull();
 
-  // The reader scrolls up to re-read: what arrives next does not move them, a button says there is more.
+  // The reader scrolls up to re-read: a button offers the way back, and what arrives next does not move them.
   box.scrollTop = 100;
   fireEvent.scroll(log);
+  expect(screen.getByRole("button", { name: "Jump to latest" })).toBeTruthy();
   box.scrollHeight = 1500;
   const third = { items: [...second.items, { kind: "user" as const, text: "And the BOQ?" }] };
   rerender(<AssistantPanel assistant={assistant({ transcript: third })} onShow={() => {}} onUndo={() => {}} onSettings={() => {}} />);

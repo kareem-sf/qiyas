@@ -270,39 +270,40 @@ export const LayersPanel = memo(function LayersPanel({
           <span className="name" title={l.name}>
             <bdi>{l.name}</bdi>
           </span>
-          {/* The row's buttons are not clicks on the row. */}
-          <span className="layer-more" onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
-            <button
-              type="button"
-              className="icon"
-              aria-label={isolateLabel}
-              title={isolateLabel}
-              disabled={locked}
-              aria-disabled={busy || undefined}
-              onClick={() => !busy && onIsolate(l.name)}
-            >
-              <svg viewBox="0 0 16 16" aria-hidden="true">
-                <circle cx="8" cy="8" r="5.5" />
-                <circle cx="8" cy="8" r="1.5" />
-              </svg>
-            </button>
-            {!isCurrent && currentButton}
-            {onSetLayer && own && (
+          {/* The row's buttons are not clicks on the row. The ones that show on hover lie over the
+              start of the buttons that stay, so they end where those begin. */}
+          <span className="layer-keep" onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
+            <span className="layer-more">
               <button
                 type="button"
                 className="icon"
-                aria-label={propsLabel}
-                title={propsLabel}
-                aria-expanded={expandedProps}
-                onClick={() => setOpen(expandedProps ? null : l.name)}
+                aria-label={isolateLabel}
+                title={isolateLabel}
+                disabled={locked}
+                aria-disabled={busy || undefined}
+                onClick={() => !busy && onIsolate(l.name)}
               >
                 <svg viewBox="0 0 16 16" aria-hidden="true">
-                  <path d={expandedProps ? "M4 10l4-4 4 4" : "M4 6l4 4 4-4"} />
+                  <circle cx="8" cy="8" r="5.5" />
+                  <circle cx="8" cy="8" r="1.5" />
                 </svg>
               </button>
-            )}
-          </span>
-          <span className="layer-keep" onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
+              {!isCurrent && currentButton}
+              {onSetLayer && own && (
+                <button
+                  type="button"
+                  className="icon"
+                  aria-label={propsLabel}
+                  title={propsLabel}
+                  aria-expanded={expandedProps}
+                  onClick={() => setOpen(expandedProps ? null : l.name)}
+                >
+                  <svg viewBox="0 0 16 16" aria-hidden="true">
+                    <path d={expandedProps ? "M4 10l4-4 4 4" : "M4 6l4 4 4-4"} />
+                  </svg>
+                </button>
+              )}
+            </span>
             {viewport && own && onViewportFrozen && (
               <input
                 type="checkbox"

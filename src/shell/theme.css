@@ -772,14 +772,16 @@ body {
    the keyboard is on it: isolate, make current, properties; they lie over the end of the name, on the
    row's own colour, so a long name keeps its room until then. */
 .layer-keep {
+  position: relative;
   display: flex;
   flex: none;
   align-items: center;
+  align-self: stretch;
 }
 .layer-more {
   position: absolute;
   inset-block: 0;
-  inset-inline-end: 26px;
+  inset-inline-end: 100%;
   display: flex;
   align-items: center;
   padding-inline: 8px 2px;
@@ -1171,10 +1173,10 @@ span.grid-sort {
 .grid-arrow {
   position: absolute;
   top: 50%;
-  inset-inline-end: -11px;
-  margin-top: -4.5px;
-  width: 9px;
-  height: 9px;
+  inset-inline-end: -10px;
+  margin-top: -4px;
+  width: 8px;
+  height: 8px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.4;
@@ -1198,7 +1200,7 @@ span.grid-sort {
 }
 :root[dir="rtl"] .grid-arrow {
   /* A box that does not mirror: a rotation is the same both ways. */
-  inset-inline-end: -11px;
+  inset-inline-end: -10px;
 }
 /* The edge you drag to resize: a hairline on the column's end, wider to hit than to see. */
 .grid-edge {
@@ -1786,6 +1788,13 @@ span.grid-sort {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+}
+.toast-undo {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
 }
 .toast-action {
   flex: none;

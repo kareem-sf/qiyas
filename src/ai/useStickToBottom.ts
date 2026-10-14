@@ -5,7 +5,7 @@ const NEAR = 32;
 
 /** A scrolling thread that follows its newest message: while the reader is at the bottom, what is
  *  added (a streamed word, a new card) scrolls into view; once they have scrolled up to read, it
- *  leaves them where they are and `away` says there is more below, for a "Jump to latest" button.
+ *  leaves them where they are, and `away` says they are not at the bottom, for a "Jump to latest" button.
  *  `jump` goes to the bottom and follows again. `changed` lists what changes when the content does
  *  (always the same number of things).
  *  Put `ref` and `onScroll` on the scrolling box. */
@@ -31,13 +31,12 @@ export function useStickToBottom(changed: readonly unknown[]) {
     const el = box.current;
     if (!el) return;
     pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR;
-    if (pinned.current) setAway(false);
+    setAway(!pinned.current);
   };
 
-  // After the content changed, before it is painted: follow it, or say there is more.
+  // After the content changed, before it is painted: follow it if the reader is at the bottom.
   useLayoutEffect(() => {
     if (pinned.current) toBottom(false);
-    else setAway(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, changed);
 

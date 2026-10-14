@@ -81,7 +81,7 @@ function UndoToast({ id, message, label, seconds, onUndo }: Undo & { id: Id }) {
     return () => clearInterval(tick);
   }, []);
   return (
-    <div className="toast toast-undo" role="group" aria-label={message}>
+    <div className="toast-undo" role="group" aria-label={message}>
       <span className="toast-title">{message}</span>
       <button
         type="button"
