@@ -169,7 +169,7 @@ fn today() -> String {
 }
 
 /// `template`'s strings as xdata values, cut to fit.
-fn chunks(template: &str) -> Vec<XDataValue> {
+pub(crate) fn chunks(template: &str) -> Vec<XDataValue> {
     let mut out = Vec::new();
     let mut rest = template;
     while !rest.is_empty() {

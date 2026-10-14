@@ -338,6 +338,19 @@ impl Session {
             return Err(invalid("The width must be 0 or more"));
         }
         check_value(value)?;
+        let text = self.mtext_entity(at, width, height, value, style)?;
+        Ok(self.add_styled(vec![text])?[0])
+    }
+
+    /// The MText `Command::MText` adds, not added yet (its text application registered).
+    pub(crate) fn mtext_entity(
+        &mut self,
+        at: Vector3,
+        width: f64,
+        height: f64,
+        value: &str,
+        style: Option<&str>,
+    ) -> Result<EntityType, CoreError> {
         let style = self.style_named(style)?;
         let (shown, field) = self.with_fields(value.to_string());
         let mut text = MText::with_value(escape_mtext(&shown), at).with_height(height);
@@ -347,7 +360,7 @@ impl Session {
         self.register_text_app();
         mark_logical(&mut text.common);
         set_text_field(&mut text.common, field.as_deref());
-        Ok(self.add_styled(vec![EntityType::MText(text)])?[0])
+        Ok(EntityType::MText(text))
     }
 
     /// `Command::EditText`: the text of `target` becomes `value` (plain text; an MText's

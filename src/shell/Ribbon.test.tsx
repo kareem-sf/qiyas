@@ -532,6 +532,7 @@ test("the Measure tab is first: Measure, Inquiry, Take-off, Dimensions and Marku
   const markup = within(screen.getByRole("group", { name: "Markup" }));
   expect(markup.getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual([
     "Revision cloud",
+    "Comment cloud",
     "Leader",
     "MText",
   ]);

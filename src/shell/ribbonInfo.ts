@@ -39,6 +39,7 @@ export const COMMAND_LINE: Record<string, [name: string, option?: string]> = {
   point: ["POINT"],
   hatch: ["HATCH"],
   revcloud: ["REVCLOUD"],
+  commentCloud: ["COMMENT"],
   wipeout: ["WIPEOUT"],
   move: ["MOVE"],
   copy: ["COPY"],

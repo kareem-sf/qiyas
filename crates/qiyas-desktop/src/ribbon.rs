@@ -184,6 +184,7 @@ pub fn default_ribbon() -> RibbonLayout {
                 "ribbon.markup",
                 vec![
                     tool("revcloud", "draw.revcloud"),
+                    tool("commentCloud", "dim.commentCloud"),
                     tool("leader", "dim.leader"),
                     tool("mtext", "text.mtext"),
                 ],
@@ -266,11 +267,14 @@ pub fn default_ribbon() -> RibbonLayout {
                 "dim.notes",
                 tools("dim", &["leader", "mleader", "tolerance"]),
             ),
-            // Revision cloud now; the revision cloud with a comment will be appended here.
+            // The revision cloud, and the comment cloud (a cloud with its comment).
             group(
                 "markup",
                 "ribbon.markup",
-                vec![tool("revcloud", "draw.revcloud")],
+                vec![
+                    tool("revcloud", "draw.revcloud"),
+                    tool("commentCloud", "dim.commentCloud"),
+                ],
             ),
             group(
                 "tables",

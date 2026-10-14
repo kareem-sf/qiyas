@@ -60,14 +60,14 @@ test("the window's default has the eight tabs, Measure first, Draw its six group
   // Dimensions: five on show, the other ten and the style behind its "⋯".
   const dims = measure.groups.find((g) => g.id === "dims")!;
   expect([dims.main, dims.buttons.length]).toEqual([5, 15]);
-  expect(measure.groups.find((g) => g.id === "markup")!.buttons.map((b) => b.command)).toEqual(["revcloud", "leader", "mtext"]);
+  expect(measure.groups.find((g) => g.id === "markup")!.buttons.map((b) => b.command)).toEqual(["revcloud", "commentCloud", "leader", "mtext"]);
   // Annotate: every dimension type and the style, Leaders, Markup (where the revision cloud with a
   // comment is added), Tables.
   const annotate = DEFAULT_RIBBON.tabs.find((t) => t.id === "annotate")!;
   expect(annotate.groups.map((g) => g.id)).toEqual(["dims", "notes", "markup", "tables"]);
   expect(annotate.groups[0].buttons).toHaveLength(15);
   expect(annotate.groups[0].main).toBeUndefined();
-  expect(annotate.groups[2].buttons.map((b) => b.command)).toEqual(["revcloud"]);
+  expect(annotate.groups[2].buttons.map((b) => b.command)).toEqual(["revcloud", "commentCloud"]);
   const parametric = DEFAULT_RIBBON.tabs.find((t) => t.id === "parametric")!;
   expect(parametric.groups.map((g) => g.buttons.length)).toEqual([13, 5, 3]);
   const manage = DEFAULT_RIBBON.tabs.find((t) => t.id === "manage")!;

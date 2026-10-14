@@ -2,8 +2,9 @@
  *  ordinate, baseline, continue, quick), dimension edits (text, flip, move text; break, space,
  *  jog), leaders, multileaders and tolerances. Pure state machines with their prompts (i18n keys),
  *  as the edit tools are; `useTool` feeds them clicks on entities, points, boxes and typed input,
- *  and runs each finished `command`. A leader's or a tolerance's text, and a dimension's new
- *  text, are asked for by the app (`request`). Every tool stays on for the next one. */
+ *  and runs each finished `command`. A leader's, a comment cloud's or a tolerance's text, and a
+ *  dimension's new text, are asked for by the app (`request`). Every tool stays on for the next
+ *  one. A comment cloud (COMMENT) goes round the points clicked, closed by Enter. */
 import type { Command, DimEditOp, DimSpec, EntityTarget } from "../api";
 import type { Point } from "../viewport/camera";
 
@@ -25,6 +26,7 @@ export const DIM_TOOLS = [
   "leader",
   "mleader",
   "tolerance",
+  "commentCloud",
 ] as const;
 
 export type DimKind = (typeof DIM_TOOLS)[number];
@@ -34,6 +36,7 @@ export const isDimTool = (tool: string): tool is DimKind => (DIM_TOOLS as readon
 /** What the app asks the user to type: a leader's text, a tolerance's frame, a dimension's text. */
 export type DimRequest =
   | { kind: "leader" | "mleader"; points: Point[] }
+  | { kind: "comment"; points: Point[] }
   | { kind: "tolerance"; at: Point }
   | { kind: "override"; handle: number };
 
@@ -99,6 +102,7 @@ function restart(s: DimState): DimState {
   if (s.kind === "qdim") return { ...base, phase: "select", hint: "dim.prompt.qdim", hintArgs: { n: "0" } };
   if (PICKS[s.kind]) return { ...base, phase: "pick", hint: `dim.prompt.${s.kind}Pick` };
   if (s.kind === "leader" || s.kind === "mleader") return { ...base, phase: "point", hint: "dim.prompt.leader0" };
+  if (s.kind === "commentCloud") return { ...base, phase: "point", hint: "dim.prompt.comment0" };
   return { ...base, phase: "point", hint: `dim.prompt.${s.kind}0` };
 }
 
@@ -194,6 +198,9 @@ function point(s: DimState, p: Point): DimState {
   if (s.kind === "leader" || s.kind === "mleader") {
     return { ...s, points, hint: points.length >= 2 ? "dim.prompt.leaderMore" : "dim.prompt.leader1" };
   }
+  if (s.kind === "commentCloud") {
+    return { ...s, points, hint: points.length >= 3 ? "dim.prompt.commentMore" : "dim.prompt.comment1" };
+  }
   if (s.kind === "qdim") return { ...restart(s), command: dimension({ kind: "quick", targets: s.handles.map(target), line_point: p }) };
   const need = POINTS[s.kind] ?? 0;
   if (points.length >= need) return pointsDone(s, points);
@@ -263,6 +270,9 @@ function finishStep(s: DimState): DimState {
   if ((s.kind === "leader" || s.kind === "mleader") && s.points.length >= 2) {
     return { ...restart(s), request: { kind: s.kind, points: s.points } };
   }
+  if (s.kind === "commentCloud" && s.points.length >= 3) {
+    return { ...restart(s), request: { kind: "comment", points: s.points } };
+  }
   return s;
 }
 
@@ -311,6 +321,11 @@ export function dimPreview(s: DimState, cursor: Point | null): Float64Array {
   const pts = cursor ? [...s.points, cursor] : s.points;
   const out: number[] = [];
   for (let i = 1; i < pts.length; i++) out.push(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1]);
+  // A comment cloud's ring closes back to its first point.
+  if (s.kind === "commentCloud" && pts.length >= 3) {
+    const [a, b] = [pts[pts.length - 1], pts[0]];
+    out.push(a[0], a[1], b[0], b[1]);
+  }
   return Float64Array.from(out);
 }
 

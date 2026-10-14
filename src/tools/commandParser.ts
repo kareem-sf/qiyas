@@ -216,6 +216,7 @@ const TOOLS: Partial<Record<CommandName, Tool>> = {
   LEADER: "leader",
   MLEADER: "mleader",
   TOLERANCE: "tolerance",
+  COMMENT: "commentCloud",
   TABLE: "table",
   TABLEDIT: "tableEdit",
   FIELD: "field",

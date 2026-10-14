@@ -337,7 +337,8 @@ pub fn catalogue() -> Vec<ToolSpec> {
             "add_markup",
             "Put a markup on the drawing for the user: a cloud around something (a ring of 3 \
              points or more) or a note at a point (1 point or more), with text. Markups are kept \
-             with the take-off but are not quantities.",
+             with the take-off, not in the drawing file, and are not quantities; to draw a \
+             comment into the drawing itself use add_comment.",
             json!({
                 "points": points("Where, in drawing coordinates."),
                 "text": { "type": "string", "description": "What the user should look at, and why." },
@@ -345,6 +346,78 @@ pub fn catalogue() -> Vec<ToolSpec> {
             }),
             &["points", "text", "kind"],
             true,
+        ),
+        tool(
+            "add_dimension",
+            "Draw a dimension into the drawing itself, as AutoCAD would: a real dimension entity \
+             (lines, arrowheads and the measured text) saved in the DWG/DXF, on the current layer \
+             in the current dimension style, sized by the annotation scale \
+             (set_annotation_scale). Points are [x, y] in drawing coordinates. Kinds and \
+             what each needs: linear p1, p2, line_point (horizontal or vertical by where \
+             line_point is; rotation in degrees for another direction); aligned p1, p2, offset \
+             (the line that far to the left of p1->p2, negative right); angular vertex, p1, p2, \
+             arc_point; radius, diameter and arc_length handle (a circle or arc from \
+             find_entities) and point (where the text goes); ordinate point (the feature) and \
+             leader_end; baseline and continue handle (an existing linear or aligned dimension) \
+             and points (the next points); quick handles (lines, arcs, circles) and line_point. \
+             One undo step. Then read_dimensions gives the values measured.",
+            json!({
+                "kind": {
+                    "type": "string",
+                    "enum": ["linear", "aligned", "angular", "radius", "diameter",
+                             "arc_length", "ordinate", "baseline", "continue", "quick"]
+                },
+                "p1": point(),
+                "p2": point(),
+                "line_point": point_described("Where the dimension line passes."),
+                "rotation": { "type": "number", "description": "linear: the direction in degrees." },
+                "offset": { "type": "number", "description": "aligned: distance of the line from the points, drawing units." },
+                "vertex": point(),
+                "arc_point": point_described("angular: where the dimension arc passes."),
+                "point": point_described("radius, diameter, arc_length: where the text goes; ordinate: the feature."),
+                "leader_end": point_described("ordinate: the leader's end; mostly up or down gives X, sideways Y."),
+                "handle": handle("The circle, arc or base dimension, from find_entities."),
+                "handles": {
+                    "type": "array",
+                    "items": { "type": "integer" },
+                    "description": "quick: the entities, from find_entities."
+                },
+                "points": points("baseline, continue: the next points, in order.")
+            }),
+            &["kind"],
+            true,
+        ),
+        tool(
+            "set_annotation_scale",
+            "Set the drawing's annotation scale, e.g. \"1:100\": new dimensions are drawn at \
+             their dimension style's sizes times it. Use it when dimensions you drew come out \
+             far too small or too large for the plan (look with view_image). One undo step.",
+            json!({ "scale": { "type": "string", "description": "paper:drawing, e.g. \"1:50\" or \"1:100\"." } }),
+            &["scale"],
+            true,
+        ),
+        tool(
+            "add_comment",
+            "Draw a revision cloud with a written comment beside it into the drawing itself, on \
+             the layer COMMENTS (red), saved in the DWG/DXF: for remarks to the designer or the \
+             team. The cloud goes round the polygon points (3 or more, drawing coordinates; leave \
+             a margin round what it marks). One undo step. Unlike add_markup, it is part of the \
+             drawing, not the take-off.",
+            json!({
+                "points": points("The polygon the cloud goes round."),
+                "text": { "type": "string", "description": "The comment, in the user's language." },
+                "arc_length": { "type": "number", "description": "Length of each arc in drawing units; worked out from the outline when left out." }
+            }),
+            &["points", "text"],
+            true,
+        ),
+        tool(
+            "list_comments",
+            "The comment clouds on every sheet: id, the cloud's handle, its label's handle, the \
+             comment text, the sheet and the cloud's bounds.",
+            json!({}),
+            &[],
+            false,
         ),
         tool(
             "measure_geometry",

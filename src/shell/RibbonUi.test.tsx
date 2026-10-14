@@ -264,6 +264,7 @@ test("Annotate's Dimensions shows all of them with no ⋯, and Markup is a group
   expect(screen.getAllByRole("group").map((g) => g.getAttribute("aria-label"))).toEqual(["Dimensions", "Leaders", "Markup", "Tables"]);
   expect(within(screen.getByRole("group", { name: "Markup" })).getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual([
     "Revision cloud",
+    "Comment cloud",
   ]);
 });
 
@@ -296,10 +297,10 @@ function withRoom(room: number, body: () => void) {
 const panelButtons = () => document.querySelectorAll(".ribbon-panel .rb").length;
 
 test("as the panel narrows, groups put more buttons behind their ⋯ until it fits, with nothing lost", () => {
-  // Measure: 4 + 5 + 4 + (5 and the ⋯) + 3 = 22 buttons.
+  // Measure: 4 + 5 + 4 + (5 and the ⋯) + 4 = 23 buttons.
   withRoom(100, () => {
     render(<Ribbon {...props} />);
-    expect(panelButtons()).toBe(22);
+    expect(panelButtons()).toBe(23);
     expect(screen.queryByRole("button", { name: "More in Inquiry" })).toBeNull();
   });
   cleanup();
@@ -316,7 +317,7 @@ test("as the panel narrows, groups put more buttons behind their ⋯ until it fi
         fireEvent.keyDown(document.body, { key: "Escape" });
       } else reach.add(name);
     }
-    for (const name of ["Select", "Distance", "Area", "Count", "Geometry", "Divide", "Measure along", "ID point", "Extract data", "Export take-off", "Import BOQ", "Compare", "Export conflicts", "Linear", "Dimension style…", "Revision cloud", "Leader", "MText"]) {
+    for (const name of ["Select", "Distance", "Area", "Count", "Geometry", "Divide", "Measure along", "ID point", "Extract data", "Export take-off", "Import BOQ", "Compare", "Export conflicts", "Linear", "Dimension style…", "Revision cloud", "Comment cloud", "Leader", "MText"]) {
       expect(reach.has(name), name).toBe(true);
     }
   });
@@ -324,7 +325,7 @@ test("as the panel narrows, groups put more buttons behind their ⋯ until it fi
   // The window widens again: the groups show what they want to show.
   withRoom(100, () => {
     render(<Ribbon {...props} />);
-    expect(panelButtons()).toBe(22);
+    expect(panelButtons()).toBe(23);
   });
 });
 

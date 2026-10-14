@@ -180,6 +180,11 @@
             },
             {
               "kind": "tool",
+              "command": "commentCloud",
+              "label": "dim.commentCloud"
+            },
+            {
+              "kind": "tool",
               "command": "leader",
               "label": "dim.leader"
             },
@@ -588,6 +593,11 @@
               "kind": "tool",
               "command": "revcloud",
               "label": "draw.revcloud"
+            },
+            {
+              "kind": "tool",
+              "command": "commentCloud",
+              "label": "dim.commentCloud"
             }
           ]
         },

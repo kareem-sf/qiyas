@@ -5,7 +5,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 
 use qiyas_core::{
-    Command, ConflictStatus, CoreError, EntityFilter, Field, Kind, Outcome, Session, Source,
+    Command, ConflictStatus, CoreError, DimSpec, EntityFilter, Field, Kind, Outcome, Session,
+    Source, Target, COMMENT_LAYER,
 };
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
@@ -212,6 +213,36 @@ pub fn execute(
             }
         }
         "add_markup" => (add_markup(session, parse(input)?, source)?, 0),
+        "add_dimension" => (add_dimension(session, parse(input)?, source)?, 0),
+        "set_annotation_scale" => {
+            let ScaleInput { scale } = parse(input)?;
+            session.run_as(Command::AnnotationScale { name: scale }, source)?;
+            let (name, factor) = session.annotation_scale();
+            (json!({ "annotation_scale": name, "factor": factor }), 0)
+        }
+        "add_comment" => {
+            let CommentInput {
+                points,
+                text,
+                arc_length,
+            } = parse(input)?;
+            let cmd = Command::Comment {
+                points,
+                text,
+                arc_len: arc_length,
+            };
+            match session.run_as(cmd, source)? {
+                Outcome::Added { handles } => (
+                    json!({ "cloud": handles.first(), "label": handles.get(1), "layer": COMMENT_LAYER }),
+                    0,
+                ),
+                _ => return Err(ToolError::Failed("No comment was drawn".to_string())),
+            }
+        }
+        "list_comments" => match session.run_as(Command::ListComments, source)? {
+            Outcome::Comments { comments } => (json!({ "comments": comments }), 0),
+            _ => return Err(ToolError::Failed("No comments were listed".to_string())),
+        },
         "measure_geometry" => {
             let GeometryInput { handle, chain, at } = parse(input)?;
             let cmd = Command::MeasureGeometry { handle, chain, at };
@@ -420,6 +451,53 @@ struct MarkupInput {
     points: Vec<[f64; 2]>,
     text: String,
     kind: MarkupKind,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScaleInput {
+    scale: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CommentInput {
+    points: Vec<[f64; 2]>,
+    text: String,
+    arc_length: Option<f64>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+enum DimKind {
+    Linear,
+    Aligned,
+    Angular,
+    Radius,
+    Diameter,
+    ArcLength,
+    Ordinate,
+    Baseline,
+    Continue,
+    Quick,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DimensionInput {
+    kind: DimKind,
+    p1: Option<[f64; 2]>,
+    p2: Option<[f64; 2]>,
+    line_point: Option<[f64; 2]>,
+    rotation: Option<f64>,
+    offset: Option<f64>,
+    vertex: Option<[f64; 2]>,
+    arc_point: Option<[f64; 2]>,
+    point: Option<[f64; 2]>,
+    leader_end: Option<[f64; 2]>,
+    handle: Option<u64>,
+    handles: Option<Vec<u64>>,
+    points: Option<Vec<[f64; 2]>>,
 }
 
 #[derive(Deserialize)]
@@ -756,6 +834,80 @@ fn add_markup(
     let id = out["measurement"]["id"].clone();
     out["ui"] = json!({ "action": "show_markup", "id": id, "bounds": bounds });
     Ok(out)
+}
+
+/// Draws the dimension `input` describes; the handles added.
+fn add_dimension(
+    session: &mut Session,
+    input: DimensionInput,
+    source: Source,
+) -> Result<Value, ToolError> {
+    fn need<T>(v: Option<T>, what: &str) -> Result<T, ToolError> {
+        v.ok_or_else(|| bad(&format!("This kind of dimension needs {what}")))
+    }
+    let target = |h: Option<u64>| -> Result<Target, ToolError> {
+        Ok(Target {
+            handle: need(h, "handle")?,
+            chain: Vec::new(),
+        })
+    };
+    let spec = match input.kind {
+        DimKind::Linear => DimSpec::Linear {
+            p1: need(input.p1, "p1")?,
+            p2: need(input.p2, "p2")?,
+            line_point: need(input.line_point, "line_point")?,
+            rotation: input.rotation,
+        },
+        DimKind::Aligned => DimSpec::Aligned {
+            p1: need(input.p1, "p1")?,
+            p2: need(input.p2, "p2")?,
+            offset: need(input.offset, "offset")?,
+        },
+        DimKind::Angular => DimSpec::Angular {
+            vertex: need(input.vertex, "vertex")?,
+            p1: need(input.p1, "p1")?,
+            p2: need(input.p2, "p2")?,
+            arc_point: need(input.arc_point, "arc_point")?,
+        },
+        DimKind::Radius => DimSpec::Radius {
+            target: target(input.handle)?,
+            point: need(input.point, "point")?,
+        },
+        DimKind::Diameter => DimSpec::Diameter {
+            target: target(input.handle)?,
+            point: need(input.point, "point")?,
+        },
+        DimKind::ArcLength => DimSpec::ArcLength {
+            target: target(input.handle)?,
+            point: need(input.point, "point")?,
+        },
+        DimKind::Ordinate => DimSpec::Ordinate {
+            feature: need(input.point, "point")?,
+            leader_end: need(input.leader_end, "leader_end")?,
+        },
+        DimKind::Baseline => DimSpec::Baseline {
+            from: target(input.handle)?,
+            points: need(input.points, "points")?,
+        },
+        DimKind::Continue => DimSpec::Continue {
+            from: target(input.handle)?,
+            points: need(input.points, "points")?,
+        },
+        DimKind::Quick => DimSpec::Quick {
+            targets: need(input.handles, "handles")?
+                .into_iter()
+                .map(|handle| Target {
+                    handle,
+                    chain: Vec::new(),
+                })
+                .collect(),
+            line_point: need(input.line_point, "line_point")?,
+        },
+    };
+    match session.run_as(Command::Dimension(spec), source)? {
+        Outcome::Added { handles } => Ok(json!({ "dimensions": handles })),
+        _ => Err(ToolError::Failed("No dimension was drawn".to_string())),
+    }
 }
 
 /// One page of the data table; `total` counts every entity the filters find.

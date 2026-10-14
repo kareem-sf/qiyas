@@ -9,6 +9,7 @@ import { openCount } from "../boq/conflictsMath";
 import { useT } from "../i18n";
 import { ImageDisplayPanel } from "../shell/AttachImageDialog";
 import { BlockEditBar } from "../shell/BlockDialogs";
+import { CommentsPanel } from "../shell/CommentsPanel";
 import { ConstraintBar } from "../shell/ConstraintBar";
 import { FileTabs } from "../shell/FileTabs";
 import { AlongPrompt, InfoCard } from "../shell/InfoCard";
@@ -29,6 +30,7 @@ import type { Annotate } from "./useAnnotate";
 import type { AssistantWiring } from "./useAssistantWiring";
 import type { Attach } from "./useAttach";
 import type { Blocks } from "./useBlocks";
+import type { Comments } from "./useComments";
 import type { Drawings } from "./useDrawings";
 import type { Layers } from "./useLayers";
 import type { Parametric } from "./useParametric";
@@ -295,11 +297,12 @@ type SideProps = {
   takeoffState: TakeoffState;
   takeoff: Takeoff;
   ai: AssistantWiring;
+  comments: Comments;
 };
 
-/** The side panel: its tabs, the inquiry card, and the take-off, BOQ, conflicts and Mizan panels
- *  (all mounted, one shown). */
-export function SidePanel({ info, drafting, shell, takeoffState, takeoff, ai }: SideProps) {
+/** The side panel: its tabs, the inquiry card, and the take-off, BOQ, conflicts, comments and
+ *  Mizan panels (all mounted, one shown). */
+export function SidePanel({ info, drafting, shell, takeoffState, takeoff, ai, comments }: SideProps) {
   const t = useT();
   const { sideTab, setSideTab } = shell;
   const { items, itemTotals, selectedId, bill, boqCode, conflicts, compared, infoCard, setInfoCard } = takeoffState;
@@ -358,6 +361,16 @@ export function SidePanel({ info, drafting, shell, takeoffState, takeoff, ai }: 
               {openConflicts}
             </span>
           )}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          id="tab-comments"
+          aria-controls="panel-comments"
+          aria-selected={sideTab === "comments"}
+          onClick={() => setSideTab("comments")}
+        >
+          {t("comments")}
         </button>
         <button
           type="button"
@@ -424,6 +437,20 @@ export function SidePanel({ info, drafting, shell, takeoffState, takeoff, ai }: 
           onShow={showConflict}
           onResolve={resolveConflict}
           onOpenBoq={openBoqTab}
+        />
+      </div>
+      <div
+        className="side-panel"
+        role="tabpanel"
+        id="panel-comments"
+        aria-labelledby="tab-comments"
+        hidden={sideTab !== "comments"}
+      >
+        <CommentsPanel
+          comments={comments.comments}
+          sheets={info?.sheets ?? []}
+          onRefresh={comments.refresh}
+          onShow={comments.show}
         />
       </div>
       <div

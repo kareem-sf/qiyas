@@ -56,7 +56,12 @@ export const DEFAULT_RIBBON: RibbonLayout = {
       ]),
       group("takeoff", "ribbon.takeoff", [action("exportTakeoff"), action("importBoq"), action("compare"), action("exportConflicts")]),
       group("dims", "dim.group", dimensions(), 5),
-      group("markup", "ribbon.markup", [tool("revcloud", "draw.revcloud"), tool("leader", "dim.leader"), tool("mtext", "text.mtext")]),
+      group("markup", "ribbon.markup", [
+        tool("revcloud", "draw.revcloud"),
+        tool("commentCloud", "dim.commentCloud"),
+        tool("leader", "dim.leader"),
+        tool("mtext", "text.mtext"),
+      ]),
     ]),
     tab(
       "home",
@@ -101,7 +106,7 @@ export const DEFAULT_RIBBON: RibbonLayout = {
       group("dims", "dim.group", dimensions()),
       group("notes", "dim.notes", tools("dim", ["leader", "mleader", "tolerance"])),
       // Revision cloud now; the revision cloud with a comment will be appended here.
-      group("markup", "ribbon.markup", [tool("revcloud", "draw.revcloud")]),
+      group("markup", "ribbon.markup", [tool("revcloud", "draw.revcloud"), tool("commentCloud", "dim.commentCloud")]),
       group("tables", "table.group", [
         tool("table", "table.table"),
         tool("tableEdit", "table.tableEdit"),
