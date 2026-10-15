@@ -3909,7 +3909,7 @@ name = "qiyas-ai"
 version = "0.0.1"
 dependencies = [
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "opencadcodec",
  "qiyas-boq",
